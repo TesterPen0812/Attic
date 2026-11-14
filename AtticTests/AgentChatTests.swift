@@ -194,8 +194,8 @@ final class AgentChatTests: XCTestCase {
         withExtendedLifetime(observation) {
             print("AGENT_RESTORE rows=\(model.entries.count) entryPublishes=\(entryPublishes) elapsedMs=\(milliseconds)")
             XCTAssertEqual(model.entries.count, exchanges * 2)
-            XCTAssertLessThanOrEqual(entryPublishes, 2,
-                "Restoring history must publish a complete snapshot, not one main-actor update per row")
+            XCTAssertEqual(entryPublishes, 1,
+                "Restoring history must publish one complete snapshot: never one main-actor update per row, and never an empty thread first")
         }
         XCTAssertTrue(model.entries.allSatisfy { model.wasShown($0.id) })
     }
