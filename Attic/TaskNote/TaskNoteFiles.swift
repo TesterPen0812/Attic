@@ -89,8 +89,12 @@ enum TaskNoteFiles {
         guard session.isImporting else { return false }
         let deadline = ContinuousClock.now + importTimeout
         while session.isImporting, ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(20))
+            // Sleep throws immediately after cancellation. Swallowing that
+            // error spins this main-actor loop until the full timeout.
+            guard !Task.isCancelled else { return false }
+            do { try await Task.sleep(for: .milliseconds(20)) }
+            catch { return false }
         }
-        return !session.isImporting && session.engine.objectIDs().count > objectsBefore
+        return !Task.isCancelled && !session.isImporting && session.engine.objectIDs().count > objectsBefore
     }
 }

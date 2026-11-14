@@ -1088,6 +1088,42 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertTrue(presenter.host.engine.isBodyOnly)
     }
 
+    func testReviewCancelledTaskNoteFileWaitDoesNotStarveTheMainActor() async throws {
+        let id = try seed(.boundary)
+        notes = NotesPageController(store: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()),
+            journal: nil, defaults: nil, saveDelay: .seconds(600), durabilityDelay: .seconds(600),
+            imageLoader: { _ in
+                try? await Task.sleep(for: .seconds(2))
+                return nil
+            })
+        notes.attachUndoRoute(library.undo)
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        let source = FileManager.default.temporaryDirectory.appendingPathComponent("task-note-cancel-\(UUID().uuidString).png")
+        try Data(repeating: 0x89, count: 64).write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let previousTimeout = TaskNoteFiles.importTimeout
+        TaskNoteFiles.importTimeout = .milliseconds(450)
+        defer { TaskNoteFiles.importTimeout = previousTimeout }
+
+        let operation = Task { @MainActor in
+            await TaskNoteFiles.importFiles([source], to: id, tasks: tasks, controller: notes)
+        }
+        for _ in 0..<50 {
+            if session.isImporting { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(session.isImporting, "The file loader must still be pending when cancellation is requested")
+        let cancelledAt = ContinuousClock.now
+        operation.cancel()
+        let added = await operation.value
+        let elapsed = cancelledAt.duration(to: .now)
+        XCTAssertFalse(added)
+        XCTAssertLessThan(elapsed, .milliseconds(200),
+            "A cancelled sleep must not become a tight 450 ms loop on the main actor")
+        notes.cancelImport(in: session)
+    }
+
     // MARK: § 9 0b performance rows (headless; paired with the plain Phase 2 note)
 
     /// The plain Phase 2 page's editor over the same body (a 320 × 520
