@@ -559,6 +559,32 @@ final class AgentChatTests: XCTestCase {
         await finishRun()
     }
 
+    func testBG45TwoFilesWithTheSameNameSurvivePickingSendingAndRemoving() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-two-files-\(UUID().uuidString)")
+        let a = folder.appendingPathComponent("first", isDirectory: true)
+        let b = folder.appendingPathComponent("second", isDirectory: true)
+        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: b, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = a.appendingPathComponent("README.md")
+        let second = b.appendingPathComponent("README.md")
+        try Data("First project".utf8).write(to: first)
+        try Data("Second project".utf8).write(to: second)
+
+        model.attachFile(at: first)
+        model.attachFile(at: second)
+        XCTAssertEqual(model.attachments.map(\.name), ["README.md", "README.md"])
+        XCTAssertEqual(Set(model.attachments.map(\.id)).count, 2)
+        let firstID = try XCTUnwrap(model.attachments.first?.id)
+        model.removeAttachment(firstID)
+        XCTAssertEqual(model.attachments.count, 1)
+        XCTAssertEqual(model.requestContext.files.map(\.text), ["Second project"])
+        model.attachFile(at: first)
+        await start("Compare these files")
+        XCTAssertEqual(runner.contexts.last?.files.map(\.text), ["Second project", "First project"])
+        await finishRun()
+    }
+
     func testFileRefusesAnythingButSmallTextFiles() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-chat-files-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

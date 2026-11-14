@@ -1110,7 +1110,7 @@ final class AgentChatModel: ObservableObject {
         for attachment in attachments {
             switch attachment {
             case let .item(target): context.items.append(target)
-            case let .file(file): context.files.append(file)
+            case let .file(file, _): context.files.append(file)
             }
         }
         return context
@@ -1134,8 +1134,7 @@ final class AgentChatModel: ObservableObject {
     func attachFile(at url: URL) {
         switch AgentChatFiles.read(url) {
         case let .success(file):
-            let attachment = AgentChatAttachment.file(file)
-            attachments.removeAll { $0.id == attachment.id }
+            let attachment = AgentChatAttachment.file(file, id: UUID())
             attachments.append(attachment)
             attachmentRefusal = nil
         case let .failure(refusal):
