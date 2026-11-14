@@ -1518,6 +1518,31 @@ final class AgentChatHostedTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
+    func testChat01ArchivedReplyOrderRenders() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_FIX_RENDER_DIR"] != nil else {
+            throw XCTSkip("Offscreen review renders require ATTIC_FIX_RENDER_DIR")
+        }
+        runner.retainsThread = true
+        let question = AgentThreadEntry(id: UUID(), role: "user", text: "Show my tasks")
+        let first = AgentThreadEntry(id: UUID(), role: "assistant", text: "Before the tool.")
+        let tool = AgentThreadEntry(id: UUID(), role: "tool", text: "Read tasks")
+        let second = AgentThreadEntry(id: UUID(), role: "assistant", text: "After the tool.")
+
+        runner.snapshot = AgentThreadSnapshot(entries: [question,
+            AgentThreadEntry(id: first.id, role: "assistant", text: first.text + second.text), tool],
+            events: [], isRunning: false)
+        model.connect(runner)
+        model.open()
+        spin(0.7)
+        try captureAgentReviewWindow(window, name: "CHAT01-before")
+
+        runner.snapshot = AgentThreadSnapshot(entries: [question, first, tool, second],
+                                              events: [], isRunning: false)
+        model.connect(runner)
+        spin(0.7)
+        try captureAgentReviewWindow(window, name: "CHAT01-after")
+    }
+
     func testReviewFixRenders() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_FIX_RENDER_DIR"] != nil else {
             throw XCTSkip("Offscreen review renders require ATTIC_FIX_RENDER_DIR")

@@ -974,6 +974,166 @@ final class AgentRunHostedTests: XCTestCase {
         runner.shutdown()
     }
 
+    func testReplyAfterToolKeepsItsPositionInSavedAndReopenedChat() async {
+        let url = journalURL()
+        let helper = FakeRunHelper()
+        helper.onInput = { line, helper in
+            guard let command = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let method = command["method"] as? String else { return }
+            switch method {
+            case "initialize": helper.emitLine(#"{"id":1,"result":{}}"#)
+            case "thread/start": helper.emitLine(#"{"id":2,"result":{"thread":{"id":"ordered-thread"}}}"#)
+            case "turn/start":
+                helper.emitLine(#"{"id":3,"result":{"turn":{"id":"ordered-turn"}}}"#)
+                helper.emitLine(#"{"method":"item/agentMessage/delta","params":{"delta":"Before the tool."}}"#)
+                helper.emitLine(#"{"method":"item/started","params":{"item":{"id":"tool-1","type":"mcpToolCall","server":"attic","tool":"list_tasks"}}}"#)
+                helper.emitLine(#"{"method":"item/completed","params":{"item":{"id":"tool-1","type":"mcpToolCall","server":"attic","tool":"list_tasks","status":"completed"}}}"#)
+                helper.emitLine(#"{"method":"item/agentMessage/delta","params":{"delta":"After the tool."}}"#)
+                helper.emitLine(#"{"method":"turn/completed","params":{"turn":{"status":"completed"}}}"#)
+            default: break
+            }
+        }
+
+        let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
+                                    tools: { FakeRunTools() }, journalURL: url)
+        _ = runner.send("Show my tasks", watching: true)
+        await wait { !runner.threadSnapshot().isRunning }
+        let saved = runner.threadSnapshot().entries.filter { $0.role != "assistant" || !$0.text.isEmpty }
+        XCTAssertEqual(saved.map(\.role), ["user", "assistant", "tool", "assistant"],
+                       "Tool steps must remain between their preceding and following replies")
+        XCTAssertEqual(saved.filter { $0.role == "assistant" }.map(\.text),
+                       ["Before the tool.", "After the tool."])
+        runner.shutdown()
+
+        let relaunched = AgentRunEngine(selectedBackend: { .codex }, helper: { FakeRunHelper() },
+                                        tools: { FakeRunTools() }, journalURL: url)
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(relaunched)
+        let rendered = chat.entries.map { entry -> String in
+            switch entry.content {
+            case .asked: return "user"
+            case .reply: return "assistant"
+            case .note: return "tool"
+            default: return "unexpected"
+            }
+        }
+        XCTAssertEqual(rendered, ["user", "assistant", "tool", "assistant"],
+                       "Closing and relaunching must preserve the order shown live")
+    }
+
+    /// Exercise the actual CLI decoder and run journal under rapid, overlapping
+    /// tool notifications. Every frame must preserve the transcript's order,
+    /// including replies begun while an earlier tool is still running.
+    func testSeededStreamingToolOrderSurvivesEveryFrameAndRelaunch() async {
+        struct Generator {
+            var state: UInt64
+            mutating func choose(_ count: Int) -> Int {
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return Int((state >> 32) % UInt64(count))
+            }
+        }
+
+        for seed: UInt64 in [0xC4A7_2001, 0xC4A7_2002, 0xC4A7_2003] {
+            var random = Generator(state: seed)
+            let url = journalURL()
+            let helper = FakeRunHelper()
+            helper.onInput = { line, helper in
+                guard let request = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+                else { return }
+                switch request["method"] as? String {
+                case "initialize": helper.emitLine(#"{"id":1,"result":{}}"#)
+                case "thread/start": helper.emitLine(#"{"id":2,"result":{"thread":{"id":"seed-thread"}}}"#)
+                case "turn/start": helper.emitLine(#"{"id":3,"result":{"turn":{"id":"seed-turn"}}}"#)
+                default: break
+                }
+            }
+            let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
+                                        tools: { FakeRunTools() }, journalURL: url)
+            let prompt = "Seed \(seed)"
+            _ = runner.send(prompt, watching: false)
+            await wait {
+                helper.inputs.contains { line in
+                    guard let data = line.data(using: .utf8),
+                          let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    else { return false }
+                    return request["method"] as? String == "turn/start"
+                }
+            }
+            var expected = ["user:\(prompt)"]
+            var canContinueReply = false
+            var liveTools: [String] = []
+            var nextTool = 0
+            var expectedEvents = 0
+
+            func sendFrame(_ method: String, item: [String: Any]? = nil, delta: String? = nil) {
+                var params: [String: Any] = [:]
+                if let item { params["item"] = item }
+                if let delta { params["delta"] = delta }
+                let frame = ["method": method, "params": params] as [String: Any]
+                let data = try! JSONSerialization.data(withJSONObject: frame)
+                helper.emitLine(String(decoding: data, as: UTF8.self))
+            }
+
+            for step in 0..<360 {
+                let action = random.choose(8)
+                if action == 0 || action == 1 {
+                    let id = "tool-\(nextTool)"
+                    nextTool += 1
+                    liveTools.append(id)
+                    sendFrame("item/started", item: ["id": id, "type": "mcpToolCall",
+                                                     "server": "attic", "tool": "list_tasks"])
+                    expected.append("tool")
+                    canContinueReply = false
+                    expectedEvents += 2 // step and progress
+                } else if action == 2, !liveTools.isEmpty {
+                    let index = random.choose(liveTools.count)
+                    let id = liveTools.remove(at: index)
+                    sendFrame("item/completed", item: ["id": id, "type": "mcpToolCall",
+                                                       "server": "attic", "tool": "list_tasks",
+                                                       "status": "completed"])
+                    canContinueReply = false
+                    expectedEvents += 2
+                } else {
+                    let delta = "w\(seed)-\(step) "
+                    sendFrame("item/agentMessage/delta", delta: delta)
+                    if canContinueReply {
+                        expected[expected.count - 1] += delta
+                    } else {
+                        expected.append("assistant:\(delta)")
+                        canContinueReply = true
+                    }
+                    expectedEvents += 1
+                }
+
+                let targetEvents = expectedEvents
+                await wait { runner.threadSnapshot().events.count >= targetEvents }
+                let actual = runner.threadSnapshot().entries
+                    .filter { $0.role != "assistant" || !$0.text.isEmpty }
+                    .map { $0.role == "tool" ? "tool" : "\($0.role):\($0.text)" }
+                XCTAssertEqual(actual, expected, "seed \(seed), step \(step)")
+            }
+            for id in liveTools {
+                sendFrame("item/completed", item: ["id": id, "type": "mcpToolCall",
+                                                   "server": "attic", "tool": "list_tasks",
+                                                   "status": "completed"])
+                expectedEvents += 2
+            }
+            await wait { runner.threadSnapshot().events.count >= expectedEvents }
+            helper.emitLine(#"{"method":"turn/completed","params":{"turn":{"status":"completed"}}}"#)
+            await wait { !runner.threadSnapshot().isRunning }
+            runner.shutdown()
+
+            let relaunched = AgentRunEngine(selectedBackend: { .codex }, helper: { FakeRunHelper() },
+                                            tools: { FakeRunTools() }, journalURL: url)
+            let actual = relaunched.threadSnapshot().entries
+                .filter { $0.role != "assistant" || !$0.text.isEmpty }
+                .map { $0.role == "tool" ? "tool" : "\($0.role):\($0.text)" }
+            XCTAssertEqual(actual, expected, "seed \(seed), after relaunch")
+            relaunched.shutdown()
+        }
+    }
+
     func testRunScopedApprovalAndDurableUndoID() async throws {
         let helper = FakeRunHelper()
         let tools = FakeRunTools()

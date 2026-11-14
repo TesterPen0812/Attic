@@ -804,29 +804,62 @@ final class AgentRunEngine: AgentRunning {
     private func emit(_ event: AgentEvent) {
         currentEvents.append(event)
         var shouldCheckpoint = false
-        if case let .textDelta(delta) = event, let id = activeReplyID,
-           let index = archive.entries.firstIndex(where: { $0.id == id }) {
-            archive.entries[index].text += delta
-            unflushedCharacters += delta.count
-            if unflushedCharacters >= 256 {
-                unflushedCharacters = 0
-                shouldCheckpoint = true
+        if case let .textDelta(delta) = event {
+            // A step or notice ends the previous reply in the live chat.
+            // Give later streamed text its own journal row at that position.
+            if !delta.isEmpty {
+                if let id = activeReplyID, let index = archive.entries.firstIndex(where: { $0.id == id }) {
+                    archive.entries[index].text += delta
+                } else {
+                    let reply = AgentThreadEntry(id: UUID(), role: "assistant", text: delta)
+                    archive.entries.append(reply)
+                    activeReplyID = reply.id
+                }
+                unflushedCharacters += delta.count
+                if unflushedCharacters >= 256 {
+                    unflushedCharacters = 0
+                    shouldCheckpoint = true
+                }
+            }
+        } else if case let .stepStarted(step) = event {
+            activeReplyID = nil
+            // Steps are displayed at start, and may finish after more text or
+            // other steps. Reserve their journal position at the same time.
+            if step.kind != .openPage, !archive.entries.contains(where: { $0.id == step.id }) {
+                archive.entries.append(AgentThreadEntry(id: step.id, role: "tool", text: step.title))
+            }
+        } else if case let .stepReworded(step) = event {
+            activeReplyID = nil
+            if let index = archive.entries.firstIndex(where: { $0.id == step.id }) {
+                archive.entries[index].text = step.title
             }
         } else if case let .stepFinished(step) = event {
-            archive.entries.append(AgentThreadEntry(id: UUID(), role: "tool", text: step.title))
+            activeReplyID = nil
+            if step.kind != .openPage {
+                if let index = archive.entries.firstIndex(where: { $0.id == step.id }) {
+                    archive.entries[index].text = step.title
+                } else {
+                    archive.entries.append(AgentThreadEntry(id: step.id, role: "tool", text: step.title))
+                }
+            }
             if step.kind != .read && step.kind != .openPage {
                 recordedTargets.append(contentsOf: step.targets)
             }
             shouldCheckpoint = true
         } else if case let .changes(set) = event {
+            activeReplyID = nil
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "receipt", text: "",
                                                     changeSet: set, targets: recordedTargets))
             shouldCheckpoint = true
         } else if case let .failed(message) = event {
+            activeReplyID = nil
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error", text: message))
         } else if case let .notice(message) = event {
+            activeReplyID = nil
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "notice", text: message))
             shouldCheckpoint = true
+        } else if case .approvalNeeded = event {
+            activeReplyID = nil
         }
         for subscriber in subscribers.values { subscriber.yield(event) }
         if shouldCheckpoint { checkpointWriter.checkpoint(archive) }
