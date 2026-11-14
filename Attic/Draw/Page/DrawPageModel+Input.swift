@@ -277,8 +277,8 @@ extension DrawPageModel {
             .insetBy(dx: -1, dy: -1) // Horizontal and vertical travel must still have an area.
         for object in objects {
             guard !gone.contains(object.id), case .stroke(let samples) = object.content, !samples.isEmpty else { continue }
-            let reach = tolerance + DrawGeometry.strokeWidth(object) / 2
-            let bounds = DrawGeometry.frame(DrawGeometry.strokeFrame(samples)).insetBy(dx: -reach, dy: -reach)
+            guard let extent = strokeExtent(for: object) else { continue }
+            let bounds = extent.bounds.insetBy(dx: -tolerance, dy: -tolerance)
             if bounds.intersects(travel) || bounds.contains(last) || bounds.contains(world) {
                 if DrawGeometry.eraserTouches(samples, size: object.style.size,
                                               from: last, to: world, tolerance: tolerance) {

@@ -225,11 +225,15 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     /// being moved or replaced. A raster clipped to the current viewport
     /// cannot reveal pixels that scroll into view during a continuous pinch.
     private func rasterCoverage() -> CGRect {
-        var coverage = DrawGeometry.union(model.objects) ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+        var coverage = model.objects.first.map { model.inputBounds(for: $0) }
+            ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+        for object in model.objects.dropFirst() {
+            coverage = coverage.union(model.inputBounds(for: object))
+        }
         if let move = model.rasterMove {
             for object in model.objects where move.ids.contains(object.id) {
-                coverage = coverage.union(DrawGeometry.bounds(object.translated(
-                    by: DrawPoint(x: move.offset.x, y: move.offset.y), id: object.id)))
+                coverage = coverage.union(model.inputBounds(for: object)
+                    .offsetBy(dx: move.offset.x, dy: move.offset.y))
             }
         }
         for object in model.rasterReplacements.values {
@@ -485,6 +489,8 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         }
         let offset = model.rasterMove?.offset ?? .zero
         let viewport = model.viewport
+        let isLiveResize: Bool
+        if case .resize = model.live { isLiveResize = true } else { isLiveResize = false }
         let gap: CGFloat = 4
         func handle(_ point: CGPoint) {
             handles.addPath(CGPath(roundedRect: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6),
@@ -492,7 +498,8 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         }
         for object in chosen {
             if chosen.count == 1, case .shape(let kind) = object.content, kind == .line || kind == .arrow { continue }
-            let bounds = DrawGeometry.bounds(object).offsetBy(dx: offset.x, dy: offset.y)
+            let bounds = model.inputBounds(for: object, transient: isLiveResize)
+                .offsetBy(dx: offset.x, dy: offset.y)
             let rect = viewRect(viewport.screen(bounds).insetBy(dx: -gap, dy: -gap))
             outline.addPath(CGPath(roundedRect: rect, cornerWidth: 5, cornerHeight: 5, transform: nil))
         }
@@ -985,7 +992,13 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
 
     override func accessibilitySelectedChildren() -> [Any]? {
         prepareObjectAccessibility()
-        return model.objectNavigationIDs.filter { model.selection.contains($0) }.compactMap { objectAccessibility[$0] }
+        let selected = Set(model.selection)
+        return model.objectNavigationIDs.filter { id in
+            #if DEBUG
+            model.axSelectionMembershipVisits += 1
+            #endif
+            return selected.contains(id)
+        }.compactMap { objectAccessibility[$0] }
     }
 
     fileprivate func focusAccessibleObject(_ id: UUID) -> Bool {

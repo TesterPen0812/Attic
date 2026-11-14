@@ -158,6 +158,45 @@ final class DrawPageModel: ObservableObject {
     private(set) var objects: [DrawObject] = []
     /// Advances with every change the board must redraw.
     private(set) var contentRevision = 0
+    #if DEBUG
+    /// Performance guard: count actual input-time sample visits after warm-up.
+    var inputGeometrySampleVisits = 0
+    var selectionMembershipVisits = 0
+    var axSelectionMembershipVisits = 0
+    #endif
+    struct StrokeExtent {
+        let samples: CGRect
+        let maximumWidth: CGFloat
+        var bounds: CGRect { samples.insetBy(dx: -maximumWidth / 2, dy: -maximumWidth / 2) }
+    }
+    /// Derived from actual ink, because imported object frames can be stale.
+    /// Invalidated only for changed IDs, or wholesale on a fresh snapshot.
+    private var strokeExtents: [UUID: StrokeExtent] = [:]
+    func strokeExtent(for object: DrawObject) -> StrokeExtent? {
+        if let cached = strokeExtents[object.id] { return cached }
+        guard case .stroke(let samples) = object.content, let first = samples.first else { return nil }
+        var minX = first.x, minY = first.y, maxX = first.x, maxY = first.y
+        var maximumWidth: CGFloat = 0
+        let base = CGFloat(object.style.size.strokeWidth)
+        for sample in samples {
+            minX = min(minX, sample.x); minY = min(minY, sample.y)
+            maxX = max(maxX, sample.x); maxY = max(maxY, sample.y)
+            maximumWidth = max(maximumWidth, DrawInk.pressureWidth(sample.pressure, base: base))
+        }
+        #if DEBUG
+        inputGeometrySampleVisits += samples.count
+        #endif
+        let extent = StrokeExtent(samples: CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY),
+                                  maximumWidth: maximumWidth)
+        strokeExtents[object.id] = extent
+        return extent
+    }
+    func inputBounds(for object: DrawObject, transient: Bool = false) -> CGRect {
+        // Live resize objects keep the stored UUID but have new sample geometry.
+        // Never read or populate the committed extent cache for those values.
+        if transient { return DrawGeometry.bounds(object) }
+        return strokeExtent(for: object)?.bounds ?? DrawGeometry.bounds(object)
+    }
     var objectNavigationCache: (revision: Int, ids: [UUID])?
     var live: DrawLive?
     /// A middle-button pan keeps ownership until that button is released,
@@ -581,6 +620,7 @@ final class DrawPageModel: ObservableObject {
            (try? store.open(id)) != nil { open(id) }
         else if let newest = try? store.library().first { open(newest.id) } else { newCanvas() }
     }
+        guard !selection.isEmpty else { return [] }
 
     func open(_ id: UUID) {
         if id != canvasID, library.isRenaming {
@@ -637,6 +677,7 @@ final class DrawPageModel: ObservableObject {
         let canvas = store.create(name: name)
         viewports[canvas.id] = DrawViewport()
         open(canvas.id)
+        strokeExtents.removeAll(keepingCapacity: true)
         setTool(.pen)
         return canvasID == canvas.id
     }
@@ -746,7 +787,13 @@ final class DrawPageModel: ObservableObject {
 
     func select(_ ids: [UUID]) {
         syncExternalChanges()
-        let next = ids.filter { id in objects.contains { $0.id == id } }
+        let available = Set(objects.map(\.id))
+        let next = ids.filter { id in
+            #if DEBUG
+            selectionMembershipVisits += 1
+            #endif
+            return available.contains(id)
+        }
         guard next != selection else { return }
         selection = next
         if next.isEmpty { isSelectionStyleOpen = false }
@@ -1071,6 +1118,7 @@ final class DrawPageModel: ObservableObject {
     }
 
     private func restyleEditing(_ change: (inout DrawStyle) -> Void) {
+        strokeExtents[id] = nil
         syncExternalChanges()
         guard var edit = editing else { return }
         change(&edit.style)
@@ -1208,7 +1256,7 @@ final class DrawPageModel: ObservableObject {
 
     func updateLost() {
         let lost = userMovedView && !objects.isEmpty
-            && !viewport.anyInView(objects.map(DrawGeometry.bounds), clear: clearRect)
+            && !objects.contains { viewport.screen(inputBounds(for: $0)).intersects(clearRect) }
         if viewportState.isLost != lost { viewportState.isLost = lost }
     }
 
@@ -1270,6 +1318,7 @@ final class DrawPageModel: ObservableObject {
 
     private func acknowledgeHistory(redo: Bool) {
         guard let canvasID, live == nil else { return }
+            for id in touched { strokeExtents[id] = nil }
         guard store is DrawPersistentStore else {
             if redo { self.redo() } else { self.undo() }
             return
@@ -1278,6 +1327,7 @@ final class DrawPageModel: ObservableObject {
         // Its flush is still the required boundary for Undo/Redo.
         if !typingCommands.isEmpty { if redo { self.redo() } else { self.undo() }; return }
         if acknowledgedDraw.isEmpty { syncExternalChanges() }
+            for id in ids { strokeExtents[id] = nil }
         prepareAcknowledgedHistory(on: canvasID)
         let before = objects
         let change: DrawChange
@@ -1328,6 +1378,7 @@ final class DrawPageModel: ObservableObject {
     /// Failed edits keep the store's recoverable after-draft and Retry UI.
     func flushAcknowledgedDraw() {
         acknowledgedDrawTimer?.cancel()
+            strokeExtents[id] = nil
         acknowledgedDrawTimer = nil
         acknowledgedUndoChanges = nil
         acknowledgedRedoChanges = []
@@ -1445,6 +1496,8 @@ final class DrawPageModel: ObservableObject {
             if let object = object(edit.id), case .text(let text) = object.content {
                 edit.text = text
                 edit.style = object.style
+            for object in delta.upserted { strokeExtents[object.id] = nil }
+            for id in delta.removedIDs { strokeExtents[id] = nil }
                 edit.origin = CGPoint(x: object.frame.x, y: object.frame.y)
                 edit.width = object.textWidth.map { CGFloat($0) }
                 edit.scale = CGFloat(object.textScale ?? 1)
@@ -1461,6 +1514,7 @@ final class DrawPageModel: ObservableObject {
         selectionRevision += 1
         thumbnailNeeded()
         updateLost()
+            strokeExtents.removeAll(keepingCapacity: true)
         board?.drawContentChanged()
         board?.drawSelectionChanged()
     }
@@ -1542,3 +1596,4 @@ final class DrawPageModel: ObservableObject {
             ?? snapshot.canvas.name // An unpublished canvas's chosen draft name has no saved row yet.
     }
 }
+        strokeExtents.removeAll(keepingCapacity: true)

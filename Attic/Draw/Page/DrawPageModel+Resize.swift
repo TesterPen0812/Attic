@@ -61,7 +61,14 @@ extension DrawPageModel {
         }
         // Moving a selection changes only its position; translating stroke
         // point arrays here would allocate every sample on every mouse event.
-        guard let union = DrawGeometry.union(chosen)?.offsetBy(dx: offset.x, dy: offset.y) else { return [] }
+        let isLiveResize: Bool
+        if case .resize = live { isLiveResize = true } else { isLiveResize = false }
+        guard let first = chosen.first else { return [] }
+        var union = inputBounds(for: first, transient: isLiveResize)
+        for object in chosen.dropFirst() {
+            union = union.union(inputBounds(for: object, transient: isLiveResize))
+        }
+        union = union.offsetBy(dx: offset.x, dy: offset.y)
         let rect = viewport.screen(union).insetBy(dx: -Self.outlineGap, dy: -Self.outlineGap)
         if chosen.count == 1, case .text = chosen[0].content {
             return [DrawHandleSpot(handle: .left, point: CGPoint(x: rect.minX, y: rect.midY)),

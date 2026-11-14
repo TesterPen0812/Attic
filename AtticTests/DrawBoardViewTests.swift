@@ -35,6 +35,39 @@ final class DrawBoardViewTests: XCTestCase {
         super.tearDown()
     }
 
+    func testPF24SelectedAccessibilityChildrenHaveLinearMembershipWork() throws {
+        let shapes = (0..<2_000).map { index in
+            DrawObject(frame: DrawFrame(x: Double(index % 100) * 12, y: Double(index / 100) * 12,
+                                        width: 8, height: 8), zIndex: Int64(index), content: .shape(.rectangle))
+        }
+        XCTAssertTrue(model.perform(.put(shapes)).isSaved)
+        model.selectAll()
+        model.axSelectionMembershipVisits = 0
+        XCTAssertEqual(board.accessibilitySelectedChildren()?.count, shapes.count)
+        XCTAssertLessThanOrEqual(model.axSelectionMembershipVisits, shapes.count * 2)
+    }
+
+    func testPF19ResizeOutlineFollowsLiveStrokeRatherThanCachedOriginalBounds() throws {
+        let samples = [DrawPoint(x: 100, y: 100, pressure: 0.2),
+                       DrawPoint(x: 140, y: 140, pressure: 1)]
+        let object = DrawObject(frame: DrawGeometry.strokeFrame(samples), zIndex: 1,
+                                content: .stroke(samples))
+        XCTAssertTrue(model.perform(.put([object])).isSaved)
+        model.setTool(.select)
+        model.select([object.id])
+        let selectionLayer = try XCTUnwrap(board.layer?.sublayers?[4] as? CAShapeLayer)
+        let before = try XCTUnwrap(selectionLayer.path).boundingBox
+        let handle = try XCTUnwrap(model.handleSpots.first { $0.handle == .bottomRight })
+        let start = model.viewport.world(handle.point)
+        model.beginResize(handle, at: start)
+        guard case .resize(let resize) = model.live else { return XCTFail("Resize did not begin") }
+        model.dragResize(resize, to: CGPoint(x: start.x + 100, y: start.y + 40), shift: false)
+        let after = try XCTUnwrap(selectionLayer.path).boundingBox
+        XCTAssertGreaterThan(after.maxX, before.maxX + 50,
+                             "live resized ink must extend the outline before any store save")
+        XCTAssertEqual(model.object(object.id), object, "dragging has not committed the resized ink")
+    }
+
     /// keyboard-hunt (13 Nov): real DrawKey actions, in randomized order,
     /// with a focus and object-liveness check after every action. Nothing is
     /// shown; the canvas repository and pasteboard are private to this test.

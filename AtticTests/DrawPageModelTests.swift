@@ -43,6 +43,51 @@ final class DrawPageModelTests: XCTestCase {
         drag([CGPoint(x: 60, y: y), CGPoint(x: 90, y: y + 10), CGPoint(x: 130, y: y)])
     }
 
+    func testPF19RepeatedViewportAndEmptyEraserDoNotRescanStoredStrokeSamples() throws {
+        let samples = (0..<64).map { DrawPoint(x: 600 + Double($0), y: 800, pressure: Double($0 % 10) / 10) }
+        let strokes = (0..<2_000).map { index in
+            DrawObject(frame: DrawGeometry.strokeFrame(samples), zIndex: Int64(index),
+                       content: .stroke(samples))
+        }
+        XCTAssertTrue(model.perform(.put(strokes)).isSaved)
+        model.setViewport(model.viewport.panned(dx: 1, dy: 0), byUser: true)
+        model.inputGeometrySampleVisits = 0
+        for index in 0..<120 {
+            model.setViewport(model.viewport.panned(dx: index.isMultiple(of: 2) ? 1 : -1, dy: 0), byUser: true)
+        }
+        model.setTool(.eraser)
+        model.pointerDown(at: CGPoint(x: -800, y: -800))
+        for index in 0..<120 {
+            model.pointerDragged(to: CGPoint(x: -800 + index % 2, y: -800))
+        }
+        model.pointerUp()
+        XCTAssertEqual(model.inputGeometrySampleVisits, 0, "unchanged long strokes must not be rescanned by input")
+        let changed = DrawObject(id: strokes[0].id, frame: strokes[0].frame, zIndex: strokes[0].zIndex,
+                                 content: .stroke(samples + [DrawPoint(x: 680, y: 800, pressure: 1)]))
+        model.inputGeometrySampleVisits = 0
+        XCTAssertTrue(model.perform(.put([changed])).isSaved)
+        model.setViewport(model.viewport.panned(dx: 1, dy: 0), byUser: true)
+        XCTAssertEqual(model.inputGeometrySampleVisits, samples.count + 1,
+                       "editing one stroke rebuilds only that stroke's sample metadata")
+    }
+
+    func testPF24LargeSelectionIsLinearAndPreservesRequestOrder() throws {
+        let shapes = (0..<2_000).map { index in
+            DrawObject(frame: DrawFrame(x: Double(index % 100) * 10, y: Double(index / 100) * 10,
+                                        width: 6, height: 6), zIndex: Int64(index), content: .shape(.rectangle))
+        }
+        XCTAssertTrue(model.perform(.put(shapes)).isSaved)
+        model.selectionMembershipVisits = 0
+        model.selectAll()
+        XCTAssertEqual(model.selection, shapes.map(\.id))
+        XCTAssertLessThanOrEqual(model.selectionMembershipVisits, shapes.count * 2)
+        let ordered = [shapes[1700].id, UUID(), shapes[12].id, shapes[800].id]
+        model.selectionMembershipVisits = 0
+        model.select(ordered)
+        XCTAssertEqual(model.selection, [shapes[1700].id, shapes[12].id, shapes[800].id])
+        XCTAssertLessThanOrEqual(model.selectionMembershipVisits, shapes.count + ordered.count)
+    }
+
     func testExternalCanvasRenameDeferredDuringPanAppliesOnPointerUp() throws {
         let id = try XCTUnwrap(model.canvasID)
         XCTAssertTrue(store.perform(.rename("Before pan"), on: id).isSaved)
