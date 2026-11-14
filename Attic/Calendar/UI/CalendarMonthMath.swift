@@ -14,7 +14,7 @@ struct CalendarMonth: Hashable, Comparable, Sendable {
         // Normalise 0 and 13 into neighbouring years, but keep the month's
         // first day inside the 1...9999 range supported by DueDay.
         let index = year * 12 + (month - 1)
-        let bounded = min(max(index, 12), 9999 * 12 - 1)
+        let bounded = min(max(index, 12), 9999 * 12 + 11)
         self.year = bounded / 12
         self.month = bounded % 12 + 1
     }

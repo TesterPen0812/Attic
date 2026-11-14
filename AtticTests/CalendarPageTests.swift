@@ -323,6 +323,19 @@ final class CalendarPageTests: XCTestCase {
                        "day navigation must not construct an invalid DueDay")
     }
 
+    func testReviewDecember9999MonthRemainsInTheSupportedYear() {
+        let december = CalendarMonth(day(9999, 12, 31))
+        XCTAssertEqual(december.year, 9999, "the last supported year must not be silently mapped to 9998")
+        XCTAssertEqual(december.month, 12)
+        XCTAssertEqual(december.firstDay, day(9999, 12, 1))
+
+        let november = CalendarMonth(year: 9999, month: 11)
+        let next = november.adding(months: 1)
+        XCTAssertEqual(next.year, 9999)
+        XCTAssertEqual(next.month, 12)
+        XCTAssertEqual(next.adding(months: 1), december, "Next is bounded at December 9999")
+    }
+
     // MARK: - Agenda
 
     func testAgendaGroupsSevenDaysInOrder() {
