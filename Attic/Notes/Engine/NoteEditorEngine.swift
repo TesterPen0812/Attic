@@ -2159,14 +2159,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if !history.isReplaying, ranges.count == 1, let replacement = strings?.first, replacement.isEmpty {
             let removal = ranges[0]
             let finalLine = lineRange(at: string.length)
-            if finalLine.location > 0, finalLine.length > 0, removal == finalLine,
+            if !isTitleLine(finalLine.location), finalLine.length > 0, removal == finalLine,
                !rangeContainsObject(removal),
                var block = NoteTextCodec.document(from: textStorage.attributedSubstring(from: finalLine),
                                                   template: template, firstBlockIsTitle: false).blocks.first {
                 block.text = ""; block.marks = []; block.inlines = []
                 pendingEmptiedParagraph = (finalLine.location, block)
             }
-            if removal.location > 0, removal.length > 0, NSMaxRange(removal) < string.length,
+            if !isTitleLine(removal.location), removal.length > 0, NSMaxRange(removal) < string.length,
                removal.location == paragraphRange(at: removal.location).location,
                NSMaxRange(removal) == paragraphRange(at: NSMaxRange(removal)).location,
                paragraphStyle(at: removal.location) == .number,
@@ -2567,7 +2567,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         if let emptied = pendingEmptiedParagraph {
             pendingEmptiedParagraph = nil
-            if emptied.location == textStorage.length, textStorage.string.hasSuffix("\n") {
+            if emptied.location == textStorage.length, hasEmptyFinalLine {
                 restoreEmptyParagraph(emptied.block)
             }
         }
@@ -4106,9 +4106,15 @@ extension NoteEditorEngine {
 
     private func emptyParagraphBlock() -> NoteBlock? {
         guard let pending = pendingParagraphStyle, pending.location == textStorage.length,
-              textStorage.length > 0,
-              (textStorage.string as NSString).character(at: textStorage.length - 1) == 0x0A else { return nil }
+              hasEmptyFinalLine else { return nil }
         return block(for: pending.state)
+    }
+
+    /// Whether the text ends in an empty paragraph of its own: after a
+    /// line break, or, in a task's note, as an empty body (its first
+    /// paragraph starts at 0, so emptied text has no break to end on).
+    private var hasEmptyFinalLine: Bool {
+        textStorage.length == 0 ? isBodyOnly : (textStorage.string as NSString).character(at: textStorage.length - 1) == 0x0A
     }
 
     private func restoreEmptyParagraph(_ block: NoteBlock?) {

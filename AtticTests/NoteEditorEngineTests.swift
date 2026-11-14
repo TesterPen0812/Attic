@@ -163,6 +163,130 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    /// Round 2, Dot R-1 / Opus R-3: a task note's first body paragraph starts
+    /// at zero, so clearing its text must keep its block like any ordinary
+    /// note's last paragraph does. Returns the engine, its view and the
+    /// offset where the first writing paragraph starts.
+    private func bg14Engine(titled: Bool, _ blocks: [NoteBlock]) -> (NoteEditorEngine, NoteEditorTextView, Int, NoteDocument) {
+        if titled {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T")] + blocks))
+            return (engine, view, 2, engine.document())
+        }
+        let (engine, view, _) = bgBodyOnly(blocks)
+        return (engine, view, 0, engine.document())
+    }
+
+    private func bg14Window(for view: NoteEditorTextView) throws -> (NSWindow, NSScrollView) {
+        let scroll = try XCTUnwrap(view.enclosingScrollView)
+        let window = F3UnshownWindow(contentRect: NSRect(x: -4_000, y: -4_000, width: 400, height: 240),
+                                    styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        XCTAssertTrue(window.makeFirstResponder(view))
+        bg14Settle(view)
+        return (window, scroll)
+    }
+
+    /// Match RoundF3Harness's native viewport and selection lifecycle before
+    /// measuring the caret; storage callbacks may finish on the next turn.
+    private func bg14Settle(_ view: NoteEditorTextView) {
+        if let layout = view.textLayoutManager { layout.ensureLayout(for: layout.documentRange) }
+        view.enclosingScrollView?.layoutSubtreeIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        view.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        view.updateInsertionPointStateAndRestartTimer(true)
+        view.displayIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+    }
+
+    private func bg14Reopen(_ document: NoteDocument, titled: Bool) throws -> NoteEditorEngine {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        _ = try store.createDocumentNote(id: id, document: document).get()
+        let reopenedStore = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let loaded = try XCTUnwrap(reopenedStore.loadDocument(noteID: id)?.content.document)
+        return NoteEditorEngine(noteID: id, document: loaded, bodyOnly: !titled)
+    }
+
+    func testBG14ClearingTheOnlyTaskBodyParagraphKeepsItsIdentityStyleAndExtras() throws {
+        var block = NoteBlock.text("Plan", id: UUID(), style: "heading")
+        block.level = 3
+        block.extras = ["future": .string("kept")]
+        for titled in [true, false] {
+            let label = titled ? "titled note" : "task note"
+            let (engine, view, start, original) = bg14Engine(titled: titled, [block])
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: start, length: 4))
+            view.deleteBackward(nil)
+            XCTAssertEqual(engine.textStorage.length, start, "\(label): the paragraph's text is gone")
+            let empty = try XCTUnwrap(engine.document().blocks.last, label)
+            XCTAssertEqual(empty.text, "", label)
+            XCTAssertEqual(empty.id, block.id, "\(label): the block keeps its ID")
+            XCTAssertEqual(empty.style, "heading", "\(label): the block keeps its style")
+            XCTAssertEqual(empty.level, 3, label)
+            XCTAssertEqual(empty.extras, block.extras, "\(label): the block keeps its unknown extras")
+            let reopened = try bg14Reopen(engine.document(), titled: titled)
+            defer { reopened.detachView() }
+            XCTAssertEqual(reopened.document().blocks.last, empty, "\(label): save and reload keep the empty block")
+            XCTAssertTrue(engine.history.undo(), label)
+            XCTAssertEqual(engine.document(), original, "\(label): Undo restores the original block")
+            XCTAssertTrue(engine.history.redo(), label)
+            XCTAssertEqual(engine.document().blocks.last, empty, "\(label): Redo clears it again, metadata kept")
+        }
+    }
+
+    func testBG14ClearingASingleTaskHeadingLeavesTheHeadingPendingLikeAnOrdinaryNote() throws {
+        var heading = NoteBlock.text("Plan", id: UUID(), style: "heading")
+        heading.level = 2
+        for titled in [true, false] {
+            let label = titled ? "titled note" : "task note"
+            let (engine, view, start, _) = bg14Engine(titled: titled, [heading])
+            defer { engine.detachView() }
+            let (window, scroll) = try bg14Window(for: view)
+            defer { window.contentView = nil; window.close() }
+            view.setSelectedRange(NSRange(location: start, length: 4))
+            view.deleteBackward(nil)
+            XCTAssertEqual(engine.pendingParagraphStyle?.state.style, .heading(2), "\(label): the empty heading stays pending")
+            XCTAssertEqual(engine.pendingParagraphStyle?.location, engine.textStorage.length, label)
+            XCTAssertEqual(engine.paragraphStyle(at: start), .heading(2), label)
+            view.insertText("Next", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertEqual(engine.document().blocks.last?.style, "heading", "\(label): typing continues the heading")
+            XCTAssertEqual(engine.document().blocks.last?.text, "Next", label)
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            try bgRound2Capture(scroll, name: "BG14-\(titled)-heading-Next")
+        }
+    }
+
+    func testBG14DeletingTheFirstNumberedTaskItemKeepsTheRestartNumber() throws {
+        var first = NoteBlock.text("one", style: "number"); first.start = 5
+        for titled in [true, false] {
+            let label = titled ? "titled note" : "task note"
+            let (engine, view, start, original) = bg14Engine(titled: titled, [first, .text("two", style: "number"), .text("three", style: "number")])
+            defer { engine.detachView() }
+            XCTAssertEqual(engine.listMarker(at: start), .number("5."), label)
+            view.setSelectedRange(NSRange(location: start, length: 4)) // "one\n"
+            view.deleteBackward(nil)
+            XCTAssertEqual(engine.listMarker(at: start), .number("5."), "\(label): the next item keeps the restart number")
+            XCTAssertEqual(engine.document().blocks.dropFirst().first?.start, 5, label)
+            XCTAssertTrue(engine.history.undo(), label)
+            XCTAssertEqual(engine.document(), original, "\(label): Undo gives the first item back")
+        }
+    }
+
+    private func bgRound2Capture(_ view: NSView, name: String) throws {
+        guard (ProcessInfo.processInfo.environment["ATTIC_BG_CAPTURE"] == "1" || ProcessInfo.processInfo.environment["TEST_RUNNER_ATTIC_BG_CAPTURE"] == "1") else { return }
+        let bounds = view.bounds
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        rep.size = bounds.size
+        view.cacheDisplay(in: bounds, to: rep)
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("R2-\(name).png")
+        try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: path)
+        print("R2_SNAPSHOT=\(path.path)")
+    }
+
     func testSW05DateChipCacheStaysBoundedAndReusesLiveEntry() {
         let renderer = NoteObjectRenderer(design: NoteTextStyle().design)
         let recent = renderer.dateChip("day 0")
