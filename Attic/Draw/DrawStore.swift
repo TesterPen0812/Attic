@@ -123,9 +123,10 @@ class DrawStore: DrawStoreProtocol {
         }
     }
 
-    /// Every change publishes a new revision. Cached thumbnail bodies stay
-    /// valid only across a thumbnail write on another canvas.
-    private func bumpRevision(thumbnailOf id: UUID? = nil) {
+    /// Every change publishes a new revision. A change that names its canvas
+    /// (a thumbnail write, an edit, Undo or Redo) drops only that canvas's
+    /// cached thumbnail body; the others stay valid. Anything else drops all.
+    private func bumpRevision(changed id: UUID? = nil) {
         revision &+= 1
         if let id { searchThumbnails[id] = nil } else { searchThumbnails.removeAll() }
     }
@@ -188,11 +189,14 @@ class DrawStore: DrawStoreProtocol {
         if let canvas = searchThumbnails[id] { return canvas }
         // The summary only names the canvas; the hydrated row is read fresh.
         // A stale cached summary is enough, so no metadata refetch per write.
-        let known = searchMetadataCache?.canvases.first { $0.id == id }
-        guard let metadata = try known ?? searchMetadata().first(where: { $0.id == id }) else { return nil }
-        let loaded = try repository.hydrateSearchThumbnails([metadata]).first
-        if let loaded { searchThumbnails[id] = loaded }
-        return loaded
+        let canvases = try searchMetadataCache?.canvases ?? searchMetadata()
+        guard let metadata = canvases.first(where: { $0.id == id }) else { return nil }
+        // A miss reads the initial window's uncached rows in one batch (one
+        // context, two fetches), not one batch per realized row.
+        var batch = canvases.prefix(12).filter { searchThumbnails[$0.id] == nil && !recoveredCanvasIDs.contains($0.id) }
+        if !batch.contains(where: { $0.id == id }) { batch = [metadata] }
+        for loaded in try repository.hydrateSearchThumbnails(batch) { searchThumbnails[loaded.id] = loaded }
+        return searchThumbnails[id]
     }
 
     private func searchMetadata() throws -> [DrawCanvas] {
@@ -668,7 +672,7 @@ class DrawStore: DrawStoreProtocol {
         // A draft keeps its thumbnail in memory until its first save.
         guard current.persisted else {
             states[id]?.canvas = after
-            bumpRevision(thumbnailOf: id)
+            bumpRevision(changed: id)
             return .saved(DrawDelta(canvas: after, upserted: [], removedIDs: [], revision: revision))
         }
         let change = DrawChange(canvasID: id, before: current.canvas, after: after, objectsBefore: [:], objectsAfter: [:])
@@ -680,7 +684,7 @@ class DrawStore: DrawStoreProtocol {
         switch outcome {
         case .committed:
             states[id]?.canvas = after
-            bumpRevision(thumbnailOf: id)
+            bumpRevision(changed: id)
             return .saved(DrawDelta(canvas: after, upserted: [], removedIDs: [], revision: revision))
         case .retry(let message): return .retry(message)
         case .held(let message): return .held(message)
@@ -834,7 +838,7 @@ class DrawStore: DrawStoreProtocol {
             _ = histories[id]?.redo.popLast()
             appendUndo(step, on: id)
         }
-        bumpRevision()
+        bumpRevision(changed: id)
         let delta = DrawDelta(canvas: step.after,
                               upserted: step.change.objectsAfter.values.filter { $0.deletedAt == nil }.sorted(by: Self.objectOrder),
                               removedIDs: step.change.objectIDs.filter { step.change.objectsAfter[$0]?.deletedAt != nil || step.change.objectsAfter[$0] == nil }.sorted { $0.uuidString < $1.uuidString },
