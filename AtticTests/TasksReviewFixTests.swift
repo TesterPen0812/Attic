@@ -445,6 +445,20 @@ final class TasksReviewFixTests: XCTestCase {
         XCTAssertEqual(model.doneLogTasks.count, 2 * TasksPageModel.doneLogPageSize, "one reach of the end reads one page")
     }
 
+    /// Opus R-3: a sentinel below the viewport, with a folded tail, pages on
+    /// by itself only while it is actually on screen.
+    func testDoneSentinelBelowTheViewportDoesNotPageOnByItself() throws {
+        let host = try mountDone(days: [(0, 12), (2, 200)])
+        defer { host.close() }
+        let model = host.model
+        let second = try XCTUnwrap(model.doneDays().dropFirst().first)
+        model.toggleGroup(second.key, on: .done)
+        host.spin(1.5)
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize,
+                       "12 open rows and two headings fill the screen: the sentinel below them is not on screen")
+        XCTAssertTrue(model.doneLogHasMore)
+    }
+
     func testDoneLogPagesReachEveryTaskAcrossDuplicatesAndSupersededCopies() throws {
         let store = try makeTestStore()
         let context = ModelContext(store.container)

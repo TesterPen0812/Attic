@@ -100,6 +100,59 @@ final class TasksRound12Tests: XCTestCase {
         }
     }
 
+    // MARK: - pro-bugs-tasks-r1 fix 1: Done headings below the fold take the ring (Opus R-2)
+
+    func testShiftTabToTheLastFoldedDoneHeadingScrollsItIntoView() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let model = hosted.model
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let context = ModelContext(hosted.store.container)
+        for ago in 3..<63 {
+            let completed = calendar.date(byAdding: .day, value: -ago, to: today)!.addingTimeInterval(12 * 3_600)
+            let item = TaskItem(id: UUID(), title: "Long ago \(ago)", status: .done,
+                                createdAt: completed, updatedAt: completed, completedAt: completed)
+            item.doneLoggedAt = completed
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(item)
+        }
+        try context.save()
+        hosted.store.refresh()
+        hosted.go(to: .done)
+        model.loadDoneLogIfNeeded()
+        for _ in 0..<5 where model.doneLogHasMore { model.loadMoreDoneLog() }
+        let days = model.doneDays()
+        XCTAssertGreaterThan(days.count, 40)
+        model.foldAllGroups(days.map(\.key), folded: true, on: .done)
+        hosted.spin(0.3)
+        func doneList() -> NSScrollView? {
+            func find(_ view: NSView) -> NSScrollView? {
+                if let keeper = view as? TasksScrollKeeper.KeeperView, let scroll = keeper.enclosingScrollView {
+                    let frame = scroll.convert(scroll.bounds, to: hosted.window.contentView)
+                    if frame.width > 100, frame.height > 100, frame.minX >= -1, frame.minX < 200 { return scroll }
+                }
+                return view.subviews.lazy.compactMap { find($0) }.first
+            }
+            hosted.window.contentView?.layoutSubtreeIfNeeded()
+            return hosted.window.contentView.flatMap { find($0) }
+        }
+        // Shift-Tab from the add bar goes to the last stop: the oldest day's
+        // heading, far below what is built.
+        for _ in 0..<2 { hosted.press("\u{19}", keyCode: 48, modifiers: .shift) }
+        let scroll = try XCTUnwrap(doneList())
+        let visible = scroll.contentView.bounds
+        let document = try XCTUnwrap(scroll.documentView)
+        // Within the bottom clearance of the list's end: the last heading is on screen.
+        XCTAssertGreaterThanOrEqual(visible.minY, document.bounds.height - visible.height - 160,
+                                    "the last heading is scrolled into view (offset \(visible.minY), \(days.count) days)")
+        // And Space folds/unfolds that very heading, the one the person sees.
+        hosted.press(" ", keyCode: 49)
+        let opened = days.filter { !model.folded(on: .done).contains($0.key) }
+        XCTAssertEqual(opened.map(\.key), [days.last!.key])
+    }
+
     private final class ProbePanel: NSPanel {
         override var canBecomeKey: Bool { true }
     }
