@@ -2684,3 +2684,105 @@ extension Draw3PageTests {
         fail = false; use(recovered)
     }
 }
+extension Draw3PageTests {
+    private func r5PinCount() throws -> Int {
+        var mirror: Mirror? = Mirror(reflecting: try XCTUnwrap(store))
+        while let current = mirror {
+            if let pins = current.children.first(where: { $0.label == "pins" })?.value {
+                let counts = try XCTUnwrap(Mirror(reflecting: pins).children.first { $0.label == "counts" })
+                return Mirror(reflecting: counts.value).children.count
+            }
+            mirror = current.superclassMirror
+        }
+        XCTFail("pin book must be present so the assertion cannot pass on a missing field")
+        return -1
+    }
+
+    func testR5QueuedMenuDeletionOffersUndoWhenRetryCommits() async throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID), url = try r5URL()
+        XCTAssertTrue(model.perform(.saveCanvas).isSaved)
+        XCTAssertTrue(model.perform(.put([DrawObject(content: .shape(.rectangle))])).isSaved)
+        fail = true; _ = store.undo(on: id)
+        let toast = PanelToastCenter(); toast.holdDuration = 600
+        model.library.toasts = toast
+        model.library.perform(.delete)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 2)
+        XCTAssertFalse(toast.current?.message.contains("couldn’t be deleted") ?? false)
+        XCTAssertNotNil(model.saveNotice)
+        fail = false; model.retrySave()
+        await r5DrainObservation()
+        XCTAssertNotNil(try store.open(id).canvas.deletedAt)
+        try r5CaptureNotice("queued-deletion", toasts: toast)
+        XCTAssertTrue(model.library.canUndoDeletionIfOffered, "the queued delete's exact toast appears once committed")
+        XCTAssertEqual(try r5PinCount(), 1)
+        XCTAssertTrue(DrawRecentlyDeleted.entries(store: store, now: Date(), calendar: .current).contains { $0.source == .draw(DrawDeletedItem(canvasID: id, objectID: nil)) })
+        guard toast.current?.answersUndoKey == true else { toast.dismiss(); return }
+        XCTAssertEqual(toast.performAction(), .applied)
+        XCTAssertNil(try store.open(id).canvas.deletedAt)
+        XCTAssertEqual(try r5PinCount(), 0)
+        let reopened = try r5CrashReopen(url)
+        XCTAssertNil(try reopened.open(id).canvas.deletedAt)
+        use(reopened)
+    }
+
+    func testR5QueuedGroupedRestoreTracksItsUndoInsteadOfReportingFailure() async throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID)
+        let image = DrawObject(content: .image(DrawImage(original: Draw3Images.encoded(width: 2, height: 2), pixelWidth: 2, pixelHeight: 2)))
+        let second = DrawObject(content: image.content)
+        XCTAssertTrue(model.perform(.put([image, second])).isSaved)
+        XCTAssertTrue(model.perform(.remove([image.id, second.id])).isSaved)
+        XCTAssertTrue(model.perform(.tags(["undo"])).isSaved)
+        fail = true; _ = store.undo(on: id)
+        let deleted = RecentlyDeletedModel(library: nil, draw: { [weak store] in store })
+        deleted.start(); XCTAssertEqual(deleted.listedEntries.count, 2)
+        deleted.restore(deleted.listedEntries)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 2)
+        XCTAssertNotEqual(deleted.message?.tone, .error, "a queued restore must be described as pending")
+        XCTAssertFalse(deleted.canUndo, "the pending group is tracked but not offered until saving settles")
+        fail = false; model.retrySave(); await r5DrainObservation()
+        XCTAssertTrue(deleted.canUndo)
+        XCTAssertEqual(try r5PinCount(), 1)
+        deleted.undo()
+        XCTAssertTrue(try store.open(id).objects.isEmpty)
+        XCTAssertFalse(deleted.canUndo)
+    }
+}
+extension Draw3PageTests {
+    private func r5CaptureNotice(_ name: String, toasts: PanelToastCenter? = nil) throws {
+        guard let path = ProcessInfo.processInfo.environment["ATTIC_R5_RENDER_DIR"] else { return }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "DrawR5-" + URL(fileURLWithPath: path).lastPathComponent, isDirectory: true)
+        print("R5_RENDER_ROOT=\(root.path)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let old = AtticTransparencySeam.systemOverride
+        AtticTransparencySeam.systemOverride = true
+        defer { AtticTransparencySeam.systemOverride = old }
+        let view = PanelNoticeStack(toasts: toasts ?? PanelToastCenter(), notice: model.saveNotice,
+            onRetry: {}, onDismissNotice: {})
+            .frame(width: 320).padding(12).background(Color.white)
+            .atticDesign(AtticDesignContext()).environment(\.colorScheme, .light)
+        let host = NSHostingView(rootView: view)
+        host.appearance = NSAppearance(named: .aqua)
+        let size = host.fittingSize
+        XCTAssertGreaterThan(size.height, 0)
+        host.setFrameSize(size); host.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: Int(ceil(size.width * 2)), pixelsHigh: Int(ceil(size.height * 2)),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.size = size
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(root.appendingPathComponent(name + ".png") as CFURL,
+            "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(bitmap.cgImage), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+    }
+}

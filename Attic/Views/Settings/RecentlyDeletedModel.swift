@@ -299,6 +299,15 @@ final class RecentlyDeletedModel: ObservableObject {
     private let draw: @MainActor () -> (any DrawStoreProtocol)?
     private let drawOnlyUndo = UndoRoute()
     private var restoreUndo: UndoRoute { library?.undo ?? drawOnlyUndo }
+    private var pendingDrawRestoreIDs = Set<UUID>()
+    private var pendingDrawRestoreMessageGeneration: UInt64?
+
+    private func describePendingDrawRestore(_ report: DrawRecentlyDeleted.RestoreResult) {
+        guard report.pending > 0, message == nil else { return }
+        message = Message(text: String(localized: "The restored changes are not saved yet."), tone: .warning)
+        pendingDrawRestoreIDs = report.pendingCanvasIDs
+        pendingDrawRestoreMessageGeneration = messageGeneration
+    }
 
     init(library: AtticLibrary?, now: @escaping () -> Date = Date.init, calendar: Calendar = .autoupdatingCurrent,
          draw: @escaping @MainActor () -> (any DrawStoreProtocol)? = { DrawLibraryHub.activeStore }) {
@@ -430,7 +439,7 @@ final class RecentlyDeletedModel: ObservableObject {
     /// Follows the Draw store's saves while the page is shown.
     private func observeDraw() {
         guard drawObserving, let store = draw() else { return }
-        withObservationTracking { _ = store.revision } onChange: { [weak self] in
+        withObservationTracking { _ = store.revision; _ = store.pendingEdits; _ = store.pendingGeneration } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.drawObserving else { return }
                 self.reload()
@@ -440,6 +449,11 @@ final class RecentlyDeletedModel: ObservableObject {
     }
 
     func reload() {
+        if let generation = pendingDrawRestoreMessageGeneration,
+           let store = draw(), pendingDrawRestoreIDs.allSatisfy({ store.pendingEdits[$0] == nil }) {
+            if messageGeneration == generation { message = nil }
+            pendingDrawRestoreIDs = []; pendingDrawRestoreMessageGeneration = nil
+        }
         let drawn = DrawRecentlyDeleted.entries(store: draw(), now: now(), calendar: calendar)
         guard let library else {
             entries = drawn
@@ -465,6 +479,7 @@ final class RecentlyDeletedModel: ObservableObject {
             message = report.failure.map {
                 Message(text: String(localized: "“\(entry.title)” couldn’t be restored: \($0)"), tone: .error)
             }
+            describePendingDrawRestore(report)
             AtticSounds.play(report.restored > 0 ? .restored : .failed)
             reload()
             return
@@ -519,6 +534,7 @@ final class RecentlyDeletedModel: ObservableObject {
         message = failures.first.map { reason in
             Message(text: RecentlyDeletedPresentation.restoreFailure(count: failures.count, reason: reason), tone: .error)
         }
+        describePendingDrawRestore(drawReport)
         reload()
         if restored > 0 || !failures.isEmpty { AtticSounds.play(restored > 0 ? .restored : .failed) }
         if restored > 0 {

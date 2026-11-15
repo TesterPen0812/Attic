@@ -41,6 +41,14 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         return Fixture(clock: clock, container: container, tasks: tasks, notes: notes, canvases: canvases, library: library)
     }
 
+    private func makeFileBackedDrawContainer() throws -> ModelContainer {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawMixedRestore-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        return try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+    }
+
     /// Deletes tasks titled `titles`, one second apart (newest last, so
     /// the list shows them in reverse).
     private func deleteTasks(_ titles: [String], in fixture: Fixture) throws -> [UUID] {
@@ -247,7 +255,7 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
 
     func testMixedUndoFinishesAfterDrawFailureIsRetried() throws {
         let fixture = try makeFixture()
-        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let container = try makeFileBackedDrawContainer()
         var failNextDrawSave = false
         let draw = DrawPersistentStore(container: container, save: { context in
             if failNextDrawSave {
@@ -269,10 +277,11 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         failNextDrawSave = true
         model.undo()
         XCTAssertEqual(model.message?.tone, .error)
-        XCTAssertTrue(model.canUndo, "the grouped Undo remains retryable")
+        XCTAssertTrue(model.canUndo, "the grouped Undo remains retryable after its own failed save")
         XCTAssertNotNil(fixture.notes.note(withID: note.id), "compensate the confirmed library Undo")
         XCTAssertTrue(draw.retry(on: board.id).isSaved, "finish the failed Draw operation")
 
+        XCTAssertTrue(model.canUndo, "the same group becomes available again after Retry")
         model.undo()
         XCTAssertNil(fixture.notes.note(withID: note.id), "finish the same group after Draw settled")
         XCTAssertNotNil(try draw.open(board.id).canvas.deletedAt)
@@ -303,9 +312,9 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertNotNil(try draw.open(board.id).canvas.deletedAt)
     }
 
-    func testMixedRestoreWithOneFailedDrawSaveUndoesOnlyConfirmedRestores() throws {
+    func testMixedRestoreWaitsForQueuedDrawSaveThenUndoesEveryAcceptedRestore() throws {
         let fixture = try makeFixture()
-        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let container = try makeFileBackedDrawContainer()
         var rejectRestore = false
         var restoresAttempted = 0
         let draw = DrawPersistentStore(container: container, save: { context in
@@ -329,16 +338,24 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         model.selectAll()
         rejectRestore = true
         model.restoreSelected()
-        XCTAssertEqual(model.message?.tone, .error)
-        XCTAssertTrue(model.canUndo)
+        XCTAssertEqual(model.message?.tone, .warning)
+        XCTAssertFalse(model.canUndo, "the whole accepted group waits for its pending member")
+        XCTAssertEqual(draw.pendingEdits.count, 1)
+        let pending = try XCTUnwrap(draw.pendingEdits.keys.first)
+        XCTAssertNil(try draw.open(pending).canvas.deletedAt, "the queued restore is visible")
         XCTAssertEqual(try draw.library(deleted: false).filter { [first.id, second.id].contains($0.id) }.count, 1)
         XCTAssertNotNil(fixture.notes.note(withID: note.id))
 
         rejectRestore = false
+        XCTAssertTrue(draw.retry(on: pending).isSaved)
+        XCTAssertTrue(model.canUndo)
         model.undo()
         XCTAssertNil(fixture.notes.note(withID: note.id))
         XCTAssertEqual(try draw.library(deleted: true).filter { [first.id, second.id].contains($0.id) }.count, 2,
-                       "the successful Draw restore goes back; the refused one was never included")
+                       "Undo includes both accepted Draw restores once their saves settle")
+        XCTAssertTrue(fixture.library.undo.redo(in: .library))
+        XCTAssertNotNil(fixture.notes.note(withID: note.id))
+        XCTAssertEqual(try draw.library(deleted: false).filter { [first.id, second.id].contains($0.id) }.count, 2)
     }
 
     func testUnrelatedStepNamedRestoreDoesNotEnableRecentlyDeletedUndo() throws {

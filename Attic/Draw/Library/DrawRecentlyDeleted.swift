@@ -29,6 +29,8 @@ enum DrawRecentlyDeleted {
         var restored: Int
         var failure: String?
         var actions: [RestoreAction]
+        var pending = 0
+        var pendingCanvasIDs: Set<UUID> = []
     }
 
     static func entries(store: (any DrawStoreProtocol)?, now: Date, calendar: Calendar) -> [RecentlyDeletedEntry] {
@@ -95,7 +97,8 @@ enum DrawRecentlyDeleted {
         var restored = 0
         var failure: String?
         var actions: [RestoreAction] = []
-        func settle(_ result: DrawSaveResult, canvasID: UUID, count: Int) {
+        var queued = 0, queuedCanvases = Set<UUID>()
+        func settle(_ result: DrawSaveResult, canvasID: UUID, count: Int, previous: UUID?) {
             switch result {
             case .saved:
                 restored += count
@@ -103,13 +106,20 @@ enum DrawRecentlyDeleted {
                     actions.append(RestoreAction(canvasID: canvasID, historyStepID: stepID,
                                                  pin: store.pinHistoryStep(stepID)))
                 }
-            case .unchanged: restored += count
-            case let .retry(message), let .held(message): failure = failure ?? message
+            case .unchanged:
+                restored += count
+                if store.pendingEdits[canvasID] != nil { queued += count; queuedCanvases.insert(canvasID) }
+            case let .retry(message), let .held(message):
+                if let pending = store.pendingEdits[canvasID], let stepID = pending.lastStepID, stepID != previous {
+                    restored += count; queued += count; queuedCanvases.insert(canvasID)
+                    actions.append(RestoreAction(canvasID: canvasID, historyStepID: stepID, pin: store.pinHistoryStep(stepID)))
+                } else { failure = failure ?? message }
             }
         }
         var seen = Set<UUID>()
         for item in items where item.objectID == nil && seen.insert(item.canvasID).inserted {
-            settle(store.perform(.restoreCanvas, on: item.canvasID), canvasID: item.canvasID, count: 1)
+            let previous = store.pendingEdits[item.canvasID]?.lastStepID
+            settle(store.perform(.restoreCanvas, on: item.canvasID), canvasID: item.canvasID, count: 1, previous: previous)
         }
         var images: [UUID: [UUID]] = [:]
         var order: [UUID] = []
@@ -120,9 +130,11 @@ enum DrawRecentlyDeleted {
         }
         for canvasID in order {
             let ids = images[canvasID] ?? []
-            settle(store.perform(.restoreObjects(ids), on: canvasID), canvasID: canvasID, count: ids.count)
+            let previous = store.pendingEdits[canvasID]?.lastStepID
+            settle(store.perform(.restoreObjects(ids), on: canvasID), canvasID: canvasID, count: ids.count, previous: previous)
         }
-        return RestoreResult(restored: restored, failure: failure, actions: actions)
+        return RestoreResult(restored: restored, failure: failure, actions: actions,
+                             pending: queued, pendingCanvasIDs: queuedCanvases)
     }
 }
 
@@ -203,12 +215,20 @@ enum RecentlyDeletedRestoreUndo {
             return .applied
         }
 
-        return UndoStep(
+        // Only the accepted restore waits here. Once saved, a failed replay
+        // keeps the same retryable group as other library history.
+        var awaitingInitialSaves = Set(actions.filter { drawStore?.pendingEdits[$0.canvasID] != nil }.map(\.canvasID))
+        var step = UndoStep(
             name: RecentlyDeletedPresentation.restoreTitle(count: restored),
             lifecycle: .restore,
             items: { drawRefs.union(librarySteps.reduce(into: Set<AtticItemRef>()) { $0.formUnion($1.affectedItems()) }) },
             undoOutcome: { withExtendedLifetime(pins) { replay(undo: true) } },
             redoOutcome: { withExtendedLifetime(pins) { replay(undo: false) } }
         )
+        step.isEnabled = {
+            awaitingInitialSaves = awaitingInitialSaves.filter { drawStore?.pendingEdits[$0] != nil }
+            return awaitingInitialSaves.isEmpty
+        }
+        return step
     }
 }

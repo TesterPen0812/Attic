@@ -45,6 +45,8 @@ struct UndoStep {
     let affectedItems: @MainActor () -> Set<AtticItemRef>
     let undo: @MainActor () -> UndoOutcome
     let redo: @MainActor () -> UndoOutcome
+    /// A recorded operation can wait for its accepted write to settle.
+    var isEnabled: @MainActor () -> Bool = { true }
     var workspacePayload: WorkspaceHistory.TextGroup? = nil
     var operationID: UUID? = nil
     var attachmentIDs: Set<UUID> = []
@@ -216,6 +218,7 @@ final class UndoRoute: ObservableObject {
         guard !replaying.contains(history), var entry = histories[history] else { return nil }
         var discardedObsolete = false
         while let step = entry.undo.last, step.replay == nil {
+            guard step.isEnabled() else { return nil }
             let outcome = step.undo()
             switch outcome {
             case .failed:
@@ -246,6 +249,7 @@ final class UndoRoute: ObservableObject {
         guard !replaying.contains(history), var entry = histories[history] else { return nil }
         var discardedObsolete = false
         while let step = entry.redo.last, step.replay == nil {
+            guard step.isEnabled() else { return nil }
             let outcome = step.redo()
             switch outcome {
             case .failed:
@@ -271,27 +275,27 @@ final class UndoRoute: ObservableObject {
 
     func canUndo(in history: UndoHistoryID) -> Bool {
         let history = resolved(history)
-        return histories[history]?.undo.isEmpty == false
+        return histories[history]?.undo.last?.isEnabled() == true
     }
 
     func canRedo(in history: UndoHistoryID) -> Bool {
         let history = resolved(history)
-        return histories[history]?.redo.isEmpty == false
+        return histories[history]?.redo.last?.isEnabled() == true
     }
 
     /// "Undo Delete Task" in menus reads this.
     func undoName(in history: UndoHistoryID) -> String? {
         let history = resolved(history)
-        return histories[history]?.undo.last.map { $0.workspacePayload?.payloads.last?.name ?? $0.name }
+        return histories[history]?.undo.last.flatMap { $0.isEnabled() ? ($0.workspacePayload?.payloads.last?.name ?? $0.name) : nil }
     }
 
     func undoLifecycle(in history: UndoHistoryID) -> UndoStep.Lifecycle? {
-        histories[resolved(history)]?.undo.last?.lifecycle
+        histories[resolved(history)]?.undo.last.flatMap { $0.isEnabled() ? $0.lifecycle : nil }
     }
 
     func redoName(in history: UndoHistoryID) -> String? {
         let history = resolved(history)
-        return histories[history]?.redo.last.map { $0.workspacePayload?.payloads.first?.name ?? $0.name }
+        return histories[history]?.redo.last.flatMap { $0.isEnabled() ? ($0.workspacePayload?.payloads.first?.name ?? $0.name) : nil }
     }
 
     /// The step an undo would reverse now.
@@ -424,7 +428,7 @@ final class UndoRoute: ObservableObject {
     private func replayTop(in history: UndoHistoryID, redo: Bool) async -> UndoOutcome? {
         let key = resolved(history)
         guard !replaying.contains(key), let entry = histories[key],
-              let step = (redo ? entry.redo : entry.undo).last else { return nil }
+              let step = (redo ? entry.redo : entry.undo).last, step.isEnabled() else { return nil }
         guard let replay = step.replay else {
             return redo ? redoStep(in: key) : undoStep(in: key)
         }

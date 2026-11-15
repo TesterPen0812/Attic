@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftUI
 
 /// The canvas menu under the title capsule (Accepted 2026-10-31, "Draw:
@@ -115,6 +116,16 @@ final class DrawLibraryMenuModel: ObservableObject {
     /// Where Delete posts its Undo toast (the panel's, from the view).
     weak var toasts: PanelToastCenter?
     private var deletionToastID: UUID?
+    private weak var deletionOffer: AnyObject?
+    private struct QueuedDeletion {
+        var canvas: DrawCanvas
+        var stepID: UUID
+        var pin: AnyObject?
+        var order: UInt64
+    }
+    private var queuedDeletions: [UUID: QueuedDeletion] = [:]
+    private var deletionSequence: UInt64 = 0
+    private var followingDeletions = false
 
     /// Only the still-offered canvas deletion owns the board's Undo key.
     var canUndoDeletionIfOffered: Bool {
@@ -351,33 +362,71 @@ final class DrawLibraryMenuModel: ObservableObject {
     /// Delete: the canvas goes to Recently Deleted, the board moves to the
     /// newest other canvas (or a new one), and a toast offers Undo.
     private func delete(_ canvas: DrawCanvas) {
+        let previous = store.pendingEdits[canvas.id]?.lastStepID
         let result = store.perform(.deleteCanvas, on: canvas.id)
         switch result {
-        case .saved: AtticSounds.play(.trashed)
+        case .saved:
+            guard let stepID = store.undoStepID(on: canvas.id) else { return }
+            let offer = store.pinHistoryStep(stepID)
+            AtticSounds.play(.trashed)
+            finish(); leaveDeletedCanvas(canvas.id)
+            offerDeletionUndo(canvas, stepID: stepID, pin: offer)
         case .unchanged: return
         case let .retry(message), let .held(message):
-            AtticSounds.play(.failed)
-            toasts?.show(message.isEmpty ? String(localized: "The canvas couldn’t be deleted.") : message,
-                         actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
-            return
+            if let pending = store.pendingEdits[canvas.id], pending.canvas.deletedAt != nil,
+               let stepID = pending.lastStepID, stepID != previous {
+                deletionSequence &+= 1
+                queuedDeletions[canvas.id] = QueuedDeletion(canvas: canvas, stepID: stepID,
+                    pin: store.pinHistoryStep(stepID), order: deletionSequence)
+                finish(); leaveDeletedCanvas(canvas.id)
+                toasts?.show(String(localized: "Deleting “\(Self.displayName(canvas.name))” is queued and not saved yet."),
+                    actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
+                followDeletionChanges()
+            } else {
+                AtticSounds.play(.failed)
+                showCommandError(message.isEmpty ? String(localized: "The canvas couldn’t be deleted.") : message)
+            }
         }
+    }
+
+    private func leaveDeletedCanvas(_ id: UUID) {
+        let pending = store.pendingEdits
+        if let next = ((try? store.library()) ?? []).first(where: { $0.id != id && pending[$0.id]?.canvas.deletedAt == nil }) {
+            actions.open(next.id)
+        } else { actions.newCanvas(name: nil) }
+    }
+
+    private func followDeletionChanges() {
+        guard !followingDeletions,
+              !queuedDeletions.isEmpty || (deletionToastID != nil && toasts?.current?.id == deletionToastID) else { return }
+        followingDeletions = true
+        withObservationTracking { _ = store.revision; _ = store.pendingEdits } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.followingDeletions = false
+                    for deletion in self.queuedDeletions.values.sorted(by: { $0.order < $1.order }) {
+                        let id = deletion.canvas.id
+                        guard self.store.pendingEdits[id] == nil else { continue }
+                        self.queuedDeletions[id] = nil
+                        if self.store.undoStepID(on: id) == deletion.stepID,
+                           (try? self.store.open(id).canvas.deletedAt) != nil {
+                            AtticSounds.play(.trashed)
+                            self.offerDeletionUndo(deletion.canvas, stepID: deletion.stepID, pin: deletion.pin)
+                        }
+                    }
+                    self.followDeletionChanges()
+                }
+            }
+        }
+    }
+
+    private func offerDeletionUndo(_ canvas: DrawCanvas, stepID deletionStepID: UUID, pin offer: AnyObject?) {
         let store = store
         let actions = actions
-        let deletionStepID = store.undoStepID(on: canvas.id)
-        let offer = deletionStepID.flatMap { store.pinHistoryStep($0) }
-        finish()
-        if let next = ((try? store.library()) ?? []).first(where: { $0.id != canvas.id }) {
-            actions.open(next.id)
-        } else {
-            actions.newCanvas(name: nil)
-        }
-        // Navigation may evict this board. Its offer was pinned before it.
         toasts?.show(String(localized: "Deleted “\(Self.displayName(canvas.name))”")) {
             defer { withExtendedLifetime(offer) {} }
             // The toast is an Undo of this deletion, not a new Restore edit.
-            guard let deletionStepID else {
-                return .failed(CommandFailure(String(localized: "The canvas has changed since it was deleted.")))
-            }
             let id = canvas.id
             // An earlier press of this Undo wrote nothing (the disk was full):
             // Retry settles that pending inverse instead of queueing another.
@@ -413,6 +462,8 @@ final class DrawLibraryMenuModel: ObservableObject {
             return .failed(CommandFailure(String(localized: "The canvas has changed since it was deleted.")))
         }
         deletionToastID = toasts?.current?.id
+        deletionOffer = offer
+        followDeletionChanges()
     }
 
     // MARK: Rename

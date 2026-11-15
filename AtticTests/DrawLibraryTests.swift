@@ -457,29 +457,48 @@ final class DrawLibraryTests: XCTestCase {
         XCTAssertEqual(log, ["close", "new -"])
     }
 
-    func testFailedDeletionKeepsCanvasOpenAndNeverOffersUndo() throws {
+    func testQueuedDeletionLeavesCanvasAndOffersUndoOnlyAfterSave() async throws {
         final class SaveGate { var fail = false }
         let gate = SaveGate()
-        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        let store = DrawPersistentStore(container: container, save: { context in
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawQueuedDelete-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        func freshContainer() throws -> ModelContainer {
+            try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+                configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+        }
+        var store: DrawPersistentStore! = DrawPersistentStore(container: try freshContainer(), save: { context in
             if gate.fail { throw CocoaError(.fileWriteUnknown) }
             try context.save()
         })
         let canvas = store.create(name: "Keep me")
-        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Safe"))]), on: canvas.id).isSaved)
-        let model = DrawLibraryMenuModel(store: store, actions: actions())
+        let object = DrawObject(content: .text("Safe"))
+        XCTAssertTrue(store.perform(.put([object]), on: canvas.id).isSaved)
+        var model: DrawLibraryMenuModel! = DrawLibraryMenuModel(store: store, actions: actions())
         let toasts = PanelToastCenter()
         model.toasts = toasts
         model.currentCanvasID = canvas.id
         gate.fail = true
         model.perform(.delete)
-        XCTAssertTrue(log.isEmpty, "Unsettled deletion must not navigate or close the menu")
-        XCTAssertEqual(model.currentCanvasID, canvas.id)
+        XCTAssertEqual(log, ["close", "new -"], "an accepted deletion leaves its projected deleted canvas")
+        XCTAssertNotNil(try store.open(canvas.id).canvas.deletedAt)
+        XCTAssertTrue(toasts.current?.message.contains("queued and not saved yet") == true)
         XCTAssertFalse(toasts.current?.answersUndoKey ?? true)
+        XCTAssertFalse(model.canUndoDeletionIfOffered, "Undo waits until the queued deletion commits")
         XCTAssertNotNil(store.pendingEdits[canvas.id])
         gate.fail = false
         XCTAssertTrue(store.retry(on: canvas.id).isSaved)
+        for _ in 0..<6 { await withCheckedContinuation { next in DispatchQueue.main.async { next.resume() } } }
         XCTAssertEqual(try store.library(deleted: true).map(\.id), [canvas.id])
+        XCTAssertTrue(model.canUndoDeletionIfOffered)
+        XCTAssertEqual(toasts.performAction(), .applied)
+        XCTAssertNil(try store.open(canvas.id).canvas.deletedAt)
+        weak var abandoned = store
+        model = nil; store = nil // Crash simulation: no orderly close.
+        XCTAssertNil(abandoned)
+        let reopened = DrawPersistentStore(container: try freshContainer())
+        XCTAssertNil(try reopened.open(canvas.id).canvas.deletedAt)
+        XCTAssertEqual(try reopened.open(canvas.id).objects, [object])
     }
 
     func testDuplicateCommandDisablesAsSoonAsSourceHasPendingEdits() throws {
