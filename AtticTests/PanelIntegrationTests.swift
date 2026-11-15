@@ -385,6 +385,29 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    /// R-1 round 2: finishing an ordinary page switch must not announce an
+    /// unchanged nil resize hold to the shell's relevant-state observer.
+    func testPageSwitchWithoutResizeNeverPublishesAnUnchangedHold() throws {
+        #if ATTIC_LOCAL_ONLY
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        panel.uiState.prepareBuiltPage(.notes)
+        spin(0.5)
+        XCTAssertNil(panel.uiState.retainedPageSizeDuringLiveResize)
+        var holdChanges = 0
+        let observation = panel.uiState.$liveResize.dropFirst().sink { _ in holdChanges += 1 }
+        defer { observation.cancel() }
+        panel.uiState.switchPage(to: .notes, motion: .current(reduceMotion: false))
+        spin(until: { !panel.uiState.isPageSwitchSliding }, timeout: 3)
+        spin(0.15)
+        XCTAssertEqual(panel.uiState.selectedSection, .notes)
+        XCTAssertNil(panel.uiState.retainedPageSizeDuringLiveResize)
+        XCTAssertEqual(holdChanges, 0, "nil → nil must not invalidate every retained page host")
+        #endif
+    }
+
     /// A page selected by a shortcut or agent during a held resize must enter
     /// from the live edge; the departing page must keep its live geometry
     /// until the slide has finished.

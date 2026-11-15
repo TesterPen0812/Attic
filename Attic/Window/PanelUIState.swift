@@ -368,6 +368,15 @@ final class PanelUIState: ObservableObject {
         panelSize = size
     }
 
+    /// Mutating an optional @Published value through optional chaining writes
+    /// it back even when nil. Only publish a resize hold that actually changed.
+    private func updateLiveResizeHold(_ change: (inout PanelLiveResizeHold) -> Void) {
+        guard var hold = liveResize else { return }
+        let before = hold
+        change(&hold)
+        if hold != before { liveResize = hold }
+    }
+
     func beginAdding() {
         editingTaskID = nil
         isComposerPresented = true
@@ -399,7 +408,7 @@ final class PanelUIState: ObservableObject {
             // Publishing it first, outside the animation, can flush the
             // shell with its old selection and consume the switch's update.
             if motion.travels || motion.fades {
-                liveResize?.keepDrawn(leaving, PanelPage(section))
+                updateLiveResizeHold { $0.keepDrawn(leaving, PanelPage(section)) }
             }
             alongside()
         } completion: { [weak self] in
@@ -410,7 +419,7 @@ final class PanelUIState: ObservableObject {
                 self.pageTransit.sliding = false
                 self.pageTransit.departingPage = nil
             }
-            self.liveResize?.settle(current: PanelPage(self.selectedSection), size: self.panelSize)
+            self.updateLiveResizeHold { $0.settle(current: PanelPage(self.selectedSection), size: self.panelSize) }
         }
         PerformanceSignposts.noteInput("page-handler-end to=\(PanelPage(section).rawValue)")
     }
