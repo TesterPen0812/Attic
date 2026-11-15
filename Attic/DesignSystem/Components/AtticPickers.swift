@@ -1083,7 +1083,7 @@ struct AtticTagPickerCard: View {
         // every change of the rows (a toggle moves the note's own tags up).
         let highlighted = highlight?.index(in: filtered, create: create)
         let highlightIndex = Binding<Int?>(
-            get: { highlighted },
+            get: { highlight?.index(in: filtered, create: create) },
             set: { highlight = AtticTagPickerHighlight.at($0, in: filtered, create: create) })
         let moveHighlight: (Int) -> Void = { step in
             guard count > 0 else { return }
@@ -1110,8 +1110,9 @@ struct AtticTagPickerCard: View {
             },
             focus: $focus,
             onHover: { index, inside in
-                let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
-                if next != highlighted { highlightIndex.wrappedValue = next }
+                let current = highlightIndex.wrappedValue
+                let next = AtticListHighlight.hovered(index, inside: inside, current: current)
+                if next != current { highlightIndex.wrappedValue = next }
             },
             listRows: listRows,
             onListHighlight: highlightIndex,

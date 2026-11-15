@@ -533,10 +533,30 @@ final class AtticDropdownTests: XCTestCase {
     /// real pointer is touched).
     private final class Pointer {
         private var inside: Set<ObjectIdentifier> = []
+        private var entered: [ObjectIdentifier: (NSTrackingArea, NSResponder)] = [:]
 
-        func move(in host: NSView, toWindowPoint location: CGPoint) throws {
+        /// Ends the exact tracking areas that received entry, even if a
+        /// state invalidation has already replaced the view's area list.
+        /// No layout or run-loop turn separates these real callbacks.
+        @discardableResult
+        func leave(in host: NSView) throws -> Int {
             let window = try XCTUnwrap(host.window)
-            host.layoutSubtreeIfNeeded()
+            let entries = entered
+            entered.removeAll()
+            inside.removeAll()
+            for (_, (area, owner)) in entries {
+                let event = try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseExited,
+                    location: NSPoint(x: -100, y: -100), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    trackingNumber: unsafeBitCast(area, to: Int.self), userData: nil))
+                owner.mouseExited(with: event)
+            }
+            return entries.count
+        }
+
+        func move(in host: NSView, toWindowPoint location: CGPoint, layout: Bool = true) throws {
+            let window = try XCTUnwrap(host.window)
+            if layout { host.layoutSubtreeIfNeeded() }
             let now = ProcessInfo.processInfo.systemUptime
             func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
             let moved = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: location, modifierFlags: [], timestamp: now,
@@ -553,9 +573,18 @@ final class AtticDropdownTests: XCTestCase {
                                                           windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                                                           trackingNumber: unsafeBitCast(area, to: Int.self), userData: nil) {
                         inside.insert(key)
+                        entered[key] = (area, owner)
                         owner.mouseEntered(with: event)
                     }
                     if isInside, area.options.contains(.mouseMoved) { owner.mouseMoved(with: moved) }
+                    if !isInside, inside.contains(key), area.options.contains(.mouseEnteredAndExited),
+                       let event = NSEvent.enterExitEvent(with: .mouseExited, location: location, modifierFlags: [], timestamp: now,
+                                                          windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                          trackingNumber: unsafeBitCast(area, to: Int.self), userData: nil) {
+                        inside.remove(key)
+                        entered.removeValue(forKey: key)
+                        owner.mouseExited(with: event)
+                    }
                 }
             }
         }
@@ -640,6 +669,93 @@ final class AtticDropdownTests: XCTestCase {
 
     private func tagNames(_ count: Int) -> [AtticTagPicker.Tag] {
         (0..<count).map { AtticTagPicker.Tag(name: String(format: "tag-%02d", $0), state: .off) }
+    }
+
+    /// Real-view renders for the required before/after check page. Opt in
+    /// through Xcode's TEST_RUNNER_ATTIC_PF43_RENDER environment variable.
+    private func attachPF43Render(_ view: NSView, name: String) throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_PF43_RENDER"] == "1" else { return }
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.size = view.bounds.size
+        view.effectiveAppearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: bitmap) }
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+        attachment.name = name + ".png"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    // MARK: Round 5: real owners, coalesced hover and deferred presentation
+
+    @MainActor private final class RenderReceipt: ObservableObject {
+        @Published var requested = 0
+        var received = -1
+    }
+
+    private struct RenderReceiptView: NSViewRepresentable {
+        let revision: Int
+        let receive: (Int) -> Void
+        func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
+        func updateNSView(_ view: NSView, context: Context) {
+            DispatchQueue.main.async { receive(revision) }
+        }
+    }
+
+    private struct RenderFrame<Content: View>: View {
+        @ObservedObject var receipt: RenderReceipt
+        let content: Content
+        var body: some View {
+            content.background(RenderReceiptView(revision: receipt.requested, receive: { receipt.received = $0 }))
+        }
+    }
+
+    private struct RealTagCard: View {
+        @ObservedObject var receipt: RenderReceipt
+        let tags: [AtticTagPicker.Tag]
+        let report: (String?) -> Void
+        var body: some View {
+            AtticDropdownCard {
+                AtticTagPickerCard(rows: { _ in (tags, nil) }, listRows: tags.count,
+                                   onToggle: { _ in }, onCreate: { _, _ in true }, focusField: false)
+                    .onPreferenceChange(AtticDropdownHighlightKey.self, perform: report)
+            }
+            .background(RenderReceiptView(revision: receipt.requested, receive: { receipt.received = $0 }))
+            .environment(\.atticDropdownHeight, AtticDropdownTests.nestedCap)
+            .environment(\.atticDropdownContentHeightChanged, { _ in })
+            .atticDesign(AtticDesignContext(reduceMotion: true))
+        }
+    }
+
+    func testPF43ATagCardFlickBeforeLayoutDoesNotScrollTheCutOffRow() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        leaveAMouseMoveAsTheCurrentEvent(in: window)
+        defer { restoreNeutralCurrentEvent() }
+        let tags = tagNames(30)
+        var report: String?
+        let receipt = RenderReceipt()
+        let host = NSHostingView(rootView: RealTagCard(receipt: receipt, tags: tags, report: { report = $0 }))
+        host.frame = CGRect(x: 0, y: 0, width: 240, height: 420)
+        window.contentView?.addSubview(host)
+        wait(for: host) { self.scrollViews(in: host).count == 2 }
+        let list = try XCTUnwrap(scrollViews(in: host).last)
+        scroll(list, to: AtticDropdownMetrics.rowHeight / 2)
+        wait(for: host) { list.contentView.bounds.origin.y == AtticDropdownMetrics.rowHeight / 2 }
+        let start = list.contentView.bounds.origin.y
+        let pointer = Pointer()
+        let top = list.convert(NSPoint(x: list.bounds.midX, y: list.isFlipped ? 6 : list.bounds.maxY - 6), to: nil)
+        try pointer.move(in: host, toWindowPoint: top, layout: false)
+        XCTAssertGreaterThan(try pointer.leave(in: host), 0, "real tracking owners received exit before layout")
+        receipt.requested += 1
+        wait(for: host) { receipt.received == receipt.requested }
+        XCTAssertEqual(receipt.received, receipt.requested, "the update after both real hover callbacks completed")
+        host.layoutSubtreeIfNeeded()
+        XCTAssertNil(report, "the actual card clears the row on exit, even before its body rebuilds")
+        XCTAssertEqual(list.contentView.bounds.origin.y, start, accuracy: 0.5, "a quick flick never scrolls under the pointer")
+        try attachPF43Render(host, name: "PF43-tag-flick-result")
     }
 
     // MARK: Nested viewports share the pointer's origin (R-1)
