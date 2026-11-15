@@ -636,6 +636,228 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    func testLiveResizeWindowDispatchFollowsAllFortyDragStepsOnEveryPage() throws {
+        #if ATTIC_LOCAL_ONLY
+        try exerciseWindowDispatchedResize(queuedRelease: false)
+        #endif
+    }
+
+    func testLiveResizeQueuedDragAndReleaseFinishAtTheDeliveredFinalWidth() throws {
+        #if ATTIC_LOCAL_ONLY
+        try exerciseWindowDispatchedResize(queuedRelease: true)
+        try exerciseWindowDispatchedResize(queuedRelease: true, suppressQueuedWatchdog: true)
+        #endif
+    }
+
+    #if ATTIC_LOCAL_ONLY
+    /// The paced case models a held button with direct AppKit events. The
+    /// queued case leaves the real watchdog enabled and models a released
+    /// hardware button while earlier drag/up events still await dispatch.
+    private func exerciseWindowDispatchedResize(queuedRelease: Bool, suppressQueuedWatchdog: Bool = false) throws {
+        print("RESIZE_PROCESS pid=\(ProcessInfo.processInfo.processIdentifier) queued=\(queuedRelease) suppressed=\(suppressQueuedWatchdog)")
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let previousTransparency = AtticTransparencySeam.systemOverride
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = previousTransparency }
+        #if DEBUG
+        let previousDraw = AtticDraw.enabledOverride
+        AtticDraw.enabledOverride = true
+        defer { AtticDraw.enabledOverride = previousDraw }
+        #endif
+        // The external measurement guard takes the perf lock after this
+        // process starts inside the build lock. It validates that the lock
+        // enclosed every window below; the sandboxed host never owns it.
+        let quietLock = queuedRelease ? nil : ProcessInfo.processInfo.environment["ATTIC_RESIZE_QUIET_LOCK"]
+        if quietLock != nil {
+            NSLog("RESIZE_QUIET_READY epoch=%.6f", Date().timeIntervalSince1970)
+            spin(0.5)
+        }
+        defer { if quietLock != nil { NSLog("RESIZE_QUIET_DONE epoch=%.6f", Date().timeIntervalSince1970) } }
+        let panel = try makePanel(scaleSeed: true)
+        panel.settings.appearance = .light
+        panel.settings.corner = queuedRelease ? .topLeft : .topRight
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        for page in PanelPage.allCases { panel.uiState.prepareBuiltPage(page) }
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
+        let originalChanged = host.onLiveResizeChanged
+        let originalEnded = host.onLiveResizeEnded
+        let originalCancelled = host.onInteractionCancelled
+        defer {
+            host.liveResizeLayoutProbe = nil
+            host.resizeCaptureProbe = nil
+            window.resizeEventProbe = nil
+            host.onLiveResizeChanged = originalChanged
+            host.onLiveResizeEnded = originalEnded
+            host.onInteractionCancelled = originalCancelled
+            host.suppressCaptureWatchdogForSyntheticTests = false
+        }
+        let ax = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previousAX = NSApp.accessibilityAttributeValue(ax)
+        NSApp.accessibilitySetValue(true, forAttribute: ax)
+        defer { NSApp.accessibilitySetValue(previousAX, forAttribute: ax) }
+
+        let corners: [ScreenCorner] = queuedRelease ? [.topLeft] : [.topRight, .topLeft]
+        for corner in corners {
+            let leftGrip = corner == .topRight
+            panel.settings.corner = corner
+            spin(0.2)
+            for page in PanelPage.allCases {
+                panel.uiState.selectSection(page.section)
+                spin(0.5)
+                var reset = window.visibleContentFrame
+                if leftGrip { reset.origin.x = reset.maxX - 320 }
+                reset.size.width = 320
+                window.setVisibleContentFrame(reset, display: false)
+                panel.uiState.updatePanelSize(reset.size)
+                host.layoutSubtreeIfNeeded()
+                spin(0.1)
+                let initial = window.visibleContentFrame
+                let point = CGPoint(x: leftGrip ? initial.minX + 2 : initial.maxX - 2, y: initial.midY)
+                let direction: CGFloat = leftGrip ? -1 : 1
+                let measurementPage = "\(page.rawValue)_\(leftGrip ? "right" : "left")"
+                let time = ProcessInfo.processInfo.systemUptime
+                var issued: [NSEvent] = []
+                var windowEvents: [NSEvent] = []
+                var capture: [AtticPanelHostingView.ResizeCaptureSample] = []
+                if queuedRelease {
+                    window.resizeEventProbe = { windowEvents.append($0) }
+                    host.resizeCaptureProbe = { capture.append($0) }
+                }
+                func event(_ type: NSEvent.EventType, step: Int) throws -> NSEvent {
+                    let made = try XCTUnwrap(NSEvent.mouseEvent(
+                        with: type, location: window.convertPoint(fromScreen: CGPoint(x: point.x + direction * CGFloat(step * 5), y: point.y)),
+                        modifierFlags: [], timestamp: time + Double(step) * 0.008,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: step + 1,
+                        clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1
+                    ))
+                    issued.append(made)
+                    return made
+                }
+                var steps = 0
+                var earlyEnds = 0
+                var cancellations: [PanelInteractionCancellationReason] = []
+                var dispatchedUp = false
+                var layouts: [Double] = []
+                var activeStep = 0
+                var stepLayouts: [Int: [ClosedRange<Double>]] = [:]
+                host.onLiveResizeChanged = { size in steps += 1; originalChanged?(size) }
+                host.onLiveResizeEnded = { size in
+                    if !dispatchedUp { earlyEnds += 1 }
+                    originalEnded?(size)
+                }
+                host.onInteractionCancelled = { cancellation, frame in
+                    cancellations.append(cancellation.reason)
+                    originalCancelled?(cancellation, frame)
+                }
+                host.liveResizeLayoutProbe = { start, end in
+                    layouts.append((end - start) * 1_000)
+                    if activeStep > 0 { stepLayouts[activeStep, default: []].append(start...end) }
+                }
+                host.suppressCaptureWatchdogForSyntheticTests = !queuedRelease || suppressQueuedWatchdog
+                if quietLock != nil { NSLog("RESIZE_QUIET_WINDOW_BEGIN page=%@ epoch=%.6f", measurementPage, Date().timeIntervalSince1970) }
+                NSApp.sendEvent(try event(.leftMouseDown, step: 0))
+                XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.windowResize), "the window must route the grip to the production host")
+                activeStep = 1
+                NSApp.sendEvent(try event(.leftMouseDragged, step: 1))
+                host.layoutSubtreeIfNeeded()
+                XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.windowResize))
+                XCTAssertFalse(panel.controller.ignoresMouseEventsForTesting)
+                var expectedSteps = 40
+                if queuedRelease {
+                    XCTAssertEqual(NSEvent.pressedMouseButtons & 1, 0, "this case models an already released hardware button")
+                    for step in 2...40 { NSApp.postEvent(try event(.leftMouseDragged, step: step), atStart: false) }
+                    NSApp.postEvent(try event(.leftMouseUp, step: 40), atStart: false)
+                    // Let layout/timers run while the application event queue is
+                    // backlogged, as when a long host layout outlasts the drag.
+                    spin(0.35)
+                    XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.windowResize), "queued drag/up events must complete before recovery ends the resize")
+                    var dispatched = 0
+                    expectedSteps = 1
+                    while dispatched < 80, let next = NSApp.nextEvent(
+                        matching: [.leftMouseDragged, .leftMouseUp], until: Date(), inMode: .default, dequeue: true
+                    ) {
+                        if next.type == .leftMouseUp { dispatchedUp = true; activeStep = 0 }
+                        if next.type == .leftMouseDragged { expectedSteps += 1; activeStep = expectedSteps }
+                        NSApp.sendEvent(next)
+                        host.layoutSubtreeIfNeeded()
+                        dispatched += 1
+                    }
+                    XCTAssertTrue(dispatchedUp, "the queued release must actually reach AppKit")
+                } else {
+                    for step in 2...40 {
+                        activeStep = step
+                        NSApp.sendEvent(try event(.leftMouseDragged, step: step))
+                        host.layoutSubtreeIfNeeded()
+                        spin(0.008)
+                        XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.windowResize), "\(page), step \(step): capture ended early")
+                        XCTAssertFalse(panel.controller.ignoresMouseEventsForTesting, "\(page), step \(step): a held resize must keep receiving mouse events")
+                    }
+                    dispatchedUp = true
+                    activeStep = 0
+                    NSApp.sendEvent(try event(.leftMouseUp, step: 40))
+                }
+                XCTAssertEqual(steps, expectedSteps, "\(page): every dispatched drag step must reach the resize handler")
+                XCTAssertEqual(earlyEnds, 0, "\(page): resize ended before its delivered mouse-up")
+                XCTAssertTrue(cancellations.isEmpty, "\(page): unexpected cancellation \(cancellations)")
+                XCTAssertEqual(window.visibleContentFrame.width, initial.width + 200, accuracy: 1, "\(page): the native panel must follow all 200 points")
+                XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.windowResize))
+                if quietLock != nil { NSLog("RESIZE_QUIET_WINDOW_END page=%@ epoch=%.6f", measurementPage, Date().timeIntervalSince1970) }
+                if queuedRelease {
+                    XCTAssertEqual(windowEvents.filter { $0.type == .leftMouseDragged }.count, expectedSteps)
+                    XCTAssertEqual(capture.filter { $0.source == "drag-entry" }.count, expectedSteps)
+                    XCTAssertEqual(capture.filter { $0.source == "resize-step" }.count, expectedSteps)
+                    XCTAssertEqual(Set(capture.map(\.generation)).count, 1, "one gesture must keep its generation")
+                    XCTAssertTrue(capture.allSatisfy { $0.host == ObjectIdentifier(host) && $0.windowNumber == window.windowNumber })
+                    XCTAssertFalse(capture.contains { $0.source == "watchdog-completion" }, "recovery must not preempt queued input")
+                    let mode = suppressQueuedWatchdog ? "queued-suppressed" : "queued"
+                    print("RESIZE_EVENT_TRACE page=\(page.rawValue) mode=\(mode) issued=\(issued.map { "\($0.type.rawValue)@\($0.timestamp)" }.joined(separator: ",")) window=\(windowEvents.map { "\($0.type.rawValue)@\($0.timestamp)" }.joined(separator: ","))")
+                    for (index, sample) in capture.enumerated() {
+                        print("RESIZE_CAPTURE_TRACE page=\(page.rawValue) mode=\(mode) index=\(index) source=\(sample.source) t=\(sample.timestamp) buttons=\(sample.buttons) generation=\(sample.generation) host=\(sample.host) window=\(sample.windowNumber ?? -1) active=\(sample.active) frame=\(String(describing: sample.frame))")
+                    }
+                }
+                if !layouts.isEmpty {
+                    let sorted = layouts.sorted()
+                    func layoutMilliseconds(_ intervals: [ClosedRange<Double>]) -> Double {
+                        var coveredUntil = -Double.infinity
+                        var duration = 0.0
+                        for interval in intervals.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+                            duration += max(0, interval.upperBound - max(interval.lowerBound, coveredUntil))
+                            coveredUntil = max(coveredUntil, interval.upperBound)
+                        }
+                        return duration * 1_000
+                    }
+                    let perStep = (1...expectedSteps).map { layoutMilliseconds(stepLayouts[$0, default: []]) }.sorted()
+                    print(String(format:
+                        "RESIZE_DELIVERY mode=%@ page=%@ corner=%@ quiet=%d steps=%d delta=%.1f early=%d layouts=%d median_ms=%.3f p95_ms=%.3f worst_ms=%.3f step_layout_median_ms=%.3f step_layout_p95_ms=%.3f step_layout_worst_ms=%.3f",
+                        queuedRelease ? (suppressQueuedWatchdog ? "queued-suppressed" : "queued") : "paced", page.rawValue, leftGrip ? "right" : "left", quietLock == nil ? 0 : 1,
+                        steps, window.visibleContentFrame.width - initial.width, earlyEnds, sorted.count,
+                        sorted[sorted.count / 2], sorted[Int(Double(sorted.count - 1) * 0.95)], sorted.last!,
+                        perStep[perStep.count / 2], perStep[Int(Double(perStep.count - 1) * 0.95)], perStep.last!))
+                }
+                if queuedRelease && !suppressQueuedWatchdog {
+                    // Recovery remains effective when no release is queued.
+                    host.liveResizeLayoutProbe = nil
+                    let frame = window.visibleContentFrame
+                    NSApp.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(
+                        with: .leftMouseDown,
+                        location: window.convertPoint(fromScreen: CGPoint(x: frame.maxX - 2, y: frame.midY)),
+                        modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 100,
+                        clickCount: 1, pressure: 1
+                    )))
+                    XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.windowResize))
+                    spin(until: { !panel.uiState.interactionLockReasons.contains(.windowResize) }, timeout: 1)
+                    XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.windowResize), "an empty event queue must still recover a lost mouse-up")
+                    NSApp.sendEvent(try event(.leftMouseUp, step: 40)) // A late release also ends the native press state.
+                }
+            }
+        }
+    }
+    #endif
+
     /// Every exit path must release the retained-page snapshot and catch up to
     /// the true native frame. A programmatic resize has no drag snapshot.
     func testLiveResizeCancelHideScreenChangeAndProgrammaticSizeCatchUp() throws {
@@ -699,6 +921,8 @@ final class PanelIntegrationTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         XCTAssertNotNil(panel.uiState.retainedPageSizeDuringLiveResize)
         host.mouseUp(with: try event(.leftMouseUp, at: heldGrip, time: 101))
+        XCTAssertEqual(window.visibleContentFrame, changedDuringDrag,
+                       "terminal handling must preserve the controller's authoritative native frame")
         spin(0.12)
         XCTAssertNil(panel.uiState.retainedPageSizeDuringLiveResize)
         XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, panel.uiState.panelSize.width, accuracy: 1)

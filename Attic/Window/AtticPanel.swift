@@ -368,7 +368,16 @@ final class AtticPanel: NSPanel {
     /// not on when the main thread got to it).
     private(set) var lastScrollEventTime: TimeInterval = 0
 
+    #if ATTIC_LOCAL_ONLY
+    var resizeEventProbe: ((NSEvent) -> Void)?
+    #endif
+
     override func sendEvent(_ event: NSEvent) {
+        #if ATTIC_LOCAL_ONLY
+        if [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(event.type) {
+            resizeEventProbe?(event)
+        }
+        #endif
         if Self.takesFirstPress(event.type) {
             tracingIdlePress = false
             if IdleLatencyTrace.shouldTracePanelPress, let context = onIdleTraceContext?() {
@@ -2046,6 +2055,30 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     /// A unit test can deliver AppKit mouse events directly, without a held
     /// hardware button. Keep that synthetic drag alive past the HID watchdog.
     var suppressCaptureWatchdogForSyntheticTests = false
+    /// Hosted measurements of the same work enclosed by PanelHostLayout.
+    var liveResizeLayoutProbe: ((Double, Double) -> Void)?
+    struct ResizeCaptureSample {
+        let source: String
+        let timestamp: TimeInterval
+        let buttons: Int
+        let generation: UInt64
+        let host: ObjectIdentifier
+        let windowNumber: Int?
+        let active: Bool
+        let frame: CGRect?
+    }
+    var resizeCaptureProbe: ((ResizeCaptureSample) -> Void)?
+    private var resizeCaptureGeneration: UInt64 = 0
+
+    private func traceResizeCapture(_ source: String, timestamp: TimeInterval) {
+        guard let resizeCaptureProbe else { return }
+        resizeCaptureProbe(ResizeCaptureSample(
+            source: source, timestamp: timestamp, buttons: NSEvent.pressedMouseButtons,
+            generation: resizeCaptureGeneration, host: ObjectIdentifier(self),
+            windowNumber: window?.windowNumber, active: resizeSession != nil,
+            frame: (window as? AtticPanel)?.visibleContentFrame ?? window?.frame
+        ))
+    }
     #endif
 
     init(
@@ -2113,6 +2146,11 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         #if ATTIC_LOCAL_ONLY
         let layoutSpan = PerformanceSignposts.beginPanelHostLayout()
         defer { PerformanceSignposts.endPanelHostLayout(layoutSpan) }
+        let layoutStart = liveResizeLayoutProbe != nil && PerformanceSignposts.isPanelLiveResizeActive
+            ? CACurrentMediaTime() : nil
+        defer {
+            if let layoutStart { liveResizeLayoutProbe?(layoutStart, CACurrentMediaTime()) }
+        }
         #endif
         IdleLatencyTrace.span("panel_host_layout") {
             AtticOverlayHierarchy.layoutPass { super.layout() }
@@ -2312,6 +2350,10 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             #if ATTIC_LOCAL_ONLY
             PerformanceSignposts.beginPanelLiveResize()
             #endif
+            #if ATTIC_LOCAL_ONLY
+            resizeCaptureGeneration &+= 1
+            traceResizeCapture("resize-begin", timestamp: event.timestamp)
+            #endif
             interactionLifecycle.begin(.windowResize)
             startEscapeMonitoring()
             window.makeKey()
@@ -2339,6 +2381,10 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                 timestamp: event.timestamp
             )
         )
+        #if ATTIC_LOCAL_ONLY
+        resizeCaptureGeneration &+= 1
+        traceResizeCapture("move-begin", timestamp: event.timestamp)
+        #endif
         interactionLifecycle.begin(.windowMove)
         startEscapeMonitoring()
         window.makeKey()
@@ -2347,6 +2393,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        #if ATTIC_LOCAL_ONLY
+        traceResizeCapture("drag-entry", timestamp: event.timestamp)
+        #endif
         guard let window else {
             cancelActiveInteraction(reason: .lostWindow)
             super.mouseDragged(with: event)
@@ -2375,6 +2424,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             )
             setContentFrame(frame, in: window)
             onLiveResizeChanged?(frame.size)
+            #if ATTIC_LOCAL_ONLY
+            traceResizeCapture("resize-step", timestamp: event.timestamp)
+            #endif
             return
         }
         guard var session = moveSession else {
@@ -2401,6 +2453,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     }
 
     override func mouseUp(with event: NSEvent) {
+        #if ATTIC_LOCAL_ONLY
+        traceResizeCapture("responder-up", timestamp: event.timestamp)
+        #endif
         guard let window else {
             cancelActiveInteraction(reason: .lostWindow)
             super.mouseUp(with: event)
@@ -2446,6 +2501,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     func cancelActiveInteraction(
         reason: PanelInteractionCancellationReason
     ) {
+        #if ATTIC_LOCAL_ONLY
+        traceResizeCapture("cancel-\(reason)", timestamp: ProcessInfo.processInfo.systemUptime)
+        #endif
         guard let cancellation = interactionLifecycle.cancel(reason: reason) else {
             return
         }
@@ -2499,6 +2557,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         localMouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) {
             [weak self] event in
             MainActor.assumeIsolated {
+                #if ATTIC_LOCAL_ONLY
+                self?.traceResizeCapture("local-up", timestamp: event.timestamp)
+                #endif
                 self?.finishCapturedMouseUp(event)
             }
             return event
@@ -2506,6 +2567,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         globalMouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) {
             [weak self] event in
             MainActor.assumeIsolated {
+                #if ATTIC_LOCAL_ONLY
+                self?.traceResizeCapture("global-up", timestamp: event.timestamp)
+                #endif
                 self?.finishCapturedMouseUp(event)
             }
         }
@@ -2535,6 +2599,14 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                     self.cancelActiveInteraction(reason: .lostWindow)
                     return
                 }
+                // Hardware can already be up while a busy main thread still
+                // has this gesture's drag/up events to dispatch. Recovering
+                // now would discard those steps; let the event path finish.
+                guard NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp],
+                                      until: .distantPast, inMode: .default, dequeue: false) == nil else { return }
+                #if ATTIC_LOCAL_ONLY
+                self.traceResizeCapture("watchdog-completion", timestamp: ProcessInfo.processInfo.systemUptime)
+                #endif
                 _ = self.finishActiveInteraction(
                     in: window,
                     mouseLocation: NSEvent.mouseLocation,
@@ -2582,6 +2654,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         mouseLocation: CGPoint,
         timestamp: TimeInterval
     ) -> Bool {
+        #if ATTIC_LOCAL_ONLY
+        traceResizeCapture("finish-attempt", timestamp: timestamp)
+        #endif
         if resizeSession != nil {
             resizeSession = nil
             guard interactionLifecycle.finish(.windowResize) else { return false }
