@@ -480,7 +480,7 @@ final class ComposerRecoveryJournal {
     static func simulateProcessExitForTesting(_ store: Store? = nil) {
         let selected = store.map { [shared($0)] } ?? Array(owners.values)
         for owner in selected {
-            owner.leases.removeAll(); owner.panels.removeAll(); owner.saving.removeAll()
+            owner.leases.removeAll(); owner.panels.removeAll(); owner.editAuthorities.removeAll(); owner.saving.removeAll()
             owner.loaded = false; owner.durable = nil
             owner.document = Store.TaskRecovery(tasks: [], draft: nil)
             _ = owner.ready(store ?? owner.lastStore)
@@ -489,10 +489,13 @@ final class ComposerRecoveryJournal {
     #endif
     private final class Lease { weak var model: ComposerModel?; init(_ model: ComposerModel) { self.model = model } }
     private var leases: [UUID: Lease] = [:]
-    private var panels: [String: Lease] = [:]
-    func registerPanel(_ key: String, model: ComposerModel) { panels[key] = Lease(model) }
+    // Tokens outlive closed views without retaining them. Expiring a weak
+    // lease must not let an older window publish a stale checkpoint.
+    private var panels: [String: UUID] = [:]
+    private var editAuthorities: [UUID: UUID] = [:]
+    func registerPanel(_ key: String, model: ComposerModel) { panels[key] = model.recoveryEditorID }
     func ownsPanel(_ key: String, model: ComposerModel) -> Bool {
-        panels[key]?.model == nil || panels[key]?.model === model
+        panels[key] == nil || panels[key] == model.recoveryEditorID
     }
     private var saving: Set<UUID> = []
     func beginSaving(_ id: UUID) { saving.insert(id) }
@@ -570,9 +573,13 @@ final class ComposerRecoveryJournal {
     func available(_ id: UUID, to model: ComposerModel) -> Bool {
         !retired.contains(id) && (leases[id]?.model == nil || leases[id]?.model === model)
     }
+    func hasEditAuthority(_ id: UUID, model: ComposerModel) -> Bool {
+        editAuthorities[id] == nil || editAuthorities[id] == model.recoveryEditorID
+    }
     func isSaving(_ id: UUID) -> Bool { saving.contains(id) }
     func claim(_ id: UUID, by model: ComposerModel) -> Bool {
         guard available(id, to: model) else { return false }
+        editAuthorities[id] = model.recoveryEditorID
         leases[id] = Lease(model); return true
     }
     func release(_ id: UUID, by model: ComposerModel) {
@@ -616,6 +623,7 @@ final class ComposerRecoveryJournal {
     func retire(_ ids: Set<UUID>, store: Store?, keepingPanel: String? = nil, kept: Store.KeptDrafts? = nil) -> Bool {
         guard !ids.isEmpty else { return flush(store) }
         retiredIDs.formUnion(ids)
+        for id in ids { editAuthorities[id] = nil; leases[id] = nil }
         return change(store) { journal in
             journal.tasks.removeAll { ids.contains($0.id) }
             journal.retired = nil
@@ -632,6 +640,7 @@ final class ComposerRecoveryJournal {
 @MainActor
 final class ComposerModel: ObservableObject {
     let tasks: TasksPageModel
+    fileprivate let recoveryEditorID = UUID()
     var services: ComposerServices {
         didSet {
             if services.drafts?.taskRecoveryURL != oldValue.drafts?.taskRecoveryURL
@@ -687,7 +696,9 @@ final class ComposerModel: ObservableObject {
         }
         return ready
     }
-    private var failedTaskContents: [UUID: (title: TaskAddBarText, files: [TasksComposerFiles])] = [:]
+    /// Only the nil-URL seam needs model-local staged bytes; semantic
+    /// state and persistent file references always come from the owner.
+    private var failedTaskFiles: [UUID: [TasksComposerFiles]] = [:]
     private var recoveringFailedTaskID: UUID?
 
 
@@ -704,7 +715,10 @@ final class ComposerModel: ObservableObject {
         failedEventDrafts = services.drafts?.loadFailedEvents() ?? []
         _ = reconcileTaskRecovery()
         restoreKeptDraft()
-        _ = restoreFailedTaskIfAvailable(restoringKeptDraft: true)
+        // Adopt only this panel's kept IDs. Shared failed Tasks are offered
+        // when a Task is opened, never while constructing a Notes panel.
+        for id in recoveryIDs { _ = recoveryOwner.claim(id, by: self) }
+        releaseIdleRecoveryLeases()
     }
 
     // MARK: The kept draft (A2)
@@ -857,7 +871,7 @@ final class ComposerModel: ObservableObject {
            saved.recoveringTaskID.map({ recoveryOwner.available($0, to: self) }) != false {
             asideDraft = AsideDraft(owner: owner, text: saved.addBar, writing: saved.writing,
                 pinned: saved.isPinned ?? false, history: TaskDraftHistory(), caret: nil, selection: nil,
-                seededTags: saved.seededTags, dateAnchor: saved.dateAnchor, recoveringTaskID: saved.recoveringTaskID,
+                seededTags: saved.seededTags, dateAnchor: saved.dateAnchor, recoveringTaskID: owner == .task ? saved.recoveringTaskID : nil,
                 dateTimeZone: saved.dateTimeZone, dateLocaleID: saved.dateLocaleID)
             if owner == .task, saved.textState == nil, saved.files == nil {
                 recoveryNotice("Older draft. Re-attach any files.")
@@ -874,12 +888,14 @@ final class ComposerModel: ObservableObject {
 
     private func dropUnavailableRecoveryViews() {
         if let id = recoveringFailedTaskID,
-           !recoveryOwner.available(id, to: self) || !failedTaskDrafts.contains(where: { $0.id == id }) {
+           !recoveryOwner.available(id, to: self) || !recoveryOwner.hasEditAuthority(id, model: self)
+            || !failedTaskDrafts.contains(where: { $0.id == id }) {
             clearDraft()
             tasks.addBarState.files = [] // another live editor/record owns these references
         }
         if let aside = asideDraft, let id = aside.recoveringTaskID,
-           !recoveryOwner.available(id, to: self) || !failedTaskDrafts.contains(where: { $0.id == id }) {
+           !recoveryOwner.available(id, to: self) || !recoveryOwner.hasEditAuthority(id, model: self)
+            || !failedTaskDrafts.contains(where: { $0.id == id }) {
             if aside.owner == .task {
                 tasks.addBarState.files = []
                 asideDraft = AsideDraft(owner: .task, text: TaskAddBarText(), writing: "", pinned: false,
@@ -931,7 +947,9 @@ final class ComposerModel: ObservableObject {
         let preserved = recoveryOwner.upsert(draft,
             consumingPanel: consumingKeptDraft ? (services.drafts?.key ?? "composerKeptDraft") : nil,
             store: services.drafts, keepingAside: aside)
-        failedTaskContents[draft.id] = (title, consumingKeptDraft && !preserved ? [] : files)
+        if services.drafts?.taskRecoveryURL == nil {
+            failedTaskFiles[draft.id] = consumingKeptDraft && !preserved ? [] : files
+        }
         if !preserved { recoveryNotice() }
         return preserved
     }
@@ -939,12 +957,12 @@ final class ComposerModel: ObservableObject {
     private func retireFailedTask(_ id: UUID?) {
         guard let id else { return }
         if !recoveryOwner.retire([id], store: services.drafts) { recoveryNotice() }
-        failedTaskContents[id] = nil
+        failedTaskFiles[id] = nil
         recoveryOwner.release(id, by: self)
     }
 
     @discardableResult
-    private func restoreFailedTaskIfAvailable(restoringKeptDraft: Bool = false) -> Bool {
+    private func restoreFailedTaskIfAvailable() -> Bool {
         guard recoveryOwner.ownsPanel(services.drafts?.key ?? "composerKeptDraft", model: self),
               kind == .task, !isCreating, tasks.addBarState.stagingFiles == 0 else { return false }
         guard reconcileTaskRecovery() else { return false }
@@ -961,10 +979,9 @@ final class ComposerModel: ObservableObject {
                 tasks.addBar = saved.addBar; writing = saved.writing
                 recoveryNotice("Older draft. Re-attach any files.")
             }
-            if let contents = failedTaskContents[saved.id] {
-                tasks.addBar = contents.title
-                tasks.addBarState.files = contents.files
-                failedTaskContents[saved.id] = (contents.title, [])
+            if services.drafts?.taskRecoveryURL == nil,
+               let files = failedTaskFiles.removeValue(forKey: saved.id) {
+                tasks.addBarState.files = files
             }
         }
         recoveringFailedTaskID = saved.id
@@ -978,6 +995,7 @@ final class ComposerModel: ObservableObject {
         guard recoveryOwner.ownsPanel(services.drafts?.key ?? "composerKeptDraft", model: self) else {
             return recoveryOwner.flush(services.drafts)
         }
+        dropUnavailableRecoveryViews()
         if kind != .task, recoveringFailedTaskID != nil, !tasks.composerFilesWait {
             guard prepareKindConversion() else { return false }
         }
@@ -1025,9 +1043,7 @@ final class ComposerModel: ObservableObject {
                 $0.setPanel(shown.isEmpty && aside == nil ? nil : kept, key: services.drafts?.key ?? "composerKeptDraft")
             }
             if !success { recoveryNotice() }
-            if success, !isOpen, !openingCard, !isCreating, title.stagingFiles == 0, let id = recoveringFailedTaskID {
-                recoveryOwner.release(id, by: self)
-            }
+            if success { releaseIdleRecoveryLeases() }
             return success
         } catch {
             recoveryNotice("Couldn’t keep files. Try again.")
@@ -1077,6 +1093,9 @@ final class ComposerModel: ObservableObject {
         openingCard = true
         defer { openingCard = false }
         dropUnavailableRecoveryViews()
+        // A shown conversion or an aside Task still owns its recovery
+        // while this card is open, regardless of the selected kind.
+        for id in recoveryIDs { _ = recoveryOwner.claim(id, by: self) }
         draftGeneration += 1
         // A file drop explicitly asks for Task before staging begins. Preserve
         // a genuine kept Note; a refused Note switch still owns Task's files.
@@ -1143,7 +1162,7 @@ final class ComposerModel: ObservableObject {
         }
         restoreFocus()
         saveKeptDraft()
-        if let id = recoveringFailedTaskID, !isCreating, title.stagingFiles == 0 { recoveryOwner.release(id, by: self) }
+        releaseIdleRecoveryLeases()
     }
 
     /// What had the keyboard before the card opened.
@@ -1499,6 +1518,15 @@ final class ComposerModel: ObservableObject {
     }
     private var asideDraft: AsideDraft?
 
+    private var recoveryIDs: Set<UUID> {
+        Set([recoveringFailedTaskID, asideDraft?.recoveringTaskID].compactMap { $0 })
+    }
+
+    private func releaseIdleRecoveryLeases() {
+        guard !isOpen, !openingCard, title.stagingFiles == 0 else { return }
+        for id in recoveryIDs where !recoveryOwner.isSaving(id) { recoveryOwner.release(id, by: self) }
+    }
+
     /// Once a Note can be submitted independently, the shared words belong
     /// with the staged Task files, even if a kind switch had already shown
     /// them on Note (where submission would have been refused).
@@ -1518,7 +1546,7 @@ final class ComposerModel: ObservableObject {
     private func draft(owner: ComposerKind) -> AsideDraft {
         AsideDraft(owner: owner, text: tasks.addBar, writing: writing, pinned: pinned,
                    history: title.history, caret: title.caret, selection: title.selection, seededTags: title.seededTags ?? seededTags,
-                   dateAnchor: title.dateAnchor, recoveringTaskID: recoveringFailedTaskID,
+                   dateAnchor: title.dateAnchor, recoveringTaskID: owner == .task ? recoveringFailedTaskID : nil,
                    dateTimeZone: title.dateTimeZone, dateLocaleID: title.dateLocaleID)
     }
 
@@ -1576,7 +1604,7 @@ final class ComposerModel: ObservableObject {
             let ready = recoveryOwner.retire([id], store: services.drafts,
                 keepingPanel: services.drafts?.key ?? "composerKeptDraft", kept: .init(shown: shown, aside: aside))
             recoveringFailedTaskID = nil
-            failedTaskContents[id] = nil
+            failedTaskFiles[id] = nil
             recoveryOwner.release(id, by: self)
             if !ready { recoveryNotice() }
             return ready

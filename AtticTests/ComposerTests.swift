@@ -3387,6 +3387,159 @@ final class ComposerRecoveryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: ownedCopy.path), "retirement cleans only the consumed staged copy")
     }
 
+    func testCP25ClosedPanelCannotCheckpointOverAnotherPanelsEditedRecoveryAndFiles() async throws {
+        let a = try launch(); type("Original failed words", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        a.composer.close()
+        let b = anotherPanel(a, key: "composerKeptDraft.floating.tasks")
+        b.page.addBar = TaskAddBarText(text: "Revised in the other panel")
+        b.page.addBar.picked.priority = .low; b.page.addBar.picked.tags = ["handoff"]
+        b.composer.writing = "New writing from the current editor"
+        let source = root.appendingPathComponent("handoff.pdf"), payload = Data("only the new panel's bytes".utf8)
+        try payload.write(to: source); b.page.addComposerFiles(urls: [source]); try await waitForFiles(b)
+        b.composer.close()
+        let owned = try XCTUnwrap(try drafts.readFailedTasks().first?.draftState?.files?.first?.urls.first)
+        try FileManager.default.removeItem(at: source)
+
+        // Quit checkpoints every retained model, including the older closed
+        // card. Its stale projection may not overwrite the current record.
+        XCTAssertTrue(a.composer.saveKeptDraft())
+        XCTAssertEqual(try drafts.readFailedTasks().first?.draftState?.title, "Revised in the other panel")
+        XCTAssertTrue(FileManager.default.isReadableFile(atPath: owned.path))
+        XCTAssertTrue(try rows(a).isEmpty)
+        a.composer.open(on: .tasks(.now))
+        XCTAssertEqual(a.page.addBar.text, "Revised in the other panel")
+        XCTAssertEqual(a.composer.writing, "New writing from the current editor")
+        XCTAssertEqual(a.page.addBarState.fileNames, ["handoff.pdf"])
+        a.composer.submit(); a.page.settlePendingCompletionAcknowledgements()
+        for work in Array(a.page.composerAttachmentTasks.values) { _ = await work.value }
+        let physical = try rows(a)
+        XCTAssertEqual(physical.filter { $0.id == id }.count, 1)
+        XCTAssertEqual(physical.first?.title, "Revised in the other panel")
+        XCTAssertEqual(physical.first?.priority, .low); XCTAssertEqual(physical.first?.tags, ["handoff"])
+        let reference = try XCTUnwrap(physical.first?.attachments.first)
+        let url = try await a.library.tasks.taskImageFiles.verifiedURL(for: reference)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(url)), payload)
+    }
+
+    func testCP26ReopeningAnOldPanelUsesTheCurrentRecoveryInsteadOfItsPrivateCopy() throws {
+        let a = try launch(); type("Older panel words", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        a.composer.close()
+        let b = anotherPanel(a, key: "composerKeptDraft.floating.tasks")
+        b.page.addBar = TaskAddBarText(text: "Current shared words")
+        b.composer.writing = "Current shared writing"; b.composer.close()
+        a.composer.open(on: .tasks(.now))
+        XCTAssertEqual(a.page.addBar.text, "Current shared words")
+        XCTAssertEqual(a.composer.writing, "Current shared writing")
+        a.composer.submit(); a.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(a).filter { $0.id == id }.count, 1)
+        XCTAssertEqual(try rows(a).first?.title, "Current shared words")
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+    }
+
+    func testCP27LateSettlementCannotEraseAClosedReplacementPanelsKeptDraft() throws {
+        let a = try launch(); type("Older acknowledged task", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        a.composer.close()
+        weak var replacement: ComposerModel?
+        autoreleasepool {
+            let b = anotherPanel(a) // the same panel slot was recreated
+            type("Kept by the younger window", in: b); b.composer.close()
+            replacement = b.composer
+        }
+        XCTAssertNil(replacement, "the weak current-panel lease has expired")
+        XCTAssertTrue(a.composer.isCreating, "drive the older callback after replacement teardown")
+        a.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(a).filter { $0.id == id }.count, 1)
+        XCTAssertEqual(drafts.loadKeptDrafts()?.shown.title, "Kept by the younger window")
+        XCTAssertEqual(try launch().page.addBar.text, "Kept by the younger window")
+    }
+
+    func testCP28ReopeningRecoveryAsNoteKeepsItsLiveLeaseUntilConversion() async throws {
+        let a = try launch(); type("Recover as a Note", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        a.composer.close(); a.composer.open(on: .tasks(.now), as: .note)
+        let b = anotherPanel(a, key: "composerKeptDraft.floating.tasks")
+        XCTAssertTrue(b.page.addBar.text.isEmpty, "a live Note conversion still owns its Task recovery")
+        await XCTAssertTrueAsync(await a.composer.create())
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+        type("Independent task in B", in: b); b.composer.submit(); b.page.settlePendingCompletionAcknowledgements()
+        let physical = try rows(b)
+        XCTAssertEqual(physical.count, 1)
+        XCTAssertEqual(physical.first?.title, "Independent task in B")
+        XCTAssertNotEqual(physical.first?.id, id)
+    }
+
+    func testCP29AnIndependentAsideNoteCannotOwnOrRetireItsTaskDraftsRecoveryID() async throws {
+        let a = try launch(); type("Task that must remain aside", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        a.composer.open(on: .tasks(.now), as: .note)
+        a.page.addBar = TaskAddBarText(text: "Separate note words"); a.composer.writing = "Separate note writing"
+        a.composer.open(on: .tasks(.now), as: .task)
+        XCTAssertEqual(a.page.addBar.text, "Task that must remain aside")
+        XCTAssertEqual(try drafts.readFailedTasks().first?.draftState?.kind, "task")
+        XCTAssertEqual(try drafts.readFailedTasks().first?.draftState?.title, "Task that must remain aside")
+        a.composer.open(on: .tasks(.now), as: .note)
+        XCTAssertEqual(a.page.addBar.text, "Separate note words")
+        await XCTAssertTrueAsync(await a.composer.create())
+        XCTAssertEqual(try drafts.readFailedTasks().map(\.id), [id], "making the independent Note must keep its Task owner")
+        a.composer.choose(.task)
+        XCTAssertEqual(a.page.addBar.text, "Task that must remain aside")
+        a.composer.submit(); a.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(a).filter { $0.id == id }.count, 1)
+        XCTAssertEqual(try rows(a).first?.title, "Task that must remain aside")
+    }
+
+    func testCP30ClosingAnIndependentNoteReleasesItsAsideTasksRecoveryLease() async throws {
+        let a = try launch(), source = root.appendingPathComponent("aside-handoff.pdf")
+        let payload = Data("aside Task's only bytes".utf8)
+        try payload.write(to: source); a.page.addComposerFiles(urls: [source]); try await waitForFiles(a)
+        try FileManager.default.removeItem(at: source)
+        type("Task set aside with its files", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        a.composer.open(on: .notes, as: .note)
+        XCTAssertTrue(a.page.addBar.text.isEmpty)
+        type("Independent Note stays here", in: a); a.composer.close()
+        let b = anotherPanel(a, key: "composerKeptDraft.floating.tasks")
+        XCTAssertEqual(b.page.addBar.text, "Task set aside with its files")
+        XCTAssertEqual(b.page.addBarState.fileNames, ["aside-handoff.pdf"])
+        XCTAssertTrue(a.composer.saveKeptDraft())
+        XCTAssertEqual(a.page.addBar.text, "Independent Note stays here")
+        b.composer.submit(); b.page.settlePendingCompletionAcknowledgements()
+        for work in Array(b.page.composerAttachmentTasks.values) { _ = await work.value }
+        let physical = try rows(b)
+        XCTAssertEqual(physical.filter { $0.id == id }.count, 1)
+        let reference = try XCTUnwrap(physical.first?.attachments.first)
+        let url = try await b.library.tasks.taskImageFiles.verifiedURL(for: reference)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(url)), payload)
+    }
+
+    func testCP31AFreshNoteOnlyPanelDoesNotConsumeAnotherPanelsFailedTask() async throws {
+        let a = try launch(); type("Failed Task stays available", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        a.composer.close()
+        let page = TasksPageModel(library: a.library)
+        var d = drafts; d.key = "composerKeptDraft.floating.notes"
+        let note = ComposerModel(tasks: page, services: ComposerServices(drafts: d))
+        ownPageLifetime(page)
+        note.open(on: .notes, as: .note)
+        XCTAssertEqual(note.kind, .note)
+        XCTAssertTrue(page.addBar.text.isEmpty, "where Task is unreachable, Note starts from its own draft")
+        XCTAssertTrue(note.writing.isEmpty)
+        page.addBar = TaskAddBarText(text: "My independent Note"); note.writing = "My own writing"
+        await XCTAssertTrueAsync(await note.create())
+        XCTAssertEqual(try drafts.readFailedTasks().map(\.id), [id])
+        XCTAssertEqual(try drafts.readFailedTasks().first?.title, "Failed Task stays available")
+        XCTAssertTrue(try rows(a).isEmpty)
+    }
+
     func testPendingDiskRecoveryPrecedesClearAndRelaunchRetryKeepsIdentity() throws {
         let first = try launch()
         type("Pending task", in: first)
