@@ -989,6 +989,20 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(model.isCreating, "the Calendar creation remains pending in its own history")
     }
 
+    func testReviewR7CommittedButUnindexedCreationKeepsItsOptimisticRow() async throws {
+        model.open(on: .tasks(.now))
+        type("Committed but still unreadable")
+        model.writing = "The writing makes the durable commit atomic"
+        tasks.listRefreshFailures = 3
+        model.submit()
+        try await waitForComposer { !self.model.isCreating }
+
+        let committed = try XCTUnwrap(try rows(TaskItem.self).first)
+        XCTAssertTrue(TaskNoteConversion.hasWriting(committed.id, in: ModelContext(container)))
+        XCTAssertTrue(page.rows(for: .now).contains { $0.id == committed.id },
+                      "a successful card submission must not erase its visible optimistic row")
+    }
+
     func testCommandReturnCreatesAndOpensTheTasksPage() async throws {
         model.open(on: .tasks(.now))
         type("Call Sam")

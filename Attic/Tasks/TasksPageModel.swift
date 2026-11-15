@@ -705,6 +705,15 @@ final class TasksPageModel: ObservableObject {
         library.tasks.$revision.dropFirst()
             .sink { [weak self] _ in
                 guard let self else { return }
+                // A committed creation may predate its first successful list read.
+                // Retire its optimistic copy only once the real row is indexed.
+                if !self.acknowledgedCreated.isEmpty {
+                    let unindexed = self.acknowledgedCreated.filter { self.store.task(withID: $0.id) == nil }
+                    if unindexed.count != self.acknowledgedCreated.count {
+                        self.acknowledgedCreated = unindexed
+                        self.acknowledgementRevision &+= 1
+                    }
+                }
                 self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
                 self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
             }
@@ -2211,7 +2220,7 @@ final class TasksPageModel: ObservableObject {
         copy.tags = draft.tags
         copy.dueDay = draft.dueDay
         copy.dueTimeMinutes = draft.dueTimeMinutes
-        acknowledgedCreated = [copy]
+        acknowledgedCreated.append(copy)
         acknowledgementRevision &+= 1
         let token = UUID()
         acknowledgedTaskToken = token
@@ -2219,7 +2228,11 @@ final class TasksPageModel: ObservableObject {
         acknowledgedTaskOrder = noteAcknowledgementOrder()
         acknowledgedTaskCommand = { [self] in
             let created = save(id)
-            acknowledgedCreated = []
+            // A saved task with writing can survive while every presentation
+            // refresh fails. Keep its visible row until the store indexes it.
+            if created == nil || store.task(withID: id) != nil {
+                acknowledgedCreated.removeAll { $0.id == id }
+            }
             acknowledgementRevision &+= 1
             if created == nil { acknowledgementFailures &+= 1 }
             settled(created)
