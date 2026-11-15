@@ -586,7 +586,7 @@ final class PanelIntegrationTests: XCTestCase {
             PanelInvalidationProbe.pageLayout = nil
             PanelInvalidationProbe.tasksHost = nil
         }
-        let held = try holdResizeGrip(building: [.notes])
+        let held = try holdResizeGrip(building: [.notes], scaleSeed: true)
         defer { held.finish() }
         try held.drag(24)
         spin(0.06)
