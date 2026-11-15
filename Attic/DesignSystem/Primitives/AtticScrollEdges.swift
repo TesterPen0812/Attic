@@ -1,6 +1,48 @@
 import AppKit
 import SwiftUI
 
+/// The app's overlay scrollers do not consume content width. Attach inside
+/// a ScrollView so the native bridge styles only its enclosing scroll view.
+struct AtticOverlayScrollers: NSViewRepresentable {
+    func makeNSView(context: Context) -> ScrollerView { ScrollerView(frame: .zero) }
+    func updateNSView(_ view: ScrollerView, context: Context) { view.apply() }
+    static func dismantleNSView(_ view: ScrollerView, coordinator: ()) { view.stopObserving() }
+
+    final class ScrollerView: NSView {
+        private var styleObserver: NSObjectProtocol?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopObserving()
+            guard window != nil else { return }
+            apply()
+            styleObserver = NotificationCenter.default.addObserver(
+                forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                // AppKit also handles this notification. Apply after its
+                // observers; layout/drawing cover any deferred re-tiling.
+                DispatchQueue.main.async { self?.apply() }
+            }
+        }
+
+        override func layout() { super.layout(); apply() }
+        override func viewWillDraw() { apply(); super.viewWillDraw() }
+
+        func apply() {
+            guard window != nil, AtticPreviewOverrides.current.stylesScrollers,
+                  let scroll = enclosingScrollView, scroll.scrollerStyle != .overlay else { return }
+            scroll.scrollerStyle = .overlay
+        }
+
+        func stopObserving() {
+            if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
+            styleObserver = nil
+        }
+    }
+}
+
 /// Native clip bounds shared by the page keepers and keyboard/composer glides.
 enum AtticPanelScrollGeometry {
     @MainActor

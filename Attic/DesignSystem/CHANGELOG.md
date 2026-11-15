@@ -1,3 +1,11 @@
+## 2026-11-15 · Settings scroller bounds (CI standing R2)
+
+Settings' constrained window and page bodies now keep native overlay
+scrollers, as Tasks and Notes do. Legacy scrollers reserved a 17 pt gutter:
+the outer viewport grew beyond a short window, and Appearance displaced
+the sidebar at minimum width. Both axes remain available in a narrow work
+area. Layout values, materials and motion are unchanged.
+
 ## 2026-11-13 · Settings pop-up accessibility (CI8-AX)
 
 Settings pop-up rows keep their real, enabled VoiceOver button, identifier
