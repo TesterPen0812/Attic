@@ -996,8 +996,12 @@ final class AgentRunHostedTests: XCTestCase {
 
         let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
                                     tools: { FakeRunTools() }, journalURL: url)
-        _ = runner.send("Show my tasks", watching: true)
-        await wait { !runner.threadSnapshot().isRunning }
+        let live = AgentChatModel()
+        live.pacing = .instant
+        live.connect(runner)
+        live.draft = "Show my tasks"
+        live.send()
+        await wait { !runner.threadSnapshot().isRunning && !live.isBusy }
         let saved = runner.threadSnapshot().entries.filter { $0.role != "assistant" || !$0.text.isEmpty }
         XCTAssertEqual(saved.map(\.role), ["user", "assistant", "tool", "assistant"],
                        "Tool steps must remain between their preceding and following replies")
@@ -1010,16 +1014,9 @@ final class AgentRunHostedTests: XCTestCase {
         let chat = AgentChatModel()
         chat.pacing = .instant
         chat.connect(relaunched)
-        let rendered = chat.entries.map { entry -> String in
-            switch entry.content {
-            case .asked: return "user"
-            case .reply: return "assistant"
-            case .note: return "tool"
-            default: return "unexpected"
-            }
-        }
-        XCTAssertEqual(rendered, ["user", "assistant", "tool", "assistant"],
-                       "Closing and relaunching must preserve the order shown live")
+        XCTAssertEqual(transcript(chat), transcript(live),
+                       "Closing and relaunching must preserve the live order and tool title")
+        relaunched.shutdown()
     }
 
     func testR1CancelledUnfinishedToolMatchesLiveChatAfterRelaunch() async {
@@ -1294,23 +1291,38 @@ final class AgentRunHostedTests: XCTestCase {
                 default: break
                 }
             }
+            let tools = FakeRunTools()
             let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
-                                        tools: { FakeRunTools() }, journalURL: url)
+                                        tools: { tools }, journalURL: url)
             let prompt = "Seed \(seed)"
-            _ = runner.send(prompt, watching: false)
-            await wait {
-                helper.inputs.contains { line in
-                    guard let data = line.data(using: .utf8),
-                          let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                    else { return false }
-                    return request["method"] as? String == "turn/start"
-                }
-            }
-            var expected = ["user:\(prompt)"]
-            var canContinueReply = false
+            let live = AgentChatModel()
+            live.pacing = .instant
+            live.connect(runner)
+            live.draft = prompt
+            live.send()
+            await wait { self.codexTurnWasSent(helper) }
             var liveTools: [String] = []
             var nextTool = 0
             var expectedEvents = 0
+
+            /// The runner appends events before the chat's feed consumes them.
+            /// Give the feed a short turn, then stop at the first real mismatch.
+            func matchesLive(_ frame: String) async -> Bool {
+                for _ in 0..<35 {
+                    if transcript(live) == archivedTranscript(runner.threadSnapshot().entries) { return true }
+                    try? await Task.sleep(for: .milliseconds(3))
+                }
+                let onScreen = transcript(live)
+                let inJournal = archivedTranscript(runner.threadSnapshot().entries)
+                let index = (0..<max(onScreen.count, inJournal.count)).first {
+                    (onScreen.indices.contains($0) ? onScreen[$0] : nil)
+                        != (inJournal.indices.contains($0) ? inJournal[$0] : nil)
+                } ?? 0
+                let visible = onScreen.indices.contains(index) ? onScreen[index] : "<missing>"
+                let saved = inJournal.indices.contains(index) ? inJournal[index] : "<missing>"
+                XCTFail("First live/journal divergence: seed \(seed), \(frame), row \(index): live \(visible), saved \(saved)")
+                return false
+            }
 
             func sendFrame(_ method: String, item: [String: Any]? = nil, delta: String? = nil) {
                 var params: [String: Any] = [:]
@@ -1329,8 +1341,6 @@ final class AgentRunHostedTests: XCTestCase {
                     liveTools.append(id)
                     sendFrame("item/started", item: ["id": id, "type": "mcpToolCall",
                                                      "server": "attic", "tool": "list_tasks"])
-                    expected.append("tool")
-                    canContinueReply = false
                     expectedEvents += 2 // step and progress
                 } else if action == 2, !liveTools.isEmpty {
                     let index = random.choose(liveTools.count)
@@ -1338,26 +1348,16 @@ final class AgentRunHostedTests: XCTestCase {
                     sendFrame("item/completed", item: ["id": id, "type": "mcpToolCall",
                                                        "server": "attic", "tool": "list_tasks",
                                                        "status": "completed"])
-                    canContinueReply = false
                     expectedEvents += 2
                 } else {
                     let delta = "w\(seed)-\(step) "
                     sendFrame("item/agentMessage/delta", delta: delta)
-                    if canContinueReply {
-                        expected[expected.count - 1] += delta
-                    } else {
-                        expected.append("assistant:\(delta)")
-                        canContinueReply = true
-                    }
                     expectedEvents += 1
                 }
 
                 let targetEvents = expectedEvents
                 await wait { runner.threadSnapshot().events.count >= targetEvents }
-                let actual = runner.threadSnapshot().entries
-                    .filter { $0.role != "assistant" || !$0.text.isEmpty }
-                    .map { $0.role == "tool" ? "tool" : "\($0.role):\($0.text)" }
-                XCTAssertEqual(actual, expected, "seed \(seed), step \(step)")
+                guard await matchesLive("frame \(step)") else { runner.shutdown(); return }
             }
             for id in liveTools {
                 sendFrame("item/completed", item: ["id": id, "type": "mcpToolCall",
@@ -1366,16 +1366,82 @@ final class AgentRunHostedTests: XCTestCase {
                 expectedEvents += 2
             }
             await wait { runner.threadSnapshot().events.count >= expectedEvents }
-            helper.emitLine(#"{"method":"turn/completed","params":{"turn":{"status":"completed"}}}"#)
-            await wait { !runner.threadSnapshot().isRunning }
+            guard await matchesLive("overlapping completions") else { runner.shutdown(); return }
+
+            // A kind-changing open_page refusal must never create a hidden row.
+            sendFrame("item/started", item: ["id": "page-\(seed)", "type": "mcpToolCall",
+                                             "server": "attic", "tool": "open_page"])
+            expectedEvents += 2
+            await wait { runner.threadSnapshot().events.count >= expectedEvents }
+            guard await matchesLive("open_page started") else { runner.shutdown(); return }
+            sendFrame("item/agentMessage/delta", delta: "After open page ")
+            expectedEvents += 1
+            await wait { runner.threadSnapshot().events.count >= expectedEvents }
+            guard await matchesLive("text after open_page") else { runner.shutdown(); return }
+            sendFrame("item/completed", item: ["id": "page-\(seed)", "type": "mcpToolCall",
+                                               "server": "attic", "tool": "open_page", "status": "failed",
+                                               "result": ["status": "refused", "approval_title": "Open Tasks?"]])
+            expectedEvents += 2
+            await wait { runner.threadSnapshot().events.count >= expectedEvents }
+            guard await matchesLive("open_page refused") else { runner.shutdown(); return }
+
+            // Mixed success yields a detail note directly after its tool.
+            sendFrame("item/started", item: ["id": "partial-\(seed)", "type": "mcpToolCall",
+                                             "server": "attic", "tool": "create_tasks"])
+            expectedEvents += 2
+            await wait { runner.threadSnapshot().events.count >= expectedEvents }
+            guard await matchesLive("partial batch started") else { runner.shutdown(); return }
+            let envelope: [String: Any] = ["status": "partial", "step": [
+                "title": "Created 1 task", "kind": "create", "state": "partial",
+                "reason": "1 of 2 operations failed."], "data": ["results": [
+                    ["index": 1, "status": "failed", "error": "Missing title"]]]]
+            let result = String(decoding: try! JSONSerialization.data(withJSONObject: envelope), as: UTF8.self)
+            sendFrame("item/completed", item: ["id": "partial-\(seed)", "type": "mcpToolCall",
+                                               "server": "attic", "tool": "create_tasks",
+                                               "result": ["content": [["type": "text", "text": result]]]])
+            expectedEvents += 2
+            await wait { runner.threadSnapshot().events.count >= expectedEvents }
+            guard await matchesLive("partial batch finished") else { runner.shutdown(); return }
+
+            let approval = AgentApproval(id: UUID(), title: "Delete a task?", targets: [])
+            tools.approval = approval
+            await wait { runner.threadSnapshot().events.contains(.approvalNeeded(approval)) }
+            expectedEvents += 1
+            await wait { live.approval == approval }
+            guard await matchesLive("approval requested") else { runner.shutdown(); return }
+            live.resolveApproval(allow: false)
+            await wait { tools.resolved[approval.id] == false }
+
+            // Failed runs and Stop both settle unfinished tool titles.
+            if seed == 0xC4A7_2003 {
+                sendFrame("item/started", item: ["id": "cancel-\(seed)", "type": "mcpToolCall",
+                                                 "server": "attic", "tool": "delete_task",
+                                                 "arguments": ["title": "Buy milk"]])
+                expectedEvents += 2
+                await wait { runner.threadSnapshot().events.count >= expectedEvents }
+                guard await matchesLive("unfinished delete") else { runner.shutdown(); return }
+                live.stop()
+            } else if seed == 0xC4A7_2002 {
+                helper.emitLine(#"{"method":"turn/completed","params":{"turn":{"status":"failed"}}}"#)
+            } else {
+                helper.emitLine(#"{"method":"turn/completed","params":{"turn":{"status":"completed"}}}"#)
+            }
+            await wait { !runner.threadSnapshot().isRunning && !live.isBusy }
+            guard await matchesLive("terminal") else { runner.shutdown(); return }
             runner.shutdown()
 
             let relaunched = AgentRunEngine(selectedBackend: { .codex }, helper: { FakeRunHelper() },
                                             tools: { FakeRunTools() }, journalURL: url)
-            let actual = relaunched.threadSnapshot().entries
-                .filter { $0.role != "assistant" || !$0.text.isEmpty }
-                .map { $0.role == "tool" ? "tool" : "\($0.role):\($0.text)" }
-            XCTAssertEqual(actual, expected, "seed \(seed), after relaunch")
+            let restored = AgentChatModel()
+            restored.pacing = .instant
+            restored.connect(relaunched)
+            let reopenedRows = transcript(restored)
+            let liveRows = transcript(live)
+            if reopenedRows != liveRows {
+                XCTFail("First relaunch divergence for seed \(seed): live \(liveRows), reopened \(reopenedRows)")
+                relaunched.shutdown()
+                return
+            }
             relaunched.shutdown()
         }
     }
