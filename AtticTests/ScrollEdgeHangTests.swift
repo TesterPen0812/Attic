@@ -189,6 +189,41 @@ final class ScrollEdgeHangTests: XCTestCase {
                       "the original dump survives as evidence")
     }
 
+    /// Dot R-3 / Opus R-1: a transient launch HANG must not consume the only
+    /// snapshot of the later scroll freeze, even after its onset leaves the ring.
+    func testLaunchAndFollowingScrollHangKeepSeparateOnsetSnapshots() {
+        let clock = FakeClock()
+        let (probe, url) = makeProbe(clock)
+        let laterOnset = URL(fileURLWithPath: url.path + ".after-first")
+        addTeardownBlock { try? FileManager.default.removeItem(at: laterOnset) }
+        AtticHangProbe.testInstance = probe
+        defer { AtticHangProbe.testInstance = nil }
+        AtticHangProbe.note("phase", key: "onset", value: "launch")
+        clock.advance(milliseconds: 4_000)
+        probe.checkForHang()
+        XCTAssertTrue(dump(URL(fileURLWithPath: url.path + ".first"))?.contains("launch") == true)
+
+        probe.runLoop(.beforeWaiting)
+        clock.advance(milliseconds: 5)
+        probe.runLoop(.afterWaiting)
+        probe.checkForHang()
+        XCTAssertTrue(dump(url)?.hasPrefix("HEALTHY:") == true)
+
+        AtticHangProbe.note("phase", key: "onset", value: "scroll-onset")
+        clock.advance(milliseconds: 4_000)
+        probe.checkForHang()
+        XCTAssertTrue(dump(laterOnset)?.contains("scroll-onset") == true,
+                      "first recovered scroll-hang onset must have its own permanent snapshot")
+        for number in 0..<4_200 {
+            AtticHangProbe.note("later", key: "event", value: String(number))
+        }
+        clock.advance(milliseconds: 2_250)
+        probe.checkForHang()
+        XCTAssertTrue(dump(laterOnset)?.contains("scroll-onset") == true,
+                      "later snapshot rotation must not overwrite either onset")
+        XCTAssertTrue(dump(URL(fileURLWithPath: url.path + ".first"))?.contains("launch") == true)
+    }
+
     /// Opus R-2 (the app's half). A signed app is sandboxed: the test names a
     /// leaf, which resolves into the app's own temporary folder.
     func testProbeFilesResolveIntoTheAppsOwnTemporaryFolder() {

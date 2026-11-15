@@ -145,6 +145,8 @@ final class AtticHangProbe: @unchecked Sendable {
     private var lastDumpHealthyWaits: UInt64 = 0
     /// Only read on the watchdog's serial queue, never on the main run loop.
     private var savedFirstHang = false
+    private var recoveredAfterFirstHang = false
+    private var savedFollowingHang = false
     private var observer: CFRunLoopObserver?
     private var watchdog: DispatchSourceTimer?
 
@@ -299,6 +301,7 @@ final class AtticHangProbe: @unchecked Sendable {
                             totals: totals, changes: changes, lastValues: lastValues)
         }
         if let recoveredWaits {
+            if savedFirstHang { recoveredAfterFirstHang = true }
             write("HEALTHY: main run loop waited, healthy-waits=\(recoveredWaits)\n")
         }
         guard let snapshot else { return }
@@ -320,6 +323,11 @@ final class AtticHangProbe: @unchecked Sendable {
         if !savedFirstHang {
             write(dump, to: URL(fileURLWithPath: outputURL.path + ".first"))
             savedFirstHang = true
+        } else if recoveredAfterFirstHang && !savedFollowingHang {
+            // Preserve the first new onset after launch recovered, even when
+            // thousands of later callbacks rotate out of the latest ring.
+            write(dump, to: URL(fileURLWithPath: outputURL.path + ".after-first"))
+            savedFollowingHang = true
         }
         write(dump)
     }

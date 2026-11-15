@@ -191,10 +191,12 @@ final class ScrollEdgeUITests: XCTestCase {
         let fileManager = FileManager.default
         let latest = pass.probe
         let first = latest.map { URL(fileURLWithPath: $0.path + ".first") }
+        let following = latest.map { URL(fileURLWithPath: $0.path + ".after-first") }
         let items = HangEvidencePlan.items(
             recovered: pass.recovery?.hasRecovered == true,
             probeText: latest.flatMap { try? String(contentsOf: $0, encoding: .utf8) },
             probeFirstExists: first.map { fileManager.fileExists(atPath: $0.path) } ?? false,
+            probeFollowingExists: following.map { fileManager.fileExists(atPath: $0.path) } ?? false,
             screenshotExists: fileManager.fileExists(atPath: pass.screenshot.path),
             sampleExists: fileManager.fileExists(atPath: pass.sample.path),
             recoveryLogExists: fileManager.fileExists(atPath: pass.recoveryLog.path))
@@ -208,6 +210,7 @@ final class ScrollEdgeUITests: XCTestCase {
             switch item {
             case .probeLatest: if let latest { attach(latest, "probe-latest") }
             case .probeFirst: if let first { attach(first, "probe-first") }
+            case .probeFollowing: if let following { attach(following, "probe-after-first") }
             case .screenshot: attach(pass.screenshot, "frozen-window")
             case .sample: attach(pass.sample, "sample")
             case .recoveryLog: attach(pass.recoveryLog, "recovery-log")
@@ -701,15 +704,17 @@ enum HangPassGuard {
 /// It follows the recovery's status and which files exist, never only the
 /// latest dump's prefix (the fallback can fire while the file still says ARMED).
 enum HangEvidencePlan {
-    enum Item: Equatable { case probeLatest, probeFirst, screenshot, screenshotUnavailableNote, sample, recoveryLog }
+    enum Item: Equatable { case probeLatest, probeFirst, probeFollowing, screenshot, screenshotUnavailableNote, sample, recoveryLog }
 
     static func items(recovered: Bool, probeText: String?, probeFirstExists: Bool,
-                      screenshotExists: Bool, sampleExists: Bool, recoveryLogExists: Bool = false) -> [Item] {
+                      screenshotExists: Bool, sampleExists: Bool, recoveryLogExists: Bool = false,
+                      probeFollowingExists: Bool = false) -> [Item] {
         var items: [Item] = []
         if recovered || probeText?.hasPrefix("HANG:") == true {
             if probeText != nil { items.append(.probeLatest) }
         }
         if probeFirstExists { items.append(.probeFirst) }
+        if probeFollowingExists { items.append(.probeFollowing) }
         guard recovered else { return items }
         items.append(screenshotExists ? .screenshot : .screenshotUnavailableNote)
         if sampleExists { items.append(.sample) }
