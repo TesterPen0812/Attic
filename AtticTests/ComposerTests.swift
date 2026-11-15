@@ -956,6 +956,39 @@ final class ComposerTests: XCTestCase {
                        "a later, deliberate Undo may reverse that completed task")
     }
 
+    func testReviewR6FailedTasksCompletionDoesNotSwallowCalendarUndo() async throws {
+        let task = try XCTUnwrap(library.createTasks([TaskDraft(title: "Fail completion")])?.first)
+        let calendarNote = try XCTUnwrap(library.createNote(title: "Calendar-side step", body: "Keep its history",
+                                                               tags: [], pinned: false, in: .calendar))
+        page.services.acknowledgementDelay = .seconds(30)
+        taskSaveFailure.successfulWritesBeforeFailure = 0
+        page.completeAcknowledged(task.id) { _ in }
+        model.open(on: .calendar(selected: today))
+        model.undoPage()
+
+        try await waitForComposer {
+            self.notes.notes.first { $0.id == calendarNote && $0.deletedAt == nil } == nil
+        }
+        XCTAssertTrue(library.undo.canRedo(in: .calendar))
+        XCTAssertEqual(tasks.task(withID: task.id)?.status, .todo)
+    }
+
+    func testReviewR6FailedCalendarCreationDoesNotSwallowTasksUndo() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older Tasks step")])?.first)
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .calendar(selected: today), as: .task)
+        type("Calendar-side creation")
+        model.writing = "Creation will fail in its own history"
+        saveFailure.on = true
+        model.submit()
+        XCTAssertTrue(model.isCreating)
+
+        XCTAssertEqual(page.undo(), .applied)
+        XCTAssertTrue(try rows(TaskItem.self).contains { $0.id == older.id && $0.deletedAt != nil },
+                      "a pending Calendar failure cannot block a Tasks history Undo")
+        XCTAssertTrue(model.isCreating, "the Calendar creation remains pending in its own history")
+    }
+
     func testCommandReturnCreatesAndOpensTheTasksPage() async throws {
         model.open(on: .tasks(.now))
         type("Call Sam")

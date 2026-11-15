@@ -722,20 +722,12 @@ final class ComposerModel: ObservableObject {
     func undoPage() {
         let history = page.history, library = tasks.library
         if history == .tasks { _ = tasks.undo(); return }
-        let hadPending = tasks.hasPendingAcknowledgement
-        let savedPending = tasks.settlePendingCompletionAcknowledgements()
-        // A failed acknowledged creation has no step in its page's history.
-        // Never let Undo fall through to an older, unrelated change.
-        if hadPending && !savedPending { return }
         if history == .calendar { Task { await library.replay(in: history, redo: false) } }
         else { _ = library.undo(in: history) }
     }
     func redoPage() {
         let history = page.history, library = tasks.library
         if history == .tasks { _ = tasks.redo(); return }
-        let hadPending = tasks.hasPendingAcknowledgement
-        let savedPending = tasks.settlePendingCompletionAcknowledgements()
-        if hadPending && !savedPending { return }
         if history == .calendar { Task { await library.replay(in: history, redo: true) } }
         else { _ = library.redo(in: history) }
     }
