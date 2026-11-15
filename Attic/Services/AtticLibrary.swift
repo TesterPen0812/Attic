@@ -1227,6 +1227,9 @@ final class AtticLibrary {
             owned.writing = updated.writing; owned.groups = updated.groups
             return .applied
         }
+        // A stale presentation index is not proof this Undo step is obsolete.
+        // Keep it on top until the failed reload can be retried.
+        if tasks.hasUnresolvedTaskReload { return .failed }
         // Tasks that left the list since (deleted, or moved to the Done log
         // when it is not reached) can't be taken back by this step any more.
         let listed = ids.allSatisfy {

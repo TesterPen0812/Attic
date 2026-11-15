@@ -402,6 +402,8 @@ final class TaskStore: ObservableObject {
     let container: ModelContainer
     private var context: ModelContext
     private var taskEditNeedsReload = false
+    /// A failed presentation read cannot prove that a committed task vanished.
+    var hasUnresolvedTaskReload: Bool { taskEditNeedsReload }
     private let now: () -> Date
     let taskImageFiles: TaskImageFiles
     @Published private(set) var importingAttachmentTaskIDs: Set<UUID> = []
