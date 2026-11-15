@@ -476,6 +476,9 @@ extension AgentActions {
                 // `resized` measures the box the object covers, and a line or
                 // arrow's stored frame keeps signed endpoint differences.
                 let covered = DrawGeometry.frame(existing.frame)
+                if covered.width < 0.001 || covered.height < 0.001 {
+                    throw AgentActionsError.invalid("Resizing a flat object to nonzero dimensions on both axes is not supported.")
+                }
                 let resized = DrawPageModel.resized([existing], handle: .bottomRight,
                     delta: CGPoint(x: width - covered.width, y: height - covered.height), shift: false,
                     minimum: 0)

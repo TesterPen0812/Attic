@@ -474,6 +474,32 @@ final class DrawDataSafetyTests: XCTestCase {
     /// difference of its endpoints, so its frame can have a negative width or
     /// height. The agent's size is the box the object covers: every endpoint
     /// direction gets exactly the asked size, with one Undo.
+    func testR4AgentFlatLineResizeNeverClaimsAnInexactSuccess() throws {
+        for kind in [DrawShape.line, .arrow] {
+            for frame in [DrawFrame(x: 200, y: 200, width: 100, height: 0),
+                          DrawFrame(x: 200, y: 200, width: 0, height: -100)] {
+                let store = try persistent(at: directory()), agent = try actions(store)
+                let c = store.create(name: "Flat")
+                let line = DrawObject(frame: frame, content: .shape(kind))
+                XCTAssertTrue(store.perform(.put([line]), on: c.id).isSaved)
+                let token = try XCTUnwrap(read(agent, canvas: c.id)["object_token"] as? String)
+                do {
+                    _ = try agent.drawAction("draw_resize_object", ["canvas_id": c.id.uuidString,
+                        "object_id": line.id.uuidString, "object_token": token, "width": 50, "height": 30], beforeMutation: {})
+                    let box = DrawGeometry.frame(try XCTUnwrap(store.open(c.id).objects.first).frame)
+                    XCTAssertEqual(box.width, 50, accuracy: 0.001); XCTAssertEqual(box.height, 30, accuracy: 0.001)
+                    XCTAssertTrue(store.undo(on: c.id).isSaved)
+                    XCTAssertEqual(try store.open(c.id).objects, [line])
+                    XCTAssertTrue(store.redo(on: c.id).isSaved)
+                    XCTAssertEqual(try DrawPersistentStore(container: store.container).open(c.id).objects, try store.open(c.id).objects)
+                } catch {
+                    XCTAssertTrue(error.localizedDescription.contains("flat"), "explicit refusal must explain the flat-axis limitation: \(error)")
+                    XCTAssertEqual(try store.open(c.id).objects, [line])
+                }
+            }
+        }
+    }
+
     func testBG31AgentResizeOfSignedLineAndArrowFramesIsExact() throws {
         for kind in [DrawShape.line, .arrow] {
             for (signX, signY) in [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
