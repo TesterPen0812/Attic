@@ -67,14 +67,31 @@ final class DrawRecoveryJournal {
     init(fileURL: URL, writeData: @escaping (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) {
         self.fileURL = fileURL
         self.writeData = writeData
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        reload()
+    }
+
+    /// Reload only on an actual successful read, or a proven missing file.
+    /// Failed reads never overwrite the last in-memory ownership record.
+    func reload() {
         do {
-            archive = try JSONDecoder().decode(Archive.self, from: Data(contentsOf: fileURL))
-            guard [1, 2].contains(archive.version), archive.records.values.allSatisfy({ !$0.edits.isEmpty }) else {
+            let data: Data
+            do { data = try Data(contentsOf: fileURL) }
+            catch {
+                let ns = error as NSError
+                if (ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoSuchFileError) ||
+                   (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT)) {
+                    archive = Archive(); sequence = 0; issue = nil
+                    return
+                }
+                throw error
+            }
+            var loaded = try JSONDecoder().decode(Archive.self, from: data)
+            guard [1, 2].contains(loaded.version), loaded.records.values.allSatisfy({ !$0.edits.isEmpty }) else {
                 throw Failure.damaged
             }
-            if archive.version == 2 {
-                guard let generation = archive.generation else { throw Failure.damaged }
+            var loadedSequence: UInt64 = 0
+            if loaded.version == 2 {
+                guard let generation = loaded.generation else { throw Failure.damaged }
                 let prefix = generation.uuidString + "-"
                 if FileManager.default.fileExists(atPath: eventsURL.path) {
                     let files = try FileManager.default.contentsOfDirectory(at: eventsURL, includingPropertiesForKeys: nil)
@@ -82,14 +99,17 @@ final class DrawRecoveryJournal {
                         .sorted { $0.lastPathComponent < $1.lastPathComponent }
                     for url in files {
                         let number = url.deletingPathExtension().lastPathComponent.dropFirst(prefix.count)
-                        guard UInt64(number) == sequence + 1 else { throw Failure.damaged }
+                        guard UInt64(number) == loadedSequence + 1 else { throw Failure.damaged }
                         let event = try JSONDecoder().decode(Event.self, from: Data(contentsOf: url))
                         guard event.version == 2, event.generation == generation else { throw Failure.damaged }
-                        try Self.apply(event, to: &archive)
-                        sequence += 1
+                        try Self.apply(event, to: &loaded)
+                        loadedSequence += 1
                     }
                 }
             }
+            archive = loaded
+            sequence = loadedSequence
+            issue = nil
         } catch { issue = Failure.damaged.localizedDescription }
     }
 
@@ -296,6 +316,14 @@ final class DrawSwiftDataRepository: DrawRepository {
     }
 
     func write(_ change: DrawChange) -> DrawWriteOutcome {
+        write(change, operation: nil)
+    }
+
+    func write(_ change: DrawChange, pending: DrawStore.Pending) -> DrawWriteOutcome {
+        write(change, operation: pending)
+    }
+
+    private func write(_ change: DrawChange, operation: DrawStore.Pending?) -> DrawWriteOutcome {
         let identity = ObjectIdentifier(container)
         guard Self.writing.insert(identity).inserted else { return .held("Another Draw command is saving.") }
         defer { Self.writing.remove(identity) }
@@ -318,11 +346,12 @@ final class DrawSwiftDataRepository: DrawRepository {
             attempts[change.canvasID] = attempt
             // The intended edit, exact physical before and expected after
             // must all be on disk before SwiftData is allowed to commit.
-            if let recovery, let queued = recovery.records[change.canvasID]?.edits {
+            if let recovery, let queued = operation.map({ [$0] }) ?? recovery.records[change.canvasID]?.edits {
                 if changedProof || attemptBytes[change.canvasID] == nil {
                     attemptBytes[change.canvasID] = try JSONEncoder().encode(attempt)
                 }
-                try recovery.update(change.canvasID, edits: queued, proof: attemptBytes[change.canvasID])
+                try recovery.update(change.canvasID, edits: queued, proof: attemptBytes[change.canvasID],
+                                    unattempted: false)
             }
             metrics.saveAttempts += 1
             do {
@@ -462,6 +491,15 @@ final class DrawSwiftDataRepository: DrawRepository {
     }
 
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome {
+        // Recovery files may become readable after this repository was
+        // constructed. Rehydrate their exact physical proof on demand.
+        if attempts[change.canvasID] == nil,
+           let bytes = recovery?.records[change.canvasID]?.proof,
+           let attempt = try? JSONDecoder().decode(Attempt.self, from: bytes),
+           attempt.change == change {
+            attempts[change.canvasID] = attempt
+            attemptBytes[change.canvasID] = bytes
+        }
         guard let attempt = attempts[change.canvasID], attempt.change == change else {
             return .held("There is no verified save attempt to reconcile; keep this draft for review.")
         }

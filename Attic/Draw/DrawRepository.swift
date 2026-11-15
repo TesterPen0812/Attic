@@ -40,6 +40,9 @@ protocol DrawRepository: AnyObject {
     func load(_ id: UUID) throws -> DrawSnapshot?
     func textMatches(_ words: [String], in id: UUID) throws -> [UUID]
     func write(_ change: DrawChange) -> DrawWriteOutcome
+    /// A durable Draw operation. The repository prepares physical proof and
+    /// checkpoints this identity together before attempting its model save.
+    func write(_ change: DrawChange, pending: DrawStore.Pending) -> DrawWriteOutcome
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome
     /// Exact physical before/after proof of the attempted save, serialized
     /// for a recovery checkpoint outside the model transaction.
@@ -57,6 +60,7 @@ protocol DrawRepository: AnyObject {
 }
 
 extension DrawRepository {
+    func write(_ change: DrawChange, pending: DrawStore.Pending) -> DrawWriteOutcome { write(change) }
     func recoveryProof(for id: UUID) -> Data? { nil }
     func matchesAgentUndoPrestate(_ change: DrawChange) -> Bool { true }
 }

@@ -69,7 +69,8 @@ enum DrawRecentlyDeleted {
     /// in Recently Deleted for 30 days goes for good.
     @discardableResult
     static func purgeExpired(store: (any DrawStoreProtocol)?, now: Date, calendar: Calendar) -> DrawPurgeReport {
-        store?.purge(deletedBefore: RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar)) ?? DrawPurgeReport()
+        if let store { DrawLibraryHub.flushLiveInput(for: store) }
+        return store?.purge(deletedBefore: RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar)) ?? DrawPurgeReport()
     }
 
     /// Delete Permanently and Empty: exactly these rows, at the deletion
@@ -77,6 +78,7 @@ enum DrawRecentlyDeleted {
     @discardableResult
     static func purge(_ items: [(item: DrawDeletedItem, deletedAt: Date)], store: (any DrawStoreProtocol)?) -> DrawPurgeReport {
         guard let store, !items.isEmpty else { return DrawPurgeReport(removed: 0, kept: items.count) }
+        DrawLibraryHub.flushLiveInput(for: store)
         return store.purge(items.map { entry in
             entry.item.objectID.map { .image(canvas: entry.item.canvasID, object: $0, deletedAt: entry.deletedAt) }
                 ?? .canvas(entry.item.canvasID, deletedAt: entry.deletedAt)
@@ -94,6 +96,7 @@ enum DrawRecentlyDeleted {
     /// one-step Recently Deleted history, including multiple canvases.
     static func restoreTracked(_ items: [DrawDeletedItem], store: (any DrawStoreProtocol)?) -> RestoreResult {
         guard let store else { return RestoreResult(restored: 0, failure: String(localized: "Draw isn’t available."), actions: []) }
+        DrawLibraryHub.flushLiveInput(for: store)
         var restored = 0
         var failure: String?
         var actions: [RestoreAction] = []
@@ -140,8 +143,8 @@ enum DrawRecentlyDeleted {
 
 /// A mixed Restore Selected is one library-history step. Individual saved
 /// Draw steps retain their own per-canvas history; the token check prevents
-/// undoing unrelated Draw edits made after the restore. A failed member
-/// compensates previously applied members and keeps this group retryable.
+/// undoing unrelated Draw edits made after the restore. On partial failure,
+/// prior successful members remain applied and the group offers ordered Retry.
 @MainActor
 enum RecentlyDeletedRestoreUndo {
     private enum MemberResult {
@@ -188,40 +191,37 @@ enum RecentlyDeletedRestoreUndo {
             redo: { step.redo() == .applied ? .changed : .failed }
         ) }
         let drawRefs = Set(actions.map { AtticItemRef(.canvas, $0.canvasID) })
-        // The offered Undo is bound to each canvas's newest step. The pins
-        // live as long as this step does, so the bounded history cannot drop
-        // a step the library is still offering to undo.
+        // Identity receipts expire when their session history is released.
         let pins = actions.compactMap { $0.pin ?? drawStore?.pinHistoryStep($0.historyStepID) }
 
         func offerIsAvailable() -> Bool {
-            guard pins.allSatisfy({ ($0 as? DrawStepPins.Pin)?.isActive ?? true }) else {
+            guard pins.allSatisfy({ ($0 as? DrawHistoryOffer)?.isActive ?? true }) else {
                 // A composite offer ends as a whole, including its untouched canvases.
-                for pin in pins { (pin as? DrawStepPins.Pin)?.cancel() }
+                for pin in pins { (pin as? DrawHistoryOffer)?.cancel() }
                 return false
             }
             return true
         }
 
+        // A partially completed group must resume at the first unfinished
+        // member. Replaying earlier members can apply a later undo twice or
+        // undo a different edit that happened after the partial failure.
+        var undone = 0, redone = 0
         func replay(undo: Bool) -> UndoOutcome {
             guard offerIsAvailable() else { return .obsolete }
             let ordered = undo ? Array(members.reversed()) : members
-            var changed: [Member] = []
-            for member in ordered {
+            var completed = undo ? undone : redone
+            for member in ordered.dropFirst(completed) {
                 let outcome = undo ? member.undo() : member.redo()
                 switch outcome {
-                case .changed:
-                    changed.append(member)
-                case .alreadyApplied:
-                    continue
+                case .changed, .alreadyApplied:
+                    completed += 1
+                    if undo { undone = completed } else { redone = completed }
                 case .failed:
-                    // Compensate only changes made in this replay; a Draw step
-                    // settled before this attempt must not be reversed here.
-                    for previous in changed.reversed() {
-                        _ = undo ? previous.redo() : previous.undo()
-                    }
-                    return .failed
+                    return completed > 0 ? .partial(completed: completed, total: ordered.count) : .failed
                 }
             }
+            if undo { undone = 0; redone = 0 } else { redone = 0; undone = 0 }
             return .applied
         }
 

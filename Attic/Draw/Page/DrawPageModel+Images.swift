@@ -97,6 +97,7 @@ extension DrawPageModel {
     /// thread, then places them, one Undo step. Nil when there is no image.
     @discardableResult
     func importImages(from pasteboard: NSPasteboard, at screen: CGPoint?) -> Task<Void, Never>? {
+        guard acceptNewDrawMutation() else { return nil }
         guard let canvasID, Self.holdsImages(pasteboard) else { return nil }
         var sources: [DrawImageSource] = []
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: Self.imageFileOptions) as? [URL], !urls.isEmpty {
@@ -119,7 +120,14 @@ extension DrawPageModel {
             let results = await Task.detached(priority: .userInitiated) {
                 sources.map { (name: $0.name, image: $0.load()) }
             }.value
-            let outcome = self?.place(results.compactMap(\.image), at: drop)
+            let outcome: DrawSaveResult?
+            if let self, let store = self.store as? DrawStore {
+                var saved: DrawSaveResult?
+                store.drainAdmittedInput { saved = self.place(results.compactMap(\.image), at: drop) }
+                outcome = saved
+            } else {
+                outcome = self?.place(results.compactMap(\.image), at: drop)
+            }
             let failed = results.filter { $0.image == nil }.map(\.name)
             if !failed.isEmpty {
                 var message = String(localized: "The following images couldn’t be added: \(failed.joined(separator: ", "))")
@@ -154,7 +162,13 @@ extension DrawPageModel {
                                                width: width, height: height),
                               zIndex: z, content: .image(item.image))
         }
-        let result = perform(.put(placed), on: drop.canvas)
+        let result: DrawSaveResult
+        if (store as? DrawStore)?.admissionClosed == true {
+            admittedImportPlacements.append((canvas: drop.canvas, objects: placed))
+            result = .held("This work is only in memory. It has not been saved.")
+        } else {
+            result = perform(.put(placed), on: drop.canvas)
+        }
         AtticSounds.play(.attached, if: result.isSaved)
         return result
     }

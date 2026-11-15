@@ -27,6 +27,9 @@ enum UndoOutcome: Equatable, Error {
     /// The store refused or failed to save; nothing changed and the step can
     /// be tried again (a full disk, a replica conflict someone can resolve).
     case failed
+    /// Some members of a grouped action were durably applied. The history
+    /// step remains offered so the rest can be retried in order.
+    case partial(completed: Int, total: Int)
     /// The step can never apply again: what it changes is gone (removed for
     /// good, in Recently Deleted, or changed since on every field it
     /// touches). The route drops it so it cannot block the steps before it.
@@ -230,6 +233,8 @@ final class UndoRoute: ObservableObject {
             switch outcome {
             case .failed:
                 return .failed
+            case .partial:
+                return outcome
             case .obsolete:
                 entry.undo.removeLast()
                 histories[history] = entry
@@ -266,6 +271,8 @@ final class UndoRoute: ObservableObject {
             switch outcome {
             case .failed:
                 return .failed
+            case .partial:
+                return outcome
             case .obsolete:
                 entry.redo.removeLast()
                 histories[history] = entry

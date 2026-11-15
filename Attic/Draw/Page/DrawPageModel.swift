@@ -223,6 +223,9 @@ final class DrawPageModel: ObservableObject {
     private(set) var pendingImport: Task<Void, Never>?
     /// Every drop or paste of images not yet placed (quit waits for all).
     private var imports: [UUID: Task<Void, Never>] = [:]
+    /// Original image bytes from providers admitted before a save froze Draw.
+    /// This finite page-owned buffer is processed only after the head settles.
+    var admittedImportPlacements: [(canvas: UUID, objects: [DrawObject])] = []
     /// A canvas's thumbnail renders once its edits have been quiet this long.
     var thumbnailSettleDelay: TimeInterval = 1.5
     /// Renders a thumbnail away from the main thread (tests hold one back).
@@ -338,12 +341,21 @@ final class DrawPageModel: ObservableObject {
     /// `.held`), with Retry: the open canvas's first, else any canvas's.
     var saveNotice: PanelNoticeContent? {
         if let issue = store.recoveryIssue {
-            return PanelNoticeContent(message: issue, canRetry: false)
+            return PanelNoticeContent(message: issue, canRetry: true)
+        }
+        if let issue = (store as? DrawStore)?.recoveryLoadIssue {
+            return PanelNoticeContent(message: issue, canRetry: true)
         }
         if let problem = saveProblem, problem.message != dismissedSaveProblem {
             return PanelNoticeContent(message: problem.message, canRetry: true)
         }
-        if let actionProblem { return PanelNoticeContent(message: actionProblem, canRetry: false) }
+        if !admittedImportPlacements.isEmpty {
+            return PanelNoticeContent(message: "This work is only in memory. It has not been saved.", canRetry: true)
+        }
+        if let actionProblem {
+            return PanelNoticeContent(message: actionProblem,
+                                      canRetry: actionProblem == (store as? DrawStore)?.admissionRefusalMessage)
+        }
         if quitImportPending {
             return PanelNoticeContent(message: String(localized: "Importing images…"), canRetry: false,
                                       isInformational: true)
@@ -363,7 +375,11 @@ final class DrawPageModel: ObservableObject {
         guard let id, let edit = pending[id] else { return nil }
         switch edit.outcome {
         case .retry(let message), .held(let message):
-            return (id, message.isEmpty ? String(localized: "Your drawing couldn’t be saved.") : message)
+            let special = message.contains("This work is only in memory") ||
+                message.contains("recovery cleanup") || message.contains("could not be loaded") ||
+                message.contains("divergent")
+            let visible = special ? message : (store as? DrawStore)?.admissionRefusalMessage ?? message
+            return (id, visible)
         case .saved, .unchanged:
             return (id, String(localized: "Your drawing couldn’t be saved."))
         }
@@ -373,18 +389,35 @@ final class DrawPageModel: ObservableObject {
     /// reconciled with what the store has.
     func retrySave() {
         dismissedSaveProblem = nil
+        actionProblem = nil
+        if let draw = store as? DrawStore,
+           draw.recoveryIssue != nil || draw.recoveryLoadIssue != nil {
+            _ = draw.retryRecoveryRead()
+            guard draw.recoveryIssue == nil, draw.recoveryLoadIssue == nil else {
+                objectWillChange.send()
+                return
+            }
+        }
         // A settled write that deletes the open canvas must not navigate
         // before the Undo/Redo that waited behind it has run.
         deletedCanvasHopDeferrals += 1
-        for (id, edit) in store.pendingEdits {
-            let result: DrawSaveResult
-            if case .held = edit.outcome { result = store.reconcile(on: id) } else { result = store.retry(on: id) }
+        for (id, _) in store.pendingEdits {
+            let result = store.retry(on: id)
             if id == canvasID { apply(result) }
             library.renameSavedByRetry(on: id)
         }
         flushAcknowledgedDraw()
+        flushTyping()
+        flushAdmittedImports()
         deletedCanvasHopDeferrals -= 1
         if externalSyncDeferred { syncExternalChanges() }
+        // When the only live canvas was provisionally deleted, the board
+        // stood empty during the failure. Retry may now choose the saved
+        // live canvas (or make an empty draft if the deletion committed).
+        if canvasID == nil, !store.hasUnsettledEdits {
+            if let live = try? store.library().first { open(live.id) }
+            else { _ = newCanvas() }
+        }
         objectWillChange.send()
     }
 
@@ -404,11 +437,18 @@ final class DrawPageModel: ObservableObject {
     /// its task stays owned by this model and completes normally. Thumbnails
     /// are regenerable and never hold the quit reply indefinitely.
     func prepareToQuit() async -> Bool {
-        finishLiveInput()
-        endEditing()
-        flushAcknowledgedDraw()
-        flushTyping()
-        flushViewportMemory()
+        let draw = store as? DrawStore
+        draw?.closeAdmissionForQuit()
+        var approved = false
+        defer { if !approved { draw?.reopenAdmissionAfterQuit() } }
+        let drain = {
+            self.finishLiveInput()
+            self.endEditing()
+            self.flushAcknowledgedDraw()
+            self.flushTyping()
+            self.flushViewportMemory()
+        }
+        if let draw { draw.drainAdmittedInput(drain) } else { drain() }
         let deadline = ContinuousClock.now.advanced(by: .milliseconds(750))
         while !imports.isEmpty, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(25))
@@ -418,12 +458,13 @@ final class DrawPageModel: ObservableObject {
             return false
         }
         quitImportPending = false
-        flushThumbnail()
+        if let draw { draw.drainAdmittedInput { flushThumbnail() } } else { flushThumbnail() }
         while !thumbnailRenders.isEmpty, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(25))
         }
-        if store.hasUnsettledEdits { retrySave() }
-        return !store.hasUnsettledEdits
+        approved = !store.hasUnsettledEdits && imports.isEmpty && thumbnailRenders.isEmpty &&
+            acknowledgedDraw.isEmpty && typingCommands.isEmpty && admittedImportPlacements.isEmpty
+        return approved
     }
 
     private func hasContent(_ id: UUID) -> Bool {
@@ -693,14 +734,30 @@ final class DrawPageModel: ObservableObject {
             $0.id != deletedID && pending[$0.id]?.canvas.deletedAt == nil
         }) {
             open(next.id)
+        } else if (store as? DrawStore)?.admissionClosed == true {
+            // No other saved canvas exists and Draw cannot create a new one
+            // while frozen. Leave the deleted board without inventing a
+            // writable draft; the exact deletion remains owned by Retry.
+            canvasID = nil
+            library.currentCanvasID = nil
+            objects = []
+            selection = []
+            editing = nil
+            editingID = nil
+            strip = nil
+            refreshHistory()
+            contentRevision += 1
+            board?.drawContentChanged()
+            board?.drawSelectionChanged()
         } else {
-            newCanvas()
+            _ = newCanvas()
         }
     }
 
     /// "+": a new, empty canvas straight away (a draft until its first content).
     @discardableResult
     func newCanvas(name: String? = nil) -> Bool {
+        guard acceptNewDrawMutation() else { return false }
         if library.isRenaming {
             library.commitRename()
             guard !library.isRenaming else { return false }
@@ -1005,6 +1062,7 @@ final class DrawPageModel: ObservableObject {
 
     func undo() {
         guard let canvasID, live == nil else { return }
+        guard acceptNewDrawMutation() else { return }
         flushAcknowledgedDraw()
         flushTyping()
         syncExternalChanges()
@@ -1018,6 +1076,7 @@ final class DrawPageModel: ObservableObject {
 
     func redo() {
         guard let canvasID, live == nil else { return }
+        guard acceptNewDrawMutation() else { return }
         flushAcknowledgedDraw()
         flushTyping()
         syncExternalChanges()
@@ -1030,6 +1089,7 @@ final class DrawPageModel: ObservableObject {
 
     /// Text places a box and types straight away.
     func beginText(at world: CGPoint) {
+        guard acceptNewDrawMutation() else { return }
         endEditing()
         let style = DrawStyle(colour: colour, size: textSize, corners: .square)
         editing = DrawTextEdit(id: UUID(), origin: CGPoint(x: world.x, y: world.y - CGFloat(textSize.textSize) * DrawText.clickLift),
@@ -1041,6 +1101,7 @@ final class DrawPageModel: ObservableObject {
 
     /// Return on a selected text box, a double click, or Text on a box.
     func edit(_ id: UUID) {
+        guard acceptNewDrawMutation() else { return }
         syncExternalChanges()
         guard let object = object(id), case .text(let text) = object.content else { return }
         endEditing()
@@ -1061,6 +1122,10 @@ final class DrawPageModel: ObservableObject {
         // must still use the agent's current position and text geometry.
         syncExternalChanges()
         guard var edit = editing, text != edit.text else { return }
+        guard acceptNewDrawMutation() else {
+            board?.drawEditingChanged(replacingText: true)
+            return
+        }
         edit.text = text
         if text.isEmpty {
             editing = edit
@@ -1127,6 +1192,9 @@ final class DrawPageModel: ObservableObject {
         typingTimer?.cancel()
         typingTimer = nil
         guard let canvasID = typingCanvasID, !typingCommands.isEmpty else { return }
+        // The burst was admitted while Draw was still open. Keep its exact
+        // commands and preview until the earlier failed write is settled.
+        if (store as? DrawStore)?.admissionClosed == true { return }
         flushAcknowledgedDraw()
         let commands = typingCommands
         typingCommands = []
@@ -1144,7 +1212,18 @@ final class DrawPageModel: ObservableObject {
         flushTyping()
     }
 
+    func flushAdmittedImports() {
+        while let placement = admittedImportPlacements.first {
+            if (store as? DrawStore)?.admissionClosed == true { return }
+            let result = perform(.put(placement.objects), on: placement.canvas)
+            if result.isSaved || store.pendingEdits[placement.canvas] != nil {
+                admittedImportPlacements.removeFirst()
+            } else { return }
+        }
+    }
+
     private func restyleEditing(_ change: (inout DrawStyle) -> Void) {
+        guard acceptNewDrawMutation() else { return }
         syncExternalChanges()
         guard var edit = editing else { return }
         change(&edit.style)
@@ -1295,11 +1374,13 @@ final class DrawPageModel: ObservableObject {
     /// run once a frame has had a chance to render. Commands stay ordered.
     func performAcknowledged(_ command: DrawCommand) {
         guard let canvasID else { return }
+        guard acceptNewDrawMutation() else { return }
         // Test/in-memory stores have no disk latency to remove. Keep their
         // immediate command and history semantics for direct model callers.
         guard store is DrawPersistentStore else { _ = perform(command); return }
         // Preserve the order when a text burst began before this gesture.
         if !typingCommands.isEmpty { flushTyping() }
+        guard acceptNewDrawMutation() else { return }
         if acknowledgedDraw.isEmpty { syncExternalChanges() }
         prepareAcknowledgedHistory(on: canvasID)
         let before = objects
@@ -1344,6 +1425,7 @@ final class DrawPageModel: ObservableObject {
 
     private func acknowledgeHistory(redo: Bool) {
         guard let canvasID, live == nil else { return }
+        guard acceptNewDrawMutation() else { return }
         guard store is DrawPersistentStore else {
             if redo { self.redo() } else { self.undo() }
             return
@@ -1407,29 +1489,21 @@ final class DrawPageModel: ObservableObject {
     func flushAcknowledgedDraw() {
         acknowledgedDrawTimer?.cancel()
         acknowledgedDrawTimer = nil
+        // Do not consume an already-admitted buffer behind a failed head.
+        // The original ordered commands are replayed after explicit Retry.
+        if (store as? DrawStore)?.admissionClosed == true { return }
+        let preview = objects
+        let previewName = canvasName
+        let undoProjection = acknowledgedUndoChanges
+        let redoProjection = acknowledgedRedoChanges
         acknowledgedUndoChanges = nil
         acknowledgedRedoChanges = []
         let entries = acknowledgedDraw
         acknowledgedDraw = []
-        var deletedHere: [UUID: DeletionState] = [:]
         guard !entries.isEmpty else { return }
         deletedCanvasHopDeferrals += 1
-        // Once an Undo/Redo has put a canvas in Recently Deleted, the edits and
-        // same-way actions still queued behind it are for a board nobody is
-        // looking at. Those are skipped and counted, because the opposite
-        // action first cancels one of them; only an opposite action that
-        // finds nothing left to cancel is the one that brings the canvas back
-        // (a Redo after an Undo deleted it, an Undo after a Redo did).
         var changedOtherCanvases = Set<UUID>()
-        for entry in entries {
-            if var state = deletedHere[entry.canvas] {
-                switch entry.action {
-                case .command: continue
-                case .undo, .redo:
-                    if entry.action.direction == state.cause { state.skipped += 1; deletedHere[entry.canvas] = state; continue }
-                    if state.skipped > 0 { state.skipped -= 1; deletedHere[entry.canvas] = state; continue }
-                }
-            }
+        for (index, entry) in entries.enumerated() {
             let result: DrawSaveResult
             switch entry.action {
             case .command(let command): result = store.perform(command, on: entry.canvas)
@@ -1439,17 +1513,24 @@ final class DrawPageModel: ObservableObject {
             switch result {
             case .saved(let delta):
                 if entry.canvas != canvasID { changedOtherCanvases.insert(entry.canvas) }
-                deletedHere[entry.canvas] = delta.canvas.deletedAt != nil
-                    ? DeletionState(cause: entry.action.direction, skipped: 0) : nil
+                _ = delta
             case .retry, .held:
-                if let pending = store.pendingEdits[entry.canvas] {
-                    deletedHere[entry.canvas] = pending.canvas.deletedAt != nil
-                        ? DeletionState(cause: entry.action.direction, skipped: 0) : nil
+                if canvasID == entry.canvas { apply(result, replacingEditorText: typingCommands.isEmpty) }
+                let remainder = Array(entries.dropFirst(index + 1))
+                if !remainder.isEmpty {
+                    acknowledgedDraw = remainder
+                    acknowledgedUndoChanges = undoProjection
+                    acknowledgedRedoChanges = redoProjection
+                    objects = preview
+                    canvasName = previewName
+                    afterContentChange(replacingEditorText: false)
                 }
+                break
             case .unchanged:
                 break
             }
-            if canvasID == entry.canvas { apply(result, replacingEditorText: typingCommands.isEmpty) }
+            if canvasID == entry.canvas, result.isSaved { apply(result, replacingEditorText: typingCommands.isEmpty) }
+            if (store as? DrawStore)?.admissionClosed == true { break }
         }
         for id in changedOtherCanvases {
             markThumbnailDirty(id)
@@ -1600,11 +1681,17 @@ final class DrawPageModel: ObservableObject {
             canRedo = !acknowledgedRedoChanges.isEmpty
             return
         }
-        let projected = store.pendingEdits[canvasID] == nil ? nil : (store as? DrawStore)?.acknowledgedHistoryAvailability(on: canvasID)
-        let undoable = projected?.undo ?? store.canUndo(on: canvasID)
-        let redoable = projected?.redo ?? store.canRedo(on: canvasID)
+        let undoable = store.canUndo(on: canvasID)
+        let redoable = store.canRedo(on: canvasID)
         if canUndo != undoable { canUndo = undoable }
         if canRedo != redoable { canRedo = redoable }
+    }
+
+    @discardableResult
+    func acceptNewDrawMutation() -> Bool {
+        guard let draw = store as? DrawStore, draw.admissionClosed else { return true }
+        report(draw.admissionRefusalMessage)
+        return false
     }
 
     static func order(_ lhs: DrawObject, _ rhs: DrawObject) -> Bool {

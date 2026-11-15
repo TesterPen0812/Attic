@@ -628,6 +628,9 @@ final class RecentlyDeletedModel: ObservableObject {
         case .failed:
             message = Message(text: String(localized: "Some restored items couldn’t be sent back. Check them before trying Undo again."),
                               tone: .error)
+        case let .partial(completed, total):
+            message = Message(text: "Undo completed \(completed) of \(total) items. Retry Undo to finish the remaining items.",
+                              tone: .warning)
         case .obsolete, nil:
             return
         }

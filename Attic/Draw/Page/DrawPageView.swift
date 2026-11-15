@@ -210,7 +210,7 @@ struct DrawTitleCapsule: View {
                     }
                     .buttonStyle(AtticRaisedButtonStyle(cornerRadius: AtticRadius.header, flat: flat))
                     .help(model.canvasName)
-                    .accessibilityLabel(model.canvasName)
+                    .accessibilityLabel(DrawLibraryMenuModel.displayName(model.canvasName))
                     .accessibilityHint(String(localized: "Opens the canvas menu"))
                     .accessibilityAddTraits(model.isFiltering ? .isSelected : [])
                     .accessibilityIdentifier("draw-title")

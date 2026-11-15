@@ -133,7 +133,7 @@ final class DrawLibraryMenuModel: ObservableObject {
         return toasts.current?.id == deletionToastID && toasts.current?.answersUndoKey == true && deletionOfferIsActive
     }
 
-    private var deletionOfferIsActive: Bool { (deletionOffer as? DrawStepPins.Pin)?.isActive ?? true }
+    private var deletionOfferIsActive: Bool { (deletionOffer as? DrawHistoryOffer)?.isActive ?? true }
 
     func undoDeletionIfOffered() -> Bool {
         guard canUndoDeletionIfOffered, let toasts else { return false }
@@ -317,6 +317,15 @@ final class DrawLibraryMenuModel: ObservableObject {
     }
 
     func perform(_ command: Command) {
+        switch command {
+        case .rename, .tags, .duplicate, .delete:
+            DrawLibraryHub.flushLiveInput(for: store)
+            if let draw = store as? DrawStore, draw.admissionClosed {
+                showCommandError(draw.admissionRefusalMessage)
+                return
+            }
+        case .export, .copyAsImage, .linkedFrom: break
+        }
         guard let canvas = currentCanvas else { return }
         switch command {
         case .rename:
@@ -414,11 +423,12 @@ final class DrawLibraryMenuModel: ObservableObject {
                         let id = deletion.canvas.id
                         guard self.store.pendingEdits[id] == nil else { continue }
                         self.queuedDeletions[id] = nil
-                        if let pin = deletion.pin as? DrawStepPins.Pin, !pin.isActive { continue }
+                        if let pin = deletion.pin as? DrawHistoryOffer, !pin.isActive { continue }
                         if self.store.undoStepID(on: id) == deletion.stepID,
                            (try? self.store.open(id).canvas.deletedAt) != nil {
                             AtticSounds.play(.trashed)
-                            self.offerDeletionUndo(deletion.canvas, stepID: deletion.stepID, pin: deletion.pin)
+                            self.offerDeletionUndo(deletion.canvas, stepID: deletion.stepID,
+                                                   pin: self.store.pinHistoryStep(deletion.stepID))
                         }
                     }
                     self.followDeletionChanges()
@@ -428,12 +438,12 @@ final class DrawLibraryMenuModel: ObservableObject {
     }
 
     private func offerDeletionUndo(_ canvas: DrawCanvas, stepID deletionStepID: UUID, pin offer: AnyObject?) {
-        guard (offer as? DrawStepPins.Pin)?.isActive ?? true else { return }
+        guard (offer as? DrawHistoryOffer)?.isActive ?? true else { return }
         let store = store
         let actions = actions
         toasts?.show(String(localized: "Deleted “\(Self.displayName(canvas.name))”")) {
             defer { withExtendedLifetime(offer) {} }
-            guard (offer as? DrawStepPins.Pin)?.isActive ?? true else { return .obsolete }
+            guard (offer as? DrawHistoryOffer)?.isActive ?? true else { return .obsolete }
             // The toast is an Undo of this deletion, not a new Restore edit.
             let id = canvas.id
             // An earlier press of this Undo wrote nothing (the disk was full):
@@ -442,8 +452,7 @@ final class DrawLibraryMenuModel: ObservableObject {
                 guard store.undoStepID(on: id) == deletionStepID, pending.canvas.deletedAt == nil else {
                     return .failed(CommandFailure(String(localized: "The canvas has changed since it was deleted.")))
                 }
-                let settled: DrawSaveResult
-                if case .held = pending.outcome { settled = store.reconcile(on: id) } else { settled = store.retry(on: id) }
+                let settled = store.retry(on: id)
                 switch settled {
                 case .saved, .unchanged: break
                 case let .retry(message), let .held(message): return .failed(CommandFailure(message))
@@ -479,7 +488,15 @@ final class DrawLibraryMenuModel: ObservableObject {
     func commitRename() {
         guard isRenaming, let id = renameCanvasID, id == currentCanvasID,
               let original = ownedPendingRename?.before ?? nameBeforeRename else { return }
+        DrawLibraryHub.flushLiveInput(for: store)
         let name = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let retryingOwnedRename = renameFailed && ownedPendingRename?.after == name &&
+            store.pendingEdits[id] != nil && renamePendingStepID != nil
+        if let draw = store as? DrawStore, draw.admissionClosed && !retryingOwnedRename {
+            renameFailed = true
+            showCommandError(draw.admissionRefusalMessage)
+            return
+        }
         guard !name.isEmpty, name != original else { cancelRename(); return }
 
         if renameFailed, let owned = ownedPendingRename, owned.after != name,
@@ -490,9 +507,8 @@ final class DrawLibraryMenuModel: ObservableObject {
         }
         let result: DrawSaveResult
         if renameFailed, let owned = ownedPendingRename, owned.after == name,
-           let pending = store.pendingEdits[id] {
-            if case .held = pending.outcome { result = store.reconcile(on: id) }
-            else { result = store.retry(on: id) }
+           store.pendingEdits[id] != nil {
+            result = store.retry(on: id)
         } else {
             let beforeStep = store.pendingEdits[id]?.lastStepID
             result = store.perform(.rename(name), on: id)
@@ -514,10 +530,8 @@ final class DrawLibraryMenuModel: ObservableObject {
 
     func cancelRename() {
         guard isRenaming else { return }
-        if let id = renameCanvasID, let step = renamePendingStepID, let owned = ownedPendingRename {
-            guard store.abandonPendingRename(on: id, stepID: step) else { return }
-            nameBeforeRename = owned.before
-        }
+        // Escape closes the field, not an already submitted operation.
+        // Its exact pending step remains owned by the store's Retry notice.
         nameDraft = currentCanvas?.name ?? nameBeforeRename ?? nameDraft
         finishRename()
     }
@@ -577,6 +591,11 @@ final class DrawLibraryMenuModel: ObservableObject {
     }
 
     func setTag(_ name: String, on: Bool) {
+        DrawLibraryHub.flushLiveInput(for: store)
+        if let draw = store as? DrawStore, draw.admissionClosed {
+            showCommandError(draw.admissionRefusalMessage)
+            return
+        }
         guard let canvas = currentCanvas, let tag = AtticTag.normalize(name) else { return }
         var tags = canvas.tags
         if on { if !tags.contains(tag) { tags.append(tag) } } else { tags.removeAll { $0 == tag } }

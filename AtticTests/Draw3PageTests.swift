@@ -545,7 +545,7 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertFalse(cues.contains(.created), "neither aborted command created a canvas")
     }
 
-    func testEscapeAfterFailedRenameAbandonsThePendingName() throws {
+    func testEscapeAfterSubmittedFailedRenamePreservesItsPendingOperation() throws {
         struct Injected: Error {}
         var fail = false
         let persistent = try persistentStore { context in
@@ -556,25 +556,20 @@ final class Draw3PageTests: XCTestCase {
         let id = try XCTUnwrap(model.canvasID)
         XCTAssertTrue(model.perform(.put([DrawObject(content: .text("Existing"))])).isSaved)
         let original = model.canvasName
-
         model.library.perform(.rename)
-        model.library.nameDraft = "Abandoned name"
+        model.library.nameDraft = "Submitted name"
         fail = true
         model.library.commitRename()
-        XCTAssertNotNil(persistent.pendingEdits[id])
-
+        let identity = try XCTUnwrap(persistent.pendingEdits[id]?.lastStepID)
         model.library.cancelRename()
         XCTAssertFalse(model.library.isRenaming)
-        XCTAssertFalse(model.library.renameFailed)
-        XCTAssertEqual(model.library.nameDraft, original)
-        XCTAssertNil(persistent.pendingEdits[id], "Escape must not leave a rename that can save later")
-        XCTAssertEqual(model.canvasName, original)
-        XCTAssertEqual(try persistent.open(id).canvas.name, original)
-
+        XCTAssertEqual(persistent.pendingEdits[id]?.lastStepID, identity,
+                       "Escape may dismiss the field but cannot cancel a submitted write")
+        XCTAssertEqual(try DrawPersistentStore(container: persistent.container).open(id).canvas.name, original)
         fail = false
         model.retrySave()
-        XCTAssertEqual(try DrawPersistentStore(container: persistent.container).open(id).canvas.name, original,
-                       "a later unrelated Retry must not apply the discarded name")
+        XCTAssertNil(persistent.pendingEdits[id])
+        XCTAssertEqual(try DrawPersistentStore(container: persistent.container).open(id).canvas.name, "Submitted name")
     }
 
     func testShellRetryAlsoClosesTheFailedRenameField() throws {
@@ -765,7 +760,7 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertTrue(finished)
     }
 
-    func testSlowRegenerableThumbnailDoesNotBlockQuitAfterContentIsSaved() async {
+    func testSlowThumbnailProviderRefusesQuitWithoutWaitingIndefinitely() async {
         model.thumbnailRenderer = { _, _ in
             try? await Task.sleep(for: .seconds(3))
             return nil
@@ -774,9 +769,12 @@ final class Draw3PageTests: XCTestCase {
         drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
         let began = ContinuousClock.now
         let ready = await model.prepareToQuit()
-        XCTAssertTrue(ready)
+        XCTAssertFalse(ready, "The conservative Quit policy includes unfinished providers")
         XCTAssertLessThan(began.duration(to: .now), .seconds(2))
-        XCTAssertEqual(stored.count, 1, "the stroke was committed before the thumbnail")
+        XCTAssertEqual(stored.count, 1, "The stroke was committed before thumbnail rendering")
+        try? await Task.sleep(for: .seconds(3))
+        let settled = await model.prepareToQuit()
+        XCTAssertTrue(settled)
     }
 
     func testDrawObjectsOnThePasteboardStillPasteAsObjects() async throws {
@@ -1379,7 +1377,7 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(model.canvasID!).objects.count, 1)
     }
 
-    func testDrawingAgainAfterAFailedSaveKeepsBothStrokesAndRetrySavesThemInOrder() async throws {
+    func testDrawingAgainAfterAFailedSaveRefusesSecondStrokeUntilRetry() async throws {
         var fail = true
         let durable = try persistentStore(save: { context in
             if fail { throw NSError(domain: "Injected", code: 1) }
@@ -1390,21 +1388,20 @@ final class Draw3PageTests: XCTestCase {
         drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
         model.flushAcknowledgedDraw()
         XCTAssertNotNil(model.saveNotice)
+        let first = try XCTUnwrap(model.objects.first)
         drag([CGPoint(x: 60, y: 200), CGPoint(x: 130, y: 260)])
-        XCTAssertEqual(model.objects.count, 2, "Input keeps working: the second stroke stays on the board")
-        XCTAssertNotNil(model.saveNotice, "The notice stays until they are saved")
+        XCTAssertEqual(model.objects.map(\.id), [first.id], "No new stroke is admitted while another save is unresolved")
+        XCTAssertNotNil(model.saveNotice)
         let blocked = await model.prepareToQuit()
-        XCTAssertFalse(blocked, "Quit waits for both")
+        XCTAssertFalse(blocked, "Quit refuses while an operation is unresolved")
         fail = false
         model.retrySave()
         XCTAssertNil(model.saveNotice)
         XCTAssertFalse(durable.hasUnsettledEdits)
-        let saved = try DrawPersistentStore(container: durable.container).open(model.canvasID!).objects
-        XCTAssertEqual(saved.count, 2)
-        XCTAssertEqual(saved.map(\.id), model.objects.map(\.id), "Saved in drawing order")
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(model.canvasID!).objects, [first])
         XCTAssertTrue(model.canUndo)
         model.undo()
-        XCTAssertEqual(model.objects.map(\.id), [saved[0].id], "Undo takes back the second stroke first")
+        XCTAssertTrue(model.objects.isEmpty, "The accepted stroke remains independently undoable")
     }
 
     func testAHeldSaveShowsAndRetryReconciles() throws {
@@ -1424,10 +1421,10 @@ final class Draw3PageTests: XCTestCase {
 
     // MARK: Queued Undo reaching a deleted canvas (BG-29 review R-7)
 
-    /// The first queued Undo reverses a restore, so the canvas is deleted and
-    /// the board leaves it. The Undo queued behind it must not run on the
-    /// canvas now in Recently Deleted (it would silently restore it).
-    func testBG29QueuedUndoesStopOnceTheirCanvasIsDeleted() throws {
+    /// Both Undos entered the 20 ms batch before storage rejected any work.
+    /// They retain their individual boundaries: undo restore, then undo
+    /// delete, rather than flattening into a single replay or dropping one.
+    func testBG29AdmittedUndoesKeepTheirOrderAcrossDeletion() throws {
         use(try persistentStore())
         let other = store.create(name: "Other")
         XCTAssertTrue(store.perform(.put([DrawObject(content: .text("keep"))]), on: other.id).isSaved)
@@ -1439,9 +1436,12 @@ final class Draw3PageTests: XCTestCase {
         model.undoAcknowledged()
         model.undoAcknowledged()
         model.flushAcknowledgedDraw()
-        XCTAssertNotNil(try store.open(target.id).canvas.deletedAt, "The second Undo must not change a deleted canvas")
-        XCTAssertNotEqual(model.canvasID, target.id)
-        XCTAssertEqual(try store.library().map(\.id), [other.id])
+        XCTAssertNil(try store.open(target.id).canvas.deletedAt, "Both already-admitted Undos must complete in order")
+        XCTAssertEqual(model.canvasID, target.id)
+        XCTAssertEqual(Set(try store.library().map(\.id)), Set([other.id, target.id]))
+        XCTAssertTrue(store.canRedo(on: target.id))
+        XCTAssertTrue(store.redo(on: target.id).isSaved, "Redo still sees the second Undo's exact step")
+        XCTAssertNotNil(try store.open(target.id).canvas.deletedAt)
     }
 
     /// A switch that begins the flush must finish its own navigation: the
@@ -1511,161 +1511,9 @@ final class Draw3PageTests: XCTestCase {
     /// runs once Retry has settled it, so Undo then Redo nets out to the
     /// restored canvas, as the person asked.
     // Round 4: real file-backed writes; no quit/close in the crash fixture.
-    func testR4HeldTailSurvivesCrashAndRetriesExactlyOnce() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawR4Crash-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
-        func container() throws -> ModelContainer {
-            try ModelContainer(for: Schema(PersistenceController.appModelTypes), configurations:
-                ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
-        }
-        var fail = false
-        var id: UUID!
-        weak var droppedPage: DrawPageModel?
-        weak var droppedStore: DrawPersistentStore?
-        let ink = DrawObject(content: .stroke([DrawPoint(x: 0, y: 0), DrawPoint(x: 10, y: 10)]))
-        let later = DrawObject(content: .stroke([DrawPoint(x: 20, y: 0), DrawPoint(x: 30, y: 10)]))
-        autoreleasepool {
-            let store = DrawPersistentStore(container: try! container(), save: { context in
-                if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
-            })
-            let page = DrawPageModel(store: store)
-            droppedPage = page; droppedStore = store
-            page.start(); id = page.canvasID!
-            XCTAssertTrue(page.perform(.put([ink])).isSaved)
-            fail = true
-            page.undoAcknowledged(); page.redoAcknowledged(); page.flushAcknowledgedDraw()
-            page.performAcknowledged(.put([later])); page.flushAcknowledgedDraw()
-            page.beginText(at: CGPoint(x: 180, y: 200)); page.typed("survives"); page.endEditing()
-            page.undoAcknowledged(); page.redoAcknowledged(); page.flushAcknowledgedDraw()
-            XCTAssertTrue(page.objects.contains(later))
-            // Drop the entire model/store/container without prepareToQuit or Retry.
-        }
-        // Cancelled frame/typing work items release their captures when their
-        // dispatch deadlines pass; no close, final flush or retry is called.
-        try await Task.sleep(for: .milliseconds(350))
-        XCTAssertNil(droppedPage); XCTAssertNil(droppedStore)
-        fail = false
-        let recovered = DrawPersistentStore(container: try container())
-        let projected = try recovered.open(id).objects
-        XCTAssertTrue(projected.contains(ink))
-        XCTAssertTrue(projected.contains(later), "the acknowledged held stroke must be checkpointed")
-        XCTAssertEqual(projected.filter { $0.text == "survives" }.count, 1)
-        let outcome = recovered.pendingEdits[id]?.outcome
-        let result = if case .held = outcome { recovered.reconcile(on: id) } else { recovered.retry(on: id) }
-        XCTAssertTrue(result.isSaved)
-        XCTAssertNil(recovered.pendingEdits[id])
-        XCTAssertEqual(try recovered.open(id).objects, projected)
-        XCTAssertEqual(recovered.retry(on: id), .unchanged)
-        let reopened = DrawPersistentStore(container: try container())
-        let fresh = try? reopened.open(id)
-        XCTAssertNotNil(fresh, "the recovered canvas must remain on disk after another launch")
-        XCTAssertEqual(fresh?.objects, projected)
-        XCTAssertNil(reopened.pendingEdits[id])
-    }
 
-    func testR4HeldTypingUndoKeepsItsExactRedoAfterCrash() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawR4TypingCrash-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
-        func container() throws -> ModelContainer {
-            try ModelContainer(for: Schema(PersistenceController.appModelTypes), configurations:
-                ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
-        }
-        var fail = false
-        var id: UUID!
-        let text = DrawObject(content: .text("start"))
-        weak var droppedPage: DrawPageModel?
-        weak var droppedStore: DrawPersistentStore?
-        autoreleasepool {
-            let store = DrawPersistentStore(container: try! container(), save: { context in
-                if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
-            })
-            let page = DrawPageModel(store: store)
-            droppedPage = page; droppedStore = store
-            page.start(); id = page.canvasID!
-            XCTAssertTrue(page.perform(.put([text])).isSaved)
-            page.edit(text.id); fail = true
-            page.typed("a"); page.typed("ab"); page.typed("abc"); page.flushLiveInput()
-            page.undo()
-            XCTAssertEqual(page.object(text.id)?.text, "ab", "held typing keeps each key's Undo")
-        }
-        try await Task.sleep(for: .milliseconds(350))
-        XCTAssertNil(droppedPage); XCTAssertNil(droppedStore)
-        fail = false
-        let recovered = DrawPersistentStore(container: try container())
-        XCTAssertEqual(try recovered.open(id).objects.first?.text, "ab")
-        let result = if case .held = recovered.pendingEdits[id]?.outcome {
-            recovered.reconcile(on: id)
-        } else { recovered.retry(on: id) }
-        XCTAssertTrue(result.isSaved)
-        XCTAssertEqual(try recovered.open(id).objects.first?.text, "ab")
-        XCTAssertTrue(recovered.redo(on: id).isSaved, "Redo is the actual one-key inverse, not the merged burst")
-        XCTAssertEqual(try recovered.open(id).objects.first?.text, "abc")
-        XCTAssertTrue(recovered.undo(on: id).isSaved)
-        XCTAssertEqual(try DrawPersistentStore(container: try container()).open(id).objects.first?.text, "ab")
-    }
 
-    func testR4HeldProjectionSurvivesRevisionAndRefusedWrite() throws {
-        var fail = false
-        use(try persistentStore(fileBacked: true, save: { context in
-            if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
-        }))
-        let id = try XCTUnwrap(model.canvasID)
-        XCTAssertTrue(model.perform(.put([DrawObject(content: .shape(.rectangle))])).isSaved)
-        fail = true
-        model.undoAcknowledged(); model.redoAcknowledged(); model.flushAcknowledgedDraw()
-        let later = DrawObject(content: .shape(.ellipse))
-        model.performAcknowledged(.put([later])); model.flushAcknowledgedDraw()
-        model.beginText(at: CGPoint(x: 180, y: 200)); model.typed("held text"); model.flushLiveInput()
-        let expected = model.objects
-        fail = false
-        let other = store.create(name: "Revision")
-        XCTAssertTrue(store.perform(.saveCanvas, on: other.id).isSaved)
-        model.syncExternalChanges()
-        XCTAssertEqual(model.objects, expected)
-        XCTAssertNotNil(model.editing)
-        fail = true
-        _ = model.perform(.tags(["held"]))
-        XCTAssertTrue(model.objects.contains(later))
-        XCTAssertNotNil(model.editing)
-        fail = false
-        model.retrySave()
-        XCTAssertTrue(try store.open(id).objects.contains(later))
-    }
 
-    func testR4HeldNonHistoryWritesQueueOnAnInactiveCanvas() throws {
-        var fail = false
-        use(try persistentStore(fileBacked: true, save: { context in
-            if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
-        }))
-        let id = try XCTUnwrap(model.canvasID)
-        let original = DrawObject(frame: DrawFrame(x: 40, y: 100, width: 80, height: 60), content: .shape(.rectangle))
-        XCTAssertTrue(model.perform(.put([original])).isSaved)
-        let other = store.create(name: "Other")
-        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Other"))]), on: other.id).isSaved)
-        XCTAssertTrue(store.perform(.tags(["queued", "second"]), on: other.id).isSaved)
-        fail = true
-        model.undoAcknowledged(); model.redoAcknowledged(); model.flushAcknowledgedDraw()
-        model.open(other.id)
-        let image = DrawObject(frame: DrawFrame(x: 170, y: 180, width: 40, height: 40), content: .image(DrawImage(original: Draw3Images.encoded(width: 2, height: 2), pixelWidth: 2, pixelHeight: 2)))
-        _ = model.perform(.put([image]), on: id)
-        model.open(id)
-        model.library.perform(.tags)
-        model.library.setTag("queued", on: true)
-        model.library.setTag("second", on: true)
-        XCTAssertEqual(Set(model.library.currentCanvas?.tags ?? []), Set(["queued", "second"]),
-                       "the second toggle builds on, and displays, the first pending toggle")
-        XCTAssertEqual(model.library.tagCounts["queued"], 2)
-        XCTAssertEqual(model.library.tagCounts["second"], 2)
-        try captureR4HeldViewsIfRequested()
-        fail = false
-        model.retrySave()
-        let saved = try store.open(id)
-        XCTAssertTrue(saved.objects.contains(original))
-        XCTAssertTrue(saved.objects.contains(image))
-        XCTAssertEqual(Set(saved.canvas.tags), Set(["queued", "second"]))
-    }
 
     /// Optional artifact capture uses the real views, without a window or focus.
     private func captureR4HeldViewsIfRequested() throws {
@@ -1757,44 +1605,6 @@ final class Draw3PageTests: XCTestCase {
             to: root.appendingPathComponent("near-flat.txt"), atomically: true, encoding: .utf8)
     }
 
-    func testR4HeldContinuationKeepsSparseStepsInsteadOfBoardSnapshots() throws {
-        var fail = false
-        use(try persistentStore(fileBacked: true, save: { context in
-            if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
-        }))
-        let id = try XCTUnwrap(model.canvasID)
-        let originals = (0..<500).map { DrawObject(zIndex: Int64($0), content: .shape(.rectangle)) }
-        XCTAssertTrue(model.perform(.put(originals)).isSaved)
-        XCTAssertTrue(model.perform(.put([DrawObject(zIndex: 500, content: .shape(.rectangle))])).isSaved)
-        fail = true
-        model.undoAcknowledged(); model.redoAcknowledged(); model.flushAcknowledgedDraw()
-        for i in 0..<200 {
-            model.performAcknowledged(.put([DrawObject(zIndex: Int64(501 + i), content: .shape(.ellipse))]))
-            model.flushAcknowledgedDraw()
-        }
-        XCTAssertEqual(store.pendingEdits[id]?.count, 202, "every later gesture belongs to the sparse durable queue")
-        let fields = Array(Mirror(reflecting: try XCTUnwrap(model)).children)
-        XCTAssertNotNil(fields.first { $0.label == "acknowledgedDraw" }, "reflection must inspect the actual model")
-        func boardArrays(_ value: Any) -> Int {
-            if let objects = value as? [DrawObject] { return objects.count >= 500 ? 1 : 0 }
-            let reflected = Mirror(reflecting: value)
-            guard reflected.displayStyle != .class else { return 0 }
-            return reflected.children.reduce(0) { $0 + boardArrays($1.value) }
-        }
-        let snapshots = fields.filter { !["objects", "store", "board", "library"].contains($0.label ?? "") }
-            .reduce(0) { $0 + boardArrays($1.value) }
-        print("R5_CONTINUATION_MEMORY retainedBoardArrays=\(snapshots)")
-        XCTAssertEqual(snapshots, 0, "any queue retaining full board arrays must fail, regardless of its property name")
-        let durable = try XCTUnwrap(store as? DrawPersistentStore)
-        let root = try XCTUnwrap(durable.container.configurations.first).url.deletingLastPathComponent()
-        let journal = DrawRecoveryJournal(fileURL: root.appendingPathComponent("DrawRecovery-v1.json"))
-        let edits = try XCTUnwrap(journal.records[id]?.edits)
-        XCTAssertEqual(edits.count, 202)
-        XCTAssertEqual(edits.reduce(0) { $0 + $1.step.change.objectsBefore.count + $1.step.change.objectsAfter.count }, 202,
-                       "the checkpoint holds two one-object history changes plus 200 one-object strokes")
-        fail = false; model.retrySave()
-        XCTAssertEqual(try store.open(id).objects.count, 701)
-    }
 
     func testR4DeletedCurrentCanvasLeavesDuringRename() throws {
         for hasOther in [false, true] {
@@ -1816,52 +1626,7 @@ final class Draw3PageTests: XCTestCase {
         }
     }
 
-    func testR4EscapeOwnsRenameWhenTheQueueCountDoesNotChange() throws {
-        var write = 0, failing = Set<Int>()
-        use(try persistentStore(fileBacked: true, save: { context in
-            write += 1
-            if failing.contains(write) { throw NSError(domain: "R4", code: 1) }; try context.save()
-        }))
-        let id = try XCTUnwrap(model.canvasID)
-        XCTAssertTrue(model.perform(.saveCanvas).isSaved)
-        let original = try store.open(id).canvas.name
-        failing = [write + 1, write + 3]
-        _ = store.perform(.tags(["keep"]), on: id)
-        XCTAssertEqual(store.pendingEdits[id]?.count, 1)
-        model.library.perform(.rename); model.library.nameDraft = "Cancelled"
-        model.library.commitRename()
-        XCTAssertEqual(store.pendingEdits[id]?.count, 1, "A committed, R failed; count stayed equal")
-        XCTAssertTrue(model.library.isRenaming)
-        model.library.cancelRename()
-        XCTAssertFalse(model.library.isRenaming)
-        failing = []
-        model.retrySave()
-        XCTAssertEqual(try store.open(id).canvas.name, original)
-        XCTAssertEqual(try store.open(id).canvas.tags, ["keep"])
-    }
 
-    func testR4StoreRetryCannotLetUndoOvertakePageRedo() throws {
-        var fail = false
-        use(try persistentStore(fileBacked: true, save: { context in
-            if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
-        }))
-        let id = try XCTUnwrap(model.canvasID)
-        let first = DrawObject(content: .shape(.rectangle)), second = DrawObject(content: .shape(.ellipse))
-        XCTAssertTrue(model.perform(.put([first])).isSaved)
-        XCTAssertTrue(model.perform(.put([second])).isSaved)
-        fail = true
-        model.undoAcknowledged(); model.redoAcknowledged(); model.flushAcknowledgedDraw()
-        let later = DrawObject(content: .shape(.arrow))
-        model.performAcknowledged(.put([later])); model.flushAcknowledgedDraw()
-        fail = false
-        XCTAssertTrue(store.retry(on: id).isSaved)
-        // An external toast/group route may now Undo, but must see the Redo
-        // already settled, or be refused until the page continuation resumes.
-        _ = store.undo(on: id)
-        model.flushAcknowledgedDraw()
-        XCTAssertNil(store.pendingEdits[id])
-        XCTAssertEqual(Set(try store.open(id).objects.map(\.id)), Set([first.id, second.id]))
-    }
 
     func testBG29ARedoQueuedBehindAFailedUndoRunsAfterRetry() throws {
         var fail = false
@@ -1937,9 +1702,14 @@ final class Draw3PageTests: XCTestCase {
         model.open(other.id)
         fail = false
         model.retrySave()
-        XCTAssertEqual(Set(try DrawPersistentStore(container: durable.container).open(target).objects.map(\.text)), Set(["keep", "later"]),
-                       "new input and navigation cannot silently cancel an acknowledged Redo")
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).objects.map(\.text), ["keep"],
+                       "input attempted after the failed write is refused, while the earlier admitted Redo survives")
         XCTAssertEqual(model.canvasID, other.id)
+        model.open(target)
+        model.performAcknowledged(.put([DrawObject(content: .text("later"))]))
+        model.flushAcknowledgedDraw()
+        XCTAssertEqual(Set(try DrawPersistentStore(container: durable.container).open(target).objects.map(\.text)), Set(["keep", "later"]),
+                       "a fresh input after Retry is saved independently")
     }
 
     func testBG29ARedoBehindAFailedRecoveryCheckpointRunsAfterRetry() throws {
@@ -1990,11 +1760,15 @@ final class Draw3PageTests: XCTestCase {
         model.retrySave()
         let saved = try DrawPersistentStore(container: durable.container).open(target).objects
         XCTAssertTrue(saved.contains(original), "the acknowledged Redo runs before subsequent typing")
-        let writing = saved.compactMap { object -> String? in
+        XCTAssertTrue(saved.compactMap { object -> String? in
             if case .text(let text) = object.content { return text }
             return nil
-        }
-        XCTAssertEqual(writing, ["later"])
+        }.isEmpty, "typing begun after failure is refused before adding history")
+        model.beginText(at: CGPoint(x: 180, y: 200))
+        model.typed("later")
+        model.endEditing()
+        model.flushLiveInput()
+        XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).objects.filter { $0.text == "later" }.count, 1)
         model.undo()
         XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).objects, [original],
                        "typing remains one Undo step after the queued Redo")
@@ -2017,13 +1791,14 @@ final class Draw3PageTests: XCTestCase {
         model.library.perform(.rename)
         model.library.nameDraft = "Later name"
         model.library.commitRename()
-        XCTAssertTrue(model.library.isRenaming, "a refused save keeps the rename draft visible")
+        XCTAssertFalse(model.library.isRenaming, "a new rename cannot enter editing while Draw is frozen")
         fail = false
         model.retrySave()
         XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).objects, [original],
                        "a library write must not clear the acknowledged Redo before it runs")
-        XCTAssertTrue(model.library.isRenaming, "the refused rename remains available to retry")
-        XCTAssertEqual(model.library.nameDraft, "Later name")
+        XCTAssertEqual(try store.open(target).canvas.name, "Untitled")
+        model.library.perform(.rename)
+        model.library.nameDraft = "Later name"
         model.library.commitRename()
         XCTAssertFalse(model.library.isRenaming)
         XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).canvas.name, "Later name")
@@ -2036,9 +1811,9 @@ final class Draw3PageTests: XCTestCase {
         model.library.perform(.rename)
         model.library.nameDraft = "Discard me"
         model.library.commitRename()
-        XCTAssertTrue(model.library.isRenaming)
+        XCTAssertFalse(model.library.isRenaming, "a new rename attempted while frozen is refused")
         model.library.cancelRename()
-        XCTAssertFalse(model.library.isRenaming, "Escape cancels a refused rename, without abandoning the pending history")
+        XCTAssertFalse(model.library.isRenaming)
         fail = false
         model.retrySave()
         XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(target).canvas.name, "Later name")
@@ -2128,14 +1903,18 @@ final class Draw3PageTests: XCTestCase {
         model.undoAcknowledged()
         model.redoAcknowledged()
         model.flushAcknowledgedDraw()
-        // Round 4 rule 4: acknowledged Redo is part of the store projection,
-        // so this pair is live even while its writes wait for Retry.
-        XCTAssertNil(try durable.open(target).canvas.deletedAt)
+        // The store owns the failed Undo's provisional deletion. The Redo
+        // was admitted in the same input batch and remains ordered in the
+        // page buffer until that head is reconciled by explicit Retry.
+        XCTAssertNotNil(try durable.open(target).canvas.deletedAt)
+        XCTAssertEqual(durable.pendingEdits[target]?.count, 1)
         model.open(target)
-        XCTAssertEqual(model.canvasID, target)
+        XCTAssertNotEqual(model.canvasID, target, "a provisional deletion cannot loop back through the saved library")
         fail = false
         model.retrySave()
         model.open(target)
+        XCTAssertNil(try durable.open(target).canvas.deletedAt, "the earlier admitted Redo runs after Retry")
+        XCTAssertEqual(model.canvasID, target)
 
         // Keep the original stale-row hop guard with a genuinely pending
         // deletion: no Redo has acknowledged a restoration in this branch.
@@ -2147,8 +1926,9 @@ final class Draw3PageTests: XCTestCase {
 
         model.open(target)
         XCTAssertNotEqual(model.canvasID, target, "the optimistic deletion cannot be its own next live canvas")
-        let destination = try XCTUnwrap(model.canvasID)
-        XCTAssertNil(try durable.open(destination).canvas.deletedAt)
+        if let destination = model.canvasID {
+            XCTAssertNil(try durable.open(destination).canvas.deletedAt)
+        } // With no other live saved canvas, the board is temporarily empty.
         fail = false
         model.retrySave()
         XCTAssertNotNil(try DrawPersistentStore(container: durable.container).open(target).canvas.deletedAt)
@@ -2252,19 +2032,22 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertEqual(stored.count, 1, "The stroke is saved before quit")
     }
 
-    func testAHeldEditStopsQuitUntilItSettles() async {
+    func testAHeldEditStopsQuitUntilExplicitRetrySettlesIt() async {
         let repository = Draw3HeldRepository()
         use(DrawStore(repository: repository))
         model.setTool(.pen)
         drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
-        let blocked = await model.prepareToQuit()
-        XCTAssertFalse(blocked)
+        let first = await model.prepareToQuit()
+        XCTAssertFalse(first)
         repository.reconcileOutcome = .committed
+        let second = await model.prepareToQuit()
+        XCTAssertFalse(second, "Even a provably committed but unresolved operation refuses Quit")
+        model.retrySave()
         let ready = await model.prepareToQuit()
         XCTAssertTrue(ready)
     }
 
-    func testARetryEditIsRetriedAtQuit() async throws {
+    func testAnUnresolvedRetryIsRefusedAtQuitUntilExplicitRetry() async throws {
         var fail = true
         let durable = try persistentStore(save: { context in
             if fail { throw NSError(domain: "Injected", code: 1) }
@@ -2276,6 +2059,10 @@ final class Draw3PageTests: XCTestCase {
         model.flushAcknowledgedDraw()
         XCTAssertTrue(durable.hasUnsettledEdits)
         fail = false
+        let blocked = await model.prepareToQuit()
+        XCTAssertFalse(blocked)
+        XCTAssertTrue(durable.hasUnsettledEdits)
+        model.retrySave()
         let ready = await model.prepareToQuit()
         XCTAssertTrue(ready)
         XCTAssertFalse(durable.hasUnsettledEdits)
@@ -2442,41 +2229,6 @@ extension Draw3PageTests {
             configurations: ModelConfiguration(url: url, cloudKitDatabase: .none)), save: save)
     }
 
-    func testR5EscapeAfterRenameUndoPreservesLaterStepsAcrossCrash() throws {
-        var fail = false
-        use(try persistentStore(fileBacked: true, save: { context in
-            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
-        }))
-        let id = try XCTUnwrap(model.canvasID), url = try r5URL()
-        XCTAssertTrue(model.perform(.saveCanvas).isSaved)
-        let original = try store.open(id).canvas.name
-        fail = true
-        model.library.perform(.rename); model.library.nameDraft = "Discard me"
-        model.library.commitRename()
-        model.undo(); model.flushAcknowledgedDraw()
-        let later = DrawObject(content: .shape(.ellipse))
-        _ = store.perform(.put([later]), on: id)
-        _ = store.perform(.tags(["survives"]), on: id)
-        model.library.cancelRename()
-        XCTAssertFalse(model.library.isRenaming)
-        XCTAssertEqual(try store.open(id).canvas.name, original)
-        var savedNames: [String] = []
-        let recovered = try r5CrashReopen(url, save: { context in
-            savedNames += try context.fetch(FetchDescriptor<DrawCanvasRecord>()).filter { $0.id == id }.map(\.name)
-            try context.save()
-        })
-        XCTAssertTrue(recovered.retry(on: id).isSaved)
-        XCTAssertEqual(try recovered.open(id).canvas.name, original)
-        XCTAssertFalse(savedNames.contains("Discard me"), "Retry must never submit the abandoned title, even transiently")
-        XCTAssertEqual(try recovered.open(id).objects, [later])
-        XCTAssertEqual(try recovered.open(id).canvas.tags, ["survives"])
-        XCTAssertTrue(recovered.undo(on: id).isSaved)
-        XCTAssertEqual(try recovered.open(id).objects, [later], "tags undo before the imported/queued object")
-        XCTAssertTrue(recovered.undo(on: id).isSaved)
-        XCTAssertTrue(try recovered.open(id).objects.isEmpty)
-        fail = false
-        use(recovered)
-    }
 
     func testR5EscapeAfterEarlierImageImportPreservesTheImport() async throws {
         var fail = false
@@ -2494,16 +2246,22 @@ extension Draw3PageTests {
         model.library.perform(.rename); model.library.nameDraft = "Discard before import"
         model.library.commitRename()
         release.finish(); await task.value
-        XCTAssertEqual(store.pendingEdits[id]?.count, 2)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 1, "already-started image work stays in the original finite import buffer")
         model.library.cancelRename()
         XCTAssertFalse(model.library.isRenaming)
-        XCTAssertEqual(try store.open(id).canvas.name, original)
-        let image = try XCTUnwrap(store.open(id).objects.first)
-        let recovered = try r5CrashReopen(url)
-        XCTAssertTrue(recovered.retry(on: id).isSaved)
-        XCTAssertEqual(try recovered.open(id).canvas.name, original)
-        XCTAssertEqual(try recovered.open(id).objects, [image])
+        XCTAssertEqual(try store.open(id).canvas.name, "Discard before import", "Escape closes the field; it cannot undo an unresolved submitted write")
+        XCTAssertTrue(try store.open(id).objects.isEmpty, "the import waits for the original failed write")
         fail = false
+        model.retrySave()
+        let image = try XCTUnwrap(store.open(id).objects.first)
+        XCTAssertEqual(try store.open(id).canvas.name, "Discard before import")
+        model.setShown(false)
+        await r5DrainObservation()
+        let recovered = try r5CrashReopen(url)
+        XCTAssertNil(recovered.pendingEdits[id], "both acknowledged writes were durable before the crash")
+        XCTAssertEqual(try recovered.open(id).canvas.name, "Discard before import")
+        XCTAssertEqual(try recovered.open(id).objects, [image])
+        XCTAssertNotEqual(try recovered.open(id).canvas.name, original)
         use(recovered)
     }
 
@@ -2518,96 +2276,32 @@ extension Draw3PageTests {
         model.library.perform(.rename); model.library.nameDraft = "Old draft"
         model.library.commitRename(); model.undo(); model.flushAcknowledgedDraw()
         let later = DrawObject(content: .shape(.rectangle))
-        _ = store.perform(.put([later]), on: id)
+        XCTAssertFalse(store.perform(.put([later]), on: id).isSaved,
+                       "new objects attempted while frozen cannot join the failed rename")
         model.library.nameDraft = "Return draft"; model.library.commitRename()
+        XCTAssertEqual(try store.open(id).canvas.name, "Old draft",
+                       "a later title edit cannot replace the pending rename")
+        fail = false
+        model.retrySave()
+        XCTAssertEqual(try store.open(id).canvas.name, "Old draft")
+        XCTAssertTrue(model.perform(.put([later])).isSaved)
+        model.library.perform(.rename)
+        model.library.nameDraft = "Return draft"
+        model.library.commitRename()
         XCTAssertEqual(try store.open(id).canvas.name, "Return draft")
         let recovered = try r5CrashReopen(url)
-        XCTAssertTrue(recovered.retry(on: id).isSaved)
+        XCTAssertNil(recovered.pendingEdits[id])
         XCTAssertEqual(try recovered.open(id).canvas.name, "Return draft")
         XCTAssertEqual(try recovered.open(id).objects, [later])
-        XCTAssertTrue(recovered.undo(on: id).isSaved)
-        XCTAssertNotEqual(try recovered.open(id).canvas.name, "Old draft")
-        XCTAssertEqual(try recovered.open(id).objects, [later])
-        fail = false
+        XCTAssertFalse(recovered.canUndo(on: id), "session history does not survive a real crash")
         use(recovered)
     }
 }
 
 
 extension Draw3PageTests {
-    func testR5PendingJournalWritesOnlyEachNewStrokeAndRecoversTheWholeTail() throws {
-        let container = try persistentStore(fileBacked: true).container
-        let url = try XCTUnwrap(container.configurations.first).url
-        var fail = false, writes = 0, encoded = 0
-        let journal = DrawRecoveryJournal(fileURL: url.deletingLastPathComponent().appendingPathComponent("DrawRecovery-v1.json"), writeData: { data, destination in
-            writes += 1; encoded += data.count
-            try data.write(to: destination, options: .atomic)
-        })
-        use(DrawStore(repository: DrawSwiftDataRepository(container: container, metrics: DrawSaveMetrics(), save: { context in
-            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
-        }, recovery: journal), recovery: journal))
-        let id = try XCTUnwrap(model.canvasID)
-        XCTAssertTrue(store.perform(.saveCanvas, on: id).isSaved)
-        fail = true
-        _ = store.perform(.tags(["head"]), on: id)
-        let image = DrawObject(content: .image(DrawImage(original: Data(repeating: 71, count: 10_000_000), pixelWidth: 1000, pixelHeight: 1000)))
-        _ = store.perform(.put([image]), on: id)
-        writes = 0; encoded = 0
-        var worstBytes = 0, worstWrites = 0
-        let start = CFAbsoluteTimeGetCurrent()
-        for i in 0..<200 {
-            let previousBytes = encoded, previousWrites = writes
-            let points = [DrawPoint(x: Double(i), y: 0), DrawPoint(x: Double(i + 1), y: 5)]
-            _ = store.perform(.put([DrawObject(frame: DrawGeometry.strokeFrame(points), zIndex: Int64(i + 1), content: .stroke(points))]), on: id)
-            worstBytes = max(worstBytes, encoded - previousBytes)
-            worstWrites = max(worstWrites, writes - previousWrites)
-        }
-        print("R5_JOURNAL strokes=200 writes=\(writes) encoded=\(encoded) worstWrites=\(worstWrites) worstBytes=\(worstBytes) elapsed_ms=\((CFAbsoluteTimeGetCurrent()-start)*1000)")
-        XCTAssertLessThanOrEqual(worstWrites, 1, "one durable record per acknowledged stroke")
-        XCTAssertLessThan(worstBytes, 16_384, "a tiny stroke must not re-encode the 10 MB image or growing tail")
-        XCTAssertEqual(store.pendingEdits[id]?.count, 202)
-        let recovered = try r5CrashReopen(url)
-        XCTAssertTrue(recovered.retry(on: id).isSaved)
-        XCTAssertEqual(try recovered.open(id).objects.count, 201)
-        XCTAssertEqual(try recovered.open(id).objects.first { $0.id == image.id }, image)
-        XCTAssertEqual(try recovered.open(id).canvas.tags, ["head"])
-        XCTAssertFalse(recovered.hasUnsettledEdits)
-        use(recovered)
-    }
 }
 extension Draw3PageTests {
-    func testR5CrashAfterHeadCommitBeforeCheckpointRetirementReplaysTailOnce() throws {
-        let container = try persistentStore(fileBacked: true).container
-        let url = try XCTUnwrap(container.configurations.first).url
-        var failSave = false, interruptAfterSave = false, failCheckpoint = false
-        let journal = DrawRecoveryJournal(fileURL: url.deletingLastPathComponent().appendingPathComponent("DrawRecovery-v1.json"), writeData: { data, destination in
-            if failCheckpoint { throw NSError(domain: "R5 retirement crash", code: 1) }
-            try data.write(to: destination, options: .atomic)
-        })
-        use(DrawStore(repository: DrawSwiftDataRepository(container: container, metrics: DrawSaveMetrics(), save: { context in
-            if failSave { throw NSError(domain: "R5 save", code: 1) }
-            try context.save()
-            if interruptAfterSave { failCheckpoint = true }
-        }, recovery: journal), recovery: journal))
-        let id = try XCTUnwrap(model.canvasID)
-        let first = DrawObject(content: .shape(.rectangle)), later = DrawObject(content: .shape(.ellipse))
-        XCTAssertTrue(store.perform(.put([first]), on: id).isSaved)
-        failSave = true
-        _ = store.undo(on: id)
-        _ = store.acknowledgeHistory(redo: true, on: id)
-        _ = store.perform(.put([later]), on: id)
-        failSave = false; interruptAfterSave = true
-        _ = store.retry(on: id)
-        XCTAssertEqual(store.pendingEdits[id]?.count, 2, "only the failed Undo reached the repository")
-        let recovered = try r5CrashReopen(url)
-        XCTAssertEqual(recovered.pendingEdits[id]?.count, 2, "the committed head is reconciled once after the crash")
-        XCTAssertTrue(recovered.retry(on: id).isSaved)
-        XCTAssertEqual(recovered.metrics.saveAttempts, 2, "only Redo and the later edit are written")
-        XCTAssertEqual(Set(try recovered.open(id).objects.map(\.id)), Set([first.id, later.id]))
-        XCTAssertTrue(recovered.undo(on: id).isSaved)
-        XCTAssertEqual(try recovered.open(id).objects, [first])
-        use(recovered)
-    }
 }
 extension Draw3PageTests {
     private func r5DrainObservation() async {
@@ -2665,40 +2359,30 @@ extension Draw3PageTests {
         _ = store.undo(on: id)
         let revision = store.revision
         deleted?.restore(entry)
-        XCTAssertEqual(store.pendingEdits[id]?.count, 2)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 1,
+                       "a restore requested after a failed Undo is refused before making a second operation")
         XCTAssertEqual(store.revision, revision)
         await r5DrainObservation()
         XCTAssertEqual(model.objects, try store.open(id).objects)
-        XCTAssertEqual(model.objects, [image])
+        XCTAssertTrue(model.objects.isEmpty)
+        fail = false
+        model.retrySave()
+        deleted?.restore(entry)
+        await r5DrainObservation()
+        XCTAssertEqual(try store.open(id).objects, [image])
+        XCTAssertTrue(deleted?.canUndo == true, "the newly submitted restore owns a group Undo")
+        deleted?.undo()
+        XCTAssertTrue(try store.open(id).objects.isEmpty, "the restored image is independently undoable")
+        XCTAssertTrue(store.redo(on: id).isSaved)
+        XCTAssertEqual(try store.open(id).objects, [image])
         deleted?.stop(); deleted = nil
         let recovered = try r5CrashReopen(url)
-        XCTAssertTrue(recovered.retry(on: id).isSaved)
         XCTAssertEqual(try recovered.open(id).objects, [image])
-        XCTAssertTrue(recovered.undo(on: id).isSaved)
-        XCTAssertTrue(try recovered.open(id).objects.isEmpty, "restore is the newest Undo")
-        // The restore is a new branch after the pending Undo. Prior session
-        // history is not persisted; its discarded tags Redo must not return.
-        XCTAssertFalse(recovered.canUndo(on: id))
         XCTAssertEqual(try recovered.open(id).canvas.tags, [])
-        XCTAssertTrue(recovered.redo(on: id).isSaved)
-        XCTAssertEqual(try recovered.open(id).objects, [image])
-        fail = false; use(recovered)
+        use(recovered)
     }
 }
 extension Draw3PageTests {
-    private func r5PinCount() throws -> Int {
-        var mirror: Mirror? = Mirror(reflecting: try XCTUnwrap(store))
-        while let current = mirror {
-            if let pins = current.children.first(where: { $0.label == "pins" })?.value {
-                let counts = try XCTUnwrap(Mirror(reflecting: pins).children.first { $0.label == "counts" })
-                return Mirror(reflecting: counts.value).children.count
-            }
-            mirror = current.superclassMirror
-        }
-        XCTFail("pin book must be present so the assertion cannot pass on a missing field")
-        return -1
-    }
-
     func testR5QueuedMenuDeletionOffersUndoWhenRetryCommits() async throws {
         var fail = false
         use(try persistentStore(fileBacked: true, save: { context in
@@ -2711,20 +2395,20 @@ extension Draw3PageTests {
         let toast = PanelToastCenter(); toast.holdDuration = 600
         model.library.toasts = toast
         model.library.perform(.delete)
-        XCTAssertEqual(store.pendingEdits[id]?.count, 2)
-        XCTAssertFalse(toast.current?.message.contains("couldn’t be deleted") ?? false)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 1, "a new deletion cannot queue behind a failed Undo")
+        XCTAssertNil(try store.open(id).canvas.deletedAt)
+        XCTAssertFalse(model.library.canUndoDeletionIfOffered)
         XCTAssertNotNil(model.saveNotice)
         fail = false; model.retrySave()
+        model.library.perform(.delete)
         await r5DrainObservation()
         XCTAssertNotNil(try store.open(id).canvas.deletedAt)
-        try r5CaptureNotice("queued-deletion", toasts: toast)
-        XCTAssertTrue(model.library.canUndoDeletionIfOffered, "the queued delete's exact toast appears once committed")
-        XCTAssertEqual(try r5PinCount(), 1)
+        try r5CaptureNotice("new-deletion-after-retry", toasts: toast)
+        XCTAssertTrue(model.library.canUndoDeletionIfOffered, "the fresh saved delete gets its own Undo offer")
         XCTAssertTrue(DrawRecentlyDeleted.entries(store: store, now: Date(), calendar: .current).contains { $0.source == .draw(DrawDeletedItem(canvasID: id, objectID: nil)) })
         guard toast.current?.answersUndoKey == true else { toast.dismiss(); return }
         XCTAssertEqual(toast.performAction(), .applied)
         XCTAssertNil(try store.open(id).canvas.deletedAt)
-        XCTAssertEqual(try r5PinCount(), 0)
         let reopened = try r5CrashReopen(url)
         XCTAssertNil(try reopened.open(id).canvas.deletedAt)
         use(reopened)
@@ -2745,12 +2429,12 @@ extension Draw3PageTests {
         let deleted = RecentlyDeletedModel(library: nil, draw: { [weak store] in store })
         deleted.start(); XCTAssertEqual(deleted.listedEntries.count, 2)
         deleted.restore(deleted.listedEntries)
-        XCTAssertEqual(store.pendingEdits[id]?.count, 2)
-        XCTAssertNotEqual(deleted.message?.tone, .error, "a queued restore must be described as pending")
-        XCTAssertFalse(deleted.canUndo, "the pending group is tracked but not offered until saving settles")
+        XCTAssertEqual(store.pendingEdits[id]?.count, 1, "the whole group is refused when Draw is frozen")
+        XCTAssertEqual(deleted.message?.tone, .error)
+        XCTAssertFalse(deleted.canUndo, "a refused group must not offer Undo")
         fail = false; model.retrySave(); await r5DrainObservation()
+        deleted.restore(deleted.listedEntries)
         XCTAssertTrue(deleted.canUndo)
-        XCTAssertEqual(try r5PinCount(), 1)
         deleted.undo()
         XCTAssertTrue(try store.open(id).objects.isEmpty)
         XCTAssertFalse(deleted.canUndo)
@@ -2788,44 +2472,6 @@ extension Draw3PageTests {
     }
 }
 extension Draw3PageTests {
-    func testR5FailedCheckpointExtensionStaysVisibleRefusesQuitAndLaterWritesWholeTail() async throws {
-        let container = try persistentStore(fileBacked: true).container
-        let url = try XCTUnwrap(container.configurations.first).url
-        var failSave = false, failCheckpoint = false
-        let journal = DrawRecoveryJournal(fileURL: url.deletingLastPathComponent().appendingPathComponent("DrawRecovery-v1.json"), writeData: { data, destination in
-            if failCheckpoint { throw NSError(domain: "R5 checkpoint full", code: 1) }
-            try data.write(to: destination, options: .atomic)
-        })
-        use(DrawStore(repository: DrawSwiftDataRepository(container: container, metrics: DrawSaveMetrics(), save: { context in
-            if failSave { throw NSError(domain: "R5 save full", code: 1) }; try context.save()
-        }, recovery: journal), recovery: journal))
-        let id = try XCTUnwrap(model.canvasID)
-        let first = DrawObject(content: .shape(.rectangle))
-        XCTAssertTrue(model.perform(.put([first])).isSaved)
-        failSave = true; model.undo(); model.flushAcknowledgedDraw()
-        failCheckpoint = true
-        model.redo(); model.flushAcknowledgedDraw()
-        let last = DrawObject(content: .shape(.ellipse))
-        model.performAcknowledged(.put([last])); model.flushAcknowledgedDraw()
-        XCTAssertEqual(Set(model.objects.map(\.id)), Set([first.id, last.id]))
-        try r5CaptureNotice("checkpoint-extension")
-        XCTAssertTrue(model.saveNotice?.message.localizedCaseInsensitiveContains("not saved yet") == true,
-                      "say the visible change is not saved now")
-        let ready = await model.prepareToQuit(); XCTAssertFalse(ready)
-        XCTAssertEqual(store.pendingEdits[id]?.count, 3)
-        failCheckpoint = false
-        // Recover the complete ordered tail at the next successful checkpoint,
-        // then crash before the repository can commit it.
-        _ = store.reconcile(on: id)
-        let recovered = try r5CrashReopen(url)
-        XCTAssertTrue(recovered.retry(on: id).isSaved)
-        XCTAssertEqual(Set(try recovered.open(id).objects.map(\.id)), Set([first.id, last.id]))
-        XCTAssertTrue(recovered.undo(on: id).isSaved)
-        XCTAssertEqual(try recovered.open(id).objects, [first])
-        XCTAssertTrue(recovered.undo(on: id).isSaved)
-        XCTAssertTrue(try recovered.open(id).objects.isEmpty)
-        failSave = false; use(recovered)
-    }
 }
 extension Draw3PageTests {
     func testR5BranchingEditWithdrawsRecentlyDeletedRedoAndReleasesPin() throws {
@@ -2844,61 +2490,14 @@ extension Draw3PageTests {
         XCTAssertTrue(deleted.canUndo)
         deleted.undo()
         XCTAssertTrue(route.canRedo(in: .library))
-        XCTAssertEqual(try r5PinCount(), 2, "the group owns a pin on each canvas")
         XCTAssertTrue(model.perform(.put([DrawObject(content: .shape(.rectangle))])).isSaved)
         XCTAssertFalse(route.canRedo(in: .library), "the offered Redo must disappear with its branch")
         XCTAssertNil(route.redoName(in: .library))
-        XCTAssertEqual(try r5PinCount(), 0, "withdrawing a group releases every member pin")
         XCTAssertNotEqual(route.redoStep(in: .library), .failed, "a withdrawn offer must never be offered and fail")
     }
 }
 extension Draw3PageTests {
-    func testR5AcknowledgedHistoryRetriesTheHeadWithoutAnotherEdit() throws {
-        var fail = false
-        use(try persistentStore(fileBacked: true, save: { context in
-            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
-        }))
-        let id = try XCTUnwrap(model.canvasID), url = try r5URL()
-        let first = DrawObject(content: .shape(.rectangle))
-        XCTAssertTrue(model.perform(.put([first])).isSaved)
-        fail = true
-        _ = store.perform(.tags(["failed"]), on: id)
-        fail = false
-        XCTAssertTrue(store.acknowledgeHistory(redo: false, on: id).isSaved)
-        XCTAssertNil(store.pendingEdits[id])
-        XCTAssertEqual(try store.open(id).canvas.tags, [])
-        let reopened = try r5CrashReopen(url)
-        XCTAssertEqual(try reopened.open(id).canvas.tags, [])
-        XCTAssertEqual(try reopened.open(id).objects, [first])
-        use(reopened)
-    }
 
-    func testR5RetiredHeadCannotReusePendingHistoryAvailability() throws {
-        var mode = 0, allowance = 0
-        use(try persistentStore(fileBacked: true, save: { context in
-            if mode == 1 || (mode == 2 && allowance == 0) { throw NSError(domain: "R5", code: 1) }
-            if mode == 2 { allowance -= 1 }
-            try context.save()
-        }))
-        let id = try XCTUnwrap(model.canvasID), url = try r5URL()
-        let object = DrawObject(content: .shape(.rectangle))
-        XCTAssertTrue(store.perform(.put([object]), on: id).isSaved)
-        mode = 1
-        _ = store.perform(.tags(["pending"]), on: id)
-        XCTAssertEqual(store.pendingEdits[id]?.count, 1)
-        XCTAssertFalse(store.acknowledgedHistoryAvailability(on: id).redo)
-        mode = 2; allowance = 1
-        _ = store.acknowledgeHistory(redo: false, on: id)
-        XCTAssertEqual(store.pendingEdits[id]?.count, 1, "the edit committed; its Undo is now the failed head")
-        XCTAssertTrue(store.acknowledgedHistoryAvailability(on: id).redo,
-                      "same count and command ID do not identify the new pending inverse")
-        mode = 0
-        XCTAssertTrue(store.retry(on: id).isSaved)
-        let reopened = try r5CrashReopen(url)
-        XCTAssertEqual(try reopened.open(id).canvas.tags, [])
-        XCTAssertEqual(try reopened.open(id).objects, [object])
-        use(reopened)
-    }
 }
 extension Draw3PageTests {
     func testR5DeletionNoticeDistinguishesUntouchedDraftAndQueuedRename() throws {

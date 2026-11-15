@@ -223,44 +223,47 @@ final class DrawDataSafetyTests: XCTestCase {
     }
 
     func testDS7CheckpointFailureBeforeWriteRetriesAndRecoversAcrossRelaunch() async throws {
+        // An unwritten checkpoint is memory-only. Retry can save that owner
+        // while it lives; a crash cannot recreate bytes it never checkpointed.
         for relaunch in [false, true] {
             let root = try directory()
-            let store = try persistent(at: root)
-            let page = DrawPageModel(store: store)
-            page.start()
-            let canvas = try XCTUnwrap(page.canvasID)
-            let checkpoint = root.appendingPathComponent("DrawRecovery-v1.json")
-            try FileManager.default.createDirectory(at: checkpoint, withIntermediateDirectories: false)
             let object = DrawObject(content: .text("Exact unsaved draft"))
-            XCTAssertFalse(page.perform(.put([object])).isSaved)
-            XCTAssertEqual(store.metrics.saveAttempts, 0)
-            XCTAssertTrue(store.hasUnsettledEdits)
-            try FileManager.default.trashItem(at: checkpoint, resultingItemURL: nil)
+            let canvas: UUID
+            do {
+                let store = try persistent(at: root)
+                let page = DrawPageModel(store: store)
+                page.start()
+                canvas = try XCTUnwrap(page.canvasID)
+                let checkpoint = root.appendingPathComponent("DrawRecovery-v1.json")
+                try FileManager.default.createDirectory(at: checkpoint, withIntermediateDirectories: false)
+                XCTAssertFalse(page.perform(.put([object])).isSaved)
+                XCTAssertEqual(store.metrics.saveAttempts, 0)
+                XCTAssertTrue(store.hasUnsettledEdits)
+                XCTAssertTrue(page.saveNotice?.message.contains("only in memory") == true)
+                try FileManager.default.trashItem(at: checkpoint, resultingItemURL: nil)
+                if relaunch {
+                    let ready = await page.prepareToQuit()
+                    XCTAssertFalse(ready, "Uncheckpointed work must refuse Quit")
+                } else {
+                    page.retrySave()
+                    XCTAssertFalse(store.hasUnsettledEdits)
+                    XCTAssertEqual(store.metrics.saveAttempts, 1)
+                    XCTAssertEqual(try store.open(canvas).objects, [object])
+                    let ready = await page.prepareToQuit()
+                    XCTAssertTrue(ready)
+                }
+            } // Drop page and writer without clean close for the crash branch.
+            let fresh = try persistent(at: root)
             if relaunch {
-                // Republish while the model writer still has no submitted attempt.
-                _ = store.reconcile(on: canvas)
-                let reopened = try persistent(at: root)
-                let recovery = DrawPageModel(store: reopened)
-                recovery.open(canvas)
-                recovery.retrySave()
-                XCTAssertFalse(reopened.hasUnsettledEdits)
-                XCTAssertEqual(try reopened.open(canvas).objects, [object])
-                let quit = await recovery.prepareToQuit()
-                XCTAssertTrue(quit)
+                XCTAssertFalse(fresh.hasUnsettledEdits)
+                XCTAssertThrowsError(try fresh.open(canvas), "No checkpoint existed to recover")
             } else {
-                page.retrySave()
-                XCTAssertFalse(store.hasUnsettledEdits)
-                XCTAssertEqual(store.metrics.saveAttempts, 1)
-                XCTAssertEqual(try persistent(at: root).open(canvas).objects, [object])
-                XCTAssertTrue(store.undo(on: canvas).isSaved)
-                XCTAssertTrue(try store.open(canvas).objects.isEmpty)
-                let quit = await page.prepareToQuit()
-                XCTAssertTrue(quit)
+                XCTAssertEqual(try fresh.open(canvas).objects, [object])
             }
         }
     }
 
-    func testDS7UnsubmittedCheckpointMarkerSurvivesRelaunchBeforeRetry() async throws {
+    func testDS7FailedCheckpointIsMemoryOnlyUntilItsOwnerRetries() async throws {
         for typing in [false, true] {
             struct Failure: Error {}
             let root = try directory()
@@ -281,20 +284,17 @@ final class DrawDataSafetyTests: XCTestCase {
                 : store.perform(.put([object]), on: canvas.id)
             XCTAssertFalse(result.isSaved)
             XCTAssertEqual(metrics.saveAttempts, 0)
-            XCTAssertEqual(journal.records[canvas.id]?.unattempted, true)
-            let recoveredJournal = DrawRecoveryJournal(fileURL: url)
-            let recoveredMetrics = DrawSaveMetrics()
-            let recovered = DrawStore(repository: DrawSwiftDataRepository(container: container, metrics: recoveredMetrics,
-                save: { try $0.save() }, recovery: recoveredJournal), recovery: recoveredJournal)
-            XCTAssertTrue(recovered.retry(on: canvas.id).isSaved)
-            XCTAssertEqual(recoveredMetrics.saveAttempts, 1)
+            XCTAssertNil(journal.records[canvas.id], "A failed checkpoint must never claim durability")
+            let freshBeforeRetry = DrawRecoveryJournal(fileURL: url)
+            XCTAssertTrue(freshBeforeRetry.records.isEmpty, "A crash now has no durable recovery")
+            XCTAssertEqual(try store.open(canvas.id).objects, [object], "The live owner retains its provisional drawing")
+            XCTAssertTrue(store.hasUnsettledEdits)
+            XCTAssertTrue(store.retry(on: canvas.id).isSaved)
+            XCTAssertEqual(metrics.saveAttempts, 1)
+            let recovered = DrawPersistentStore(container: container)
             XCTAssertEqual(try recovered.open(canvas.id).objects, [object])
             XCTAssertFalse(recovered.hasUnsettledEdits)
-            XCTAssertTrue(recoveredJournal.records.isEmpty)
-            let page = DrawPageModel(store: recovered)
-            page.open(canvas.id)
-            let quit = await page.prepareToQuit()
-            XCTAssertTrue(quit)
+            XCTAssertFalse(store.hasUnsettledEdits)
         }
     }
 

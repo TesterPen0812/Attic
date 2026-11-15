@@ -1296,6 +1296,12 @@ final class AppCoordinator: ObservableObject {
     }
 
     func prepareForTerminationDurably() async -> Bool {
+        // Close Draw admission before any await, including Tasks and Calendar
+        // providers. Other pages can continue their own writes normally.
+        let draw = AtticDraw.isEnabled ? DrawPageModel.shared.store as? DrawStore : nil
+        draw?.closeAdmissionForQuit()
+        var approved = false
+        defer { if !approved { draw?.reopenAdmissionAfterQuit() } }
         guard await prepareTaskWorkForQuitDurably() else { return false }
         let calendar = await CalendarDraftTerminationRegistry.shared.prepareForTerminationResult()
         if case let .refused(owner) = calendar {
@@ -1332,17 +1338,30 @@ final class AppCoordinator: ObservableObject {
             canvasSession.cancelActiveInteraction()
             canvasSession.flushViewState()
         }
-        return await prepareTaskWorkForQuitDurably()
+        guard await prepareTaskWorkForQuitDurably() else { return false }
+        approved = draw?.hasUnsettledEdits != true
+        return approved
     }
 
     func prepareForTermination() -> Bool {
+        let draw = AtticDraw.isEnabled ? DrawPageModel.shared.store as? DrawStore : nil
+        draw?.closeAdmissionForQuit()
+        var approved = false
+        defer { if !approved { draw?.reopenAdmissionAfterQuit() } }
         guard prepareTaskAcknowledgementsForQuit() else { return false }
         let canTerminate = AppTerminationPreparation.prepare(
             flushNoteDraft: { noteDraft.prepareToLeave(.quit) },
             commitCanvasTermination: {
                 if AtticDraw.isEnabled {
-                    DrawPageModel.shared.finishLiveInput()
-                    DrawPageModel.shared.flushViewportMemory()
+                    if let draw {
+                        draw.drainAdmittedInput {
+                            DrawPageModel.shared.finishLiveInput()
+                            DrawPageModel.shared.flushViewportMemory()
+                        }
+                    } else {
+                        DrawPageModel.shared.finishLiveInput()
+                        DrawPageModel.shared.flushViewportMemory()
+                    }
                     return
                 }
                 canvasSession.cancelActiveInteraction()
@@ -1354,13 +1373,12 @@ final class AppCoordinator: ObservableObject {
             return false
         }
         if AtticDraw.isEnabled, DrawPageModel.shared.store.hasUnsettledEdits {
-            DrawPageModel.shared.retrySave()
-            if DrawPageModel.shared.store.hasUnsettledEdits {
-                hoverMonitor.revealProgrammatically(section: .canvas)
-                return false
-            }
+            hoverMonitor.revealProgrammatically(section: .canvas)
+            return false
         }
-        return prepareTaskAcknowledgementsForQuit()
+        guard prepareTaskAcknowledgementsForQuit() else { return false }
+        approved = true
+        return true
     }
 
     private func prepareTaskAcknowledgementsForQuit() -> Bool {

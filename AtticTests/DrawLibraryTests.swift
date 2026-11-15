@@ -8,45 +8,41 @@ import XCTest
 /// using isolated Draw stores, including persistent deletion/Undo regressions.
 @MainActor
 final class DrawLibraryTests: XCTestCase {
-    func testBG27DeletionToastPinsItsHeadBeforeNavigationCanEvictIt() async throws {
+    func testBG27DeletionToastExpiresAfterBodyEvictionWithoutUndoingSavedDeletion() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawToast-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
         let container = try ModelContainer(for: Schema(PersistenceController.appModelTypes),
             configurations: ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
         let store = DrawPersistentStore(container: container)
-        let pressure = store.create(name: "Pressure")
-        var data = Draw3Images.encoded(width: 1_000, height: 1_000)
-        data.append(Data(repeating: 7, count: 34_000_000 - data.count))
-        XCTAssertNotNil(Draw3Images.cgImage(data))
-        let image = DrawObject(content: .image(DrawImage(original: data, pixelWidth: 1_000, pixelHeight: 1_000)))
-        XCTAssertTrue(store.perform(.put([image]), on: pressure.id).isSaved)
-        XCTAssertTrue(store.perform(.remove([image.id]), on: pressure.id).isSaved)
-        let pressureOffer = try XCTUnwrap(store.pinHistoryStep(try XCTUnwrap(store.undoStepID(on: pressure.id))))
-        let next = store.create(name: "Next")
-        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("next"))]), on: next.id).isSaved)
         let page = DrawPageModel(store: store)
         page.start()
         XCTAssertTrue(page.newCanvas(name: "Target"))
         let target = try XCTUnwrap(page.canvasID)
         XCTAssertTrue(page.perform(.put([DrawObject(content: .text("target"))])).isSaved)
-        // Pinned image history already exceeds the budget. Only the real
-        // target board is rendered; drafts force its eviction during Delete.
-        for index in 0..<8 { _ = store.create(name: "Draft \(index)") }
+        for index in 0..<9 {
+            let canvas = store.create(name: "Other \(index)")
+            XCTAssertTrue(store.perform(.put([DrawObject(content: .text("data"))]), on: canvas.id).isSaved)
+        }
         let menu = DrawLibraryMenuModel(store: store, actions: DrawLibraryActions(
             open: { page.open($0) }, newCanvas: { _ = page.newCanvas(name: $0) }, reveal: { _, _ in }, close: {}))
         let toast = PanelToastCenter()
         menu.toasts = toast
         menu.currentCanvasID = target
-        try withExtendedLifetime(pressureOffer) {
-            menu.perform(.delete)
-            XCTAssertFalse(store.cachedCanvasIDs.contains(target), "Delete's navigation evicted the old board")
-            XCTAssertNotNil(toast.current, "the app is offering Undo")
-            XCTAssertNil(toast.performAction().failure, "the offered Undo must work under pressure from another pinned head")
-            XCTAssertNil(try store.open(target).canvas.deletedAt)
-            XCTAssertEqual(page.canvasID, target)
+        menu.perform(.delete)
+        XCTAssertNotNil(try store.open(target).canvas.deletedAt)
+        XCTAssertTrue(menu.canUndoDeletionIfOffered, "A fresh deletion initially offers Undo")
+        // The previous nine canvases were created before deletion, so the
+        // deletion reloads the target into the LRU. Evict it afterwards.
+        for index in 0..<9 {
+            let canvas = store.create(name: "Later \(index)")
+            XCTAssertTrue(store.perform(.put([DrawObject(content: .text("later"))]), on: canvas.id).isSaved)
         }
-        XCTAssertNil(try DrawPersistentStore(container: container).open(target).canvas.deletedAt)
+        XCTAssertFalse(store.cachedCanvasIDs.contains(target), "Navigation evicts the saved deleted body")
+        XCTAssertFalse(menu.canUndoDeletionIfOffered, "Eviction withdraws the Undo offer")
+        XCTAssertNotNil(try store.open(target).canvas.deletedAt)
+        XCTAssertNotNil(try DrawPersistentStore(container: container).open(target).canvas.deletedAt,
+                        "The durable deletion survives expiration of the session Undo")
         let ready = await page.prepareToQuit()
         XCTAssertTrue(ready)
     }

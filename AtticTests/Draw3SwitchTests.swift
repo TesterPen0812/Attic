@@ -200,7 +200,7 @@ final class Draw3SwitchTests: XCTestCase {
 
     // MARK: Quit
 
-    func testTheAppsQuitRouteWaitsForDrawAndAHeldEditStopsIt() async throws {
+    func testTheAppsQuitRouteWaitsForExplicitRetryOfDraw() async throws {
         AtticDraw.enabledOverride = true
         let root = ownedTemporaryDirectory(prefix: "Draw3Quit")
         let coordinator = try AppCoordinator(runtime: runtime(root), openStore: {
@@ -217,9 +217,12 @@ final class Draw3SwitchTests: XCTestCase {
         model.pointerDown(at: CGPoint(x: 60, y: 100))
         model.pointerDragged(to: CGPoint(x: 120, y: 150))
         let blocked = await coordinator.prepareForTerminationDurably()
-        XCTAssertFalse(blocked, "A held edit stops quit")
+        XCTAssertFalse(blocked, "A held edit stops Quit")
         XCTAssertNil(model.live, "The stroke in progress was finished first")
         repository.reconcileOutcome = .committed
+        let stillBlocked = await coordinator.prepareForTerminationDurably()
+        XCTAssertFalse(stillBlocked, "An unresolved operation refuses Quit even if committed")
+        model.retrySave()
         let ready = await coordinator.prepareForTerminationDurably()
         XCTAssertTrue(ready)
         coordinator.stop()

@@ -235,10 +235,8 @@ protocol DrawStoreProtocol: AnyObject {
     func performAgent(_ command: DrawCommand, on id: UUID) -> DrawSaveResult
     func retry(on id: UUID) -> DrawSaveResult
     func reconcile(on id: UUID) -> DrawSaveResult
-    /// Abandon the last failed rename only if its physical write did not commit.
-    /// Other queued edits, their recovery proof and their Undo history survive.
-    /// Exact pending rename identity and its canonical names. A later edit
-    /// with the same names does not belong to the earlier field.
+    /// Older recovery formats may contain a failed rename. The current
+    /// pending operation remains owned by the store until Retry settles it.
     func pendingRename(on id: UUID, stepID: UUID) -> (before: String, after: String)?
     func abandonPendingRename(on id: UUID, stepID: UUID) -> Bool
     func abandonPendingRename(on id: UUID, named name: String, restoring original: String) -> Bool
@@ -249,8 +247,8 @@ protocol DrawStoreProtocol: AnyObject {
     func undoStepID(on id: UUID) -> UUID?
     func redoStepID(on id: UUID) -> UUID?
     /// An offer bound to a history step (a toast's Undo, a grouped Restore's
-    /// Undo) holds the returned token for as long as it can be used; the
-    /// bounded history keeps that step until the offer ends or expires.
+    /// Undo) holds a revocable identity token, never the historical payload.
+    /// The token expires on 100-step trimming, Redo invalidation or eviction.
     func pinHistoryStep(_ stepID: UUID) -> AnyObject?
     /// A self-contained inverse sealed to the physical state after one saved
     /// edit, for the agent's versioned Undo journal across launches.

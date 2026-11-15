@@ -146,7 +146,7 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
 
     // MARK: - Restore Selected
 
-    func testBG27RestoreSelectedAcrossMoreThanEightDrawCanvasesKeepsUndoAndRedo() throws {
+    func testBG27RestoreSelectedAcrossMoreThanEightDrawCanvasesExpiresWholeGroupedOffer() throws {
         let fixture = try makeFixture()
         let draw = DrawInMemoryStore()
         let ids = (0..<9).map { number -> UUID in
@@ -162,17 +162,16 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         model.restoreSelected()
         XCTAssertNil(model.message, model.message?.text ?? "")
         XCTAssertTrue(model.entries.isEmpty)
-        XCTAssertTrue(model.canUndo)
-
-        model.undo()
-        XCTAssertEqual(model.entries.count, 9, "One Undo must reverse the entire restored group")
-        for id in ids { XCTAssertNotNil(try draw.open(id).canvas.deletedAt) }
-        XCTAssertTrue(fixture.library.undo.redo(in: .library), "Redo must restore the group")
-        model.reload()
-        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertFalse(model.canUndo, "Evicting any member expires the entire grouped Undo offer")
+        for (index, id) in ids.enumerated() {
+            let snapshot = try draw.open(id)
+            XCTAssertNil(snapshot.canvas.deletedAt, "Every restoration is permanent even when Undo expires")
+            XCTAssertEqual(snapshot.objects.first?.text, "Saved \(index)")
+        }
+        XCTAssertFalse(fixture.library.undo.redo(in: .library), "An expired group cannot be Redone")
     }
 
-    func testBG27VisitingOtherSavedCanvasesDoesNotEraseOffscreenRestoreUndo() throws {
+    func testBG27VisitingOtherSavedCanvasesExpiresOffscreenRestoreUndoWithoutLosingData() throws {
         let fixture = try makeFixture()
         let draw = DrawInMemoryStore()
         let original = draw.create(name: "Restored")
@@ -189,10 +188,14 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
             XCTAssertTrue(draw.perform(.put([DrawObject(content: .text("data"))]), on: canvas.id).isSaved)
             _ = try draw.open(canvas.id)
         }
+        XCTAssertFalse(model.canUndo, "Evicted body withdraws its Undo offer visibly")
         model.undo()
-        XCTAssertNotNil(try draw.open(original.id).canvas.deletedAt, "Reading other canvases cannot revoke offered Undo")
-        XCTAssertEqual(try draw.open(original.id).canvas.thumbnail, Data([1, 2, 3]),
-                       "Replaying an evicted canvas's history must preserve its thumbnail")
+        let restored = try draw.open(original.id)
+        XCTAssertNil(restored.canvas.deletedAt, "Expired Undo must leave durable restoration intact")
+        XCTAssertEqual(restored.canvas.thumbnail, Data([1, 2, 3]), "Reopening loads the saved thumbnail")
+        XCTAssertEqual(restored.objects.first?.text, "keep")
+        XCTAssertTrue(draw.historyChanges(on: original.id)?.undo.isEmpty == true,
+                      "Reopening after eviction starts fresh session history")
     }
 
     func testDrawOnlyRestoreSelectedIsOneUndoAcrossCanvasesAndDeletedImage() throws {
@@ -276,9 +279,10 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
 
         failNextDrawSave = true
         model.undo()
-        XCTAssertEqual(model.message?.tone, .error)
-        XCTAssertTrue(model.canUndo, "the grouped Undo remains retryable after its own failed save")
-        XCTAssertNotNil(fixture.notes.note(withID: note.id), "compensate the confirmed library Undo")
+        XCTAssertEqual(model.message?.tone, .warning)
+        XCTAssertTrue(model.message?.text.contains("Undo completed 1 of 2") == true, "Partial progress must be explicit")
+        XCTAssertTrue(model.canUndo, "the unfinished part of the grouped Undo remains retryable")
+        XCTAssertNil(fixture.notes.note(withID: note.id), "The completed library Undo remains done without compensation")
         XCTAssertTrue(draw.retry(on: board.id).isSaved, "finish the failed Draw operation")
 
         XCTAssertTrue(model.canUndo, "the same group becomes available again after Retry")

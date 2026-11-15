@@ -549,6 +549,8 @@ final class AtticLibrary {
             return recordFailure(CommandFailure(reported ?? String(localized: "This change can no longer be undone."), canRetry: false))
         case .failed?:
             return recordFailure(CommandFailure(reported ?? String(localized: "Couldn’t \(verb). Try again."), canRetry: true))
+        case let .partial(completed, total)?:
+            return recordFailure(CommandFailure("\(verb.capitalized) completed \(completed) of \(total) items. Retry the remaining items.", canRetry: true))
         }
     }
 

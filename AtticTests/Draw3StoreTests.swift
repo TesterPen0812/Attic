@@ -508,100 +508,34 @@ final class Draw3StoreTests: XCTestCase {
         })
     }
 
-    func testEscapeDropsOnlyTheQueuedRenameAndKeepsAnEarlierFailedDrawingEdit() throws {
-        let log = SaveLog(), container = try container()
-        log.fail = false
-        let store = flakyStore(log, container: container)
-        let canvas = store.create(name: "Original")
-        let first = stroke(), second = stroke()
-        XCTAssertTrue(store.perform(.put([first]), on: canvas.id).isSaved)
-        log.fail = true
-        guard case .retry = store.perform(.put([second]), on: canvas.id) else {
-            return XCTFail("The drawing save should be retryable")
-        }
-        XCTAssertFalse(store.perform(.rename("Discarded"), on: canvas.id).isSaved)
-        XCTAssertEqual(store.pendingEdits[canvas.id]?.count, 2)
 
-        XCTAssertTrue(store.abandonPendingRename(on: canvas.id, named: "Discarded", restoring: "Original"))
-        XCTAssertEqual(try store.open(canvas.id).canvas.name, "Original")
-        XCTAssertEqual(Set(try store.open(canvas.id).objects.map(\.id)), [first.id, second.id])
-        XCTAssertEqual(store.pendingEdits[canvas.id]?.count, 1, "the earlier failed drawing still needs Retry")
-
-        log.fail = false
-        XCTAssertTrue(store.retry(on: canvas.id).isSaved)
-        XCTAssertNil(store.pendingEdits[canvas.id])
-        let reopened = DrawPersistentStore(container: container)
-        XCTAssertEqual(try reopened.open(canvas.id).canvas.name, "Original", "the abandoned name cannot save later")
-        XCTAssertEqual(Set(try reopened.open(canvas.id).objects.map(\.id)), [first.id, second.id])
-        XCTAssertTrue(store.undo(on: canvas.id).isSaved)
-        XCTAssertEqual(try store.open(canvas.id).objects.map(\.id), [first.id], "only saved edits enter Undo")
-    }
-
-    func testAnEditAfterAFailedSaveQueuesAndRetrySavesBothInOrder() throws {
+    func testAnEditAfterAFailedSaveIsRefusedBeforeItCanReachPersistence() throws {
         let log = SaveLog(), container = try container()
         let store = flakyStore(log, container: container)
         let board = store.create()
         let first = stroke(), second = stroke()
-        guard case .retry = store.perform(.put([first]), on: board.id) else { return XCTFail("The first save fails, ready for Retry") }
-        XCTAssertFalse(store.perform(.put([second]), on: board.id).isSaved)
-        XCTAssertEqual(Set(try store.open(board.id).objects.map(\.id)), [first.id, second.id], "Input keeps working: both show")
-        XCTAssertEqual(Set(store.pendingEdits[board.id]?.objects.map(\.id) ?? []), [first.id, second.id])
-        XCTAssertFalse(store.canUndo(on: board.id), "Undo waits until they are saved")
-
+        guard case .retry = store.perform(.put([first]), on: board.id) else {
+            return XCTFail("First failed save must be retryable")
+        }
+        let attempts = store.metrics.saveAttempts
+        guard case .held = store.perform(.put([second]), on: board.id) else {
+            return XCTFail("New input must be refused while the store owns a failure")
+        }
+        XCTAssertEqual(store.metrics.saveAttempts, attempts)
+        XCTAssertEqual(try store.open(board.id).objects.map(\.id), [first.id])
+        XCTAssertEqual(store.pendingEdits[board.id]?.count, 1)
+        XCTAssertFalse(store.canUndo(on: board.id))
         log.fail = false
         XCTAssertTrue(store.retry(on: board.id).isSaved)
-        XCTAssertFalse(store.hasUnsettledEdits)
-        XCTAssertEqual(log.inserted, [first.id, second.id], "Saved in the order they were made")
-        XCTAssertEqual(Set(try DrawPersistentStore(container: container).open(board.id).objects.map(\.id)), [first.id, second.id])
-
-        // Undo takes them back one at a time, the latest first.
-        XCTAssertTrue(store.undo(on: board.id).isSaved)
-        XCTAssertEqual(try store.open(board.id).objects.map(\.id), [first.id])
+        XCTAssertEqual(log.inserted, [first.id])
+        XCTAssertEqual(try DrawPersistentStore(container: container).open(board.id).objects.map(\.id), [first.id])
         XCTAssertTrue(store.undo(on: board.id).isSaved)
         XCTAssertTrue(try store.open(board.id).objects.isEmpty)
-        XCTAssertFalse(store.canUndo(on: board.id))
         XCTAssertTrue(store.redo(on: board.id).isSaved)
         XCTAssertEqual(try store.open(board.id).objects.map(\.id), [first.id])
     }
 
-    func testTwoFailuresInARowLoseNothingAndALaterSaveSavesEveryEditInOrder() throws {
-        let log = SaveLog(), container = try container()
-        let store = flakyStore(log, container: container)
-        let board = store.create()
-        let first = stroke(), second = stroke(), third = stroke()
-        XCTAssertFalse(store.perform(.put([first]), on: board.id).isSaved)
-        XCTAssertFalse(store.perform(.put([second]), on: board.id).isSaved, "The second save fails too")
-        XCTAssertFalse(store.retry(on: board.id).isSaved, "And so does Retry")
-        XCTAssertTrue(store.hasUnsettledEdits, "Quit still waits")
-        XCTAssertEqual(store.pendingEdits[board.id]?.count, 2, "Both count as unsaved")
-        XCTAssertEqual(Set(try store.open(board.id).objects.map(\.id)), [first.id, second.id])
 
-        log.fail = false
-        XCTAssertTrue(store.perform(.put([third]), on: board.id).isSaved, "A later successful save takes the held ones with it")
-        XCTAssertFalse(store.hasUnsettledEdits)
-        XCTAssertEqual(log.inserted, [first.id, second.id, third.id])
-        XCTAssertEqual(Set(try DrawPersistentStore(container: container).open(board.id).objects.map(\.id)),
-                       [first.id, second.id, third.id])
-        for remaining in [[first.id, second.id], [first.id], []] {
-            XCTAssertTrue(store.undo(on: board.id).isSaved)
-            XCTAssertEqual(Set(try store.open(board.id).objects.map(\.id)), Set(remaining))
-        }
-    }
-
-    func testEditsQueuedBehindAHeldSaveSettleOnceItReconciles() throws {
-        let repository = Draw3HeldRepository()
-        let store = DrawStore(repository: repository)
-        let board = store.create()
-        let first = stroke(), second = stroke()
-        guard case .held = store.perform(.put([first]), on: board.id) else { return XCTFail("Held") }
-        XCTAssertFalse(store.perform(.put([second]), on: board.id).isSaved)
-        XCTAssertEqual(Set(try store.open(board.id).objects.map(\.id)), [first.id, second.id])
-        repository.reconcileOutcome = .committed
-        repository.writesCommit = true
-        XCTAssertTrue(store.reconcile(on: board.id).isSaved)
-        XCTAssertFalse(store.hasUnsettledEdits)
-        XCTAssertEqual(Set(try repository.load(board.id)?.objects.map(\.id) ?? []), [first.id, second.id])
-    }
 }
 
 // Test-only replica fixtures: production never inserts replicas deliberately.

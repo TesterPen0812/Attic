@@ -93,9 +93,11 @@ extension DrawPageModel {
         }
         switch tool {
         case .pen:
+            guard acceptNewDrawMutation() else { return }
             select([])
             begin(.ink(DrawInkTrace(DrawInkSample(point: world, pressure: pressure))))
         case .eraser:
+            guard acceptNewDrawMutation() else { return }
             begin(.erase(gone: [], last: world))
             erase(to: world)
         case .text:
@@ -105,10 +107,12 @@ extension DrawPageModel {
                 beginText(at: world)
             }
         case .shape:
+            guard acceptNewDrawMutation() else { return }
             select([])
             begin(.shape(shape, start: world, end: world))
         case .select:
             if let spot = handleSpot(at: screen) {
+                guard acceptNewDrawMutation() else { return }
                 beginResize(spot, at: world)
             } else if let hit = DrawGeometry.pick(objects, at: world, tolerance: pickTolerance) {
                 if shift {
@@ -116,7 +120,9 @@ extension DrawPageModel {
                 } else if !selection.contains(hit.id) {
                     select([hit.id])
                 }
-                begin(.move(from: world, offset: .zero, moved: false))
+                if (store as? DrawStore)?.admissionClosed != true {
+                    begin(.move(from: world, offset: .zero, moved: false))
+                }
             } else {
                 let base = shift ? Set(selection) : []
                 if !shift { select([]) }
@@ -175,6 +181,7 @@ extension DrawPageModel {
 
     func doubleClick(at screen: CGPoint) {
         guard tool == .select, editing == nil else { return }
+        guard acceptNewDrawMutation() else { return }
         let world = viewport.world(screen)
         if let hit = DrawGeometry.pick(objects, at: world, tolerance: pickTolerance) {
             if case .text = hit.content { edit(hit.id) }

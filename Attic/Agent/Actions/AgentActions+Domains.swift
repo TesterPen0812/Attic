@@ -333,10 +333,14 @@ extension AgentActions {
         if name == "draw_list_canvases" {
             let canvases = try draw.library(deleted: false)
             let text = try Self.json(["canvases": canvases.map { ["id": $0.id.uuidString, "name": $0.name] },
-                                      "count": canvases.count])
+                                      "count": canvases.count,
+                                      "draw_mutations_paused": (draw as? DrawStore)?.admissionClosed == true])
             return (text, AgentStep(id: UUID(), title: "List Draw canvases", kind: .read,
                                     targets: canvases.map { AgentTarget(page: .draw, itemID: $0.id, title: $0.name) },
                                     state: .done), nil)
+        }
+        if name != "draw_read_canvas", let store = draw as? DrawStore, store.admissionClosed {
+            throw AgentActionsError.invalid(store.admissionRefusalMessage)
         }
         if name == "draw_create_canvas" {
             try beforeMutation()
@@ -393,7 +397,9 @@ extension AgentActions {
                                                        title: snapshot.canvas.name)], state: .done)
             return (try Self.json(["canvas_id": canvasID.uuidString, "canvas_name": snapshot.canvas.name,
                                    "objects": objects, "count": snapshot.objects.count,
-                                   "truncated": snapshot.objects.count > objects.count]), step, nil)
+                                   "truncated": snapshot.objects.count > objects.count,
+                                   "draw_mutations_paused": (draw as? DrawStore)?.admissionClosed == true,
+                                   "canvas_save_unsettled": draw.pendingEdits[canvasID] != nil]), step, nil)
         }
         if name == "draw_edit_text" {
             let objectID = try Self.uuid(args["object_id"], "object_id")

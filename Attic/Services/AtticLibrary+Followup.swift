@@ -168,7 +168,7 @@ extension AtticLibrary {
             switch outcome {
             case .applied: progress.attachmentPhase[attachment.attachmentID] = .sentBack
             case .obsolete: progress.attachmentPhase[attachment.attachmentID] = .dropped
-            case .failed: break
+            case .failed, .partial: break
             }
             outcomes.append(outcome)
         }
@@ -226,7 +226,7 @@ extension AtticLibrary {
             switch outcome {
             case .applied: progress.itemPhase[ref] = .sentBack
             case .obsolete: progress.itemPhase[ref] = .dropped
-            case .failed: failed.insert(ref)
+            case .failed, .partial: failed.insert(ref)
             }
             outcomes.append(outcome)
         }
