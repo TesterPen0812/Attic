@@ -518,7 +518,10 @@ final class PanelIntegrationTests: XCTestCase {
         let previousStyle = AtticReducedMotionStyle.current
         let previousTransparency = AtticTransparencySeam.systemOverride
         let capturesRender = ProcessInfo.processInfo.environment["ATTIC_RESIZE_REVIEW_CAPTURE"] != nil
-        if capturesRender { AtticTransparencySeam.systemOverride = false }
+        // Native glass cannot be represented by an offscreen view cache.
+        // Compare the app's real Reduce Transparency appearance for the
+        // look artifact; the separate scale measurement keeps glass enabled.
+        if capturesRender { AtticTransparencySeam.systemOverride = true }
         AtticMotionPreference.systemReduceMotionOverride = true
         defer {
             AtticMotionPreference.systemReduceMotionOverride = nil
@@ -549,24 +552,37 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, fadingWidth, accuracy: 1,
                        "the outgoing page is still drawn while it fades, at the live width")
         XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, fadingWidth, accuracy: 1)
+        try held.release()
+        spin(0.3)
         if let output = ProcessInfo.processInfo.environment["ATTIC_RESIZE_REVIEW_CAPTURE"] {
-            let content = try XCTUnwrap(held.panel.controller.panelForTesting.contentView)
+            // The geometry assertions above observe the fade itself. Cache
+            // the real page at rest for the separate look comparison;
+            // view caching does not capture animation presentation layers.
+            held.panel.uiState.selectSection(.tasks)
+            spin(0.3)
+            let content = try XCTUnwrap((held.panel.controller.panelForTesting.contentView
+                as? AtticPanelContentContainer)?.hostingView)
+            content.layoutSubtreeIfNeeded()
+            // The offscreen host supplies a 1× native representation. Keep
+            // its pixel format and render the real hierarchy directly at 2×.
+            let native = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
             let bitmap = try XCTUnwrap(NSBitmapImageRep(
                 bitmapDataPlanes: nil, pixelsWide: Int(content.bounds.width * 2),
-                pixelsHigh: Int(content.bounds.height * 2), bitsPerSample: 8,
-                samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+                pixelsHigh: Int(content.bounds.height * 2), bitsPerSample: native.bitsPerSample,
+                samplesPerPixel: native.samplesPerPixel, hasAlpha: native.hasAlpha,
+                isPlanar: native.isPlanar, colorSpaceName: native.colorSpaceName,
+                bitmapFormat: native.bitmapFormat, bytesPerRow: 0, bitsPerPixel: native.bitsPerPixel
             ))
             bitmap.size = content.bounds.size
             content.cacheDisplay(in: content.bounds, to: bitmap)
+            XCTAssertEqual(bitmap.pixelsWide, Int(content.bounds.width * 2), "review render must be 2×")
+            XCTAssertEqual(bitmap.pixelsHigh, Int(content.bounds.height * 2), "review render must be 2×")
             let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
                                            uniformTypeIdentifier: "public.png")
             attachment.name = URL(fileURLWithPath: output).lastPathComponent
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        try held.release()
-        spin(0.3)
         #endif
     }
 
@@ -696,8 +712,8 @@ final class PanelIntegrationTests: XCTestCase {
         AtticDraw.enabledOverride = true
         defer { AtticDraw.enabledOverride = previousDraw }
         #endif
-        // The external measurement guard takes the perf lock after this
-        // process starts inside the build lock. It validates that the lock
+        // The external measurement guard owns the perf lock before this
+        // process starts inside both build locks. It validates that the lock
         // enclosed every window below; the sandboxed host never owns it.
         let quietLock = queuedRelease ? nil : ProcessInfo.processInfo.environment["ATTIC_RESIZE_QUIET_LOCK"]
         if quietLock != nil {
