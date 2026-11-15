@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
@@ -10,6 +11,69 @@ import XCTest
 /// mounted on their own. Event writes go to a fake store only.
 @MainActor
 final class ComposerTests: XCTestCase {
+    func testMultiplePanelDraftsSurviveQuitAndClosingAnotherPanel() throws {
+        let suite = "ComposerPanelDrafts.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let locations: [PanelPage?] = [nil, .tasks, .notes, .calendar]
+        let inputs = [
+            ComposerDraftStore.Draft(title: "Docked task", writing: "Keep first", kind: "task"),
+            ComposerDraftStore.Draft(title: "Floating tasks", writing: "Keep second", kind: "task"),
+            ComposerDraftStore.Draft(title: "Floating note", writing: "Keep third", kind: "note"),
+            ComposerDraftStore.Draft(title: "Floating event", writing: "Keep fourth", kind: "event")
+        ]
+        let active = locations.map { ComposerDraftStore.forPanel(defaults: defaults, floatingPage: $0) }
+        for (index, store) in active.enumerated() { store.save(inputs[index]) }
+        let reopened = locations.map { ComposerDraftStore.forPanel(defaults: defaults, floatingPage: $0) }
+        for (index, store) in reopened.enumerated() {
+            XCTAssertEqual(store.load(), inputs[index], "relaunch kept panel \(index)'s draft")
+        }
+
+        reopened[1].save(nil) // Tasks in its own panel has been submitted.
+        XCTAssertNil(reopened[1].load())
+        for index in [0, 2, 3] {
+            XCTAssertEqual(reopened[index].load(), inputs[index], "closing one panel cannot erase panel \(index)")
+        }
+    }
+
+    /// Splitting the panels' kept words must still leave a failed Calendar
+    /// submission available for retry from whichever panel opens Calendar.
+    func testFailedCalendarEventRecoveryIsSharedBetweenDockedAndFloatingPanels() throws {
+        let suite = "ComposerFailedEventPanels.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let docked = ComposerDraftStore.forPanel(defaults: defaults, floatingPage: nil)
+        let floating = ComposerDraftStore.forPanel(defaults: defaults, floatingPage: .calendar)
+        let event = ComposerDraftStore.FailedEvent(title: "Retry calendar event", writing: "Unsaved details",
+                                                   day: nil, length: 60, calendarID: "test-calendar")
+        docked.saveFailedEvents([event])
+        XCTAssertEqual(floating.loadFailedEvents(), [event], "a pulled-out Calendar can recover the failed event")
+        floating.saveFailedEvents([])
+        XCTAssertTrue(docked.loadFailedEvents().isEmpty, "a successful retry clears the shared backup")
+    }
+
+    func testCP19RecoveredTaskConvertedToEventDoesNotReturnAsTask() async throws {
+        let suite = "ComposerConvertEvent.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let drafts = ComposerDraftStore(defaults: defaults)
+        model.services.drafts = drafts
+        page.services.acknowledgementDelay = .seconds(3600)
+        model.open(on: .tasks(.now)); type("Convert to event"); model.writing = "Task writing"; model.submit()
+        saveFailure.on = true; page.settlePendingCompletionAcknowledgements(); saveFailure.on = false
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertFalse(drafts.loadFailedTasks().isEmpty)
+        model.open(on: .calendar(selected: today), as: .event)
+        await XCTAssertTrueAsync(await model.create())
+        XCTAssertTrue(drafts.loadFailedTasks().isEmpty)
+        model.open(on: .tasks(.now))
+        XCTAssertTrue(page.addBar.text.isEmpty)
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertEqual(events.events.count, 1)
+    }
+
     func testR1PendingTaskExplainsBothSubmitRoutesAndKeepsCreateEnabled() async throws {
         model.open(on: .tasks(.now))
         type("Pending task")
@@ -208,6 +272,7 @@ final class ComposerTests: XCTestCase {
         let fixed = now
         let restartedPage = TasksPageModel(library: library, services: TasksPageServices(now: { fixed }))
         restartedPage.services.acknowledgementDelay = .seconds(3600)
+        ComposerRecoveryJournal.simulateProcessExitForTesting(drafts)
         let restarted = ComposerModel(tasks: restartedPage, services: ComposerServices(drafts: drafts))
         restarted.open(on: .tasks(.now))
         XCTAssertEqual(restartedPage.addBar.text, "Later draft")
@@ -306,6 +371,7 @@ final class ComposerTests: XCTestCase {
         let restartedStore = TaskStore(container: container, now: { fixed }, taskImageFiles: tasks.taskImageFiles)
         let restartedLibrary = AtticLibrary(tasks: restartedStore, notes: notes)
         let restartedPage = TasksPageModel(library: restartedLibrary, services: TasksPageServices(now: { fixed }))
+        ComposerRecoveryJournal.simulateProcessExitForTesting(drafts)
         let restarted = ComposerModel(tasks: restartedPage, services: ComposerServices(drafts: drafts))
         restarted.open(on: .tasks(.now))
         XCTAssertEqual(restartedPage.addBar.text, "Important unsaved task #keep")
@@ -2813,6 +2879,7 @@ final class ComposerRecoveryTests: XCTestCase {
         ComposerDraftStore(defaults: defaults, taskRecoveryURL: root.appendingPathComponent("pending.json"))
     }
     private func launch(_ recovery: ComposerDraftStore? = nil) throws -> Session {
+        ComposerRecoveryJournal.simulateProcessExitForTesting(recovery ?? drafts)
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
         let tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: root.appendingPathComponent("files")))
         let failing = failure
@@ -2828,18 +2895,496 @@ final class ComposerRecoveryTests: XCTestCase {
         // A simulated quit leaves the old controller's delayed command alive
         // in this test process. Abort it before the temporary store disappears;
         // it must never commit later or query a removed SQLite file.
+        ownPageLifetime(page)
+        return Session(container: container, library: library, page: page, composer: composer)
+    }
+    private func ownPageLifetime(_ page: TasksPageModel) {
+        let failing = failure
         addTeardownBlock { @MainActor [weak page, failing] in
             failing.on = true
             page?.settlePendingCompletionAcknowledgements()
+            if let page {
+                for work in Array(page.composerAttachmentTasks.values) { _ = await work.value }
+                await page.library.notes?.waitForAttachmentReconciliation()
+            }
+            await Task.yield()
         }
-        return Session(container: container, library: library, page: page, composer: composer)
     }
+
+    private func waitForFiles(_ session: Session) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while session.page.addBarState.stagingFiles > 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(session.page.addBarState.stagingFiles, 0)
+    }
+    private func seedKeptBackupForCrash(_ kept: ComposerDraftStore.Draft) throws {
+        let url = try XCTUnwrap(drafts.taskRecoveryURL)
+        var disk = try JSONDecoder().decode(ComposerDraftStore.TaskRecovery.self, from: Data(contentsOf: url))
+        disk.draft = kept
+        try drafts.persistTaskRecovery(JSONEncoder().encode(disk), url)
+    }
+
     private func rows(_ session: Session) throws -> [TaskItem] {
         try ModelContext(session.container).fetch(FetchDescriptor<TaskItem>())
     }
     private func type(_ text: String, in session: Session) {
         session.page.addBar = TaskAddBarText(text: text)
         session.composer.writing = "Writing that must survive"
+    }
+
+    private func capturePersistenceNotice(_ session: Session, phase: String) throws {
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("ComposerPersistenceRenders-\(ProcessInfo.processInfo.processIdentifier)")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        for (name, mode) in [("light", AtticDesignContext.Mode.light), ("dark", .dark)] {
+            let design = AtticDesignContext(mode: mode, reduceTransparency: true)
+            let host = NSHostingView(rootView: VStack(spacing: 16) {
+                ComposerCard(model: session.composer, drawsChrome: false)
+                PanelNoticeStack(toasts: session.page.toasts, notice: nil, onRetry: {}, onDismissNotice: {})
+            }.padding(16).frame(width: 360, height: 300, alignment: .top)
+                .atticDesign(design).background(design.tokens.panel.base.color))
+            host.frame = CGRect(x: 0, y: 0, width: 360, height: 300)
+            let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 360, height: 300),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false; window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            window.orderBack(nil)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 720, pixelsHigh: 600,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            bitmap.size = host.bounds.size
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: output.appendingPathComponent("\(phase)-\(name).png"))
+            let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+            attachment.name = "\(phase)-\(name).png"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        print("CP_RENDER_DIR \(output.path)")
+    }
+
+    /// Compatibility guards use the unchanged wire layouts, not the new
+    /// journal's convenience save APIs. Every model opens a real temp store.
+    func testOriginalPersistenceLayoutsStillMigrateWithoutLosingEitherOwner() throws {
+        let parent = root!
+        let oldDraft = Data(#"{"title":"Old note","writing":"Old writing","kind":"note"}"#.utf8)
+        for format in 0..<5 {
+            defaults.removePersistentDomain(forName: suite)
+            root = parent.appendingPathComponent("format-\(format)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            var legacyID: UUID?
+            switch format {
+            case 0:
+                try Data(#"{"tasks":[],"draft":{"title":"Old note","writing":"Old writing","kind":"note"}}"#.utf8)
+                    .write(to: XCTUnwrap(drafts.taskRecoveryURL))
+            case 1: defaults.set(oldDraft, forKey: "composerKeptDraft")
+            case 2, 4:
+                let record = ComposerDraftStore.FailedTask(id: UUID(), title: TaskAddBarText(text: "Legacy task"),
+                    writing: "Old task writing", status: .backlog, page: .tasks(.backlog))
+                legacyID = record.id
+                // Nil extension fields encode no keys: this is [FailedTask]'s
+                // original pending-only layout, with no kept-draft envelope.
+                let data = try JSONEncoder().encode([record])
+                if format == 2 { try data.write(to: XCTUnwrap(drafts.taskRecoveryURL)) }
+                else { defaults.set(data, forKey: "composerKeptDraft.failedTasks") }
+            default:
+                defaults.set(Data(#"{"shown":{"title":"Old note","writing":"Old writing","kind":"note"},"aside":{"title":"Aside task","writing":"Aside writing","kind":"task"}}"#.utf8), forKey: "composerKeptDraft")
+            }
+            let session = try launch()
+            if let legacyID {
+                XCTAssertEqual(session.page.addBar.text, "Legacy task")
+                session.composer.submit(); session.page.settlePendingCompletionAcknowledgements()
+                let physical = try rows(session)
+                XCTAssertEqual(physical.filter { $0.id == legacyID }.count, 1)
+                XCTAssertEqual(physical.first?.status, .backlog)
+            } else {
+                XCTAssertEqual(session.composer.kind, .note)
+                XCTAssertEqual(session.page.addBar.text, "Old note")
+                XCTAssertEqual(session.composer.writing, "Old writing")
+                if format == 3 {
+                    XCTAssertNotNil(session.page.toasts.current, "legacy aside Task files require an explicit re-attach notice")
+                    session.composer.choose(.task)
+                    XCTAssertEqual(session.page.addBar.text, "Aside task")
+                    XCTAssertEqual(session.composer.writing, "Aside writing")
+                    session.composer.choose(.note)
+                    XCTAssertEqual(session.page.addBar.text, "Old note")
+                }
+            }
+            XCTAssertTrue(session.composer.saveKeptDraft())
+        }
+        root = parent
+    }
+
+    // CP regression oracles: authored on the merged branch before fixes.
+    private func anotherPanel(_ s: Session, key: String = "composerKeptDraft") -> Session {
+        let p = TasksPageModel(library: s.library)
+        p.services.acknowledgementDelay = .seconds(3600)
+        var d = drafts; d.key = key
+        let c = ComposerModel(tasks: p, services: ComposerServices(drafts: d))
+        c.open(on: .tasks(.now))
+        ownPageLifetime(p)
+        return Session(container: s.container, library: s.library, page: p, composer: c)
+    }
+    func testCP01PanelsMergeRecordsInsteadOfReplacingAnotherPanelsFailure() throws {
+        let a = try launch(), b = anotherPanel(a)
+        type("Failed A", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        type("New A", in: a)
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        type("Saved B", in: b); b.composer.submit(); b.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try drafts.readFailedTasks().map(\.id), [id], "B may retire only B")
+        XCTAssertEqual(try rows(a).count, 1)
+    }
+    func testCP02LivePendingCannotBeRecoveredOrCreatedTwiceByAnotherPanel() throws {
+        let a = try launch(); type("Live A", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id), b = anotherPanel(a)
+        XCTAssertTrue(b.page.addBar.text.isEmpty, "live pending is not crash recovery")
+        type("Independent B", in: b); a.page.settlePendingCompletionAcknowledgements()
+        b.composer.submit(); b.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(a).filter { $0.id == id }.count, 1)
+        XCTAssertEqual(Set(try rows(a).map(\.title)), ["Live A", "Independent B"])
+    }
+    func testCP03KeptDraftRestoresExactSemanticStateAndAside() throws {
+        let a = try launch(); a.page.addBar = TaskAddBarText(text: "Literal Monday #milk")
+        a.page.addBar.dismissed = [(a.page.addBar.text as NSString).range(of: "Monday")]
+        a.page.addBar.shown = [(a.page.addBar.text as NSString).range(of: "#milk")]
+        a.page.addBar.picked.priority = .low; a.page.addBar.picked.tags = ["seed"]
+        a.page.addBarState.seededTags = ["seed"]; a.composer.writing = "Task writing"
+        let expected = a.page.addBar
+        a.page.addBarState.stagingFiles = 1; a.composer.open(on: .notes, as: .note)
+        a.page.addBar.text = "Independent Note"; a.composer.writing = "Note writing"; a.composer.pinned = true
+        a.composer.close(); let b = try launch()
+        XCTAssertTrue(b.composer.pinned)
+        b.composer.open(on: .tasks(.now), as: .task)
+        XCTAssertEqual(b.page.addBar, expected); XCTAssertEqual(b.composer.writing, "Task writing")
+        XCTAssertEqual(b.page.addBarState.seededTags, ["seed"])
+    }
+    func testCP04EmptyingRecoveredTaskDiscardsIdentityAndOriginalPage() throws {
+        let a = try launch(); a.composer.open(on: .tasks(.backlog)); type("Abandoned", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        a.page.addBar.clear(); a.composer.writing = ""; a.composer.close()
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+        a.composer.open(on: .tasks(.now)); type("Fresh Now", in: a)
+        a.composer.submit(); a.page.settlePendingCompletionAcknowledgements()
+        XCTAssertNotEqual(try rows(a).first?.id, id); XCTAssertEqual(try rows(a).first?.status, .todo)
+        XCTAssertFalse(a.composer.failed)
+    }
+    func testCP05ConvertingRecoveredTaskToNoteRetiresItsRecord() async throws {
+        let a = try launch(); type("Convert recovery", in: a); a.composer.submit()
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        a.composer.choose(.note); await XCTAssertTrueAsync(await a.composer.create())
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty); XCTAssertTrue(try rows(a).isEmpty)
+        XCTAssertTrue(try launch().page.addBar.text.isEmpty)
+    }
+    func testCP06CorruptJournalIsQuarantinedAndSubmissionKeepsWorking() throws {
+        let url = try XCTUnwrap(drafts.taskRecoveryURL), bytes = Data("{garbage".utf8)
+        try bytes.write(to: url); let a = try launch()
+        XCTAssertNotNil(a.page.toasts.current, "damaged recovery needs a visible notice")
+        type("Works after corruption", in: a); a.composer.submit(); a.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(a).map(\.title), ["Works after corruption"])
+        let copies = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        XCTAssertTrue(copies.contains { $0 != url && (try? Data(contentsOf: $0)) == bytes })
+    }
+    func testCP07CloseWriteFailureIsVisibleAndRetryKeepsDraft() throws {
+        var d = drafts; let write = d.persistTaskRecovery; var broken = true
+        d.persistTaskRecovery = { data, url in
+            if broken { throw CocoaError(.fileWriteOutOfSpace) }; try write(data, url)
+        }
+        let a = try launch(d); a.composer.choose(.note); type("Keep on close", in: a); a.composer.close()
+        XCTAssertNotNil(a.page.toasts.current, "close cannot silently lose kept words")
+        try capturePersistenceNotice(a, phase: "after")
+        broken = false; a.composer.saveKeptDraft()
+        XCTAssertEqual(try launch().page.addBar.text, "Keep on close")
+    }
+    func testCP08EditedRecoveryKeepsLatestPicksAndDismissedTokens() throws {
+        let a = try launch(); type("Call Monday #milk", in: a)
+        a.page.addBar.picked.priority = .high; a.composer.submit()
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        a.page.addBar.picked.priority = .low; a.page.addBar.picked.day = DueDay(year: 2027, month: 3, day: 4)
+        a.page.addBar.dismissed = [(a.page.addBar.text as NSString).range(of: "#milk")]
+        let expected = a.page.addBar; a.composer.close(); let b = try launch()
+        XCTAssertEqual(b.page.addBar, expected)
+        b.composer.submit(); b.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(b).first?.priority, .low); XCTAssertEqual(try rows(b).first?.tags, [])
+    }
+    func testCP09PicksOnlyDraftCannotBeDisplacedByRecovery() throws {
+        let a = try launch(); type("Failed waiting", in: a); a.composer.submit(); type("Next", in: a)
+        failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        a.composer.submit(); a.page.addBar.picked.priority = .low; a.page.addBar.picked.tags = ["next"]
+        a.page.addBarState.seededTags = ["next"]; a.page.settlePendingCompletionAcknowledgements()
+        XCTAssertTrue(a.page.addBar.text.isEmpty); XCTAssertEqual(a.page.addBar.picked.priority, .low)
+        XCTAssertEqual(a.page.addBar.picked.tags, ["next"]); XCTAssertEqual(a.page.addBarState.seededTags, ["next"])
+    }
+    func testCP10KeptAndFailedOwnedFilesSurviveRelaunchWithExactBytes() throws {
+        let a = try launch(), payload = Data("only promised copy".utf8)
+        var staged = TaskAttachmentStaging()
+        let directory = try staged.makeOwnedDirectory(), file = directory.appendingPathComponent("promise.pdf")
+        try payload.write(to: file); staged.urls = [file]
+        a.page.addBarState.files = [TasksComposerFiles(staging: staged)]
+        type("Own my files", in: a); a.composer.close()
+        staged.discard() // the promise/paste temporary copy disappears at quit
+        let b = try launch()
+        XCTAssertEqual(b.page.addBarState.fileNames, ["promise.pdf"])
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(b.page.addBarState.files.first?.staging.urls.first)), payload)
+        b.composer.open(on: .tasks(.now)); b.composer.submit()
+        failure.on = true; b.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        let c = try launch(); XCTAssertEqual(c.page.addBarState.fileNames, ["promise.pdf"])
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(c.page.addBarState.files.first?.staging.urls.first)), payload)
+    }
+    func testCP11ClosingPanelCannotOrphanPendingFiles() async throws {
+        let base = try launch(); var panel: Session? = anotherPanel(base)
+        let file = root.appendingPathComponent("pending.pdf"), payload = Data("pending bytes".utf8)
+        try payload.write(to: file); panel?.page.addComposerFiles(urls: [file])
+        try await waitForFiles(try XCTUnwrap(panel))
+        type("Pending close", in: try XCTUnwrap(panel)); panel?.composer.submit(); panel?.composer.close()
+        let pendingPage = try XCTUnwrap(panel?.page); panel = nil
+        pendingPage.settlePendingCompletionAcknowledgements()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while try rows(base).first?.attachments.isEmpty != false, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(try rows(base).count, 1)
+        let reference = try XCTUnwrap(try rows(base).first?.attachments.first)
+        let url = try await base.library.tasks.taskImageFiles.verifiedURL(for: reference)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(url)), payload)
+    }
+    func testCP12PanelKeptDraftsRemainIndependentOnOneJournal() throws {
+        let a = try launch(), b = anotherPanel(a, key: "composerKeptDraft.floating.tasks")
+        type("Docked", in: a); type("Floating", in: b); a.composer.close(); b.composer.close()
+        let c = try launch(), d = anotherPanel(c, key: "composerKeptDraft.floating.tasks")
+        XCTAssertEqual(c.page.addBar.text, "Docked"); XCTAssertEqual(d.page.addBar.text, "Floating")
+        d.page.addBar.clear(); d.composer.writing = ""; d.composer.close()
+        XCTAssertEqual(try launch().page.addBar.text, "Docked")
+    }
+
+    func testCP13FailedRetirementRetriesBeforeDeletedTaskCanReturn() throws {
+        var d = drafts; let write = d.persistTaskRecovery; var failOnce = true
+        d.persistTaskRecovery = { data, url in
+            if try JSONDecoder().decode(ComposerDraftStore.TaskRecovery.self, from: data).tasks.isEmpty, failOnce {
+                failOnce = false; throw CocoaError(.fileWriteOutOfSpace)
+            }
+            try write(data, url)
+        }
+        let a = try launch(d); type("Retire durably", in: a); a.composer.submit()
+        a.page.settlePendingCompletionAcknowledgements(); a.composer.saveKeptDraft()
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty, "failed retirement must be retried")
+        let context = ModelContext(a.container)
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) { context.delete(row) }
+        try context.save()
+        XCTAssertTrue(try launch().page.addBar.text.isEmpty, "permanently deleted task must stay gone")
+    }
+    func testCP14RelativeDayNeverResolvesAgainstRelaunchDay() throws {
+        let a = try launch()
+        a.page.services.now = { Date(timeIntervalSince1970: 1_800_000_000) }
+        a.page.addBar = TaskAddBarText(text: "Call today")
+        let expected = a.composer.values.day; a.composer.close()
+        let b = try launch(); b.page.services.now = { Date(timeIntervalSince1970: 1_900_000_000) }
+        XCTAssertEqual(b.composer.values.day, expected)
+        XCTAssertEqual(b.composer.values.title, "Call")
+        let current = DueDay(date: b.page.services.now(), calendar: b.page.services.calendar())
+        XCTAssertEqual(b.page.parser.today, current, "ordinary row edits keep the current clock")
+        XCTAssertEqual(b.page.dateChoices.today, current, "date pickers offer the actual current day")
+        b.composer.submit(); b.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(b).count, 1)
+        XCTAssertEqual(try rows(b).first?.dueDay, expected)
+    }
+    func testCP15TransientReadFailureDoesNotPermanentlyDisableSubmit() throws {
+        XCTAssertTrue(drafts.save(.init(title: "Existing", writing: "", kind: "task")))
+        var d = drafts; let read = d.readTaskRecovery; var fail = true
+        d.readTaskRecovery = { url in
+            if fail { fail = false; throw CocoaError(.fileReadNoPermission) }; return try read(url)
+        }
+        let a = try launch(d)
+        a.page.addBar.clear(); a.composer.writing = ""; a.composer.close()
+        a.composer.open(on: .tasks(.now)); type("After read retry", in: a)
+        a.composer.submit(); a.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(a).map(\.title), ["After read retry"])
+    }
+    func testCP16StoreFamilyResetRemovesComposerJournalAndOwnedFiles() throws {
+        let base = root.appendingPathComponent("Reset")
+        let identifier = (Bundle.main.bundleIdentifier ?? "unknown-bundle").replacingOccurrences(of: "/", with: "-")
+        let directory = base.appendingPathComponent("AtticCanvasUITests").appendingPathComponent(identifier)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let journal = directory.appendingPathComponent("canvas.store.composer-tasks.json")
+        try Data("[]".utf8).write(to: journal)
+        let staging = directory.appendingPathComponent("canvas.store.composer-files")
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let container = try PersistenceController.makeCanvasUITestContainer(reset: true, baseDirectory: base)
+        XCTAssertFalse(container.configurations.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: journal.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staging.path))
+    }
+
+    func testCP17QuitRefusesAnUncheckpointedDraftOrPendingProvider() throws {
+        var d = drafts
+        d.persistTaskRecovery = { _, _ in throw CocoaError(.fileWriteOutOfSpace) }
+        let a = try launch(d); type("Do not lose on quit", in: a)
+        XCTAssertFalse(TasksPageModel.prepareForTermination(in: a.library.tasks))
+        XCTAssertNotNil(a.page.toasts.current)
+        a.composer.services.drafts = drafts
+        a.page.addBarState.stagingFiles = 1
+        XCTAssertFalse(TasksPageModel.prepareForTermination(in: a.library.tasks))
+        a.page.addBarState.stagingFiles = 0
+        XCTAssertTrue(TasksPageModel.prepareForTermination(in: a.library.tasks))
+        XCTAssertEqual(drafts.load()?.title, "Do not lose on quit")
+    }
+    func testCP18TransientReconciliationFailureIsRetried() throws {
+        let task = ComposerDraftStore.FailedTask(id: UUID(), title: TaskAddBarText(text: "Retry fetch"),
+            writing: "", status: .todo, page: .tasks(.now))
+        XCTAssertTrue(drafts.saveFailedTasks([task]))
+        let a = try launch()
+        // Recreate only the card, with a launch fetch that fails once.
+        a.composer.close(); a.page.addBar.clear(); a.composer.writing = ""
+        var fails = true
+        let c = ComposerModel(tasks: a.page, services: ComposerServices(drafts: drafts, taskRecoveryIDs: { _ in
+            if fails { fails = false; throw CocoaError(.fileReadUnknown) }; return []
+        }))
+        c.open(on: .tasks(.now)); c.submit(); a.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(a).map(\.id), [task.id])
+    }
+    func testCP20FailedRecoveryRetainsPinnedAndShownTokenState() throws {
+        let a = try launch(); a.page.addBar = TaskAddBarText(text: "Call Monday #home")
+        a.composer.writing = "Pinned task writing"
+        let range = (a.page.addBar.text as NSString).range(of: "Monday")
+        let exactDay = try XCTUnwrap(DueDay(year: 2028, month: 4, day: 5))
+        a.page.addBar.pinned = [.init(range: range, value: .dueDay(exactDay))]
+        a.page.addBar.shown = [range]
+        a.composer.submit(); failure.on = true; a.page.settlePendingCompletionAcknowledgements(); failure.on = false
+        let b = try launch()
+        XCTAssertEqual(b.page.addBar.pinned, [.init(range: range, value: .dueDay(exactDay))])
+        XCTAssertEqual(b.page.addBar.shown, [range])
+        XCTAssertEqual(b.composer.values.day, DueDay(year: 2028, month: 4, day: 5))
+    }
+    func testCP21MissingOwnedFilesRequireVisibleReattachmentWithoutPhantomChips() async throws {
+        let a = try launch(), file = root.appendingPathComponent("lost.pdf")
+        try Data("missing file".utf8).write(to: file); a.page.addComposerFiles(urls: [file])
+        try await waitForFiles(a)
+        type("Missing attachment", in: a); a.composer.close()
+        // Remove only this test's staging family to model unavailable bytes.
+        for child in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            where child.path.hasSuffix(".files") { try FileManager.default.removeItem(at: child) }
+        try FileManager.default.removeItem(at: file)
+        let b = try launch()
+        XCTAssertTrue(b.page.addBarState.fileNames.isEmpty)
+        XCTAssertNotNil(b.page.toasts.current, "the draft must explicitly ask for re-attachment")
+        XCTAssertEqual(b.page.addBar.text, "Missing attachment")
+    }
+    func testCP22ReturnDoesNotRepeatedlyReadAndDecodeTheJournal() throws {
+        var d = drafts; let read = d.readTaskRecovery, write = d.persistTaskRecovery
+        var reads = 0
+        let fullFlush = ProcessInfo.processInfo.environment["ATTIC_COMPOSER_FULLFSYNC"] == "1"
+        let cycles = ProcessInfo.processInfo.environment["ATTIC_COMPOSER_COST_PROBE"] == "1" ? 100 : 1
+        d.readTaskRecovery = { url in reads += 1; return try read(url) }
+        d.persistTaskRecovery = { data, url in
+            try write(data, url)
+            if fullFlush {
+                let descriptor = open(url.path, O_RDONLY | O_CLOEXEC)
+                guard descriptor >= 0 else { throw POSIXError(.EIO) }
+                defer { close(descriptor) }
+                guard fcntl(descriptor, F_FULLFSYNC) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+            }
+        }
+        let a = try launch(d)
+        var elapsed: [Double] = [], coldLoads: [Double] = [], keptSizes: [Int] = [], sizes: [Int] = [], readCounts: [Int] = []
+        for cycle in 0..<cycles {
+            type("Measured kept draft \(cycle)", in: a)
+            if cycles > 1 { a.composer.writing = String(repeating: "retained writing ", count: 6_400) }
+            a.composer.saveKeptDraft()
+            if cycles > 1 {
+                keptSizes.append(try Data(contentsOf: XCTUnwrap(drafts.taskRecoveryURL)).count)
+                reads = 0
+                let coldStart = ContinuousClock.now
+                ComposerRecoveryJournal.simulateProcessExitForTesting(d)
+                let coldDuration = coldStart.duration(to: .now).components
+                coldLoads.append(Double(coldDuration.seconds) * 1000 + Double(coldDuration.attoseconds) / 1e15)
+                XCTAssertEqual(reads, 1, "a cold owner reads one journal")
+            }
+            reads = 0
+            let start = ContinuousClock.now
+            a.composer.submit()
+            let duration = start.duration(to: .now).components
+            elapsed.append(Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1e15)
+            readCounts.append(reads)
+            XCTAssertLessThanOrEqual(reads, 1, "one owner must avoid redundant reads before acknowledgement")
+            a.page.settlePendingCompletionAcknowledgements()
+            XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+            sizes.append(try Data(contentsOf: XCTUnwrap(drafts.taskRecoveryURL)).count)
+        }
+        XCTAssertEqual(try rows(a).count, cycles)
+        let budget = try XCTUnwrap(sizes.first)
+        XCTAssertTrue(sizes.allSatisfy { $0 <= budget }, "successful history must not enlarge the recovery journal")
+        let sorted = elapsed.sorted()
+        if let maximum = coldLoads.max() {
+            let cold = coldLoads.sorted()
+            print("CP_COLD n=\(cold.count) p50_ms=\(cold[cold.count / 2]) p95_ms=\(cold[cold.count * 95 / 100]) max_ms=\(maximum) journal_bytes_max=\(keptSizes.max()!)")
+        }
+        print("CP_RETURN mode=\(fullFlush ? "fullfsync" : "fsync") n=\(cycles) p50_ms=\(sorted[sorted.count / 2]) p95_ms=\(sorted[min(sorted.count - 1, sorted.count * 95 / 100)]) max_ms=\(sorted.last!) reads_max=\(readCounts.max()!) journal_first=\(budget) journal_last=\(sizes.last!)")
+    }
+
+    func testCP23PermanentPurgeWaitsForDurableRecoveryRetirement() throws {
+        var d = drafts; let write = d.persistTaskRecovery
+        d.persistTaskRecovery = { data, url in
+            if try JSONDecoder().decode(ComposerDraftStore.TaskRecovery.self, from: data).tasks.isEmpty {
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+            try write(data, url)
+        }
+        let a = try launch(d)
+        a.page.addBar = TaskAddBarText(text: "Purge safely")
+        a.composer.submit(); a.page.settlePendingCompletionAcknowledgements()
+        let id = try XCTUnwrap(try rows(a).first?.id)
+        XCTAssertTrue(a.library.delete(AtticItemRef(.task, id), in: .tasks))
+        XCTAssertTrue(a.library.tasks.purgeDeleted(before: .distantFuture).isEmpty,
+            "retain the tombstone while retirement cannot be made durable")
+        XCTAssertEqual(try rows(a).count, 1)
+        a.composer.services.drafts = drafts; a.composer.saveKeptDraft()
+        XCTAssertEqual(a.library.tasks.purgeDeleted(before: .distantFuture), [id])
+        XCTAssertTrue(try rows(a).isEmpty)
+        XCTAssertTrue(try launch().page.addBar.text.isEmpty)
+    }
+
+    func testCP24CommittedTaskFinishesFilesAfterCrashWithoutReattachingTwice() async throws {
+        var d = drafts; let write = d.persistTaskRecovery; var retirementArmed = false
+        d.persistTaskRecovery = { data, url in
+            if try JSONDecoder().decode(ComposerDraftStore.TaskRecovery.self, from: data).tasks.isEmpty, retirementArmed {
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+            try write(data, url)
+        }
+        let a = try launch(d), file = root.appendingPathComponent("crash.pdf"), payload = Data("crash-proof bytes".utf8)
+        try payload.write(to: file); a.page.addComposerFiles(urls: [file])
+        let staged = ContinuousClock.now.advanced(by: .seconds(5))
+        while a.page.addBarState.stagingFiles > 0, ContinuousClock.now < staged { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(a.page.addBarState.stagingFiles, 0)
+        type("Committed before files", in: a); a.composer.submit()
+        let id = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
+        retirementArmed = true
+        let ownedCopy = try XCTUnwrap(try drafts.readFailedTasks().first?.draftState?.files?.first?.urls.first)
+        XCTAssertNotNil(a.library.createTask(TaskDraft(title: "Committed before files"),
+            writing: "Writing that must survive", in: .tasks, id: id))
+        let replay = try launch(d)
+        XCTAssertTrue(replay.page.addBar.text.isEmpty, "a committed task's backup must not be offered as a new draft")
+        let imported = ContinuousClock.now.advanced(by: .seconds(5))
+        while try rows(replay).first?.attachments.count != 1, ContinuousClock.now < imported { try await Task.sleep(for: .milliseconds(10)) }
+        for work in Array(replay.page.composerAttachmentTasks.values) { _ = await work.value }
+        XCTAssertEqual(try rows(replay).filter { $0.id == id }.count, 1)
+        XCTAssertEqual(try rows(replay).first?.attachments.count, 1)
+        XCTAssertEqual(try drafts.readFailedTasks().map(\.id), [id], "retirement failure leaves the file manifest durable")
+        let final = try launch()
+        let retired = ContinuousClock.now.advanced(by: .seconds(5))
+        while !(try drafts.readFailedTasks().isEmpty), ContinuousClock.now < retired { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
+        XCTAssertTrue(final.page.addBar.text.isEmpty)
+        XCTAssertEqual(try rows(final).filter { $0.id == id }.count, 1)
+        XCTAssertEqual(try rows(final).first?.attachments.count, 1, "replay must recognize an already imported digest")
+        let reference = try XCTUnwrap(try rows(final).first?.attachments.first)
+        let url = try await final.library.tasks.taskImageFiles.verifiedURL(for: reference)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(url)), payload)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ownedCopy.path), "retirement cleans only the consumed staged copy")
     }
 
     func testPendingDiskRecoveryPrecedesClearAndRelaunchRetryKeepsIdentity() throws {
@@ -2869,7 +3414,7 @@ final class ComposerRecoveryTests: XCTestCase {
         XCTAssertTrue(again.page.addBar.text.isEmpty)
     }
 
-    func testRecoveryWriteFailureLeavesWordsPicksFilesAndStoreUntouched() throws {
+    func testRecoveryWriteFailureLeavesWordsPicksFilesAndStoreUntouched() async throws {
         var recovery = drafts
         recovery.persistTaskRecovery = { _, _ in throw CocoaError(.fileWriteOutOfSpace) }
         let session = try launch(recovery)
@@ -2878,6 +3423,7 @@ final class ComposerRecoveryTests: XCTestCase {
         let file = root.appendingPathComponent("keep.pdf")
         try Data("keep file".utf8).write(to: file)
         session.page.addComposerFiles(urls: [file])
+        try await waitForFiles(session)
         session.composer.submit()
         XCTAssertEqual(session.page.addBar.text, "Never clear this")
         XCTAssertEqual(session.composer.writing, "Writing that must survive")
@@ -2892,12 +3438,13 @@ final class ComposerRecoveryTests: XCTestCase {
         XCTAssertTrue(try rows(try launch()).isEmpty)
     }
 
-    func testTaskSaveFailureKeepsDiskRecoveryAndRelaunchHasNoPhantomFiles() throws {
+    func testTaskSaveFailureKeepsDiskRecoveryAndRelaunchHasNoPhantomFiles() async throws {
         let session = try launch()
         type("Failed task", in: session)
         let file = root.appendingPathComponent("reattach.pdf")
         try Data("still owned".utf8).write(to: file)
         session.page.addComposerFiles(urls: [file])
+        try await waitForFiles(session)
         session.composer.submit()
         let pendingID = try XCTUnwrap(try drafts.readFailedTasks().first?.id)
         failure.on = true
@@ -2909,12 +3456,16 @@ final class ComposerRecoveryTests: XCTestCase {
         let restarted = try launch()
         XCTAssertEqual(restarted.page.addBar.text, "Failed task")
         XCTAssertEqual(restarted.composer.writing, "Writing that must survive")
-        XCTAssertTrue(restarted.page.addBarState.fileNames.isEmpty, "BT10: relaunch must require reattaching, never claim lost file ownership")
+        XCTAssertEqual(restarted.page.addBarState.fileNames, ["reattach.pdf"], "BT10: restore the draft’s durable owned copy")
         failure.on = false
         restarted.composer.submit()
         restarted.page.settlePendingCompletionAcknowledgements()
         XCTAssertEqual(try rows(restarted).map(\.id), [pendingID])
-        XCTAssertTrue(try rows(restarted).allSatisfy { $0.attachments.isEmpty })
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while try rows(restarted).first?.attachments.isEmpty != false, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(try rows(restarted).first?.attachments.map(\.filename), ["reattach.pdf"])
         XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
     }
 
@@ -2965,7 +3516,7 @@ final class ComposerRecoveryTests: XCTestCase {
         retry.page.settlePendingCompletionAcknowledgements()
         // The actual crash stops the callback before it can clear this
         // older kept-card backup. Retain that exact disk state here.
-        drafts.save(keptAtCrash)
+        try seedKeptBackupForCrash(keptAtCrash)
         let id = try XCTUnwrap(try rows(retry).first?.id)
         XCTAssertEqual(try drafts.readFailedTasks().map(\.id), [id])
         // Two physical app-level replicas, one logical task.
@@ -3069,7 +3620,7 @@ final class ComposerRecoveryTests: XCTestCase {
         XCTAssertTrue(try drafts.readFailedTasks().isEmpty)
         // The ledger retirement was durable; the process stopped immediately
         // before clearing the older kept-card backup.
-        drafts.save(keptAtCrash)
+        try seedKeptBackupForCrash(keptAtCrash)
         let restarted = try launch()
         XCTAssertTrue(restarted.page.addBar.text.isEmpty)
         restarted.composer.submit()
@@ -3121,8 +3672,10 @@ final class ComposerRecoveryTests: XCTestCase {
         let session = try launch()
         type("Do not clear", in: session)
         session.composer.submit()
-        XCTAssertEqual(session.page.addBar.text, "Do not clear")
-        XCTAssertEqual(try Data(contentsOf: url), bytes)
-        XCTAssertTrue(try rows(session).isEmpty)
+        let siblings = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        XCTAssertTrue(siblings.contains { $0 != url && (try? Data(contentsOf: $0)) == bytes }, "damaged bytes stay readable beside the new journal")
+        XCTAssertTrue(session.page.addBar.text.isEmpty, "a damaged journal cannot disable submission")
+        session.page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(try rows(session).map(\.title), ["Do not clear"])
     }
 }

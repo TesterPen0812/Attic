@@ -40,7 +40,7 @@ final class PanelComposerState: ObservableObject {
         // A draft still in the card when the app quits is kept (A2).
         quitting = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
                                                           object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.model?.saveKeptDraft() }
+            MainActor.assumeIsolated { _ = self?.model?.saveKeptDraft() }
         }
     }
 

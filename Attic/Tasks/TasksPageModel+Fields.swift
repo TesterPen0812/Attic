@@ -145,8 +145,8 @@ extension TasksPageModel {
         if addBarState.caret != caret { addBarState.caret = caret }
         // Assign only a change: every assignment redraws the bar.
         var shown = addBar
-        let marked = shown.markShown(parser: parser, caret: caret)
-        let replaced = shown.typedReplacesPicks(parser: parser, caret: caret)
+        let marked = shown.markShown(parser: addBarParser, caret: caret)
+        let replaced = shown.typedReplacesPicks(parser: addBarParser, caret: caret)
         if marked || replaced { addBar = shown }
     }
 
@@ -207,12 +207,12 @@ extension TasksPageModel {
     /// A day picked from the strip: it sits on the Date button; a typed
     /// date leaves the text.
     func pickDate(_ day: DueDay, editor: AtticTokenFieldEditor) {
-        composerChange(editor, removing: addBar.ranges(of: .date, parser: parser)) { $0.day = day }
+        composerChange(editor, removing: addBar.ranges(of: .date, parser: addBarParser)) { $0.day = day }
     }
 
     /// Priority from the strip; No Priority clears it (typed marks go too).
     func pickPriority(_ priority: TaskPriority, editor: AtticTokenFieldEditor) {
-        composerChange(editor, removing: addBar.ranges(of: .priority, parser: parser)) {
+        composerChange(editor, removing: addBar.ranges(of: .priority, parser: addBarParser)) {
             $0.priority = priority == .none ? nil : priority
         }
     }
@@ -221,9 +221,9 @@ extension TasksPageModel {
     /// (typed or picked) goes, typed words included; another is added.
     func toggleComposerTag(_ tag: String, editor: AtticTokenFieldEditor) {
         guard let tag = AtticTag.normalize(tag) else { return }
-        let has = addBar.parts(parser: parser).tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
+        let has = addBar.parts(parser: addBarParser).tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
         if has {
-            composerChange(editor, removing: addBar.ranges(of: .tag, tag: tag, parser: parser)) { picks in
+            composerChange(editor, removing: addBar.ranges(of: .tag, tag: tag, parser: addBarParser)) { picks in
                 picks.tags.removeAll { $0.caseInsensitiveCompare(tag) == .orderedSame }
             }
         } else {
@@ -236,21 +236,21 @@ extension TasksPageModel {
     func clearComposer(_ field: ComposerField, editor: AtticTokenFieldEditor) {
         switch field {
         case .date:
-            let schedule = addBar.ranges(of: .date, parser: parser) + addBar.ranges(of: .time, parser: parser)
+            let schedule = addBar.ranges(of: .date, parser: addBarParser) + addBar.ranges(of: .time, parser: addBarParser)
             composerChange(editor, removing: schedule) { $0.day = nil }
-        case .priority: composerChange(editor, removing: addBar.ranges(of: .priority, parser: parser)) { $0.priority = nil }
-        case .tags: composerChange(editor, removing: addBar.ranges(of: .tag, parser: parser)) { $0.tags = [] }
+        case .priority: composerChange(editor, removing: addBar.ranges(of: .priority, parser: addBarParser)) { $0.priority = nil }
+        case .tags: composerChange(editor, removing: addBar.ranges(of: .tag, parser: addBarParser)) { $0.tags = [] }
         }
     }
 
     /// The tag list's state for the new task, and its tags: the task's
     /// first (typed or picked), then the library's.
     func composerTagState(_ tag: String) -> AtticCheckState {
-        addBar.parts(parser: parser).tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame } ? .on : .off
+        addBar.parts(parser: addBarParser).tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame } ? .on : .off
     }
 
     var composerTagChoices: [String] {
-        let own = addBar.parts(parser: parser).tags
+        let own = addBar.parts(parser: addBarParser).tags
         return own + allTags.filter { tag in !own.contains { $0.caseInsensitiveCompare(tag) == .orderedSame } }
     }
 

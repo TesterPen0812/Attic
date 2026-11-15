@@ -393,6 +393,7 @@ enum WorkspacePurge {
                 let claim = try await coordinator.journal.writeDurably(entry, staged: staged, replacing: ownership.claims[id])
                 checkpoint = (id, claim); preDraft = entry
             }
+            guard ComposerRecoveryJournal.prepareToPurge(ids, in: context.container) else { return refused() }
             let envelope = try coordinator.newEnvelope(intent: "Remove task permanently", reads: tokens, writes: owners, scopes: scopes,
                 preDraft: preDraft, afterDocuments: prepared.mapValues(\.content), checkpointClaim: checkpoint?.1,
                 staged: ownership.staged.values.flatMap { $0 })

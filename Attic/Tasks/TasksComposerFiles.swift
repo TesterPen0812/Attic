@@ -5,12 +5,12 @@ import UniformTypeIdentifiers
 /// Files added to the add bar while a task is being written (O17-06):
 /// dropped on the bar, pasted into it, or chosen with its strip's Attach
 /// button. Each batch is staged at once by the task attachment pipeline
-/// (`TaskDroppedFiles.stage`, or the picker's originals as they are), so a
+/// (`TaskDroppedFiles.stage`, then a durable Composer-owned copy), so a
 /// promise or a pasted image is never lost while the title is typed; the
 /// files go onto the new task when it is added, through the same import
 /// (`TaskStore.attachStagedFiles`) with its limits and rollback.
-struct TasksComposerFiles: Identifiable {
-    let id = UUID()
+struct TasksComposerFiles: Identifiable, Sendable {
+    var id = UUID()
     var staging: TaskAttachmentStaging
     /// The files' names, in order, for the strip's value and VoiceOver.
     var names: [String] { staging.urls.map(\.lastPathComponent) }
@@ -37,8 +37,15 @@ extension TasksPageModel {
                 let staging = try await TaskDroppedFiles.stage(batch)
                 guard let self else { staging.discard(); return }
                 guard self.addBarState.filesGeneration == generation else { staging.discard(); return }
+                let original = TasksComposerFiles(staging: staging)
+                let prepared = await self.prepareComposerBatch(original)
+                guard self.addBarState.filesGeneration == generation else {
+                    prepared.staging.discard()
+                    self.addBarState.discardPreparedComposerFiles?(prepared)
+                    return
+                }
                 self.addBarState.stagingFiles -= 1
-                self.appendComposerFiles(staging)
+                self.appendPreparedComposerFiles(prepared)
             } catch {
                 guard let self else { return }
                 guard self.addBarState.filesGeneration == generation else { return }
@@ -57,16 +64,41 @@ extension TasksPageModel {
         return card != nil
     }
 
-    /// Files chosen with the strip's Attach button (the picker's originals,
-    /// read only when the task is added, as a row's picker does).
+    /// Files chosen with Attach: persistent composers copy them on a worker
+    /// before submission. Originals remain untouched.
     func addComposerFiles(urls: [URL]) {
         guard !urls.isEmpty else { return }
-        appendComposerFiles(TaskAttachmentStaging(urls: urls))
+        let batch = TasksComposerFiles(staging: TaskAttachmentStaging(urls: urls))
+        guard addBarState.prepareComposerFiles != nil else { appendPreparedComposerFiles(batch); return }
+        let generation = addBarState.filesGeneration
+        addBarState.stagingFiles += 1
+        Task { @MainActor [self] in
+            let prepared = await prepareComposerBatch(batch)
+            guard addBarState.filesGeneration == generation else {
+                prepared.staging.discard()
+                addBarState.discardPreparedComposerFiles?(prepared)
+                return
+            }
+            addBarState.stagingFiles -= 1
+            appendPreparedComposerFiles(prepared)
+        }
     }
 
-    private func appendComposerFiles(_ staging: TaskAttachmentStaging) {
+    private func prepareComposerBatch(_ batch: TasksComposerFiles) async -> TasksComposerFiles {
+        do { return try await addBarState.prepareComposerFiles?(batch) ?? batch }
+        catch {
+            store.reportAttachmentImportFailure(error)
+            // Keep the original staged bytes visible and owned by this draft.
+            // Its checkpoint/quit will retry instead of orphaning a promise.
+            return batch
+        }
+    }
+
+    private func appendPreparedComposerFiles(_ batch: TasksComposerFiles) {
+        let staging = batch.staging
         guard !staging.urls.isEmpty else { staging.discard(); return }
-        addBarState.files.append(TasksComposerFiles(staging: staging))
+        addBarState.files.append(batch)
+        addBarState.checkpointComposerFiles?()
         let names = staging.urls.map(\.lastPathComponent)
         AccessibilityNotification.Announcement(
             names.count == 1 ? String(localized: "\(names[0]) will be attached to the new task")
@@ -81,6 +113,7 @@ extension TasksPageModel {
         addBarState.stagingFiles = 0
         let files = addBarState.files
         addBarState.files = []
+        addBarState.checkpointComposerFiles?()
         files.forEach { $0.staging.discard() }
     }
 
@@ -115,15 +148,16 @@ extension TasksPageModel {
         attachComposerFiles(takeComposerFiles(), to: id)
     }
 
-    func attachComposerFiles(_ files: [TasksComposerFiles], to id: UUID) {
-        guard !files.isEmpty else { return }
+    func attachComposerFiles(_ files: [TasksComposerFiles], to id: UUID, settled: ((Bool) -> Void)? = nil) {
+        guard !files.isEmpty else { settled?(true); return }
         let staging = TaskAttachmentStaging(merging: files.map(\.staging))
         let token = UUID()
         composerAttachmentTasks[token] = Task { @MainActor [self] in
             defer { composerAttachmentTasks[token] = nil }
-            guard let owner = store.attachmentOwnerID(for: id) else { staging.discard(); return true }
+            guard let owner = store.attachmentOwnerID(for: id) else { staging.discard(); settled?(true); return true }
             let added = await store.attachStagedFiles(to: owner) { staging }
-            guard let added, !added.isEmpty else { return false }
+            guard let added, !added.isEmpty else { settled?(false); return false }
+            settled?(true)
             let title = self.store.task(withID: owner)?.title ?? ""
             AccessibilityNotification.Announcement(
                 added.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(added.count) files to \(title)")

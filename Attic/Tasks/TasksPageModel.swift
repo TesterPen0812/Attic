@@ -189,7 +189,16 @@ final class TasksSubtaskDraftState: ObservableObject {
 /// The add bar's text and insertion point. Only the add bar observes it.
 @MainActor
 final class TasksAddBarState: ObservableObject {
-    @Published var text = TaskAddBarText()
+    @Published var text = TaskAddBarText() {
+        didSet { if text.text != oldValue.text { dateAnchor = nil; dateTimeZone = nil; dateLocaleID = nil } }
+    }
+    /// A recovered relative date keeps the day shown at its checkpoint.
+    var dateAnchor: Date?
+    var dateTimeZone: String?
+    var dateLocaleID: String?
+    var checkpointComposerFiles: (() -> Void)?
+    var prepareComposerFiles: ((TasksComposerFiles) async throws -> TasksComposerFiles)?
+    var discardPreparedComposerFiles: ((TasksComposerFiles) -> Void)?
     /// Filter defaults belong to this draft, whichever page opened it.
     var seededTags: [String]?
     @Published var caret: Int?
@@ -237,6 +246,9 @@ final class TasksAddBarState: ObservableObject {
     /// The draft is gone (added, or cleared on purpose).
     func clearDraft() {
         text.clear()
+        dateAnchor = nil
+        dateTimeZone = nil
+        dateLocaleID = nil
         seededTags = nil
         history.reset()
         selection = nil
@@ -272,7 +284,7 @@ final class TasksPageModel: ObservableObject {
             model.settlePendingCompletionAcknowledgements()
             if model.acknowledgementFailures != failures { ready = false }
         }
-        return ready
+        return ComposerModel.prepareForTermination(in: store.container) && ready
     }
 
     /// Await both the acknowledged creation and its submitted files. A new
@@ -420,6 +432,7 @@ final class TasksPageModel: ObservableObject {
     private var acknowledgedTaskCommand: (() -> Bool)?
     /// Includes failures from commands that reenter settlement to preserve Undo order.
     private var acknowledgementFailures: UInt64 = 0
+    var acknowledgementFailuresForComposer: UInt64 { acknowledgementFailures }
     private var acknowledgedTaskToken: UUID?
 
     struct HeldPlace: Equatable {
@@ -679,6 +692,17 @@ final class TasksPageModel: ObservableObject {
     /// outlive a system time-zone change or a change in the injected calendar.
     var parser: TaskTextParser {
         TaskTextParser(calendar: services.calendar(), locale: services.locale, now: services.now)
+    }
+
+    /// Only this draft interprets relative words against its checkpoint.
+    /// Existing-task edits, subtask drafts and date pickers use today's clock.
+    var addBarParser: TaskTextParser {
+        let anchor = addBarState.dateAnchor
+        var clock = services.calendar()
+        if anchor != nil, let id = addBarState.dateTimeZone, let zone = TimeZone(identifier: id) { clock.timeZone = zone }
+        let locale = anchor == nil ? services.locale : (addBarState.dateLocaleID.map(Locale.init(identifier:)) ?? services.locale)
+        return TaskTextParser(calendar: clock, locale: locale,
+                              now: anchor.map { date in { date } } ?? services.now)
     }
     /// Where the page's Undo toast shows: the shell's one toast host (the
     /// panel supplies its own; the page alone gets a private one).
@@ -2257,9 +2281,10 @@ final class TasksPageModel: ObservableObject {
             settled(created)
             return created != nil
         }
-        Task { @MainActor [self, delay = services.acknowledgementDelay] in
+        Task { @MainActor [weak self, delay = services.acknowledgementDelay] in
             try? await Task.sleep(for: delay)
-            if acknowledgedTaskToken == token { _ = settlePendingTaskAcknowledgement() }
+            guard let self else { return }
+            if self.acknowledgedTaskToken == token { _ = settlePendingTaskAcknowledgement() }
         }
         return id
     }
@@ -2871,8 +2896,8 @@ final class TasksPageModel: ObservableObject {
         // no piece (`friend`, `money`) stay words. Only the saved task sees
         // it: a failed save keeps the draft exactly as it was.
         var finished = addBar
-        finished.typedReplacesPicks(parser: parser, caret: nil)
-        guard let draft = finished.draft(parser: parser, status: addStatus),
+        finished.typedReplacesPicks(parser: addBarParser, caret: nil)
+        guard let draft = finished.draft(parser: addBarParser, status: addStatus),
               let task = library.createTasks([draft])?.first else { return nil }
         addBarState.clearDraft()
         let destination: TasksTab = task.listedStatus == .backlog ? .backlog : .now

@@ -484,6 +484,7 @@ extension WorkspaceItemLifecycle {
             files.files.registerWriter(coordinator.ownership)
             guard let collection = files.files.acquireCollection(leased) else { return refused() }
             defer { collection.release() }
+            guard ComposerRecoveryJournal.prepareToPurge(taskIDs, in: context.container) else { return refused() }
             let envelope = try coordinator.newEnvelope(intent: "Purge whole item", reads: Array(initial.values)
                     + missingRedirects.values.map { WorkspaceModelToken(owner: .init(entity: .association, id: $0), replicas: []) }
                     + newVersions.values.map { WorkspaceModelToken(owner: .init(entity: .version, id: $0), replicas: []) }, writes: owners,

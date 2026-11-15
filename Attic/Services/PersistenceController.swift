@@ -263,7 +263,7 @@ enum PersistenceController {
         at storeURL: URL,
         fileManager: FileManager
     ) throws {
-        for suffix in ["", "-wal", "-shm"] {
+        for suffix in ["", "-wal", "-shm", ".composer-tasks.json", ".composer-files"] {
             let url = URL(fileURLWithPath: storeURL.path + suffix)
             guard fileManager.fileExists(atPath: url.path) else { continue }
             try fileManager.removeItem(at: url)

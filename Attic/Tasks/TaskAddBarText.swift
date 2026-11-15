@@ -10,7 +10,7 @@ import Foundation
 /// parser, `dismissed`, `pinned`), and what is *drawn* (`shown`): a piece
 /// becomes a chip once its word is finished, and stays one when the caret
 /// comes back to its end, so Backspace there always finds the chip it sees.
-struct TaskAddBarText: Equatable {
+struct TaskAddBarText: Equatable, Codable {
     var text = ""
     /// Recognised pieces the person turned back into plain text (UTF-16
     /// ranges in `text`); edits move them along or forget them.
@@ -26,13 +26,13 @@ struct TaskAddBarText: Equatable {
     /// priority (picking one takes the typed words out).
     var picked = Picks()
 
-    struct Picks: Equatable {
+    struct Picks: Equatable, Codable {
         var day: DueDay?
         var priority: TaskPriority?
         var tags: [String] = []
     }
 
-    struct Pinned: Equatable {
+    struct Pinned: Equatable, Codable {
         var range: NSRange
         var value: ParsedTaskToken.Value
     }

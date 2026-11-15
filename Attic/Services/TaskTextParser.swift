@@ -3,7 +3,7 @@ import Foundation
 /// A piece of typed text the parser recognised. The UI turns each into a
 /// chip; Backspace on a chip turns it back into its text (`range`).
 struct ParsedTaskToken: Equatable {
-    enum Value: Equatable {
+    enum Value: Equatable, Codable {
         case tag(String)
         case dueDay(DueDay)
         case time(Int)

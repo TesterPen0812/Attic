@@ -2472,6 +2472,12 @@ final class TaskStore: ObservableObject {
             removed += ids.flatMap { storedByID[$0] ?? [] }
         }
         guard !removed.isEmpty else { return [] }
+        #if os(macOS)
+        guard ComposerRecoveryJournal.prepareToPurge(purgedIDs, in: container) else {
+            report("Couldn’t finish draft recovery. Try again before removing permanently.", owner: nil)
+            return []
+        }
+        #endif
         let removedFiles = removed.flatMap { $0.attachments + $0.removedAttachments.map(\.reference) }
         WorkspaceLegacyBridge.prepareMutations(removed, in: context)
         removed.forEach { WorkspaceLegacyBridge.delete($0, in: context) }

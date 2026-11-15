@@ -4082,7 +4082,7 @@ private struct TasksAddBar: View {
     }
 
     static func suggestion(model: TasksPageModel, text: TasksAddBarState) -> TaskAddBarText.Suggestion? {
-        guard let suggestion = text.text.suggestion(parser: model.parser, caret: text.caret, tags: model.cachedTags),
+        guard let suggestion = text.text.suggestion(parser: model.addBarParser, caret: text.caret, tags: model.cachedTags),
               suggestion.range != text.hiddenSuggestion else { return nil }
         return suggestion
     }
@@ -4101,7 +4101,7 @@ private struct TasksAddBar: View {
         let stripShown = showsStrip && (hasDraft || anyPicker || hasFiles)
         // What the new task will get, typed or picked (owner item 18): the
         // strip's buttons show it, and its pickers tick it.
-        let parts = text.text.parts(parser: model.parser)
+        let parts = text.text.parts(parser: model.addBarParser)
         VStack(alignment: .leading, spacing: AtticPickerMetrics.stripToBar) {
                 AtticComposerStrip(
                     datePresented: $datePresented,
@@ -4171,7 +4171,7 @@ private struct TasksAddBar: View {
                 placeholder: model.addPlaceholder,
                 text: $text.text.text,
                 tokens: AtticAddBar.Tokens(
-                    chips: text.text.tokenChips(parser: model.parser, caret: text.caret),
+                    chips: text.text.tokenChips(parser: model.addBarParser, caret: text.caret),
                     isFocused: $isFocused,
                     actions: AtticTokenFieldActions(
                         submit: { command in submit(openingPage: command) },
