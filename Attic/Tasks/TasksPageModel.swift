@@ -2267,17 +2267,18 @@ final class TasksPageModel: ObservableObject {
     /// durable completion has not yet entered the history. A scheduled task
     /// for an already-settled click has no remaining work to do.
     @discardableResult
-    func settlePendingCompletionAcknowledgements(through id: UUID? = nil) -> Bool {
-        var savedAny = settlePendingTaskAcknowledgement()
+    func settlePendingCompletionAcknowledgements(through id: UUID? = nil,
+                                                   includingTaskCommand: Bool = true) -> Bool {
+        var latestSaved = includingTaskCommand ? settlePendingTaskAcknowledgement() : false
         while !completingAfterAcknowledgement.isEmpty {
             let next = completingAfterAcknowledgement.removeFirst()
             let outcome = finishCompletion(next.id)
-            savedAny = savedAny || outcome.isApplied
+            latestSaved = outcome.isApplied
             recordAcknowledgementFailure(outcome)
             next.settled(outcome)
             if next.id == id { break }
         }
-        return savedAny
+        return latestSaved
     }
 
     private func finishCompletion(_ id: UUID) -> CommandOutcome {

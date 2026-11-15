@@ -142,6 +142,18 @@ final class ComposerTests: XCTestCase {
     private var windows: [NSWindow] = []
     private final class Switch { var on = false }
     private let saveFailure = Switch()
+    private final class TaskSaveFailure {
+        var successfulWritesBeforeFailure: Int?
+        func persist(_ context: ModelContext) throws {
+            if let remaining = successfulWritesBeforeFailure {
+                successfulWritesBeforeFailure = nil
+                if remaining == 0 { throw CocoaError(.fileWriteUnknown) }
+                successfulWritesBeforeFailure = remaining - 1
+            }
+            try context.save()
+        }
+    }
+    private let taskSaveFailure = TaskSaveFailure()
     private let clock: Calendar = Calendar.autoupdatingCurrent
     private lazy var now: Date = clock.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 10))!
     private var today: DueDay { DueDay(date: now, calendar: clock) }
@@ -153,7 +165,8 @@ final class ComposerTests: XCTestCase {
         container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         _ = try WorkspaceLegacyBridge.coordinator(for: container)
         let fixed = now
-        tasks = TaskStore(container: container, now: { fixed },
+        let failingTasks = taskSaveFailure
+        tasks = TaskStore(container: container, now: { fixed }, persist: { try failingTasks.persist($0) },
             taskImageFiles: TaskImageFiles(rootURL: ownedTemporaryDirectory(prefix: "ComposerTaskFiles")))
         let failing = saveFailure
         notes = NoteStore(container: container, now: { fixed }, persist: { context in
@@ -868,6 +881,31 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(library.undo.canRedo(in: .tasks), "the earlier Redo step remains available")
         XCTAssertTrue(model.failed)
         XCTAssertEqual(model.writing, "Keep the failed draft")
+    }
+
+    func testReviewR5MixedCompletionAcknowledgementsStopAtLatestFailure() throws {
+        let created = try XCTUnwrap(library.createTasks([
+            TaskDraft(title: "First completes"), TaskDraft(title: "Second save fails")
+        ]))
+        page.services.acknowledgementDelay = .seconds(30)
+        taskSaveFailure.successfulWritesBeforeFailure = 1
+        var outcomes: [CommandOutcome] = []
+        page.completeAcknowledged(created[0].id) { outcomes.append($0) }
+        page.completeAcknowledged(created[1].id) { outcomes.append($0) }
+        XCTAssertTrue(page.hasPendingAcknowledgement)
+
+        _ = page.undo()
+        XCTAssertEqual(outcomes.count, 2)
+        XCTAssertTrue(outcomes[0].isApplied)
+        XCTAssertFalse(outcomes[1].isApplied)
+        XCTAssertEqual(tasks.task(withID: created[0].id)?.status, .done,
+                       "a newer failed acknowledgement blocks Undo of the saved completion")
+        XCTAssertEqual(tasks.task(withID: created[1].id)?.status, .todo)
+        XCTAssertTrue(library.undo.canUndo(in: .tasks))
+
+        XCTAssertEqual(page.undo(), .applied)
+        XCTAssertEqual(tasks.task(withID: created[0].id)?.status, .todo,
+                       "a later, deliberate Undo may reverse that completed task")
     }
 
     func testCommandReturnCreatesAndOpensTheTasksPage() async throws {
