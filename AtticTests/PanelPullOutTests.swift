@@ -787,6 +787,9 @@ final class PanelPullOutHostedTests: XCTestCase {
             spin(0.4)
             let editor = try XCTUnwrap(rig.noteDraft.pages.historyBrowser?.preview?.engine.textView,
                                        "history preview has its own native editor")
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.isKeyWindow)
             XCTAssertTrue(floating.panel.makeFirstResponder(editor))
             XCTAssertFalse(floating.composerStateForTesting.model?.isOpen ?? false)
             let escape = try XCTUnwrap(NSEvent.keyEvent(
@@ -810,10 +813,98 @@ final class PanelPullOutHostedTests: XCTestCase {
             rig.noteDraft.pages.refreshHistoryPreview()
             spin(0.4)
             let newEditor = try XCTUnwrap(browser.preview?.engine.textView)
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.isKeyWindow)
             XCTAssertTrue(floating.panel.makeFirstResponder(newEditor))
             NSApp.sendEvent(escape)
             spin(0.2)
             XCTAssertNil(rig.noteDraft.pages.historyBrowser, "Escape from remounted preview exits History")
+        }
+    }
+
+    func testFloatingTasksHistoryPreviewEscapeClosesHistory() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
+        try withRig { rig in
+            let task = try XCTUnwrap(rig.store.create(title: "Task history escape"))
+            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
+            floating.uiState.openTaskNote(task.id, from: .tasks)
+            spin(until: { rig.noteDraft.pages.taskNotePresenter?.session != nil }, timeout: 5)
+            let session = try XCTUnwrap(rig.noteDraft.pages.taskNotePresenter?.session)
+            XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0),
+                with: NSAttributedString(string: "Task body history"), name: "Type"))
+            var opened: Bool?
+            Task { @MainActor in
+                guard await rig.noteDraft.pages.preserveDurably(session) else { opened = false; return }
+                opened = await rig.noteDraft.pages.openHistoryDurably(workspace: session)
+            }
+            spin(until: { opened != nil }, timeout: 5)
+            XCTAssertEqual(opened, true)
+            spin(0.4)
+            func nativeEditors(_ view: NSView) -> [NoteEditorTextView] {
+                (view as? NoteEditorTextView).map { [$0] } ?? view.subviews.flatMap(nativeEditors)
+            }
+            let mounted = nativeEditors(floating.hostingViewForTesting)
+            let editor = try XCTUnwrap(mounted.first { !$0.isEditable }, "mounted read-only History editor")
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.isKeyWindow)
+            XCTAssertTrue(editor.window === floating.panel, "History preview belongs to the floating Tasks window")
+            XCTAssertTrue(floating.panel.makeFirstResponder(editor))
+            XCTAssertTrue(floating.panel.firstResponder === editor)
+            let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: floating.panel.windowNumber,
+                context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(escape)
+            spin(0.2)
+            XCTAssertNil(rig.noteDraft.pages.historyBrowser)
+            XCTAssertTrue(floating.panel.isVisible)
+        }
+    }
+
+    func testFloatingHistoryPreviewEscapeClosesComposerBeforeHistory() throws {
+        try checkFloatingHistoryEscapeOrder()
+    }
+
+    private func checkFloatingHistoryEscapeOrder() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
+        try withRig { rig in
+            let id = UUID()
+            guard case .success = rig.notes.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("History and Composer")])) else {
+                return XCTFail("seed note")
+            }
+            XCTAssertTrue(rig.noteDraft.pages.open(noteID: id))
+            rig.state.selectSection(.notes)
+            spin(0.4)
+            try pull(.notes, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .notes))
+            var opened: Bool?
+            Task { @MainActor in opened = await rig.noteDraft.pages.openHistoryDurably() }
+            spin(until: { opened != nil }, timeout: 5)
+            XCTAssertEqual(opened, true)
+            spin(0.4)
+            let browser = try XCTUnwrap(rig.noteDraft.pages.historyBrowser)
+            let editor = try XCTUnwrap(browser.preview?.engine.textView)
+            let composer = try XCTUnwrap(floating.composerStateForTesting.model)
+            composer.open(on: .notes)
+            spin(0.4)
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.isKeyWindow)
+            XCTAssertTrue(floating.panel.makeFirstResponder(editor))
+            let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: floating.panel.windowNumber,
+                context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(escape)
+            spin(0.2)
+            XCTAssertFalse(composer.isOpen)
+            XCTAssertTrue(rig.noteDraft.pages.historyBrowser === browser)
+            XCTAssertTrue(floating.panel.makeFirstResponder(editor))
+            NSApp.sendEvent(escape)
+            spin(0.2)
+            XCTAssertNil(rig.noteDraft.pages.historyBrowser)
+            XCTAssertTrue(floating.panel.isVisible)
         }
     }
 
