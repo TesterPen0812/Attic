@@ -249,7 +249,16 @@ final class AdaptiveFindTests: XCTestCase {
 
             // The exact same events must be interpreted the same way when
             // both arrive at the already-mounted editor (input-source safe).
+            let native = try XCTUnwrap(field as? AtticNativeSearchInput.Field)
+            let updates = native.representableUpdateCount
             engine.find.query = ""
+            // Begin the comparison after the outside clear reaches AppKit;
+            // until then, the previous composition's late-commit guard applies.
+            let deadline = Date().addingTimeInterval(1)
+            repeat { spin(0.01) }
+            while (native.representableUpdateCount == updates || !editor.string.isEmpty) && Date() < deadline
+            XCTAssertGreaterThan(native.representableUpdateCount, updates, "the native field applied the outside clear")
+            XCTAssertEqual(editor.string, "", "the comparison starts with the cleared native field")
             editor.string = ""
             editor.setSelectedRange(NSRange(location: 0, length: 0))
             editor.interpretKeyEvents([deadKey, finishingKey])
