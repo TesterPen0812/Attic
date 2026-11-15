@@ -22,6 +22,41 @@ final class AtticDropdownTests: XCTestCase {
         }
     }
 
+    // TP-9: titles are presentation, never link-row identity.
+    func testPF43DuplicateLinkTitlesRevealAndCommitTheRequestedUUID() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let model = NoteFormatCardModel()
+        let candidates = (0..<4).map { _ in NoteLinkCandidate(id: UUID(), title: "Same title") }
+        model.noteCandidates = { candidates }
+        model.openLink(url: nil)
+        model.linkText = "Same"
+        var committed: String?
+        model.onCommitLink = { committed = $0; return true }
+        var reported: String?
+        let host = NSHostingView(rootView: NoteLinkCardView(model: model, hasLink: false)
+            .environment(\.atticDropdownHeight, 104)
+            .atticDesign(AtticDesignContext(reduceMotion: true))
+            .onPreferenceChange(AtticDropdownHighlightKey.self) { reported = $0 })
+        host.frame = CGRect(x: 0, y: 0, width: 280, height: 180)
+        window.contentView?.addSubview(host)
+        wait(for: host) { !self.scrollViews(in: host).isEmpty && reported != nil }
+        let list = try XCTUnwrap(scrollViews(in: host).first)
+        XCTAssertEqual(reported, candidates[0].id.uuidString)
+        XCTAssertGreaterThan(list.documentView?.bounds.height ?? 0, list.contentView.bounds.height)
+        let start = list.contentView.bounds.origin.y
+        // This is the model action used by the editor's navigation route,
+        // not a direct highlight write. Let production scheduling run.
+        model.moveLinkSuggestion(by: 1)
+        model.moveLinkSuggestion(by: 1)
+        model.moveLinkSuggestion(by: 1)
+        wait { reported == candidates[3].id.uuidString && list.contentView.bounds.origin.y > start }
+        XCTAssertEqual(reported, candidates[3].id.uuidString)
+        XCTAssertGreaterThan(list.contentView.bounds.origin.y, start, "the clipped duplicate-title target is revealed")
+        model.submitLink()
+        XCTAssertEqual(committed, NoteLinkPolicy.noteURL(candidates[3].id))
+    }
+
     // MARK: The width rule
 
     /// Tab's policy in a card with a field and a list (the race itself is

@@ -1,3 +1,9 @@
+## 2026-11-15 · Duplicate-title note-link suggestions reveal the selected note
+
+The constrained link card identifies each suggestion by its note UUID, not
+its displayed title. Keyboard navigation can reveal the intended note even
+when several notes share that title. Appearance and motion are unchanged.
+
 ## 2026-11-14 · Lists scroll to the keyboard's highlight, never to a hover
 
 A scrolling list (`AtticDropdownViewport`) brings a highlight into view only

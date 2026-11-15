@@ -1444,7 +1444,7 @@ struct NoteLinkCardView: View {
         AtticDropdownCard(width: AtticNoteFormatMetrics.linkCardWidth) {
             ForEach(Array(model.linkSuggestions.enumerated()), id: \.element.id) { index, note in
                 AtticDropdownRow(title: note.title, systemName: "note.text", isHighlighted: model.linkSuggestionIndex == index,
-                    onHover: { if $0 { model.linkSuggestionIndex = index } }, hoverRetainsHighlightOnExit: true, position: index + 1, itemCount: model.linkSuggestions.count) {
+                    onHover: { if $0 { model.linkSuggestionIndex = index } }, hoverRetainsHighlightOnExit: true, position: index + 1, itemCount: model.linkSuggestions.count, scrollID: note.id.uuidString) {
                     model.chooseNote(index)
                 }
                 .accessibilityIdentifier("notes-link-suggestion-\(note.id)")
