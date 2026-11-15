@@ -948,6 +948,24 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(model.writing, "Keep the failed draft")
     }
 
+    func testRound2OldToastCannotUndoAnotherPanelsPendingAction() throws {
+        let first = try XCTUnwrap(library.createTasks([TaskDraft(title: "First panel task")])?.first)
+        page.showToast("Added first task")
+        let offeredToast = try XCTUnwrap(page.toasts.current)
+        let other = TasksPageModel(library: library, services: TasksPageServices(now: { [self] in self.now }))
+        other.services.acknowledgementDelay = .seconds(30)
+        defer { other.settlePendingCompletionAcknowledgements() }
+        let newerID = other.createAcknowledged(TaskDraft(title: "Second panel task"), save: { [library] id in
+            library!.createTask(TaskDraft(title: "Second panel task"), writing: "", in: .tasks, id: id)
+        }, settled: { _ in })
+        XCTAssertEqual(page.toasts.current?.id, offeredToast.id)
+        XCTAssertTrue(other.hasPendingAcknowledgement)
+        _ = page.toasts.performAction()
+        XCTAssertNotNil(tasks.task(withID: first.id))
+        XCTAssertNotNil(tasks.task(withID: newerID), "the stale first-panel toast cannot undo the second panel's newly settled step")
+        XCTAssertFalse(library.undo.canRedo(in: .tasks))
+    }
+
     func testReviewR4EditMenuChromeUndoSettlesCreationBeforeHistory() throws {
         let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older history step")])?.first)
         page.services.acknowledgementDelay = .seconds(30)

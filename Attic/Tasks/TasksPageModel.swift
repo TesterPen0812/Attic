@@ -3013,10 +3013,10 @@ final class TasksPageModel: ObservableObject {
         let step = library.undo.undoStepID(in: .tasks)
         postedToastStep = step
         postedToastID = toasts.show(message, performing: { [weak self] in
-            // Only the step the toast named: anything newer makes it stale.
-            self?.settlePendingCompletionAcknowledgements()
-            guard let self, let step, self.library.undo.undoStepID(in: .tasks) == step else { return .applied }
-            let outcome = self.library.undo(in: .tasks)
+            guard let self, let step else { return .obsolete }
+            // The library settles all panels and verifies this exact step in
+            // the same synchronous Undo route.
+            let outcome = self.library.undo(in: .tasks, matching: step)
             // The toast says it where the Undo was pressed; the same
             // sentence is not repeated in the panel's notice.
             if let failure = outcome.failure, self.store.lastErrorMessage == failure.message { self.store.dismissError() }

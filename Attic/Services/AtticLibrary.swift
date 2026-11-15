@@ -518,10 +518,13 @@ final class AtticLibrary {
     /// Undo, ⌘Z): `.failed` keeps the step to try again; a step that can
     /// never apply again is dropped and reported as not retryable.
     @discardableResult
-    func undo(in history: UndoHistoryID) -> CommandOutcome {
+    func undo(in history: UndoHistoryID, matching expectedStepID: UUID? = nil) -> CommandOutcome {
         // The library is shared by docked, floating, keyboard and Edit-menu
         // routes. A failed pending command cannot expose an older history step.
         if TasksPageModel.settlePendingForHistory(history, store: tasks) == false { return .applied }
+        // Toast actions name a specific step. Check after settling every live
+        // panel, when the shared history can no longer acquire a newer step.
+        if let expectedStepID, undo.undoStepID(in: history) != expectedStepID { return .obsolete }
         let serial = tasks.errorSerial
         return historyOutcome(undo.undoStep(in: history), since: serial, verb: String(localized: "undo"))
     }
