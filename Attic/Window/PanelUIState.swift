@@ -244,7 +244,10 @@ final class PanelUIState: ObservableObject {
             managedInteractionLocks.remove(reason)
         }
         if reason == .windowResize {
-            liveResize = isActive ? PanelLiveResizeHold(base: panelSize, drawn: [PanelPage(selectedSection)]) : nil
+            var stillDrawn: Set<PanelPage> = [PanelPage(selectedSection)]
+            if let departing = pageTransit.departingPage { stillDrawn.insert(departing) }
+            stillDrawn.formUnion(pageTransit.drawnDepartures)
+            liveResize = isActive ? PanelLiveResizeHold(base: panelSize, drawn: stillDrawn) : nil
         }
     }
 
@@ -347,10 +350,11 @@ final class PanelUIState: ObservableObject {
         // SwiftUI may stop completing animations after the window orders out.
         // No page is visibly travelling now; discard the old completion so
         // it cannot end a new slide if the panel reopens immediately.
-        if pageTransit.sliding {
+        if pageTransit.sliding || pageTransit.departingPage != nil || !pageTransit.drawnDepartures.isEmpty {
             pageSlideGeneration &+= 1
             pageTransit.sliding = false
             pageTransit.departingPage = nil
+            pageTransit.drawnDepartures.removeAll()
         }
     }
 
@@ -400,7 +404,15 @@ final class PanelUIState: ObservableObject {
         let generation = pageSlideGeneration
         let sliding = motion.travels
         let leaving = PanelPage(selectedSection)
-        pageTransit.departingPage = sliding ? PanelPage(selectedSection) : nil
+        pageTransit.departingPage = (sliding || motion.fades) ? leaving : nil
+        if sliding || motion.fades {
+            // An interrupted animation may still be drawing an earlier
+            // departure when a later switch begins. Keep those pages live if
+            // the grip is taken before the latest transition has settled.
+            pageTransit.drawnDepartures.insert(leaving)
+        } else {
+            pageTransit.drawnDepartures.removeAll()
+        }
         if pageTransit.sliding != sliding { pageTransit.sliding = sliding }
         withAnimation(motion.animation, completionCriteria: .removed) {
             selectSection(section)
@@ -415,10 +427,9 @@ final class PanelUIState: ObservableObject {
             // The page's actual animation has finished. An interrupted
             // switch owns a newer generation and must keep its transit state.
             guard let self, self.pageSlideGeneration == generation else { return }
-            if sliding {
-                self.pageTransit.sliding = false
-                self.pageTransit.departingPage = nil
-            }
+            if sliding { self.pageTransit.sliding = false }
+            self.pageTransit.departingPage = nil
+            self.pageTransit.drawnDepartures.removeAll()
             self.updateLiveResizeHold { $0.settle(current: PanelPage(self.selectedSection), size: self.panelSize) }
         }
         PerformanceSignposts.noteInput("page-handler-end to=\(PanelPage(section).rawValue)")

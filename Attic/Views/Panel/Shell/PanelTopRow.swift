@@ -308,6 +308,10 @@ final class PanelPageTransit: ObservableObject {
     /// may stop accepting input immediately but must keep painting until
     /// its slide finishes.
     @Published var departingPage: PanelPage?
+    /// Includes interrupted Slide and Fade departures that may still be
+    /// animating when a resize grip is taken. The current transition clears
+    /// the set at settlement or when the panel hides.
+    var drawnDepartures: Set<PanelPage> = []
 }
 
 extension EnvironmentValues {

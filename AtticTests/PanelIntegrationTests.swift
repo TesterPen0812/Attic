@@ -488,11 +488,18 @@ final class PanelIntegrationTests: XCTestCase {
     }
 
     private func holdResizeGrip(building pages: [PanelPage], current: PanelPage = .tasks,
-                                scaleSeed: Bool = false) throws -> HeldResize {
+                                scaleSeed: Bool = false, corner: ScreenCorner? = nil,
+                                switchBeforeGrip: PanelPageMotion? = nil) throws -> HeldResize {
         let panel = try makePanel(scaleSeed: scaleSeed)
+        if let corner { panel.settings.corner = corner }
         XCTAssertEqual(panel.monitor.revealProgrammatically(section: current.section, takesKeyboard: false), .shown)
         for page in pages { panel.uiState.prepareBuiltPage(page) }
         spin(0.6)
+        if let motion = switchBeforeGrip {
+            panel.uiState.switchPage(to: .notes, motion: motion)
+            spin(0.025)
+            XCTAssertEqual(panel.uiState.selectedSection, .notes)
+        }
         let window = panel.controller.panelForTesting
         let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
         host.suppressCaptureWatchdogForSyntheticTests = true
@@ -532,6 +539,45 @@ final class PanelIntegrationTests: XCTestCase {
         )
     }
     #endif
+
+    /// R-2 round 2: taking the resize grip after the switch has started must
+    /// preserve the leaving page's live proposal, on either docking edge.
+    func testResizeBegunDuringSlideOrFadeKeepsDepartureLiveOnBothEdges() throws {
+        #if ATTIC_LOCAL_ONLY
+        let previousStyle = AtticReducedMotionStyle.current
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticReducedMotionStyle.current = previousStyle
+        }
+        var layouts: [PanelPage: CGSize] = [:]
+        PanelInvalidationProbe.pageLayout = { page, size in layouts[page] = size }
+        defer { PanelInvalidationProbe.pageLayout = nil }
+        for fade in [false, true] {
+            AtticMotionPreference.systemReduceMotionOverride = fade
+            for corner in [ScreenCorner.topLeft, .topRight] {
+                layouts = [:]
+                let held = try holdResizeGrip(
+                    building: [.notes], corner: corner,
+                    switchBeforeGrip: fade ? .fade : .current(reduceMotion: false)
+                )
+                defer { held.finish() }
+                XCTAssertNil(held.panel.uiState.liveResize?.heldSize(for: .tasks),
+                             "\(fade ? "Fade" : "Slide") departing Tasks must still be drawn on \(corner)")
+                try held.drag(80)
+                XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, held.liveWidth(), accuracy: 1)
+                XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, held.liveWidth(), accuracy: 1)
+                spin(0.6)
+                let lastDrawn = held.liveWidth()
+                XCTAssertEqual(try XCTUnwrap(held.panel.uiState.liveResize?.heldSize(for: .tasks)).width,
+                               lastDrawn, accuracy: 1, "only the now-hidden page freezes after the transition")
+                let leaving = try XCTUnwrap(layouts[.tasks]).width
+                try held.drag(84)
+                XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, leaving, accuracy: 1)
+                try held.release()
+            }
+        }
+        #endif
+    }
 
     /// R-4: every page still drawn during a page switch keeps the live width,
     /// not only a sliding departure. Under Reduce Motion's Fade nothing slides,
