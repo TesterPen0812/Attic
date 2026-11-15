@@ -24,9 +24,37 @@ final class ScrollEdgeUITests: XCTestCase {
         }
     }
 
-    private func capturePass(surface: String, mode: String) {
-        let prefix = "scroll-edges-\(surface)-\(mode)"
+    /// FZ-1 matches the original Solid Light capture, including both
+    /// screenshots, and launches a separate process/fixture on each attempt.
+    /// The runner receives TEST_RUNNER_ATTIC_FREEZE_SCREENING=1 and
+    /// TEST_RUNNER_ATTIC_FREEZE_ARM={baseline,consistent-fold}.
+    func testSolidLightFreezeTrial() throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(environment["ATTIC_FREEZE_SCREENING"] == "1", "FZ-1 trial is opt-in")
+        let arm = environment["ATTIC_FREEZE_ARM"] ?? "baseline"
+        let repetitions = min(25, max(1, Int(environment["ATTIC_FREEZE_REPETITIONS"] ?? "12") ?? 12))
+        for attempt in 1...repetitions {
+            capturePass(surface: "solid", mode: "light", freezeArm: arm, attempt: attempt)
+        }
+    }
+
+    private func capturePass(surface: String, mode: String, freezeArm: String? = nil, attempt: Int? = nil) {
+        let prefix = freezeArm.flatMap { arm in attempt.map { "fz1-\(arm)-\($0)" } }
+            ?? "scroll-edges-\(surface)-\(mode)"
+        let started = Date()
         let pass = HangPass(prefix: prefix)
+        var screenshots = 0
+        defer {
+            if let freezeArm, let attempt {
+                let dump = pass.probe.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+                let header = dump.split(separator: "\n").first.map(String.init) ?? "no-probe"
+                let metrics = dump.split(separator: "\n").filter { $0.contains("fold.place.enter[") || $0.contains("fold.size.enter[") }.prefix(3).joined(separator: "; ")
+                let counters = pass.probe.flatMap { try? String(contentsOf: URL(fileURLWithPath: $0.path + ".counters"), encoding: .utf8) } ?? "missing"
+                let valid = screenshots == 2 && counters.contains("ARM=\(freezeArm)")
+                let status = pass.recovery?.hasRecovered == true ? "hit" : (pass.probe == nil || !valid ? "invalid" : "clean")
+                print("ATTIC_FZ1_ATTEMPT arm=\(freezeArm) attempt=\(attempt) status=\(status) elapsed=\(Date().timeIntervalSince(started)) screenshots=\(screenshots) probe=\(header) counters=\(counters.trimmingCharacters(in: .whitespacesAndNewlines)) hang-metrics=\(metrics)")
+            }
+        }
         let app = launchHangPass(pass, surface: surface, mode: mode)
         let pin = app.buttons["panel-pin-button"]
         XCTAssertTrue(pin.waitForExistence(timeout: 8), "\(surface) \(mode): the panel shows")
@@ -50,7 +78,8 @@ final class ScrollEdgeUITests: XCTestCase {
                 recovery.noteProgress()
                 if recovery.hasRecovered { break }
                 RunLoop.current.run(until: Date().addingTimeInterval(1.2))
-                save(panel.screenshot(), name: "scroll-edges-\(surface)-\(mode)-soft-\(index)")
+                save(panel.screenshot(), name: "\(prefix)-soft-\(index)")
+                screenshots += 1
                 recovery.noteProgress()
             }
             let result = recovery.finish()
@@ -163,6 +192,9 @@ final class ScrollEdgeUITests: XCTestCase {
         app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "long"
         // A leaf in the app's own temporary folder: a signed app is sandboxed.
         app.launchEnvironment["ATTIC_HANG_PROBE_FILE"] = pass.location.leaf
+        if let arm = ProcessInfo.processInfo.environment["ATTIC_FREEZE_ARM"] {
+            app.launchEnvironment["ATTIC_FZ1_ARM"] = arm
+        }
         app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", surface]
         app.launch()
         pass.rememberLaunch(pid: launchedPID(of: app))
@@ -201,6 +233,7 @@ final class ScrollEdgeUITests: XCTestCase {
         let latest = pass.probe
         let first = latest.map { URL(fileURLWithPath: $0.path + ".first") }
         let following = latest.map { URL(fileURLWithPath: $0.path + ".after-first") }
+        let foldCallback = latest.map { URL(fileURLWithPath: $0.path + ".fold-stack") }
         let items = HangEvidencePlan.items(
             recovered: pass.recovery?.hasRecovered == true,
             probeText: latest.flatMap { try? String(contentsOf: $0, encoding: .utf8) },
@@ -229,6 +262,9 @@ final class ScrollEdgeUITests: XCTestCase {
                 note.lifetime = .keepAlways
                 add(note)
             }
+        }
+        if let foldCallback, fileManager.fileExists(atPath: foldCallback.path) {
+            attach(foldCallback, "raw-fold-callback-stack")
         }
     }
 

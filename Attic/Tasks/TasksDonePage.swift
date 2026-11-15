@@ -88,7 +88,18 @@ struct TasksDonePage<Cell: View>: View {
 
     private func list(_ lines: [TasksDoneLine], turn: TasksFoldTurn?, places: [UUID: TasksFoldPlace],
                       runs: [UUID: AtticSelectionRun]) -> some View {
-        ScrollViewReader { proxy in
+        #if DEBUG
+        let foldProbeIndexes: [UUID: Int] = {
+            var indexes: [UUID: Int] = [:]
+            if AtticHangProbe.isEnabled {
+                for (index, line) in lines.enumerated() {
+                    if case let .row(row) = line.content { indexes[row.id] = index }
+                }
+            }
+            return indexes
+        }()
+        #endif
+        return ScrollViewReader { proxy in
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 // The picked tags never hide finished tasks silently (13
@@ -118,8 +129,8 @@ struct TasksDonePage<Cell: View>: View {
                         // A turning day's body closes or opens over its
                         // rows (fix round 2); every other row is open.
                         #if DEBUG
-                        let fold = turn.flatMap { turn in places[row.id].map { TasksFoldBody(progress: turn.progress, place: $0, probeKey: TasksFoldBody.probeKey(for: row.id)) } }
-                            ?? TasksFoldBody(progress: 1, place: nil, probeKey: TasksFoldBody.probeKey(for: row.id))
+                        let fold = turn.flatMap { turn in places[row.id].map { TasksFoldBody(progress: turn.progress, place: $0, probeKey: TasksFoldBody.probeKey(for: row.id, index: foldProbeIndexes[row.id])) } }
+                            ?? TasksFoldBody(progress: 1, place: nil, probeKey: TasksFoldBody.probeKey(for: row.id, index: foldProbeIndexes[row.id]))
                         #else
                         let fold = turn.flatMap { turn in places[row.id].map { TasksFoldBody(progress: turn.progress, place: $0) } }
                             ?? TasksFoldBody(progress: 1, place: nil)

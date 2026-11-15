@@ -1,6 +1,7 @@
 import AppKit
 import QuartzCore
 import CoreFoundation
+import Darwin
 
 #if DEBUG
 /// Preview builds only (round 11): with `ATTIC_FRAME_MONITOR=1` a display
@@ -47,6 +48,50 @@ final class AtticFrameMonitor: NSObject {
 /// Observe, never perturb: this type only reads clocks and run-loop phases,
 /// formats details outside its lock, and writes files from its own queue.
 final class AtticHangProbe: @unchecked Sendable {
+    struct FoldToken {
+        let kind: String
+        let key: String
+        let thread: UInt64
+        let depth: Int
+        let sequence: UInt64
+    }
+
+    private struct FoldTraceValue<Value: Equatable>: Equatable, CustomStringConvertible {
+        let thread: UInt64
+        let depth: Int
+        let value: Value
+        var description: String { "thread=\(thread) depth=\(depth) \(value)" }
+    }
+
+    /// DEBUG-only tracing of the real Layout call on its calling thread.
+    /// The pair survives a reentrant call and requires no SwiftUI state write.
+    static func beginFold<Value: Equatable>(_ kind: String, key: String, value: @autoclosure () -> Value) -> FoldToken? {
+        guard let shared else { return nil }
+        let signature = value()
+        let thread = UInt64(pthread_mach_thread_np(pthread_self()))
+        let (depth, sequence): (Int, UInt64) = shared.lock.withLock {
+            let depth = shared.foldDepths[thread, default: 0]
+            shared.foldDepths[thread] = depth + 1
+            shared.foldSequence &+= 1
+            return (depth, shared.foldSequence)
+        }
+        let token = FoldToken(kind: kind, key: key, thread: thread, depth: depth, sequence: sequence)
+        noteRaw("fold.\(kind).enter", key: key,
+                value: FoldTraceValue(thread: thread, depth: depth, value: signature),
+                detail: "sequence=\(sequence)")
+        return token
+    }
+
+    static func endFold<Value: Equatable>(_ token: FoldToken?, value: @autoclosure () -> Value) {
+        guard let token, let shared else { return }
+        noteRaw("fold.\(token.kind).exit", key: token.key,
+                value: FoldTraceValue(thread: token.thread, depth: token.depth, value: value()),
+                detail: "sequence=\(token.sequence)")
+        shared.lock.withLock {
+            let depth = shared.foldDepths[token.thread, default: 0]
+            shared.foldDepths[token.thread] = max(0, depth - 1)
+        }
+    }
     /// Test seam: a hosted test installs an instance to exercise the armed paths.
     nonisolated(unsafe) static var testInstance: AtticHangProbe?
     private static let environmentInstance: AtticHangProbe? = {
@@ -132,6 +177,7 @@ final class AtticHangProbe: @unchecked Sendable {
 
     private let outputURL: URL
     private let clock: @Sendable () -> UInt64
+    private let trialArm: String?
     private let lock = NSLock()
     private let startNanos: UInt64
     private var events: [Event?] = Array(repeating: nil, count: 16_384)
@@ -141,6 +187,10 @@ final class AtticHangProbe: @unchecked Sendable {
     private var changes: [String: Int] = [:]
     private var lastValues: [String: String] = [:]
     private var lastRawValues: [String: Any] = [:]
+    private var foldDepths: [UInt64: Int] = [:]
+    private var foldSequence: UInt64 = 0
+    private var savedFoldCallbackStack = false
+    private var lastTrialCounters: UInt64 = 0
     private var sleeping = false
     private var waitStarted: UInt64
     private var lastWake: UInt64?
@@ -163,10 +213,12 @@ final class AtticHangProbe: @unchecked Sendable {
 
     init(outputURL: URL,
          realWaitNanos: UInt64 = 1_000_000,
+         trialArm: String? = ProcessInfo.processInfo.environment["ATTIC_FZ1_ARM"],
          clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         self.outputURL = outputURL
         self.clock = clock
         self.realWaitNanos = realWaitNanos
+        self.trialArm = trialArm
         let start = clock()
         startNanos = start
         waitStarted = start
@@ -286,7 +338,7 @@ final class AtticHangProbe: @unchecked Sendable {
     private func recordRaw<Value: Equatable>(_ kind: String, key: String, value: Value,
                                              detail: () -> String) {
         let identity = "\(kind)[\(key)]"
-        let (changed, wantsEvent, previous, knownValue): (Bool, Bool, String?, String?) = lock.withLock {
+        let (changed, wantsEvent, previous, knownValue, captureStack): (Bool, Bool, String?, String?, Bool) = lock.withLock {
             let count = totals[identity, default: 0] + 1
             totals[identity] = count
             let changed = (lastRawValues[identity] as? Value).map { $0 != value } ?? true
@@ -295,8 +347,16 @@ final class AtticHangProbe: @unchecked Sendable {
                 lastRawValues[identity] = value
                 changes[identity, default: 0] += 1
             }
-            return (changed, changed || count.isMultiple(of: 128), previous, previous)
+            // Only the repeating main-thread fold callback after a truly
+            // unfinished turn takes a raw stack. Capture outside this lock;
+            // symbolication runs later, never in the Layout callback.
+            let capture = !savedFoldCallbackStack && !changed && count >= 256 &&
+                kind.hasPrefix("fold.") && kind.hasSuffix(".enter") && Thread.isMainThread &&
+                Self.age(clock(), since: lastCompletedTurn) > stallNanos
+            if capture { savedFoldCallbackStack = true }
+            return (changed, changed || count.isMultiple(of: 128), previous, previous, capture)
         }
+        if captureStack { captureRawFoldCallbackStack(kind: kind, key: key) }
         guard changed || wantsEvent else { return }
         // Only format a newly changed raw value. Even on the 128th identical
         // pass the ring can reuse the last formatted value.
@@ -318,6 +378,27 @@ final class AtticHangProbe: @unchecked Sendable {
         }
     }
 
+    private func captureRawFoldCallbackStack(kind: String, key: String) {
+        // Thread.callStackReturnAddresses records this exact Layout caller.
+        // dladdr is used only for image/base provenance, never symbol names.
+        let frames = Thread.callStackReturnAddresses.enumerated().map { index, number -> String in
+            let address = number.uint64Value
+            var info = Dl_info()
+            let pointer = UnsafeRawPointer(bitPattern: UInt(address))
+            if let pointer, dladdr(pointer, &info) != 0 {
+                let image = info.dli_fname.map { String(cString: $0) } ?? "unknown"
+                let base = info.dli_fbase.map { UInt(bitPattern: $0) } ?? 0
+                return "\(index) image=\(image) base=0x\(String(base, radix: 16)) pc=0x\(String(address, radix: 16))"
+            }
+            return "\(index) image=unknown pc=0x\(String(address, radix: 16))"
+        }
+        let data = Data(("fold-callback=\(kind) key=\(key)\n" + frames.joined(separator: "\n") + "\n").utf8)
+        let url = URL(fileURLWithPath: outputURL.path + ".fold-stack")
+        DispatchQueue.global(qos: .utility).async {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
     /// Test seam: whether the shared lock is free right now. A `detail` closure
     /// evaluated inside the lock sees `false` (NSLock is not recursive).
     var lockIsFree: Bool {
@@ -332,6 +413,7 @@ final class AtticHangProbe: @unchecked Sendable {
     }
 
     func checkForHang() {
+        writeTrialCountersIfDue()
         var recoveredWaits: UInt64?
         let snapshot: Snapshot? = lock.withLock {
             // Read inside the lock, after the run-loop state it is compared with.
@@ -397,6 +479,32 @@ final class AtticHangProbe: @unchecked Sendable {
             savedFollowingHang = true
         }
         write(dump)
+    }
+
+    /// A bounded summary of *clean* trials, sampled on the watchdog queue.
+    /// Scans existing counters every four seconds without copying the mutable
+    /// dictionaries (which would add copy-on-write work to the next layout).
+    private func writeTrialCountersIfDue() {
+        guard let trialArm else { return }
+        let result: (UInt64, UInt64, UInt64, Int, Int, Int, Int, Int)? = lock.withLock {
+            let now = clock()
+            guard Self.age(now, since: lastTrialCounters) >= 4_000_000_000 else { return nil }
+            lastTrialCounters = now
+            var foldSizes = 0, foldPlaces = 0, slotReads = 0, groupReads = 0, realized = 0
+            for (key, calls) in totals {
+                if key.hasPrefix("fold.size.enter[") { foldSizes += calls }
+                if key.hasPrefix("fold.place.enter[") { foldPlaces += calls }
+                if key.hasPrefix("row.slotFrame.transform[") { slotReads += calls }
+                if key.hasPrefix("group.frame.transform[") { groupReads += calls }
+                if key.hasPrefix("row.realized[") { realized += calls }
+            }
+            return (Self.age(now, since: startNanos) / 1_000_000,
+                    self.turns, self.healthyWaits, foldSizes, foldPlaces, slotReads, groupReads, realized)
+        }
+        guard let result else { return }
+        let (elapsed, turns, waits, foldSize, foldPlace, row, group, realized) = result
+        write("ARM=\(trialArm) elapsed=\(elapsed)ms turns=\(turns) healthy-waits=\(waits) fold-size=\(foldSize) fold-place=\(foldPlace) row-frame=\(row) group-frame=\(group) realized=\(realized)\n",
+              to: URL(fileURLWithPath: outputURL.path + ".counters"))
     }
 
     private func write(_ content: String) {

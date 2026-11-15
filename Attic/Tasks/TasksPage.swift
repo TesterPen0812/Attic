@@ -1672,6 +1672,17 @@ struct TasksPage: View {
 
     private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
         let (rows, sections, entries, ids, groups, selectionRuns) = model.listSnapshot(for: tab)
+        #if DEBUG
+        let foldProbeIndexes: [UUID: Int] = {
+            var indexes: [UUID: Int] = [:]
+            if AtticHangProbe.isEnabled {
+                for (index, entry) in entries.enumerated() {
+                    if let rowID = entry.row?.id { indexes[rowID] = index }
+                }
+            }
+            return indexes
+        }()
+        #endif
         let travel = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false)
         let view = model.viewOptions(for: tab)
         let query = model.trimmedQuery(for: tab)
@@ -1708,7 +1719,7 @@ struct TasksPage: View {
                         let folded = Self.shownFolded(turning ? turn : nil, folded: model.folded(on: tab).contains(dateGroup.key))
                         if let row = entry.row {
                             #if DEBUG
-                            let fold = Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id], probeKey: TasksFoldBody.probeKey(for: row.id))
+                            let fold = Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id], probeKey: TasksFoldBody.probeKey(for: row.id, index: foldProbeIndexes[row.id]))
                             #else
                             let fold = Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id])
                             #endif

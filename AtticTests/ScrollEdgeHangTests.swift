@@ -52,11 +52,65 @@ final class ScrollEdgeHangTests: XCTestCase {
         addTeardownBlock {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + ".first"))
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + ".after-first"))
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + ".fold-stack"))
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + ".counters"))
         }
         return (probe, url)
     }
 
     private func dump(_ url: URL) -> String? { try? String(contentsOf: url, encoding: .utf8) }
+
+    func testFoldEntryExitPairsExposeNestingAndOneRawStuckCallStack() throws {
+        let clock = FakeClock()
+        let (probe, url) = makeProbe(clock)
+        AtticHangProbe.testInstance = probe
+        defer { AtticHangProbe.testInstance = nil }
+
+        let outer = try XCTUnwrap(AtticHangProbe.beginFold("size", key: "row=index-10", value: 12))
+        let inner = try XCTUnwrap(AtticHangProbe.beginFold("place", key: "row=index-10", value: 18))
+        XCTAssertEqual(outer.depth, 0)
+        XCTAssertEqual(inner.depth, 1)
+        XCTAssertEqual(outer.thread, inner.thread)
+        AtticHangProbe.endFold(inner, value: 18)
+        AtticHangProbe.endFold(outer, value: 12)
+
+        // The fake clock advances without completing a run-loop turn. Many
+        // identical callbacks trigger one stack from the callback's thread,
+        // captured after unlocking the probe's accounting lock.
+        clock.advance(milliseconds: 4_000)
+        for _ in 0..<300 {
+            let token = AtticHangProbe.beginFold("place", key: "row=index-10", value: 18)
+            AtticHangProbe.endFold(token, value: 18)
+        }
+        let stackURL = URL(fileURLWithPath: url.path + ".fold-stack")
+        let deadline = Date().addingTimeInterval(3)
+        while !FileManager.default.fileExists(atPath: stackURL.path), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stackURL.path), "one raw caller stack must be saved")
+        XCTAssertTrue((dump(stackURL) ?? "").contains("fold-callback=fold.place.enter"))
+        XCTAssertEqual(probe.callCount(kind: "fold.place.enter", key: "row=index-10"), 301)
+        XCTAssertEqual(probe.callCount(kind: "fold.place.exit", key: "row=index-10"), 301)
+    }
+
+    func testCleanFreezeTrialWritesCountersWithoutGeneratingHangEvidence() throws {
+        let clock = FakeClock()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("fz1-counters-\(UUID()).txt")
+        defer { try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + ".counters")) }
+        let probe = AtticHangProbe(outputURL: url, trialArm: "baseline", clock: { clock.now })
+        AtticHangProbe.testInstance = probe
+        defer { AtticHangProbe.testInstance = nil }
+        for _ in 0..<6 { AtticHangProbe.noteRaw("fold.size.enter", key: "row-1", value: 42) }
+        clock.advance(milliseconds: 4_100)
+        probe.runLoop(.beforeWaiting)
+        probe.checkForHang()
+        let counters = try String(contentsOf: URL(fileURLWithPath: url.path + ".counters"), encoding: .utf8)
+        XCTAssertTrue(counters.contains("ARM=baseline"))
+        XCTAssertTrue(counters.contains("fold-size=6"))
+        XCTAssertTrue(counters.contains("healthy-waits=0"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path + ".first"))
+    }
 
     /// Opus R-9: when another afterWaiting observer spins, the watchdog
     /// must have already marked the main run loop awake (earliest order).

@@ -655,8 +655,8 @@ struct TasksFoldBody: ViewModifier, Animatable {
 
     /// Diagnostic keys are created only when the DEBUG hang probe is armed.
     /// Release builds never format row IDs while constructing fold bodies.
-    static func probeKey(for rowID: UUID) -> String {
-        AtticHangProbe.key(rowID.uuidString)
+    static func probeKey(for rowID: UUID, index: Int? = nil) -> String {
+        AtticHangProbe.key("row=\(rowID.uuidString) index=\(index.map(String.init) ?? "unknown")")
     }
 
     init(progress: CGFloat, place: TasksFoldPlace?, probeKey: String = "") {
@@ -685,7 +685,7 @@ struct TasksFoldBody: ViewModifier, Animatable {
     func body(content: Content) -> some View {
         let visible: CGFloat? = place.flatMap { progress >= 1 ? nil : Self.visibleHeight(progress: progress, place: $0) }
         #if DEBUG
-        let layout = TasksFoldLayout(visible: visible, probeKey: probeKey)
+        let layout = TasksFoldLayout(visible: visible, probeKey: probeKey, foldProgress: progress)
         #else
         let layout = TasksFoldLayout(visible: visible)
         #endif
@@ -702,38 +702,127 @@ struct TasksFoldLayout: Layout {
     #if DEBUG
     /// DEBUG hang probe only: names the row in the probe's ring.
     var probeKey: String = ""
+    var foldProgress: CGFloat = 1
     #endif
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let row = subviews.first else { return .zero }
-        let size = row.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        let childProposal = ProposedViewSize(width: proposal.width, height: nil)
         #if DEBUG
+        var measured: CGSize?
+        var reported: CGSize?
+        let foldTrace = AtticHangProbe.beginFold("size", key: probeKey,
+            value: FoldEntryProbeValue(proposal: proposal, childProposal: childProposal,
+                                       bounds: nil, visible: visible, progress: foldProgress))
+        defer {
+            AtticHangProbe.endFold(foldTrace,
+                value: FoldExitProbeValue(measured: measured, reported: reported,
+                                          placedProposal: nil))
+        }
+        #endif
+        let size = row.sizeThatFits(childProposal)
+        #if DEBUG
+        measured = size
         TasksFoldLayoutProbe.shared.measure(size.height)
         AtticHangProbe.noteRaw("fold.size", key: probeKey,
                                value: FoldSizeProbeValue(width: proposal.width, height: proposal.height,
                                                          child: size, visible: visible),
                                detail: "result-height=\(visible.map { min(size.height, max(0, $0)) } ?? size.height)")
         #endif
-        guard let visible else { return size }
-        return CGSize(width: size.width, height: min(size.height, max(0, visible)))
+        let result = visible.map { CGSize(width: size.width, height: min(size.height, max(0, $0))) } ?? size
+        #if DEBUG
+        reported = result
+        #endif
+        return result
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard let row = subviews.first else { return }
         #if DEBUG
         TasksFoldLayoutProbe.shared.place()
-        #endif
-        let size = row.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
-        #if DEBUG
+        // Trial 2 is selected at launch before the view exists. Both arms
+        // keep this exact Layout and its natural child height.
+        let consistent = AtticFreezeTrial.consistentFoldProposal
+        let childProposal = ProposedViewSize(width: consistent ? proposal.width : bounds.width, height: nil)
+        var measured: CGSize?
+        var placedProposal: ProposedViewSize?
+        let foldTrace = AtticHangProbe.beginFold("place", key: probeKey,
+            value: FoldEntryProbeValue(proposal: proposal, childProposal: childProposal,
+                                       bounds: bounds, visible: visible, progress: foldProgress))
+        defer {
+            AtticHangProbe.endFold(foldTrace,
+                value: FoldExitProbeValue(measured: measured, reported: bounds.size,
+                                          placedProposal: placedProposal))
+        }
+        if consistent {
+            placedProposal = childProposal
+            row.place(at: bounds.origin, anchor: .topLeading, proposal: childProposal)
+            return
+        }
+        let size = row.sizeThatFits(childProposal)
+        measured = size
+        let placement = ProposedViewSize(width: bounds.width, height: size.height)
+        placedProposal = placement
         AtticHangProbe.noteRaw("fold.place", key: probeKey,
                                value: FoldPlaceProbeValue(bounds: bounds, proposalWidth: proposal.width,
                                                           proposalHeight: proposal.height, child: size))
+        row.place(at: bounds.origin, anchor: .topLeading, proposal: placement)
+        #else
+        let size = row.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+        row.place(at: bounds.origin, anchor: .topLeading,
+                  proposal: ProposedViewSize(width: bounds.width, height: size.height))
         #endif
-        row.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: size.height))
     }
 }
 
 #if DEBUG
+private enum AtticFreezeTrial {
+    static let consistentFoldProposal = ProcessInfo.processInfo.environment["ATTIC_FZ1_ARM"] == "consistent-fold"
+}
+
+private struct FoldEntryProbeValue: Equatable, CustomStringConvertible {
+    let proposalWidth: CGFloat?
+    let proposalHeight: CGFloat?
+    let childWidth: CGFloat?
+    let childHeight: CGFloat?
+    let bounds: CGRect?
+    let visible: CGFloat?
+    let progress: CGFloat
+
+    init(proposal: ProposedViewSize, childProposal: ProposedViewSize,
+         bounds: CGRect?, visible: CGFloat?, progress: CGFloat) {
+        proposalWidth = proposal.width
+        proposalHeight = proposal.height
+        childWidth = childProposal.width
+        childHeight = childProposal.height
+        self.bounds = bounds
+        self.visible = visible
+        self.progress = progress
+    }
+
+    var description: String {
+        "proposal=(\(String(describing: proposalWidth)),\(String(describing: proposalHeight))) childProposal=(\(String(describing: childWidth)),\(String(describing: childHeight))) bounds=\(String(describing: bounds)) visible=\(String(describing: visible)) progress=\(progress)"
+    }
+}
+
+private struct FoldExitProbeValue: Equatable, CustomStringConvertible {
+    let measured: CGSize?
+    let reported: CGSize?
+    let placedWidth: CGFloat?
+    let placedHeight: CGFloat?
+
+    init(measured: CGSize?, reported: CGSize?, placedProposal: ProposedViewSize?) {
+        self.measured = measured
+        self.reported = reported
+        placedWidth = placedProposal?.width
+        placedHeight = placedProposal?.height
+    }
+
+    var description: String {
+        "measured=\(String(describing: measured)) resultOrBounds=\(String(describing: reported)) placedProposal=(\(String(describing: placedWidth)),\(String(describing: placedHeight)))"
+    }
+}
+
 private struct FoldSizeProbeValue: Equatable, CustomStringConvertible {
     let width: CGFloat?
     let height: CGFloat?
