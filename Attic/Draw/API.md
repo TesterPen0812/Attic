@@ -5,8 +5,11 @@ page, canvas and panel switches; it owns per-canvas session Undo/Redo. The store
 has no selection, tool or viewport state. Geometry is in points.
 Call `activate(_:)` when the page opens a canvas. The active canvas, unsaved
 drafts and unsettled edits remain cached; inactive persisted canvases may be
-reloaded after the eight-state cache limit. Each canvas keeps at most 100 saved
-Undo steps, evicting the oldest step first. Pending edits are never trimmed.
+reloaded after the eight-state cache limit. Body eviction discards the canvas's
+entire session Undo/Redo history and expires dependent offers; reopening starts
+fresh history. Each resident canvas keeps at most 100 combined Undo and Redo
+steps, expiring offers before removing the oldest whole prefix. Pending edits
+are never evicted.
 
 ```swift
 let store: any DrawStoreProtocol = DrawInMemoryStore()
@@ -61,17 +64,18 @@ queued for the next turn of the main loop and coalesced per canvas; the old
 thumbnail shows until the new one lands.
 
 Observe `revision`, `lastDelta`, `pendingEdits` and `hasUnsettledEdits` on the
-concrete observable store. Successful saves publish one delta and advance history
-once. `.retry` keeps the visible after-draft and permits `retry(on:)`; `.held`
-requires `reconcile(on:)`. History stays unchanged until a save is confirmed.
-Do not release the session or allow quit with unsettled edits. Commands on a
-canvas with an unsaved edit still work: each shows at once and waits, in
-order, behind it (`pendingEdits[id].count` says how many). `retry`,
-`reconcile` and each later command try them again in order (a submitted held
-save is reconciled, never overwritten), stopping at the first that still fails; Undo
-and Redo stay off until all are saved, then step back through each. Other
-canvases remain available. `reload` reads fresh durable values after external
-imports and clears only that canvas's old history; it refuses unsettled drafts.
+concrete observable store. Live ink and typing remain provisional until their
+bounded input buffer reaches a complete recovery checkpoint or a proven database
+commit. Successful saves publish a delta and advance history once. One failed
+write freezes mutation admission across Draw; new attempts are refused without
+writing, accumulating history, or retrying implicitly. View, switch, select,
+pan, zoom, copy and export remain available. Already admitted input and imports
+retain their finite buffers and original canvas identity. Retry reconciles the
+same operation: proven after-state settles once, proven before-state may retry
+with the same identities, and mixed/unreadable evidence stays held. Quit refuses
+every unresolved operation and memory-only buffer. `reload` reads fresh durable
+values after an external import, withdraws its old session offers, and refuses
+to replace an unsettled draft.
 
 Use `copy` to encode `DrawStore.clipboardType` (`com.taha.attic.draw-objects.v1`)
 into the pasteboard. After successfully writing the pasteboard, call `cut` to
@@ -104,18 +108,19 @@ Thrown saves use a fresh read of all affected physical replicas: exact before
 means Retry, exact after publishes once, mixed/unreadable remains held. There
 is no automatic overwrite/discard of a held draft. A normal failed edit stays
 visible through `open`/`pendingEdits`, while `library` describes durable data.
-For disk-backed stores, an atomic `DrawRecovery-v1.json` checkpoint beside the
-SwiftData store holds pending changes (including original image bytes), queued
-edits and a physical before/after proof before each attempted database commit.
-On launch, the store reads fresh physical rows and reconciles the first pending
-save; a proven commit is retired, a proven noncommit can Retry, and an ambiguous
-outcome remains held. A checkpoint failure before repository submission retains
-an unattempted marker: reconciliation first checkpoints and submits that edit,
-rather than asking the repository to reconcile an attempt it never received.
-The marker survives a successful republish and relaunch. Recovered drafts are reachable from `library`, even if
-their first save never created a database row. An unreadable checkpoint is
-preserved and blocks edits, permanent deletion, and normal Quit until it can be inspected. The checkpoint
-does not persist ordinary session Undo history. In-memory stores have no sidecar.
+For disk-backed stores, a recovery file beside the SwiftData store holds one
+pending operation and its complete physical before/after proof. A healthy save
+performs one combined checkpoint replacement, one database save, and one
+checkpoint retirement. A committed write with failed retirement remains fenced
+for cleanup-only Retry; the operation is never re-applied. If the checkpoint
+cannot be written, its unsaved head stays owned in memory and Quit refuses.
+On relaunch a full canvas load must succeed before a pending sparse change is
+projected; load failure stays visible and retryable, never a fabricated empty
+or incomplete canvas. An unreadable checkpoint is preserved and blocks edits,
+purge, and Quit until it can be re-read. Existing v1 recovery tails remain
+readable and drain their individual actions in order, advancing durably after
+each head; normal operation no longer appends tails. Session Undo is not
+persisted across launches. In-memory stores have no recovery sidecar.
 
 This API never accesses old `Canvas*` rows. `AtticDraw.isEnabled` (on unless
 `AtticDraw.enabled` is false in defaults, read at launch) makes Draw the Canvas
@@ -123,17 +128,23 @@ page; the app then marks its container with `AtticLegacyCanvas.markDormant`,
 and every old-Canvas reader (the Canvas store, Search's library, Recently
 Deleted, tags, workspace tokens and inventory, links and titles, all through
 the counted `fetchCanvasReplicas` funnel) leaves the old rows unread and
-unchanged. The quit route calls `DrawPageModel.prepareToQuit()`, which settles
-the stroke in progress, gives in-flight image imports a bounded chance to finish,
-retries or reconciles unsettled edits and returns false while any import or edit
-is still outstanding. Thumbnail generation is a regenerable cache and does not
-block quit after the bound. Undo survives session switches, not app relaunch.
+unchanged. The quit route closes Draw admission before waiting on other page
+providers, drains already admitted strokes, typing and image imports, and
+performs a final owner check. It refuses while any operation, memory-only input,
+unknown recovery ownership, import or thumbnail render remains, and reopens
+admission when refused. Undo survives canvas switches while its body remains
+resident, but not body eviction or relaunch.
 
 Agent Draw snapshots, token checks and Draw Undo guards first settle queued input
 on pages using that exact store (acknowledged commands and typing). An active
 pointer gesture continues until its normal end; the editor stays open with its
 latest text. A failed flush remains an unsettled
-store edit and prevents an agent mutation. Raster image decoding bounds its
+store edit and prevents an agent mutation, including creation of a new canvas.
+Agent `draw_list_canvases` returns `draw_mutations_paused`; `draw_read_canvas`
+returns that status and `canvas_save_unsettled` so provisional snapshots cannot
+be mistaken for durably committed ones. Agent resize accepts a zero extent only
+on an already flat line/arrow axis while resizing its nonzero dimension; pointer
+resize retains its existing 4 pt minimum. Raster image decoding bounds its
 requested pixel size before integer arithmetic, without rewriting stored frames.
 
 
