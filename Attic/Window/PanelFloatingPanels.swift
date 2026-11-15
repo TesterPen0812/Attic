@@ -34,6 +34,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     private let store: TaskStore
     private let noteDraft: NoteDraftController
     private let settings: AppSettings
+    private let tasksPageState: TasksPageState
     private var cancellables: Set<AnyCancellable> = []
     private var keyLookAwaitsRelease = false
     private var fadeGeneration = 0
@@ -52,6 +53,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         store = deps.store
         noteDraft = deps.noteDraft
         settings = deps.settings
+        tasksPageState = TasksPageState(memory: deps.tasksMemory)
         uiState.becomeFloating(on: page)
         uiState.isPanelPinned = pinned
         uiState.updatePanelSize(frame.size)
@@ -64,7 +66,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
                 settings: deps.settings, toasts: toasts,
                 // Its own page state (its own Search and drafts), the
                 // remembered views shared with the docked panel's.
-                tasksPageState: TasksPageState(memory: deps.tasksMemory),
+                tasksPageState: tasksPageState,
                 calendarPageState: calendarPageState,
                 composerState: composerState),
             panelCornerRadius: deps.settings.panelCornerSize,
@@ -233,6 +235,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     #if DEBUG
     var hostingViewForTesting: AtticPanelHostingView { hostingView }
     var composerStateForTesting: PanelComposerState { composerState }
+    var tasksModelForTesting: TasksPageModel? { tasksPageState.builtModel }
     var calendarEventRowsOverrideForTesting: CalendarEventRowState?
     #endif
 

@@ -299,6 +299,7 @@ final class PanelPullOutHostedTests: XCTestCase {
         let state: PanelUIState
         let panel: AtticPanel
         let settings: AppSettings
+        let store: TaskStore
         let notes: NoteStore
         let noteDraft: NoteDraftController
         var island: PanelIslandWindows { controller.islandWindowsForTesting }
@@ -709,6 +710,44 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
+    /// Tasks' local Escape monitor runs before the window. With a quick
+    /// look expanded, an open Composer remains the topmost Escape target.
+    func testFloatingTasksEscapeClosesComposerBeforeQuickLook() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires real key routing")
+        try withRig { rig in
+            let task = try XCTUnwrap(rig.store.create(title: "Quick look beneath Composer"))
+            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
+            let host = floating.hostingViewForTesting
+            let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+            let previous = NSApp.accessibilityAttributeValue(enhanced)
+            NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+            defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+            spin(0.5)
+            let model = try XCTUnwrap(floating.tasksModelForTesting)
+            model.setExpanded(task.id, true)
+            XCTAssertTrue(model.expanded.contains(task.id))
+            let plus = try XCTUnwrap(elements(host).first {
+                ($0.accessibilityIdentifier?() ?? "") == "tasks-new-task"
+            })
+            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
+            spin(0.4)
+            XCTAssertTrue(floating.composerStateForTesting.model?.isOpen == true)
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.makeFirstResponder(host), "Escape is on chrome, not in an editor")
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: floating.panel.windowNumber, context: nil, characters: "\u{1b}",
+                charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(event)
+            spin(0.4)
+            XCTAssertFalse(floating.composerStateForTesting.model?.isOpen ?? false,
+                           "Escape closes the topmost Composer first")
+            XCTAssertTrue(model.expanded.contains(task.id), "the underlying quick look remains open")
+        }
+    }
+
     /// The history editor's unhandled Escape must reach the Notes page's
     /// exit command if its floating Composer had nothing to close.
     func testFloatingNotesHistoryPreviewEscapeClosesHistory() throws {
@@ -823,7 +862,7 @@ final class PanelPullOutHostedTests: XCTestCase {
             panel.orderOut(nil)
         }
         try body(Rig(controller: controller, state: state, panel: panel, settings: settings,
-                     notes: notes, noteDraft: draft))
+                     store: store, notes: notes, noteDraft: draft))
     }
 
     private func elements(_ root: AnyObject) -> [AnyObject] {
