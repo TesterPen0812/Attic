@@ -428,6 +428,33 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testR4ClearedNumberedParagraphKeepsItsDisplayedRestart() throws {
+        for titled in [true, false] {
+            var block = NoteBlock.text("item", style: "number")
+            block.id = UUID()
+            block.start = 5
+            let (engine, view, start, original) = bg14Engine(titled: titled, [block])
+            defer { engine.detachView() }
+            let (window, _) = try bg14Window(for: view)
+            defer { window.contentView = nil; window.close() }
+            view.setSelectedRange(NSRange(location: start, length: 4))
+            view.deleteBackward(nil)
+            XCTAssertEqual(engine.listMarker(at: start), .number("5."))
+            XCTAssertEqual(engine.document().blocks.last?.start, 5)
+            let reopened = try bg14Reopen(engine.document(), titled: titled)
+            defer { reopened.detachView() }
+            XCTAssertEqual(reopened.listMarker(at: start), .number("5."))
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document(), original)
+            XCTAssertEqual(engine.listMarker(at: start), .number("5."))
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.listMarker(at: start), .number("5."))
+            view.insertText("x", replacementRange: view.selectedRange())
+            XCTAssertEqual(engine.listMarker(at: start), .number("5."))
+            XCTAssertEqual(engine.document().blocks.last?.start, 5)
+        }
+    }
+
     func testBG14ClearingTheOnlyTaskBodyParagraphKeepsItsIdentityStyleAndExtras() throws {
         var block = NoteBlock.text("Plan", id: UUID(), style: "heading")
         block.level = 3

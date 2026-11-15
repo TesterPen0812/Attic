@@ -4817,6 +4817,12 @@ extension NoteEditorEngine {
     }
 
     func numberedOrdinal(at location: Int, indent: Int) -> Int {
+        // An empty final paragraph has no character carrying its restart.
+        // Read its canonical pending block before the character cache, and
+        // do not store a character checkpoint for this pending state.
+        if location == textStorage.length, let pending = pendingParagraphStyle,
+           pending.location == location, pending.state.style == .number,
+           let start = pending.state.block?.start { return start }
         if let cached = cachedOrdinal(at: location) { return cached }
         if location < textStorage.length, let value = textStorage.attribute(.noteListStart, at: location, effectiveRange: nil) as? Int {
             cacheOrdinal(value, at: location)
