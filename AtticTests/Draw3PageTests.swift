@@ -2899,3 +2899,35 @@ extension Draw3PageTests {
         use(reopened)
     }
 }
+extension Draw3PageTests {
+    func testR5DeletionNoticeDistinguishesUntouchedDraftAndQueuedRename() throws {
+        for queued in [false, true] {
+            var fail = false
+            use(try persistentStore(fileBacked: true, save: { context in
+                if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
+            }))
+            let id = try XCTUnwrap(model.canvasID)
+            XCTAssertTrue(model.perform(.saveCanvas).isSaved)
+            model.library.perform(.rename)
+            if queued {
+                fail = true
+                model.library.nameDraft = "Queued title"; model.library.commitRename()
+                _ = store.perform(.deleteCanvas, on: id)
+            } else {
+                XCTAssertTrue(store.perform(.deleteCanvas, on: id).isSaved)
+            }
+            model.externalSyncDeferred = true // Notice wording only; pending observation has its own guard.
+            model.syncExternalChanges()
+            try r5CaptureNotice(queued ? "deleted-queued-rename" : "deleted-untouched-rename")
+            let message = model.saveNotice?.message ?? ""
+            XCTAssertFalse(message.contains("rename") && message.contains("could not be saved"), message)
+            if queued {
+                fail = false; model.retrySave()
+                XCTAssertEqual(try store.open(id).canvas.name, "Queued title")
+                XCTAssertFalse(model.saveNotice?.message.contains("could not be saved") ?? false)
+            } else {
+                XCTAssertFalse(message.contains("rename"), "an untouched field never attempted a rename")
+            }
+        }
+    }
+}

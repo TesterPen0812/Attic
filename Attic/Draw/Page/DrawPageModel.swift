@@ -681,8 +681,12 @@ final class DrawPageModel: ObservableObject {
     /// The durable library can still list a canvas whose failed Undo projects
     /// a deletion. It must not send this hop back to that same deleted snapshot.
     private func leaveDeletedCanvas(_ deletedID: UUID) {
-        if let draft = library.invalidateRename(onDeletedCanvas: deletedID) {
-            report(String(localized: "This canvas was deleted. The rename “\(draft)” could not be saved."))
+        if let rename = library.invalidateRename(onDeletedCanvas: deletedID) {
+            if rename.queued {
+                report(String(localized: "This canvas was deleted after its name change was queued."))
+            } else if rename.edited {
+                report(String(localized: "This canvas was deleted before the name draft “\(rename.draft)” was submitted."))
+            } else { report(String(localized: "This canvas was deleted.")) }
         }
         let pending = store.pendingEdits
         if let next = try? store.library().first(where: {

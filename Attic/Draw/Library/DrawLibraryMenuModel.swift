@@ -524,11 +524,14 @@ final class DrawLibraryMenuModel: ObservableObject {
 
     /// A deleted target cannot keep navigation trapped in its rename field.
     /// Preserve the typed draft for the failure notice; do not save it elsewhere.
-    func invalidateRename(onDeletedCanvas id: UUID) -> String? {
+    func invalidateRename(onDeletedCanvas id: UUID) -> (draft: String, edited: Bool, queued: Bool)? {
         guard isRenaming, renameCanvasID == id else { return nil }
-        let draft = nameDraft
+        let original = ownedPendingRename?.before ?? nameBeforeRename ?? nameDraft
+        let result = (draft: nameDraft,
+                      edited: nameDraft.trimmingCharacters(in: .whitespacesAndNewlines) != original,
+                      queued: ownedPendingRename != nil)
         finishRename()
-        return draft
+        return result
     }
 
     /// The shell's existing pending-save Retry also completes this editor if
