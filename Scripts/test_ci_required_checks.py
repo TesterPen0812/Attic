@@ -119,6 +119,14 @@ class RequiredChecksTests(unittest.TestCase):
                 self.assertIn(f'RUNNER_DIAGNOSTICS={"1" if asked and not selection.startswith("AtticTests/") else ""}',
                               result.stdout.splitlines())
 
+    def test_focused_ci_dispatch_forwards_hang_repetition_count(self):
+        workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
+        dispatch = workflow.split('  workflow_dispatch:', 1)[1].split('\npermissions:', 1)[0]
+        self.assertIn('      hang_repetitions:', dispatch)
+        ui_step = workflow.split('      - name: Run macOS UI tests', 1)[1].split('\n  costs:', 1)[0]
+        self.assertIn('HANG_REPETITIONS: ${{ inputs.hang_repetitions }}', ui_step)
+        self.assertIn('export TEST_RUNNER_ATTIC_HANG_REPETITIONS="$HANG_REPETITIONS"', ui_step)
+
     def test_optimized_reference_uses_historical_task_tests_with_current_cost_members(self):
         from prepare_cost_reference import INTEGRATION_MEMBERS
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()

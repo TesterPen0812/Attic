@@ -45,6 +45,12 @@ on:
         default: ''
         type: string
 
+      hang_repetitions:
+        description: Number of independent launches for focused scroll-hang diagnostics (1–25)
+        required: false
+        default: 25
+        type: number
+
       inspect_dropdown_sampling:
         description: Record repeated old/paired priority estimates on the same runner
         required: false
@@ -768,6 +774,7 @@ jobs:
         timeout-minutes: 35
         env:
           UI_TESTS: ${{ inputs.ui_tests }}
+          HANG_REPETITIONS: ${{ inputs.hang_repetitions }}
         run: |
           rm -rf "$RUNNER_TEMP/AtticUITests.xcresult"
           rm -rf "$RUNNER_TEMP/attic-visual-uat"
@@ -811,6 +818,9 @@ jobs:
           # (xcodebuild forwards only TEST_RUNNER_-prefixed variables to the
           # UI runner); a focused dispatch naming one of them asks for it.
           # TEST_RUNNER_ATTIC_HANG_REPETITIONS=<1...25> sets the launch count.
+          if [ -n "${HANG_REPETITIONS:-}" ]; then
+            export TEST_RUNNER_ATTIC_HANG_REPETITIONS="$HANG_REPETITIONS"
+          fi
           if [ "$ui_scheme" = AtticUI ]; then
             for diagnostic in \
               AtticUITests/ScrollEdgeUITests/testDarkGlassHoverScrollRepeats \
