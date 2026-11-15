@@ -821,6 +821,38 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: saved), Data("keep these files with the task".utf8))
     }
 
+    func testReviewR1ImmediateUndoKeepsOwnedStagedBytesForRedo() async throws {
+        let bytes = Data("only owned copy of the promised image".utf8)
+        var staging = TaskAttachmentStaging()
+        let directory = try staging.makeOwnedDirectory()
+        let source = directory.appendingPathComponent("promise.txt")
+        try bytes.write(to: source)
+        staging.urls = [source]
+        defer { staging.discard() }
+
+        model.open(on: .tasks(.now))
+        type("Task with promised file")
+        page.addBarState.files.append(TasksComposerFiles(staging: staging))
+        model.submit()
+        XCTAssertTrue(model.isCreating, "the acknowledgement is held when Undo arrives")
+        model.undoPage()
+        try await waitForComposer { !self.model.isCreating }
+        try await Task.sleep(for: .milliseconds(200)) // give the queued attachment Task a turn
+
+        XCTAssertTrue(liveTasks().isEmpty, "Undo reverses the new task, not older history")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path),
+                      "the staged bytes still belong to the undoable creation")
+        XCTAssertFalse(tasks.lastErrorMessage?.contains("no longer available") == true)
+
+        model.redoPage()
+        try await waitForComposer { self.liveTasks().first?.attachments.count == 1 }
+        let saved = try XCTUnwrap(liveTasks().first?.attachments.first)
+        let foundURL = try await tasks.taskImageFiles.verifiedURL(for: saved)
+        let url = try XCTUnwrap(foundURL)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertEqual(liveTasks().first?.attachments.count, 1)
+    }
+
     func testUndoDuringAcknowledgedTaskCreationUndoesThatTaskNotThePreviousOne() async throws {
         let before = try XCTUnwrap(library.createTasks([TaskDraft(title: "Existing task")])?.first)
         model.open(on: .tasks(.now))

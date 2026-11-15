@@ -332,18 +332,16 @@ final class TasksPageModel: ObservableObject {
         var ready = true
         while true {
             guard prepareForTermination(in: store) else { return false }
-            let pending = live.allObjects.filter { $0.store.container === store.container }
-                .flatMap { Array($0.composerAttachmentTasks.values) }
+            let pending = Array(store.composerAttachmentTasks.values)
             guard !pending.isEmpty else {
-                return ready && failures.allSatisfy { $0.0.acknowledgementFailures == $0.1 }
+                return ready && store.pendingComposerAttachments.isEmpty
+                    && failures.allSatisfy { $0.0.acknowledgementFailures == $0.1 }
             }
             for task in pending {
                 if !(await task.value) { ready = false }
             }
         }
     }
-
-    var composerAttachmentTasks: [UUID: Task<Bool, Never>] = [:]
 
     let library: AtticLibrary
     var store: TaskStore { library.tasks }
@@ -716,6 +714,11 @@ final class TasksPageModel: ObservableObject {
                 }
                 self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
                 self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
+                // A successful refresh or Redo may have brought back an owner
+                // whose file import was deferred. Run after publication.
+                if !self.store.pendingComposerAttachments.isEmpty {
+                    Task { @MainActor [weak self] in self?.retryComposerAttachments() }
+                }
             }
             .store(in: &cancellables)
         library.tags.inventoryChanges
@@ -756,6 +759,7 @@ final class TasksPageModel: ObservableObject {
             viewOptionsByTab = memory.viewOptions
             scrollOffsets = memory.scrollOffsets
         }
+        if !store.pendingComposerAttachments.isEmpty { retryComposerAttachments() }
     }
 
     // MARK: - Lists
