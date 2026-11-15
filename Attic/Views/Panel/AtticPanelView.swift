@@ -642,13 +642,17 @@ struct AtticPanelView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { sharedChrome.tagBar.open() }
             }
             #endif
-            .onReceive(uiState.$revealCount.dropFirst()) { _ in sharedChrome.tagBar.close() }
+            .onReceive(uiState.$revealCount.dropFirst()) { _ in
+                sharedChrome.tagBar.close()
+                topRowState.focusActiveSearch()
+            }
             .onChange(of: uiState.hideCount) { _, _ in sharedChrome.tagBar.close() }
             .onChange(of: uiState.selectedSection) { _, _ in
                 // Gone whole, at once: never folding over the sliding pages.
                 composerState.model?.close(atOnce: true)
                 // Another page's bar starts collapsed too.
                 sharedChrome.tagBar.close()
+                topRowState.focusActiveSearch()
                 syncBottomControlsHeight()
                 syncTopRowFootprint()
                 releaseTaskEntryInteractionLocks()

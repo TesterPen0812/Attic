@@ -39,7 +39,6 @@ struct NotesLibraryView: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelPageIsCurrent) private var isCurrent
     @Environment(\.panelComposer) private var panelComposer
-    @Environment(\.panelSharedChrome) private var sharedChrome
     /// The search field's keyboard, as the top row's field reports it.
     private var fieldFocused: Bool {
         get { searchFocused }
@@ -111,19 +110,18 @@ struct NotesLibraryView: View {
         }
         .accessibilityElement(children: .contain)
         .padding(.horizontal, pageEdge)
-        .background(NotesWindowReader(keys: keys).frame(width: 0, height: 0).accessibilityHidden(true))
         .onAppear {
             #if DEBUG
             Self.lifetimeProbe?(keys)
             #endif
             if isCurrent {
-                keys.start(owner: keyOwner, handler: { event in handle(event) })
+                keys.start(owner: keyOwner, searchHasFocus: { fieldFocused }, handler: { event in handle(event) })
                 if searchFocused { beginSearch() }
             }
         }
         .onDisappear { keys.stop(owner: keyOwner) }
         .onChange(of: isCurrent) { _, current in
-            if current { keys.start(owner: keyOwner, handler: { event in handle(event) }) }
+            if current { keys.start(owner: keyOwner, searchHasFocus: { fieldFocused }, handler: { event in handle(event) }) }
             else { keys.stop(owner: keyOwner, preservingWindow: true) }
         }
         .onChange(of: searchFocused) { _, focused in
@@ -251,13 +249,13 @@ struct NotesLibraryView: View {
         // The clicked note takes input before its first frame and bytes arrive.
         guard isCurrent, controller.isLibraryPresented, model.openingNoteRequest == nil,
               panelComposer?.isOpen() != true else { return false }
-        // The tag bar holds the keys it uses while it has the keyboard, and
-        // Esc while it is open (13 Nov).
-        if PanelTagBarState.ownsKeys || (event.keyCode == 53 && PanelTagBarState.ownsEscape) { return false }
-        // The shared "+" has the keyboard: Return is its, as Space is (it
-        // would otherwise open the highlighted or first searched note).
-        if sharedChrome?.plusHasKeyboard == true || sharedChrome?.tagBar.summaryHasKeyboard == true, event.keyCode == 36 || event.keyCode == 76,
-           event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty { return false }
+        // Escape closes an open tag bar. Ordinary library keys are delivered
+        // only to the native focused content or search field, so a delayed
+        // tag-focus callback cannot claim their Return or arrow keys.
+        if event.keyCode == 53 && PanelTagBarState.ownsEscape { return false }
+        // Unmodified arrows and Return reach here only from the library's
+        // actual native content responder or its focused search field. Other
+        // buttons keep their own activation without a shared-owner exception.
         let all = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         // A folded section's rows are not in the list (the board folds none).
         let groups = model.navigable(all, layout: model.layout, store: store)
@@ -471,7 +469,10 @@ struct NotesLibraryView: View {
                                         isSelected: row.id == selected && model.highlightedID == nil,
                                         isHighlighted: row.id == model.highlightedID,
                                         commands: { rowCommands(row.id) }, anchors: anchors,
-                                        onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: { onOpen(row.id) })
+                                    onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: {
+                                        keys.focusContent()
+                                        onOpen(row.id)
+                                    })
                                         .equatable()
                                         // Rows sit 2 apart, no dividers.
                                         .padding(.top, row.id == group.rows.first?.id ? 0 : NotesLibraryRowMetrics.rowGap)
@@ -511,6 +512,8 @@ struct NotesLibraryView: View {
             // the library's history, so Undo never depends on a row.
             .contentShape(Rectangle())
             .atticContextMenu { libraryCommands() }
+            .background(NotesWindowReader(keys: keys))
+            .simultaneousGesture(TapGesture().onEnded { keys.focusContent() })
             .onAppear {
                 if let selected, controller.defaults?.object(forKey: "AtticPanel.scroll.notes-library") == nil { proxy.scrollTo(selected, anchor: .center) }
             }
@@ -568,7 +571,10 @@ struct NotesLibraryView: View {
                             isSelected: row.id == selected && model.highlightedID == nil,
                             isHighlighted: row.id == model.highlightedID,
                             commands: { rowCommands(row.id) }, anchors: anchors,
-                            onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: { onOpen(row.id) })
+                            onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: {
+                                keys.focusContent()
+                                onOpen(row.id)
+                            })
                             .equatable()
                             // Board | list (owner, 2026-10-31): each note moves
                             // from its row to its card and back.
@@ -653,18 +659,28 @@ struct NotesLibraryView: View {
 @MainActor
 final class NotesLibraryKeys: ObservableObject {
     weak var window: NSWindow?
+    weak var contentResponder: NSView?
     var handler: ((NSEvent) -> Bool)?
     private var monitor: Any?
     private var owner: UUID?
+    private var searchHasFocus: (() -> Bool)?
 
-    func start(owner: UUID, handler: @escaping (NSEvent) -> Bool) {
+    func start(owner: UUID, searchHasFocus: @escaping () -> Bool = { false }, handler: @escaping (NSEvent) -> Bool) {
         self.owner = owner
+        self.searchHasFocus = searchHasFocus
         self.handler = handler
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             MainActor.assumeIsolated {
                 guard let self, let window = self.window, event.window === window, window.isKeyWindow,
                       let handler = self.handler else { return event }
+                // The native content responder handles its own ordinary keys.
+                // Only a focused search field may route its editing/navigation
+                // keys through the monitor. Command-F is a page-wide shortcut.
+                let fieldOwnsInput = self.searchHasFocus?() == true && window.firstResponder is NSTextView
+                let chord = event.modifierFlags.intersection([.command, .control, .option, .shift])
+                let globalFind = event.keyCode == 3 && chord == .command
+                guard fieldOwnsInput || globalFind else { return event }
                 let consumed = handler(event)
                 #if DEBUG
                 PanelKeyStopSeam.monitorDecisions.append("library monitor key=\(event.keyCode) modifiers=\(event.modifierFlags.rawValue) consumed=\(consumed) responder=\(String(describing: window.firstResponder))")
@@ -678,6 +694,7 @@ final class NotesLibraryKeys: ObservableObject {
         guard self.owner == owner else { return }
         self.owner = nil
         handler = nil
+        searchHasFocus = nil
         if !preservingWindow { window = nil }
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
@@ -687,6 +704,15 @@ final class NotesLibraryKeys: ObservableObject {
     /// (its input method composes it), as if it had been typed there.
     static func deliver(_ event: NSEvent, to editor: NSTextView) {
         editor.interpretKeyEvents([event])
+    }
+
+    /// A content click takes the responder synchronously, before a note can
+    /// start its asynchronous editor handoff.
+    @discardableResult
+    func focusContent() -> Bool {
+        guard let window, window.isKeyWindow, let contentResponder,
+              contentResponder.window === window else { return false }
+        return window.makeFirstResponder(contentResponder)
     }
 }
 
@@ -701,13 +727,36 @@ private struct NotesWindowReader: NSViewRepresentable {
 
     func updateNSView(_ view: NSView, context: Context) {
         keys.window = view.window
+        keys.contentResponder = view
     }
 
     private final class ReaderView: NSView {
         weak var keys: NotesLibraryKeys?
+        override var acceptsFirstResponder: Bool { true }
+        override var canBecomeKeyView: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func accessibilityRole() -> NSAccessibility.Role? { .group }
+        override func accessibilityLabel() -> String? { String(localized: "Notes list") }
+        override func accessibilityIdentifier() -> String { "notes-library-content" }
+
+        override func keyDown(with event: NSEvent) {
+            // AppKit owns Tab traversal. This one semantic content stop owns
+            // the library's arrows/Return/shortcuts whenever it is focused.
+            if event.keyCode == 48 {
+                if event.modifierFlags.contains(.shift) { window?.selectPreviousKeyView(self) }
+                else { window?.selectNextKeyView(self) }
+                return
+            }
+            if keys?.handler?(event) == true { return }
+            super.keyDown(with: event)
+        }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            MainActor.assumeIsolated { keys?.window = window }
+            MainActor.assumeIsolated {
+                keys?.window = window
+                keys?.contentResponder = window == nil ? nil : self
+            }
         }
     }
 }

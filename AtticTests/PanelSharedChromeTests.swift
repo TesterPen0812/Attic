@@ -691,7 +691,7 @@ private final class RealShell {
             send(event)
         }
         spin(0.12)
-        tabHistory.append("shift=\(shift) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) summaryOwns=\(sharedChrome.tagBar.summaryHasKeyboard) summaryStop=\(String(describing: sharedChrome.tagBar.summaryFocus)) focused=\(focusedIdentifiers()) responder=\(responder) key=\(panel.isKeyWindow) AXFocus=\(focusedAXDescription())")
+        tabHistory.append("shift=\(shift) taskPlusOwns=\(sharedChrome.taskPlusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) summaryOwns=\(sharedChrome.tagBar.summaryHasKeyboard) summaryStop=\(String(describing: sharedChrome.tagBar.summaryFocus)) focused=\(focusedIdentifiers()) responder=\(responder) key=\(panel.isKeyWindow) AXFocus=\(focusedAXDescription())")
         recordSnapshot("after Tab settled shift=\(shift)")
     }
 
@@ -784,6 +784,17 @@ private final class RealShell {
 
     func element(_ identifier: String) -> NSObject? {
         elements(host).first { $0.accessibilityIdentifier?() == identifier } as? NSObject
+    }
+
+    /// Take the real AppKit responder installed behind Notes' list rather
+    /// than simulating a shared focus-owner flag with FKA disabled on the Air.
+    func focusNotesLibraryContent() -> Bool {
+        func find(in view: NSView) -> NSView? {
+            if view.accessibilityIdentifier() == "notes-library-content" { return view }
+            return view.subviews.lazy.compactMap { find(in: $0) }.first
+        }
+        guard let scope = find(in: host) else { return false }
+        return panel.makeFirstResponder(scope)
     }
 
     /// The accessibility identifiers of every element reporting keyboard focus.
@@ -1278,13 +1289,15 @@ extension PanelSharedChromeTests {
                 XCTAssertFalse(library.query.isEmpty)
                 XCTAssertNil(library.highlightedID, "search supplies its first result without a highlight")
             } else {
+                XCTAssertTrue(shell.focusNotesLibraryContent(), "the library's real content responder owns navigation")
                 shell.appKey(Self.downArrow, keyCode: 125)
                 XCTAssertNotNil(library.highlightedID, "a row is highlighted")
             }
-            shell.sharedChrome.notePlusKeyboard(true)
+            XCTAssertTrue(shell.panel.makeFirstResponder(nil), "move focus out of library content before another control's Return")
+            XCTAssertFalse(shell.sharedChrome.taskPlusHasKeyboard, "Notes never lends its focus to Tasks' adapter")
             shell.appKey("\r", keyCode: 36)
-            XCTAssertTrue(shell.draft.pages.isLibraryPresented, "Return on + never opens a highlighted or searched note")
-            shell.sharedChrome.notePlusKeyboard(false)
+            XCTAssertTrue(shell.draft.pages.isLibraryPresented, "Return outside the library's native scope never opens a highlighted or searched note")
+            XCTAssertTrue(shell.focusNotesLibraryContent(), "give the library actual native focus to activate its row")
             shell.appKey("\r", keyCode: 36)
             shell.wait { !shell.draft.pages.isLibraryPresented }
             XCTAssertFalse(shell.draft.pages.isLibraryPresented, "control: with the keyboard elsewhere Return opens it")
@@ -1307,6 +1320,7 @@ extension PanelSharedChromeTests {
                     XCTAssertFalse(library.query.isEmpty)
                     XCTAssertNil(library.highlightedID)
                 } else {
+                    XCTAssertTrue(shell.focusNotesLibraryContent())
                     shell.appKey(Self.downArrow, keyCode: 125)
                     XCTAssertNotNil(library.highlightedID, "a row is highlighted")
                 }
@@ -1350,7 +1364,7 @@ extension PanelSharedChromeTests {
             let plus = page == .notes ? PanelBottomBarLook.notesPlus : PanelBottomBarLook.calendarPlus
             if NSApp.isFullKeyboardAccessEnabled {
                 shell.tabTo(plus.identifier)
-                XCTAssertTrue(shell.sharedChrome.plusHasKeyboard)
+                XCTAssertTrue(shell.focusedIdentifiers().contains(plus.identifier), "native Tab focused the real plus")
             } else {
                 let report = try XCTUnwrap(PanelKeyStopSeam.plusFocusReports[PanelPage(page)])
                 report(true)
@@ -1359,8 +1373,7 @@ extension PanelSharedChromeTests {
             shell.hideAndReveal()
             XCTAssertEqual(shell.state.selectedSection, page)
             XCTAssertEqual(shell.state.panelSize, size)
-            shell.wait { !shell.sharedChrome.plusHasKeyboard }
-            XCTAssertFalse(shell.sharedChrome.plusHasKeyboard, "\(page): a reveal never leaves the keyboard on the plus")
+            XCTAssertFalse(shell.sharedChrome.taskPlusHasKeyboard, "\(page): ordinary pages have no shared keyboard-owner latch")
             XCTAssertFalse(shell.focusedIdentifiers().contains(plus.identifier))
             ComposerOverlay.isPresented = false
             shell.appKey(" ", keyCode: 49)
@@ -1396,6 +1409,13 @@ extension PanelSharedChromeTests {
             }
             shell.wait { !shell.sharedChrome.tagBar.keyFocused }
             XCTAssertFalse(shell.sharedChrome.tagBar.keyFocused, "\(how): # gave the keyboard up")
+            // The library now handles navigation only as an actual AppKit
+            // first responder. A reveal focuses the visible Search button;
+            // a closed tag bar does not silently lend arrows to the library.
+            if how == "a click in the library" {
+                XCTAssertTrue(shell.responder.contains("ReaderView"), "the library click transfers native focus")
+            }
+            XCTAssertTrue(shell.focusNotesLibraryContent(), "navigate only after the content scope has focus")
             shell.appKey(Self.downArrow, keyCode: 125)
             shell.wait { library.highlightedID != nil }
             XCTAssertNotNil(library.highlightedID, "\(how): the arrows move the library highlight")
@@ -1432,6 +1452,7 @@ extension PanelSharedChromeTests {
             XCTAssertFalse(PanelTagBarState.ownsKeys, "\(how): # gave up the keys")
             let currentLibrary = try XCTUnwrap(shell.draft.pages.liveLibraryModel)
             let before = currentLibrary.highlightedID
+            shell.tabTo("notes-library-content")
             shell.appKey(Self.downArrow, keyCode: 125)
             shell.wait { currentLibrary.highlightedID != before }
             XCTAssertNotEqual(currentLibrary.highlightedID, before, "\(how): the arrows move the library highlight")
@@ -1470,7 +1491,7 @@ extension PanelSharedChromeTests {
             PanelKeyStopSeam.held = []
             for run in held { run() }
             spin(0.2)
-            XCTAssertFalse(chrome.plusHasKeyboard)
+            XCTAssertFalse(chrome.taskPlusHasKeyboard)
             XCTAssertEqual(PanelKeyStopSeam.plusAssignments, 0, "\(change): the old handoff must not take the keyboard")
         }
     }
@@ -1543,10 +1564,9 @@ extension PanelSharedChromeTests {
 
 
 extension PanelSharedChromeTests {
-    /// Closing the bar must beat a request whose next-turn focus handoff
-    /// has not run yet. No native FKA focus is needed to observe the stale
-    /// assignment itself; CI additionally observes native focus below.
-    func testClosingTheTagBarCancelsItsQueuedKeyboardHandoff() throws {
+    /// The native request is one latest-value state. Closing the bar must
+    /// clear it without queuing a focus handoff for ordinary Notes controls.
+    func testClosingTheTagBarCancelsItsNativeFocusRequestWithoutDeferral() throws {
         let chrome = PanelSharedChrome()
         chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
         let model = SharedBarModel(page: .notes)
@@ -1556,14 +1576,12 @@ extension PanelSharedChromeTests {
         PanelKeyStopSeam.tagKeyAssignments = 0
         chrome.tagBar.requestKeyFocus()
         spin(0.2)
-        XCTAssertEqual(PanelKeyStopSeam.held.count, 1, "the request is queued before native focus takes")
+        XCTAssertTrue(chrome.tagBar.nativeKeyFocusRequested, "native focus is requested directly")
+        XCTAssertTrue(PanelKeyStopSeam.held.isEmpty, "ordinary native focus has no deferred handoff")
         chrome.tagBar.close()
         spin(0.2)
-        let held = PanelKeyStopSeam.held
-        PanelKeyStopSeam.held = []
-        held.forEach { $0() }
-        spin(0.2)
-        XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, 0, "close wins over the queued request")
+        XCTAssertFalse(chrome.tagBar.nativeKeyFocusRequested, "closing cancels the live native focus request")
+        XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, 0, "ordinary native focus never runs the Tasks adapter")
         XCTAssertFalse(chrome.tagBar.keyFocused)
     }
 }
@@ -1597,6 +1615,7 @@ extension PanelSharedChromeTests {
         try clickBesideTheCollapsedTagBar(shell)
         shell.wait { !shell.sharedChrome.tagBar.keyFocused }
         XCTAssertFalse(shell.sharedChrome.tagBar.keyFocused, "a click beside the visible bar releases #")
+        XCTAssertTrue(shell.focusNotesLibraryContent(), "the content takes subsequent navigation as a native responder")
         shell.appKey(Self.downArrow, keyCode: 125)
         XCTAssertNotNil(library.highlightedID, "the library's arrows work after clicking the empty gap")
     }
@@ -1680,13 +1699,13 @@ extension PanelSharedChromeTests {
             defer { close(new) }
             let newReport = try XCTUnwrap(PanelKeyStopSeam.plusFocusReports[.tasks])
             newReport(true)
-            XCTAssertTrue(chrome.plusHasKeyboard)
+            XCTAssertTrue(chrome.taskPlusHasKeyboard)
             XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()))
             // A late loss callback, or disappearance without ever having focus,
             // must not release the other physical control's acquired ownership.
             if oldHadFocus { oldReport(false) }
             close(old)
-            XCTAssertTrue(chrome.plusHasKeyboard, "the old instance cannot release the new owner")
+            XCTAssertTrue(chrome.taskPlusHasKeyboard, "the old instance cannot release the new owner")
             XCTAssertEqual(requests.current, AnyHashable(PanelPlusFocusID()))
         }
     }
@@ -1745,7 +1764,7 @@ extension PanelSharedChromeTests {
 
 
 extension PanelSharedChromeTests {
-    func testR3TheNewestTagKeyboardIntentWinsWhenSwiftUICoalescesChanges() throws {
+    func testR4TheNewestNativeTagFocusRequestWinsWithoutDeferral() throws {
         for releaseLast in [false, true] {
             let chrome = PanelSharedChrome()
             chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
@@ -1763,11 +1782,9 @@ extension PanelSharedChromeTests {
                 chrome.tagBar.requestKeyFocus()
             }
             spin(0.3)
-            let held = PanelKeyStopSeam.held
-            PanelKeyStopSeam.held = []
-            held.forEach { $0() }
-            spin(0.2)
-            XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, releaseLast ? 0 : 1, "the last source action wins")
+            XCTAssertTrue(PanelKeyStopSeam.held.isEmpty, "non-Tasks focus needs no deferred handoff")
+            XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, 0, "Tasks alone uses the managed-focus adapter")
+            XCTAssertEqual(chrome.tagBar.nativeKeyFocusRequested, !releaseLast, "latest native request decides focus")
             if !releaseLast { XCTAssertEqual(chrome.tagBar.cursor, .tag("launch")) }
         }
     }
@@ -1775,7 +1792,7 @@ extension PanelSharedChromeTests {
 
 
 extension PanelSharedChromeTests {
-    func testR3AnOutsideClickCancelsAClosedHashKeysPendingHandoff() throws {
+    func testR4AnOutsideClickCancelsAClosedHashKeysNativeFocusRequest() throws {
         try requireKeyWindowTests()
         let (shell, library) = try notesLibraryShell()
         defer { shell.close() }
@@ -1785,15 +1802,15 @@ extension PanelSharedChromeTests {
         shell.appKey("t", keyCode: 17, modifiers: [.option, .command])
         shell.appKey("t", keyCode: 17, modifiers: [.option, .command])
         XCTAssertFalse(shell.sharedChrome.tagBar.isOpen)
-        XCTAssertFalse(shell.sharedChrome.tagBar.keyFocused)
-        XCTAssertFalse(PanelKeyStopSeam.held.isEmpty)
+        XCTAssertTrue(shell.sharedChrome.tagBar.nativeKeyFocusRequested,
+                      "the second shortcut requests focus on the now-closed native #")
+        XCTAssertTrue(PanelKeyStopSeam.held.isEmpty, "native requests are never queued through Tasks' adapter")
         shell.appClick(at: CGPoint(x: 170, y: 250))
-        let held = PanelKeyStopSeam.held
-        PanelKeyStopSeam.held = []
-        held.forEach { $0() }
         shell.spin(0.3)
-        XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, 0, "outside click cancels focus that has not landed")
+        XCTAssertFalse(shell.sharedChrome.tagBar.nativeKeyFocusRequested, "outside click cancels the native focus request")
+        XCTAssertEqual(PanelKeyStopSeam.tagKeyAssignments, 0, "no obsolete deferred focus can arrive")
         XCTAssertFalse(shell.sharedChrome.tagBar.hasKeyboard)
+        XCTAssertTrue(shell.focusNotesLibraryContent())
         shell.appKey(Self.downArrow, keyCode: 125)
         XCTAssertNotNil(library.highlightedID)
     }
@@ -1812,6 +1829,7 @@ extension PanelSharedChromeTests {
                 shell.wait { !library.groups(store: shell.notes, drafts: []).isEmpty }
                 XCTAssertNil(library.highlightedID)
             } else {
+                XCTAssertTrue(shell.focusNotesLibraryContent())
                 shell.appKey(Self.downArrow, keyCode: 125)
                 XCTAssertNotNil(library.highlightedID)
             }
@@ -1824,7 +1842,10 @@ extension PanelSharedChromeTests {
                     XCTAssertTrue(node.accessibilityIsAttributeSettable(NSAccessibility.Attribute(rawValue: "AXFocused")))
                 }
             }
-            // Report the native buttons' focus callback, as the plus seam does.
+            // On the FKA-off Air this callback verifies button-local ring
+            // rendering. Remove actual native library focus first: a fake
+            // summary callback must never be allowed to claim Return from it.
+            XCTAssertTrue(shell.panel.makeFirstResponder(nil))
             shell.sharedChrome.tagBar.noteSummaryKeyboard(true)
             shell.state.keyboardFocus.noteKeyboardNavigation()
             shell.spin(0.3)
@@ -1834,6 +1855,7 @@ extension PanelSharedChromeTests {
             shell.appKey("\r", keyCode: 36)
             XCTAssertTrue(shell.draft.pages.isLibraryPresented, "Return belongs to the focused summary button")
             shell.sharedChrome.tagBar.noteSummaryKeyboard(false)
+            XCTAssertTrue(shell.focusNotesLibraryContent())
             shell.appKey("\r", keyCode: 36)
             shell.wait { !shell.draft.pages.isLibraryPresented }
             XCTAssertFalse(shell.draft.pages.isLibraryPresented, "control: the library still opens a note when summary focus is released")
@@ -1852,7 +1874,11 @@ extension PanelSharedChromeTests {
                     let (shell, library) = try notesLibraryShell()
                     defer { shell.close() }
                     library.tagPicks = TagPicks(["launch"])
-                    if searching { library.query = "Launch" } else { shell.appKey(Self.downArrow, keyCode: 125) }
+                    if searching { library.query = "Launch" }
+                    else {
+                        XCTAssertTrue(shell.focusNotesLibraryContent())
+                        shell.appKey(Self.downArrow, keyCode: 125)
+                    }
                     shell.spin(0.4)
                     shell.tabTo(identifier)
                     XCTAssertTrue(shell.sharedChrome.tagBar.summaryHasKeyboard, "the native summary button owns activation")
@@ -1880,6 +1906,7 @@ extension PanelSharedChromeTests {
         let rows = library.groups(store: shell.notes, drafts: []).flatMap(\.rows)
         XCTAssertEqual(rows.count, 2)
         let clickedID = try XCTUnwrap(rows.first?.id)
+        XCTAssertTrue(shell.focusNotesLibraryContent(), "the library has actual native focus before arrow navigation")
         shell.appKey(Self.downArrow, keyCode: 125)
         shell.appKey(Self.downArrow, keyCode: 125)
         XCTAssertNotEqual(library.highlightedID, clickedID, "the keyboard highlights a different note before the row click")
@@ -1898,14 +1925,14 @@ extension PanelSharedChromeTests {
         // No view-update turn between the actual click and Return: neither
         // a delayed registration nor a focus dump can hide stale ownership.
         shell.appClick(at: point, settle: false)
-        let released = !shell.sharedChrome.plusHasKeyboard
+        let released = shell.responder.contains("ReaderView") && !shell.focusedIdentifiers().contains("notes-new-note")
         ComposerOverlay.isPresented = false
         shell.appKey("\r", keyCode: 36, settle: false)
         shell.wait { !shell.draft.pages.isLibraryPresented }
         XCTAssertFalse(shell.draft.pages.isLibraryPresented, "the click opened the chosen note")
         shell.spin(0.5)
         XCTAssertEqual(shell.draft.pages.active?.noteID, clickedID, "Return cannot replace the clicked note with the highlighted one while the first frame is pending")
-        XCTAssertTrue(released, "the row click releases + before another key can act")
+        XCTAssertTrue(released, "the row click transfers native focus to the Notes content before another key can act")
         XCTAssertFalse(ComposerOverlay.isPresented, "Return stays with the clicked note")
     }
 }
@@ -1988,5 +2015,85 @@ extension PanelSharedChromeTests {
 
     func testR4DrawPlusHasItsOwnNativeTabReach() throws {
         try assertR4PageReachesNativePlus(.canvas, id: PanelBottomBarLook.drawPlus.identifier)
+    }
+}
+
+// MARK: - Round 4: library commands belong to the content's actual responder
+
+extension PanelSharedChromeTests {
+    func testR4UnfocusedNotesLibraryDoesNotStealArrowsOrReturn() throws {
+        try requireKeyWindowTests()
+        let (shell, library) = try notesLibraryShell()
+        defer { shell.close() }
+        // The key window remains the Notes panel; deliberately put the first
+        // responder outside the library's content scope. The old key-window
+        // monitor still stole arrows and Return from this unrelated responder.
+        XCTAssertTrue(shell.panel.makeFirstResponder(nil))
+        XCTAssertNil(library.highlightedID)
+        shell.appKey(Self.downArrow, keyCode: 125)
+        XCTAssertNil(library.highlightedID, "the library must not move a row without native content focus")
+        shell.appKey("\r", keyCode: 36)
+        XCTAssertTrue(shell.draft.pages.isLibraryPresented, "Return outside the library must not open a note")
+    }
+
+    func testR4NotesContentNativeResponderAloneNavigatesAndOpens() throws {
+        try requireKeyWindowTests()
+        let (shell, library) = try notesLibraryShell()
+        defer { shell.close() }
+        XCTAssertTrue(shell.focusNotesLibraryContent(), "Notes content owns a real AppKit responder")
+        XCTAssertTrue(shell.responder.contains("ReaderView"), "the focus is in the library's native content scope")
+        shell.appKey(Self.downArrow, keyCode: 125)
+        XCTAssertNotNil(library.highlightedID, "arrows navigate once the content itself owns focus")
+        shell.appKey("\r", keyCode: 36)
+        shell.wait { !shell.draft.pages.isLibraryPresented }
+        XCTAssertFalse(shell.draft.pages.isLibraryPresented, "Return on the focused content opens the highlighted note")
+    }
+
+    func testR4NativeContentFocusOutranksAStaleTagFocusCallback() throws {
+        try requireKeyWindowTests()
+        let (shell, library) = try notesLibraryShell()
+        defer { shell.close() }
+        XCTAssertTrue(shell.focusNotesLibraryContent())
+        shell.appKey(Self.downArrow, keyCode: 125)
+        XCTAssertNotNil(library.highlightedID)
+        // Simulate a SwiftUI focus callback arriving after AppKit already
+        // moved its responder into the library. Native ownership wins.
+        shell.sharedChrome.tagBar.noteKeyFocus(true)
+        XCTAssertTrue(shell.focusNotesLibraryContent())
+        shell.appKey("\r", keyCode: 36)
+        shell.wait { !shell.draft.pages.isLibraryPresented }
+        XCTAssertFalse(shell.draft.pages.isLibraryPresented,
+                       "the focused library opens its row despite stale tag ownership")
+    }
+
+    func testR4NotesLibraryContentAppearsOnceInNativeTabOrder() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("requires native FKA CI") }
+        let (shell, library) = try notesLibraryShell()
+        defer { shell.close() }
+        shell.tabTo("notes-library-content")
+        shell.appKey(Self.downArrow, keyCode: 125)
+        XCTAssertNotNil(library.highlightedID, "native Tab to content grants arrow ownership")
+        shell.tab()
+        XCTAssertFalse(shell.focusedIdentifiers().contains("notes-library-content"), "the content is exactly one native Tab stop")
+    }
+
+    func testR4PageSwitchAndRevealChooseTheActiveSearchButtonAsNativeFocusDestination() throws {
+        try requireKeyWindowTests()
+        guard NSApp.isFullKeyboardAccessEnabled else { throw XCTSkip("requires native FKA CI") }
+        let shell = try RealShell(attachments: makeTestAttachmentFileStore(), placement: .onDisplay)
+        defer { shell.close() }
+        shell.go(to: .calendar)
+        shell.tabTo(PanelBottomBarLook.calendarPlus.identifier)
+        shell.go(to: .canvas)
+        XCTAssertTrue(shell.focusedIdentifiers().contains("draw-search-button"),
+                      "switching away from a focused Calendar plus chooses Draw's visible Search")
+        shell.tabTo(PanelBottomBarLook.drawPlus.identifier)
+        shell.hideAndReveal()
+        XCTAssertTrue(shell.focusedIdentifiers().contains("draw-search-button"),
+                      "reveal chooses the current page's visible Search, not the old plus")
+        ComposerOverlay.isPresented = false
+        shell.appKey(" ", keyCode: 49)
+        XCTAssertFalse(ComposerOverlay.isPresented, "an old plus is inert after the reveal")
     }
 }

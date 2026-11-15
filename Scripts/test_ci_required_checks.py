@@ -364,6 +364,7 @@ class RequiredChecksTests(unittest.TestCase):
         mutations = {
             'shared xcodebuild invocation removed': block[:invocation_start] + block[invocation_end:],
             'selection never passed to xcodebuild': block.replace('"${only[@]}" || status=1', '|| status=1', 1),
+            'one required native test omitted': block.replace('            testR4NotesLibraryContentAppearsOnceInNativeTabOrder\n', '', 1),
             'a different result summary is read': block.replace('summary --path "$RUNNER_TEMP/AtticFKA-shared-chrome.xcresult"', 'summary --path "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult"', 1),
             'shared result not validated': '\n'.join(line for line in block.split('\n') if not ('python3 -c' in line and 'fka-shared-chrome-summary.json' in line)),
             'shared summary never read': '\n'.join(line for line in block.split('\n') if not ('xcrun xcresulttool' in line and 'AtticFKA-shared-chrome.xcresult' in line)),

@@ -989,7 +989,8 @@ struct NotesEditorPage: View {
     }
 
     private func openFromLibrary(_ id: UUID) {
-        sharedChrome?.releasePlusKeyboard()
+        // The clicked Notes row already moves the native responder into its
+        // content scope before this method can start its first-frame yield.
         IdleLatencyTrace.controlDispatched(.noteOpen)
         // A task's own note opens as its task's page (§ 5.3), over Notes.
         let query = library.query

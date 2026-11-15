@@ -179,9 +179,9 @@ jobs:
             testBG67TheAXObserverFindsTheRealControlsWithCIEnhancedUIOff
             testBG67TheRealPanelsCalendarNotesAndDrawPlusAreKeyboardStops
             testClickingTheSpaceBesideTheCollapsedTagBarReleasesTheLibraryKeyboard
-            testClosingTheTagBarCancelsItsQueuedKeyboardHandoff
+            testClosingTheTagBarCancelsItsNativeFocusRequestWithoutDeferral
             testR3AThrowWhileResolvingTheLibraryClosesItsKeyShell
-            testR3AnOutsideClickCancelsAClosedHashKeysPendingHandoff
+            testR4AnOutsideClickCancelsAClosedHashKeysNativeFocusRequest
             testR3ClickingANotesRowReleasesThePlusAndReturnKeepsTheNoteOpen
             testR3PickedSummaryReturnNeverOpensTheHighlightedOrSearchedNote
             testR3RevealAddsNoShellBodyPass
@@ -189,9 +189,14 @@ jobs:
             testR3TheTabDriverUsesTheApplicationsKeyboardPath
             testR4CalendarPlusHasItsOwnNativeTabReach
             testR4DrawPlusHasItsOwnNativeTabReach
+            testR4NativeContentFocusOutranksAStaleTagFocusCallback
             testR4NativeFocusTraceRecordsBothSidesOfEveryInput
+            testR4NotesLibraryContentAppearsOnceInNativeTabOrder
+            testR4NotesContentNativeResponderAloneNavigatesAndOpens
             testR4NotesPlusHasItsOwnNativeTabReach
             testR4OffscreenAndOnDisplayExposeTheSameCalendarAXControl
+            testR4PageSwitchAndRevealChooseTheActiveSearchButtonAsNativeFocusDestination
+            testR4UnfocusedNotesLibraryDoesNotStealArrowsOrReturn
             testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess
             testReturnWhileThePlusHoldsTheKeyboardIsNotTheLibrarysOpen
             testTabbingAcrossThePickedTagsSummaryVisitsOnlyItsTwoButtonsWithFullKeyboardAccess

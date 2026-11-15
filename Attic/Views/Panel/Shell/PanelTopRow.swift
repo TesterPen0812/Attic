@@ -86,6 +86,12 @@ enum PanelTopRowLayout {
 /// environment; pages write to it, never while laying out.
 @MainActor
 final class PanelTopRowState: ObservableObject {
+    /// Direct request to focus the visible Search button after a switch or
+    /// reveal. Observed by the header alone, not the retained panel body.
+    @Published private(set) var activeSearchFocusRevision: UInt64 = 0
+
+    func focusActiveSearch() { activeSearchFocusRevision &+= 1 }
+
     /// The pages whose search is open.
     @Published private(set) var searchingPages: Set<PanelPage> = []
     /// The floating chat is open over the panel: the top row's controls fold

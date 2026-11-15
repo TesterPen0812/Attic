@@ -32,27 +32,15 @@ final class PanelSharedChrome: ObservableObject {
     /// starts collapsed each time the panel opens and on each page
     /// (Accepted 2026-11-13, 1A).
     let tagBar = PanelTagBarState()
-    /// The shared "+" has the keyboard (Tab, Space, Return). Not published:
-    /// nothing draws from it. The Notes library reads it so its own Return
-    /// never takes the key from "+" (round 2 review N-6).
-    private(set) var plusHasKeyboard = false
+    /// Only Tasks lends "+" to its custom Tab adapter. Other pages use the
+    /// system's focused button and never publish an inferred keyboard owner.
+    private(set) var taskPlusHasKeyboard = false
+    private var taskPlusOwner: UUID?
 
-    private var plusKeyboardOwner: UUID?
-    private var releasePlus: (@MainActor () -> Void)?
-
-    func notePlusKeyboard(_ has: Bool, owner: UUID? = nil, release: (@MainActor () -> Void)? = nil) {
-        if !has, let owner, plusKeyboardOwner != owner { return }
-        plusKeyboardOwner = has ? owner : nil
-        releasePlus = has ? release : nil
-        if plusHasKeyboard != has { plusHasKeyboard = has }
-    }
-
-    /// Release before opening a note yields its first frame: a second key
-    /// must already belong to that note, even while the bar is folding away.
-    func releasePlusKeyboard() {
-        let release = releasePlus
-        notePlusKeyboard(false)
-        release?()
+    func noteTaskPlusKeyboard(_ has: Bool, owner: UUID? = nil) {
+        if !has, let owner, taskPlusOwner != owner { return }
+        taskPlusOwner = has ? owner : nil
+        taskPlusHasKeyboard = has
     }
 
     /// What the controls do, per page. Not observable: only a click reads them.
@@ -259,8 +247,8 @@ private struct PanelPlusFocus: ViewModifier {
     let revealCount: UInt64
     let reveals: AnyPublisher<UInt64, Never>
     let requests: AtticFocusRequests?
-    /// Told whether "+" has the keyboard: the Notes library leaves Return
-    /// to it then (round 2 review N-6).
+    /// The Tasks adapter receives the actual focus callback. Notes, Calendar
+    /// and Draw never exchange global ownership to decide who handles keys.
     let chrome: PanelSharedChrome?
     let action: () -> Void
     @FocusState private var focused: Bool
@@ -329,23 +317,13 @@ private struct PanelPlusFocus: ViewModifier {
         #if DEBUG
         PanelKeyStopSeam.focusCallbacks.append("plus page=\(page) focused=\(now) reachable=\(reachable) taskManaged=\(page.managesOwnTabOrder)")
         #endif
-        if now {
+        if now, page.managesOwnTabOrder {
             lender = requests
             requests?.note(PanelPlusFocusID(), focused: true, owner: keyboardOwner)
-            let focus = $focused
-            let arming = $armed
-            let token = handoff
-            let owner = keyboardOwner
-            let focusRequests = requests
-            chrome?.notePlusKeyboard(true, owner: owner, release: {
-                token.cancel()
-                arming.wrappedValue = false
-                focus.wrappedValue = false
-                focusRequests?.note(PanelPlusFocusID(), focused: false, owner: owner)
-            })
-        } else {
+            chrome?.noteTaskPlusKeyboard(true, owner: keyboardOwner)
+        } else if !now {
             lender?.note(PanelPlusFocusID(), focused: false, owner: keyboardOwner)
-            chrome?.notePlusKeyboard(false, owner: keyboardOwner)
+            chrome?.noteTaskPlusKeyboard(false, owner: keyboardOwner)
             armed = false
         }
     }
@@ -355,7 +333,7 @@ private struct PanelPlusFocus: ViewModifier {
         armed = false
         if focused { focused = false }
         lender?.note(PanelPlusFocusID(), focused: false, owner: keyboardOwner)
-        chrome?.notePlusKeyboard(false, owner: keyboardOwner)
+        chrome?.noteTaskPlusKeyboard(false, owner: keyboardOwner)
     }
 }
 
@@ -611,6 +589,7 @@ private struct PanelSharedTopControlsObserver: View {
     @ObservedObject var chrome: PanelSharedChrome
     @ObservedObject var state: PanelTopRowState
     let page: PanelPage
+    @FocusState private var activeSearchFocused: Bool
 
     var body: some View {
         let look = chrome.topRow(for: page)
@@ -626,7 +605,20 @@ private struct PanelSharedTopControlsObserver: View {
                 PanelTopRowSearchButton(label: look.searchLabel, identifier: look.searchIdentifier, shared: true) {
                     chrome.search(on: page)
                 }
+                .focused($activeSearchFocused)
             }
+        }
+        .onChange(of: state.activeSearchFocusRevision) { _, _ in
+            // The destination is the actual native Search button on the new
+            // current page. Tasks continues to manage its own focus order.
+            if !page.managesOwnTabOrder && look.shown && !searching && !covered {
+                activeSearchFocused = true
+            } else {
+                activeSearchFocused = false
+            }
+        }
+        .onChange(of: searching || !look.shown || covered) { _, hidden in
+            if hidden { activeSearchFocused = false }
         }
     }
 }

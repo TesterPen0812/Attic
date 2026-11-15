@@ -42,30 +42,23 @@ final class PanelTagBarState: ObservableObject {
     @Published private(set) var keyFocused = false
     /// Bumped to give "#" the keyboard.
     @Published private(set) var keyFocusRequest: UInt64 = 0
-    /// Bumped to make "#" give the keyboard up (`releaseKeyFocus`).
-    @Published private(set) var keyReleaseRequest: UInt64 = 0
-
-    enum KeyIntent: Equatable { case focus(UInt64), release(UInt64) }
-    private var keyIntentRevision: UInt64 = 0
-    private(set) var keyIntent: KeyIntent = .release(0)
-    private(set) var keyFocusPending = false
+    /// Actual desired focus for the plain native # button. This is a single
+    /// latest-value request, including while its SwiftUI view is mounting:
+    /// no deferred handoff, generation counter or competing release clock.
+    @Published private(set) var nativeKeyFocusRequested = false
 
     /// The two native summary buttons leave row activation to the focused control.
     enum SummaryFocus: Hashable { case picked, clear }
     @Published private(set) var summaryFocus: SummaryFocus?
-    private var summaryOwner: UUID?
     var summaryHasKeyboard: Bool { summaryFocus != nil }
 
-    func noteSummaryFocus(_ focus: SummaryFocus?, owner: UUID) {
-        if focus == nil, summaryOwner != owner { return }
-        summaryOwner = focus == nil ? nil : owner
+    func noteSummaryFocus(_ focus: SummaryFocus?) {
         if summaryFocus != focus { summaryFocus = focus }
     }
 
     #if DEBUG
     /// Reports the native button's callback on a host without FKA enabled.
     func noteSummaryKeyboard(_ has: Bool) {
-        summaryOwner = nil
         summaryFocus = has ? .picked : nil
     }
     #endif
@@ -100,11 +93,11 @@ final class PanelTagBarState: ObservableObject {
     /// Asks "#" to give the keyboard up (a click elsewhere, the panel's
     /// reveal, the bar closing). Tasks orders its own Tab and ignores it.
     func releaseKeyFocus() {
-        // A requested handoff may still be queued before keyFocused becomes true.
-        keyIntentRevision &+= 1
-        keyIntent = .release(keyIntentRevision)
-        keyFocusPending = false
-        keyReleaseRequest &+= 1
+        nativeKeyFocusRequested = false
+        // Release the recorded ownership in the same input turn. SwiftUI's
+        // focus callback can arrive later (and never arrives on FKA-off hosts).
+        // A click or a close must already have taken ordinary keys from #.
+        noteKeyFocus(false, closeWhenLeaving: false)
     }
 
     func setCursor(_ stop: PanelTagBarStop?) {
@@ -122,14 +115,14 @@ final class PanelTagBarState: ObservableObject {
     }
 
     func requestKeyFocus() {
-        keyIntentRevision &+= 1
-        keyIntent = .focus(keyIntentRevision)
-        keyFocusPending = true
+        nativeKeyFocusRequested = true
         keyFocusRequest &+= 1
     }
 
     func noteKeyFocus(_ focused: Bool, closeWhenLeaving: Bool = true) {
-        if focused { keyFocusPending = false }
+        // A native Tab can focus # without a programmatic request. Retain
+        // that native ownership until a real blur, click elsewhere or close.
+        if nativeKeyFocusRequested != focused { nativeKeyFocusRequested = focused }
         guard keyFocused != focused else { return }
         keyFocused = focused
         // The keyboard left the bar (Tab on, a click on a row): a bar it
@@ -177,7 +170,6 @@ struct NotesTagBar: View {
     @State private var pointed: NotesTagBarPillID?
     @StateObject private var keys = PanelTagBarKeys()
     @FocusState private var summaryFocus: PanelTagBarState.SummaryFocus?
-    @State private var summaryOwner = UUID()
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
 
     private var allID: String { "\(idPrefix)-all" }
@@ -288,7 +280,8 @@ struct NotesTagBar: View {
         }
         .buttonStyle(AtticPressButtonStyle())
         .focusEffectDisabled()
-        .modifier(PanelTagKeyFocus(state: state, requests: focusRequests, seam: idPrefix, managed: managesOwnTabOrder, reachable: shown))
+        .modifier(PanelTagKeyFocus(state: state, requests: focusRequests, seam: idPrefix, managed: managesOwnTabOrder,
+                                   reachable: shown, nativeKey: { keys.handleFocusedKey($0) }))
         .atticFocusRing(state.keyFocused && state.cursor == nil, cornerRadius: m.pillRadius)
         .help(String(localized: "Tags (⌥⌘T)"))
         .accessibilityLabel(String(localized: "Tags"))
@@ -344,7 +337,7 @@ struct NotesTagBar: View {
             #if DEBUG
             PanelKeyStopSeam.focusCallbacks.append("tag summary \(idPrefix) focus=\(String(describing: now))")
             #endif
-            state.noteSummaryFocus(now, owner: summaryOwner)
+            state.noteSummaryFocus(now)
         }
         .onChange(of: shown) { _, now in if !now { releaseSummary() } }
         .onDisappear { releaseSummary() }
@@ -378,7 +371,7 @@ struct NotesTagBar: View {
 
     private func releaseSummary() {
         summaryFocus = nil
-        state.noteSummaryFocus(nil, owner: summaryOwner)
+        if state.summaryFocus == summaryFocus { state.noteSummaryFocus(nil) }
     }
 
     // MARK: Open: All and the tags
@@ -712,9 +705,10 @@ private struct PanelTagKeyFocus: ViewModifier {
     let reachable: Bool
     /// A stop in AppKit's key loop while the bar shows: the "#" key. The
     /// picked-tags summary is not: its two native buttons are its stops, and
-    /// a container around them would be a third (round 2 review N-5). Like
-    /// the key it still takes the keyboard when ⌥⌘T asks.
+    /// a container around them would be a third (round 2 review N-5).
     var plainStop = true
+    /// Non-Tasks pages deliver ordinary keys from the actual focused button.
+    var nativeKey: ((KeyPress) -> KeyPress.Result)? = nil
     @FocusState private var focused: Bool
     @State private var armed = false
     /// The Tab order this "#" lends its requests from (Tasks'), so that Tab
@@ -727,30 +721,24 @@ private struct PanelTagKeyFocus: ViewModifier {
         // Tasks keeps its own Tab order exactly as before (the page asks for
         // "#" itself, whatever the bar shows); the other pages' key loop
         // walks it only while the bar shows.
-        let focusable = (managed || !plainStop) ? armed : reachable
+        let focusable = managed ? armed : (plainStop && reachable)
         #if DEBUG
         let _ = PanelKeyStopSeam.tagKey[seam] = focusable
         #endif
         content
             .focusable(focusable, interactions: .activate)
             .focused($focused)
+            .onKeyPress(keys: [.leftArrow, .rightArrow, .escape, .space, .return, KeyEquivalent(Character("\u{3}"))]) { press in
+                guard !managed, focused, reachable else { return .ignored }
+                return nativeKey?(press) ?? .ignored
+            }
             .onChange(of: state.keyFocusRequest) { _, _ in if managed { arm() } }
-            .onChange(of: state.keyIntent) { _, intent in
-                guard !managed else { return }
-                if case .focus = intent {
-                    arm(expectedIntent: intent)
-                    return
-                }
-                handoff.cancel()
-                armed = false
-                let released = handoff.generation
-                DispatchQueue.main.async {
-                    guard handoff.generation == released, state.keyIntent == intent else { return }
-                    if state.keyFocused { release() }
-                }
+            .onChange(of: state.nativeKeyFocusRequested) { _, wanted in
+                guard !managed, plainStop else { return }
+                focused = reachable && wanted
             }
             .onReceive(requests?.requests.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { asked in
-                guard asked == AnyHashable(PanelTagKeyFocusID()) else { return }
+                guard managed, asked == AnyHashable(PanelTagKeyFocusID()) else { return }
                 arm()
             }
             .onChange(of: focused) { _, now in
@@ -758,6 +746,7 @@ private struct PanelTagKeyFocus: ViewModifier {
                 PanelKeyStopSeam.focusCallbacks.append("tag key \(seam) focused=\(now) reachable=\(reachable) managed=\(managed)")
                 #endif
                 state.noteKeyFocus(now)
+                if !managed { return }
                 if now {
                     lender = requests
                     requests?.note(PanelTagKeyFocusID(), focused: true)
@@ -767,38 +756,48 @@ private struct PanelTagKeyFocus: ViewModifier {
                 }
             }
             .onChange(of: requests.map(ObjectIdentifier.init), initial: true) { _, _ in
+                guard managed || lender != nil else { return }
                 // Another page's requests: the old Tab order is told at once.
                 if let lender, lender !== requests { lender.note(PanelTagKeyFocusID(), focused: false) }
                 lender = requests
+            }
+            .onAppear {
+                if !managed, plainStop, reachable, state.nativeKeyFocusRequested { focused = true }
             }
             // Hidden, or on another kind of page, "#" gives the keyboard up.
             .onChange(of: reachable) { _, now in if !now, !managed { release() } }
             .onChange(of: managed) { _, _ in release() }
             .onDisappear {
-                // The key and summary replace one another. Release native
-                // ownership, preserving a cursor deliberately opening the bar.
-                handoff.cancel()
-                state.noteKeyFocus(false, closeWhenLeaving: false)
-                lender?.note(PanelTagKeyFocusID(), focused: false)
+                // An outgoing summary or # animation must not revoke a new
+                // focus request made to the live native control.
+                if managed {
+                    handoff.cancel()
+                    state.noteKeyFocus(false, closeWhenLeaving: false)
+                    lender?.note(PanelTagKeyFocusID(), focused: false)
+                } else if focused {
+                    state.noteKeyFocus(false, closeWhenLeaving: false)
+                }
             }
     }
 
     private func release() {
+        // A Tasks-to-Notes switch updates `managed` before this modifier's
+        // release callback. Cancel the handoff Tasks already scheduled even
+        // though the newly active page uses native focus.
         handoff.cancel()
         armed = false
+        lender?.note(PanelTagKeyFocusID(), focused: false)
         if focused { focused = false }
         state.noteKeyFocus(false)
-        lender?.note(PanelTagKeyFocusID(), focused: false)
     }
 
-    private func arm(expectedIntent: PanelTagBarState.KeyIntent? = nil) {
-        guard reachable || managed else { return }
+    private func arm() {
+        guard managed, reachable else { return }
         armed = true
-        let intent = expectedIntent ?? state.keyIntent
         let queued = handoff.next()
         panelKeyHandoff {
             // Released since (a page switch, a reveal, a click): stay put.
-            guard handoff.generation == queued, managed || state.keyIntent == intent else { return }
+            guard handoff.generation == queued else { return }
             #if DEBUG
             PanelKeyStopSeam.tagKeyAssignments += 1
             #endif
@@ -879,9 +878,37 @@ final class PanelTagBarKeys: ObservableObject {
         let action = Self.action(keyCode: event.keyCode, characters: event.charactersIgnoringModifiers,
                                  modifiers: event.modifierFlags, isOpen: state.isOpen,
                                  hasKeyboard: state.hasKeyboard, hasCursor: state.cursor != nil)
+        // The window monitor owns the global chord and a popup's Escape.
+        // Ordinary arrows, Return and Space belong to the focused control
+        // on Notes; Tasks still uses its existing managed focus order.
+        if !context.managed && action != .toggle && !(action == .close && event.keyCode == 53) {
+            return false
+        }
         #if DEBUG
         PanelKeyStopSeam.monitorDecisions.append("tag monitor key=\(event.keyCode) modifiers=\(event.modifierFlags.rawValue) action=\(action) consumed=\(action != .none)")
         #endif
+        return perform(action, in: context)
+    }
+
+    func handleFocusedKey(_ press: KeyPress) -> KeyPress.Result {
+        guard let context, context.enabled, !context.managed else { return .ignored }
+        guard press.modifiers.isEmpty else { return .ignored }
+        let action: Action
+        switch press.key {
+        case .leftArrow: action = context.state.isOpen ? .move(-1) : .none
+        case .rightArrow: action = context.state.isOpen ? .move(1) : .none
+        case .escape: action = context.state.isOpen ? .close : .none
+        case .space: action = context.state.isOpen && context.state.cursor != nil ? .activate : .openOnFirst
+        case .return, KeyEquivalent(Character("\u{3}")):
+            action = context.state.isOpen ? .close : .openOnFirst
+        default: action = .none
+        }
+        return perform(action, in: context) ? .handled : .ignored
+    }
+
+    @discardableResult
+    private func perform(_ action: Action, in context: Context) -> Bool {
+        let state = context.state
         let stops = PanelTagBarStop.stops(tags: context.tags, picks: context.picks)
         switch action {
         case .none:
@@ -934,9 +961,9 @@ final class PanelTagBarKeys: ObservableObject {
     private func handleClick(_ event: NSEvent) {
         guard let context, let view, let window = view.window, event.window === window else { return }
         #if DEBUG
-        PanelKeyStopSeam.monitorDecisions.append("tag click type=\(event.type) open=\(context.state.isOpen) focused=\(context.state.keyFocused) pending=\(context.state.keyFocusPending)")
+        PanelKeyStopSeam.monitorDecisions.append("tag click type=\(event.type) open=\(context.state.isOpen) focused=\(context.state.keyFocused) requested=\(context.state.nativeKeyFocusRequested)")
         #endif
-        guard context.state.isOpen || context.state.keyFocused || (!context.managed && context.state.keyFocusPending) else { return }
+        guard context.state.isOpen || context.state.keyFocused || (!context.managed && context.state.nativeKeyFocusRequested) else { return }
         let point = view.convert(event.locationInWindow, from: nil)
         guard !view.bounds.contains(point) else { return }
         if context.state.isOpen { context.state.close() } else if !context.managed { context.state.releaseKeyFocus() }
