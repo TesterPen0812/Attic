@@ -348,6 +348,9 @@ class DrawStore: DrawStoreProtocol {
     /// Records `history` as what the ledger holds for `key`. A step already
     /// measured (`measuring`) is not measured again.
     private func setLedgered(_ key: UUID, _ history: History, measuring earlier: LedgeredHistory? = nil) {
+        #if DEBUG
+        HistoryLedgerProbe.footprintSets += 1
+        #endif
         var prints: [UUID: StepFootprint] = [:]
         for step in history.undo + history.redo {
             prints[step.id] = earlier?.prints[step.id] ?? HistoryLedger.measure(step)

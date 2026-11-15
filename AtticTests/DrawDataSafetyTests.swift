@@ -512,20 +512,20 @@ final class DrawDataSafetyTests: XCTestCase {
                 let stroke = DrawObject(frame: frame, content: .stroke([DrawPoint(x: frame.x, y: frame.y), DrawPoint(x: frame.x + frame.width, y: frame.y + frame.height)]))
                 XCTAssertTrue(page.perform(.put([stroke])).isSaved)
                 page.setTool(.select); page.select([stroke.id])
+                page.setViewport(DrawViewport(zoom: DrawViewport.maxZoom), byUser: true)
                 let spot = try XCTUnwrap(page.handleSpots.first { $0.handle == .bottomRight })
                 let head = store.undoStepID(on: page.canvasID!)
                 page.pointerDown(at: spot.point, shift: true)
-                page.pointerDragged(to: CGPoint(x: spot.point.x + (mirror ? 0 : 1), y: spot.point.y + (mirror ? 1 : 0)), shift: true)
+                page.pointerDragged(to: CGPoint(x: spot.point.x + page.viewport.zoom, y: spot.point.y + page.viewport.zoom), shift: true)
                 page.pointerUp(); page.flushAcknowledgedDraw()
                 let changed = try XCTUnwrap(page.objects.first)
                 let box = DrawGeometry.frame(changed.frame)
                 XCTAssertLessThanOrEqual(max(box.width, box.height), 4.01, "1 pt travel cannot amplify a 3 pt object to thousands")
-                if changed != stroke {
-                    page.undo(); XCTAssertEqual(page.objects, [stroke])
-                    page.redo(); XCTAssertEqual(page.objects, [changed])
-                } else {
-                    XCTAssertEqual(store.undoStepID(on: page.canvasID!), head, "a no-op does not consume history")
-                }
+                XCTAssertNotEqual(changed, stroke, "the pointer fixture must actually resize")
+                XCTAssertNotEqual(store.undoStepID(on: page.canvasID!), head)
+                XCTAssertEqual(max(box.width, box.height), 4, accuracy: 0.01)
+                page.undo(); XCTAssertEqual(page.objects, [stroke])
+                page.redo(); XCTAssertEqual(page.objects, [changed])
                 XCTAssertEqual(try DrawPersistentStore(container: store.container).open(page.canvasID!).objects, [changed])
             }
         }

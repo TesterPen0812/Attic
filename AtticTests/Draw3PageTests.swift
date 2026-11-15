@@ -1773,19 +1773,18 @@ final class Draw3PageTests: XCTestCase {
             model.flushAcknowledgedDraw()
         }
         XCTAssertEqual(store.pendingEdits[id]?.count, 202, "every later gesture belongs to the sparse durable queue")
-        let held = Mirror(reflecting: try XCTUnwrap(model)).children.first { $0.label == "heldHistory" }
-        var snapshots = 0, retainedReferences = 0
-        for pair in held.map({ Array(Mirror(reflecting: $0.value).children) }) ?? [] {
-            guard let value = Array(Mirror(reflecting: pair.value).children).last?.value,
-                  let entries = Mirror(reflecting: value).children.first(where: { $0.label == "entries" }) else { continue }
-            for entry in Mirror(reflecting: entries.value).children {
-                if let before = Mirror(reflecting: entry.value).children.first(where: { $0.label == "before" })?.value as? [DrawObject] {
-                    snapshots += 1; retainedReferences += before.count
-                }
-            }
+        let fields = Array(Mirror(reflecting: try XCTUnwrap(model)).children)
+        XCTAssertNotNil(fields.first { $0.label == "acknowledgedDraw" }, "reflection must inspect the actual model")
+        func boardArrays(_ value: Any) -> Int {
+            if let objects = value as? [DrawObject] { return objects.count >= 500 ? 1 : 0 }
+            let reflected = Mirror(reflecting: value)
+            guard reflected.displayStyle != .class else { return 0 }
+            return reflected.children.reduce(0) { $0 + boardArrays($1.value) }
         }
-        print("R4_CONTINUATION_MEMORY beforeArrays=\(snapshots) objectReferences=\(retainedReferences)")
-        XCTAssertEqual(snapshots, 0, "continuations must retain sparse changes, never a full board per action")
+        let snapshots = fields.filter { !["objects", "store", "board", "library"].contains($0.label ?? "") }
+            .reduce(0) { $0 + boardArrays($1.value) }
+        print("R5_CONTINUATION_MEMORY retainedBoardArrays=\(snapshots)")
+        XCTAssertEqual(snapshots, 0, "any queue retaining full board arrays must fail, regardless of its property name")
         let durable = try XCTUnwrap(store as? DrawPersistentStore)
         let root = try XCTUnwrap(durable.container.configurations.first).url.deletingLastPathComponent()
         let journal = DrawRecoveryJournal(fileURL: root.appendingPathComponent("DrawRecovery-v1.json"))
@@ -2424,6 +2423,7 @@ final class Draw3Gate: @unchecked Sendable {
         waiting.forEach { $0.resume() }
     }
 }
+
 // Round 5: Escape owns the exact title transition and its queued inverses.
 extension Draw3PageTests {
     private func r5URL() throws -> URL {
@@ -2532,6 +2532,7 @@ extension Draw3PageTests {
         use(recovered)
     }
 }
+
 
 extension Draw3PageTests {
     func testR5PendingJournalWritesOnlyEachNewStrokeAndRecoversTheWholeTail() throws {

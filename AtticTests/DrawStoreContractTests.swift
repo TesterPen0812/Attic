@@ -279,6 +279,10 @@ final class DrawStoreContractTests: XCTestCase {
         XCTAssertEqual(strokeSets, 0); XCTAssertEqual(HistoryLedgerProbe.footprintSets, 0)
         print("R4_LEDGER_OPERATIONS transform500=\(transformVisits) transformObjects=\(transformObjects) strokeObjects=\(strokeObjects) strokeSets=\(strokeSets) strokes110=\(strokeVisits) keys2=\(typingVisits) redo1=\(redoVisits)")
         XCTAssertEqual(strokeVisits, 0); XCTAssertEqual(typingVisits, 0); XCTAssertEqual(redoVisits, 0)
+        HistoryLedgerProbe.reset()
+        evictEveryEarlierCanvas(store)
+        XCTAssertGreaterThan(HistoryLedgerProbe.footprintSets, 0, "positive control: real eviction constructs footprint sets")
+
     }
 
     private func round3PersistentStore() throws -> DrawPersistentStore {
