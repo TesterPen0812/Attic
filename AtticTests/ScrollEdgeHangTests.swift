@@ -49,6 +49,17 @@ final class ScrollEdgeHangTests: XCTestCase {
 
     private func dump(_ url: URL) -> String? { try? String(contentsOf: url, encoding: .utf8) }
 
+    /// Opus R-9: when another afterWaiting observer spins, the watchdog
+    /// must have already marked the main run loop awake (earliest order).
+    func testRunLoopWakeObserverRunsAtEarliestOrder() {
+        let clock = FakeClock()
+        let (probe, _) = makeProbe(clock)
+        probe.start()
+        defer { probe.stopForTesting() }
+        XCTAssertEqual(probe.installedObserverOrders.wake, CFIndex(Int32.min))
+        XCTAssertEqual(probe.installedObserverOrders.sleep, CFIndex(Int32.max))
+    }
+
     /// Opus R-1 = Dot R-1 (P0). The watchdog read its clock before the lock, so
     /// run-loop state written in between could be newer than `now`, and the
     /// unsigned subtraction trapped: the app crashed mid-hang instead of dumping.

@@ -158,6 +158,7 @@ final class AtticHangProbe: @unchecked Sendable {
     private var recoveredAfterFirstHang = false
     private var savedFollowingHang = false
     private var observer: CFRunLoopObserver?
+    private var wakeObserver: CFRunLoopObserver?
     private var watchdog: DispatchSourceTimer?
 
     init(outputURL: URL,
@@ -173,18 +174,23 @@ final class AtticHangProbe: @unchecked Sendable {
         lastRealWait = start
     }
 
-    private func start() {
+    func start() {
         precondition(Thread.isMainThread)
         guard observer == nil else { return }
-        // Sleep and wake are `beforeWaiting` and `afterWaiting` only. AppKit
-        // dispatches events between the loop's exit and its next entry, so a
-        // spin inside event handling must still count as busy.
-        let activities = CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue
-        guard let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, activities, true,
+        // Observe wake before other afterWaiting callbacks can spin; observe
+        // sleep last after all beforeWaiting callbacks have completed. One
+        // last-order observer for both phases could miss a stuck earlier wake.
+        guard let wakeObserver = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault,
+                                                                  CFRunLoopActivity.afterWaiting.rawValue, true,
+                                                                  CFIndex(Int32.min), { [weak self] _, activity in
+            self?.runLoop(activity)
+        }), let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault,
+                                                               CFRunLoopActivity.beforeWaiting.rawValue, true,
                                                                CFIndex(Int32.max), { [weak self] _, activity in
             self?.runLoop(activity)
         }) else { return }
         self.observer = observer
+        self.wakeObserver = wakeObserver
         // `start` runs inside a main run-loop turn: awake, not waiting.
         lock.withLock {
             let now = clock()
@@ -192,6 +198,7 @@ final class AtticHangProbe: @unchecked Sendable {
             lastCompletedTurn = now
             lastRealWait = now
         }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), wakeObserver, CFRunLoopMode.commonModes)
         CFRunLoopAddObserver(CFRunLoopGetMain(), observer, CFRunLoopMode.commonModes)
 
         let queue = DispatchQueue(label: "attic.ci.hang-probe", qos: .utility)
@@ -201,6 +208,21 @@ final class AtticHangProbe: @unchecked Sendable {
         watchdog.setEventHandler { [weak self] in self?.checkForHang() }
         watchdog.resume()
         self.watchdog = watchdog
+    }
+
+    /// Hosted-order guard: observe actual installed observers, not a repeated
+    /// constant. Both observers are removed when this synthetic test ends.
+    var installedObserverOrders: (wake: CFIndex?, sleep: CFIndex?) {
+        (wakeObserver.map(CFRunLoopObserverGetOrder), observer.map(CFRunLoopObserverGetOrder))
+    }
+
+    func stopForTesting() {
+        if let observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, CFRunLoopMode.commonModes) }
+        if let wakeObserver { CFRunLoopRemoveObserver(CFRunLoopGetMain(), wakeObserver, CFRunLoopMode.commonModes) }
+        observer = nil
+        wakeObserver = nil
+        watchdog?.cancel()
+        watchdog = nil
     }
 
     /// A non-negative age that never underflows, however the readings interleave.
