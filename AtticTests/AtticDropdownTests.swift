@@ -822,7 +822,7 @@ final class AtticDropdownTests: XCTestCase {
     /// A date card cut short to fit the panel, a key having lit a day and
     /// the card scrolled back to the top; `press` then presses › on the
     /// button. Returns the card's scroll offset once the month has turned.
-    private func offsetAfterTurningTheMonth(waitForScroll: Bool, press: (NSView, NSWindow, AnyObject) throws -> Void) throws -> CGFloat {
+    private func offsetAfterTurningTheMonth(waitForScroll: Bool, press: (NSView, NSWindow, AnyObject, () -> Void) throws -> Void) throws -> CGFloat {
         final class Keys { var handler: ((NSEvent) -> Bool)? }
         let keys = Keys()
         var calendar = Calendar(identifier: .gregorian)
@@ -837,18 +837,31 @@ final class AtticDropdownTests: XCTestCase {
         let window = makeWindow()
         defer { window.close() }
         defer { restoreNeutralCurrentEvent() }
+        var reportedDay: String?
         let card = AtticDropdownCard(width: AtticDropdownMetrics.dateCardWidth) {
             AtticDateCard(today: today, selected: selected, calendar: calendar, typed: .constant(""), onPick: { _ in })
         }
         .environment(\.atticDropdownHeight, 200)
         .environment(\.atticDropdownContentHeightChanged, { _ in })
         .environment(\.atticDropdownRegisterKeys, { keys.handler = $0 })
+        .environment(\.atticDropdownFocusRequest, 0)
         .atticDesign(AtticDesignContext(mode: .light, reduceMotion: true))
-        let host = NSHostingView(rootView: card)
+        .onPreferenceChange(AtticDropdownHighlightKey.self) { day in
+            DispatchQueue.main.async { reportedDay = day }
+        }
+        let receipt = RenderReceipt()
+        let host = NSHostingView(rootView: RenderFrame(receipt: receipt, content: card))
         host.frame = CGRect(x: 0, y: 0, width: 240, height: 320)
         window.contentView?.addSubview(host)
         host.layoutSubtreeIfNeeded()
-        spin(0.3)
+        wait(for: host) { keys.handler != nil && !self.scrollViews(in: host).isEmpty }
+        func renderedUpdate() {
+            receipt.requested += 1
+            wait(for: host) { receipt.received == receipt.requested }
+            XCTAssertEqual(receipt.received, receipt.requested, "the requested real-view update finished")
+            host.layoutSubtreeIfNeeded()
+        }
+        renderedUpdate()
         let card0 = try XCTUnwrap(scrollViews(in: host).first, "the card scrolls")
         XCTAssertGreaterThan((card0.documentView?.frame.height ?? 0) - card0.contentView.bounds.height, 20, "the card is cut short")
 
@@ -858,8 +871,11 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(keys.handler)(right))
         wait(for: host) { card0.contentView.bounds.origin.y > 20 }
         XCTAssertGreaterThan(card0.contentView.bounds.origin.y, 20, "a key's highlight on a day cut off scrolls to it")
+        wait(for: host) { reportedDay != nil }
+        let previousDay = reportedDay
         scroll(card0, to: 0)
-        spin(0.3)
+        wait(for: host) { card0.contentView.bounds.origin.y == 0 }
+        renderedUpdate()
 
         func dump(_ root: AnyObject) -> [String] {
             [root.accessibilityLabel?() ?? "-"] + (((root.accessibilityChildren?() ?? nil) ?? []).flatMap { dump($0 as AnyObject) })
@@ -868,28 +884,29 @@ final class AtticDropdownTests: XCTestCase {
             XCTFail("no › button among \(dump(host))")
             return -1
         }
-        try press(host, window, next)
-        wait(for: host) { self.labelled("November 2026", in: host) != nil }
+        try press(host, window, next, renderedUpdate)
+        wait(for: host) { self.labelled("November 2026", in: host) != nil && reportedDay != previousDay }
         XCTAssertNotNil(labelled("November 2026", in: host), "the month turned")
-        // A scroll that should happen is waited for; one that should not gets a settle.
+        XCTAssertNotEqual(reportedDay, previousDay, "the changed lit day has been reported")
         if waitForScroll { wait(for: host) { card0.contentView.bounds.origin.y > 20 } }
-        spin(0.3)
+        host.layoutSubtreeIfNeeded()
+        try attachPF43Render(host, name: "PF43-month-arrow-result")
         return card0.contentView.bounds.origin.y
     }
 
     /// A real mouse down and up through the window, as the app's event loop
     /// delivers them: the app's current event is the mouse-up while the
     /// button acts.
-    private func click(atWindowPoint point: CGPoint, in window: NSWindow) throws {
+    private func click(atWindowPoint point: CGPoint, releaseAt: CGPoint? = nil, in window: NSWindow, afterDown: () -> Void = {}) throws {
         for (type, mask, pressure) in [(NSEvent.EventType.leftMouseDown, NSEvent.EventTypeMask.leftMouseDown, Float(1)),
                                        (.leftMouseUp, .leftMouseUp, 0)] {
-            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: type == .leftMouseUp ? (releaseAt ?? point) : point, modifierFlags: [],
                                                          timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                                                          context: nil, eventNumber: 0, clickCount: 1, pressure: pressure))
             NSApp.postEvent(event, atStart: true)
             let next = try XCTUnwrap(NSApp.nextEvent(matching: mask, until: Date().addingTimeInterval(1), inMode: .default, dequeue: true))
             NSApp.sendEvent(next)
-            spin(0.1)
+            if type == .leftMouseDown { afterDown() }
         }
     }
 
@@ -898,12 +915,12 @@ final class AtticDropdownTests: XCTestCase {
     /// is not the keyboard: the card stays, or the arrow slides out from under
     /// the pointer.
     func testPF43AMouseClickOnTheMonthArrowDoesNotScrollACutShortDateCard() throws {
-        let offset = try offsetAfterTurningTheMonth(waitForScroll: false) { host, window, next in
+        let offset = try offsetAfterTurningTheMonth(waitForScroll: false) { host, window, next, render in
             let frame = try XCTUnwrap((next.accessibilityFrame?()).map { window.convertFromScreen($0) }, "the button has a frame")
             let point = CGPoint(x: frame.midX, y: frame.midY)
             // The pointer is on the button before it clicks, as it always is.
             try Pointer().move(in: host, toWindowPoint: point)
-            try self.click(atWindowPoint: point, in: window)
+            try self.click(atWindowPoint: point, in: window, afterDown: render)
         }
         XCTAssertEqual(offset, 0, accuracy: 0.5, "a click on › does not scroll the card")
     }
@@ -912,8 +929,8 @@ final class AtticDropdownTests: XCTestCase {
     /// app's last event was: a mouse-up made elsewhere in the window a
     /// moment ago (a real click on something else) is not this press's click.
     func testPF43AAccessibilityPressRightAfterAMouseUpElsewhereScrollsTheLitDayIntoView() throws {
-        let offset = try offsetAfterTurningTheMonth(waitForScroll: true) { _, window, next in
-            try self.click(atWindowPoint: CGPoint(x: 300, y: 500), in: window)
+        let offset = try offsetAfterTurningTheMonth(waitForScroll: true) { _, window, next, render in
+            try self.click(atWindowPoint: CGPoint(x: 300, y: 500), in: window, afterDown: render)
             XCTAssertEqual(NSApp.currentEvent?.type, .leftMouseUp, "the app's last event is a mouse-up elsewhere")
             XCTAssertTrue(next.accessibilityPerformPress?() ?? false)
         }
@@ -923,10 +940,44 @@ final class AtticDropdownTests: XCTestCase {
     /// A VoiceOver or other accessibility press on ›/‹ has no pointer under
     /// it: the lit day it moves into a cut-off week is brought into view.
     func testPF43AAccessibilityPressOnTheMonthArrowScrollsTheLitDayIntoView() throws {
-        let offset = try offsetAfterTurningTheMonth(waitForScroll: true) { _, _, next in
+        let offset = try offsetAfterTurningTheMonth(waitForScroll: true) { _, _, next, _ in
             XCTAssertTrue(next.accessibilityPerformPress?() ?? false)
         }
         XCTAssertGreaterThan(offset, 20, "the lit day is scrolled into view after an accessibility press on ›")
+    }
+
+    func testPF43AMouseDownOnMonthArrowAndUpOutsideDoesNotTurnItBeforeAnAXPress() throws {
+        let offset = try offsetAfterTurningTheMonth(waitForScroll: true) { host, window, next, render in
+            let frame = try XCTUnwrap((next.accessibilityFrame?()).map { window.convertFromScreen($0) })
+            try self.click(atWindowPoint: CGPoint(x: frame.midX, y: frame.midY),
+                           releaseAt: CGPoint(x: 300, y: 500), in: window, afterDown: render)
+            render()
+            XCTAssertNotNil(self.labelled("October 2026", in: host), "release outside cancels the mouse activation")
+            XCTAssertEqual(self.scrollOffset(in: host) ?? -1, 0, accuracy: 0.5, "a cancelled press leaves the card in place")
+            XCTAssertTrue(next.accessibilityPerformPress?() ?? false)
+            // The helper requires November, so an erroneous mouse action
+            // followed by this AX action cannot pass by turning twice.
+        }
+        XCTAssertGreaterThan(offset, 20, "the subsequent AX activation reveals the day")
+    }
+
+    func testPF43AAccessibilityMonthPressWithPointerOnArrowRevealsTheLitDay() throws {
+        let offset = try offsetAfterTurningTheMonth(waitForScroll: true) { host, window, next, render in
+            let frame = try XCTUnwrap((next.accessibilityFrame?()).map { window.convertFromScreen($0) })
+            try Pointer().move(in: host, toWindowPoint: CGPoint(x: frame.midX, y: frame.midY))
+            render()
+            let hoveredArrow = try XCTUnwrap(self.labelled("Next month", in: host))
+            XCTAssertTrue(hoveredArrow.accessibilityPerformPress?() ?? false)
+        }
+        XCTAssertGreaterThan(offset, 20, "an accessibility activation reveals the day even with the pointer on the arrow")
+    }
+
+    func testPF43AMouseMonthPressWithoutPriorHoverDoesNotScrollTheCard() throws {
+        let offset = try offsetAfterTurningTheMonth(waitForScroll: false) { _, window, next, render in
+            let frame = try XCTUnwrap((next.accessibilityFrame?()).map { window.convertFromScreen($0) })
+            try self.click(atWindowPoint: CGPoint(x: frame.midX, y: frame.midY), in: window, afterDown: render)
+        }
+        XCTAssertEqual(offset, 0, accuracy: 0.5, "a mouse activation identifies itself even when no hover arrived")
     }
 
     // MARK: A hover that does not move the highlight (R-3)

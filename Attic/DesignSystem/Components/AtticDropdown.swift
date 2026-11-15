@@ -2438,6 +2438,11 @@ extension EnvironmentValues {
     }
 }
 
+/// The input that wrote a dropdown highlight.
+enum AtticHighlightSource: Equatable, Sendable {
+    case keyboard, pointer, accessibility
+}
+
 /// Where a scrolling list's highlight came from, known from the change
 /// itself and not inferred from `NSApp.currentEvent` (which a stale mouse
 /// event from an earlier test, or a stray move between a key press and
@@ -2459,6 +2464,13 @@ final class AtticHighlightOrigin {
     /// after exit needs one update to report that origin before it expires.
     /// New entries invalidate queued leaves; no elapsed-time rule is used.
     private var leaveGeneration = 0
+
+    /// Actions that write a highlight know their own source (including AX).
+    func highlightWritten(_ id: String, source: AtticHighlightSource) {
+        leaveGeneration &+= 1
+        reported = false
+        pointerRow = source == .pointer ? id : nil
+    }
 
     func pointerEntered(_ id: String) {
         // Every move inside a row says so again: only a different row is a

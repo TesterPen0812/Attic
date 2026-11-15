@@ -732,12 +732,7 @@ struct AtticDateCard: View {
         let d = AtticDropdownMetrics.self
         let lit = hoveredMonthStep == step
         return Button {
-            update { state in
-                _ = state.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false)
-                // Only the arrow's own hover identifies a pointer action;
-                // an AX press after an unrelated mouse-up still reveals the day.
-                if lit, state.lit == .day { highlightOrigin?.pointerEntered(Self.dayID(calendar.startOfDay(for: state.cursor))) }
-            }
+            turnMonth(step, source: .pointer)
         } label: {
             AtticIcon(systemName: systemName, size: d.monthChevron, weight: .medium, ink: .icon)
                 .frame(width: d.monthNavWidth - 2, height: d.monthNavWidth - 2)
@@ -753,6 +748,16 @@ struct AtticDateCard: View {
         }
         .help(label)
         .accessibilityLabel(label)
+        .accessibilityAction { turnMonth(step, source: .accessibility) }
+    }
+
+    private func turnMonth(_ step: Int, source: AtticHighlightSource) {
+        update { state in
+            _ = state.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false)
+            if state.lit == .day {
+                highlightOrigin?.highlightWritten(Self.dayID(calendar.startOfDay(for: state.cursor)), source: source)
+            }
+        }
     }
 
     /// Clear Date (draft C): a full-width soft row, 66 % ink at rest.
