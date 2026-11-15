@@ -728,6 +728,42 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    /// R-3 round 2: Notes' compact restoring state must keep its natural
+    /// centre in the shell when no retained page has a frozen size.
+    func testUnfrozenRestoringProgressIsCentredInThePanel() throws {
+        #if ATTIC_LOCAL_ONLY
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        var observedFrame: CGRect?
+        let width: CGFloat = 340
+        let height: CGFloat = 520
+        let restored = ZStack {
+            ProgressView("Restoring draft…")
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.onAppear {
+                            observedFrame = geometry.frame(in: .named("resize-restoring"))
+                        }
+                    }
+                }
+                .modifier(PanelResizePageFrame(frozenSize: nil))
+        }
+        .frame(width: width, height: height)
+        .coordinateSpace(name: "resize-restoring")
+        let host = NSHostingView(rootView: restored)
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: width, height: height),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        spin(0.15)
+        let frame = try XCTUnwrap(observedFrame, "the real ProgressView must be laid out")
+        XCTAssertEqual(frame.midX, width / 2, accuracy: 2)
+        XCTAssertEqual(frame.midY, height / 2, accuracy: 2)
+        #endif
+    }
+
     /// R-2: a hidden page does no work for the steps of a drag. Its top row,
     /// which reads the page's travel, must not re-run while the panel widens.
     func testLiveResizeHiddenPagesDoNoTopRowWorkDuringADrag() throws {

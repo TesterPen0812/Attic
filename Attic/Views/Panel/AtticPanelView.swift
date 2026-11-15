@@ -233,15 +233,7 @@ struct AtticPanelView: View {
                             // A fully invisible page has no reason to measure
                             // again at each intermediate window size. Its
                             // retained native editors and state stay mounted.
-                            .frame(width: frozenSize?.width, height: frozenSize?.height,
-                                   alignment: .topLeading)
-                            // The outer frame accepts SwiftUI's actual offered
-                            // size, including the proposal before the next
-                            // AppKit size notification. The hidden content
-                            // stays pinned at the top-leading origin.
-                            .frame(minWidth: 0, maxWidth: .infinity,
-                                   minHeight: 0, maxHeight: .infinity,
-                                   alignment: .topLeading)
+                            .modifier(PanelResizePageFrame(frozenSize: frozenSize))
                             .onAppear {
                                 PerformanceSignposts.noteInput("page-mounted \(page.rawValue)")
                             }
@@ -895,6 +887,25 @@ struct AtticPanelView: View {
 /// observed-model changes inside the subtree still invalidate it normally.
 /// As soon as a page becomes visible (or starts travelling), normal SwiftUI
 /// comparison resumes for every frame.
+/// A held page keeps its last-sized native content pinned to its origin.
+/// The normal, unheld page keeps the ZStack's centring for compact states.
+struct PanelResizePageFrame: ViewModifier {
+    let frozenSize: CGSize?
+
+    func body(content: Content) -> some View {
+        content
+            .frame(width: frozenSize?.width, height: frozenSize?.height, alignment: .topLeading)
+            // A nil frame is inert: compact states (such as Notes' restoring
+            // indicator) retain the ZStack's centred layout. Only frozen
+            // pages occupy the whole proposal at its top-leading origin.
+            .frame(minWidth: frozenSize == nil ? nil : 0,
+                   maxWidth: frozenSize == nil ? nil : .infinity,
+                   minHeight: frozenSize == nil ? nil : 0,
+                   maxHeight: frozenSize == nil ? nil : .infinity,
+                   alignment: .topLeading)
+    }
+}
+
 private struct PanelResizeStablePageHost<Content: View>: View, Equatable {
     let page: PanelPage
     let isCurrent: Bool
