@@ -108,10 +108,6 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in self?.onPressed?() }
-        panel.onUnhandledEscape = { [weak self] in
-            guard let self, self.panel.isVisible else { return false }
-            return self.composerState.closeForUnhandledEscape()
-        }
         panel.onUnhandledUndo = { [weak self] redo in
             guard let self else { return }
             AtticPanelController.performUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
