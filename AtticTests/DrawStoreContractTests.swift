@@ -126,6 +126,155 @@ final class DrawStoreContractTests: XCTestCase {
 
     // MARK: BG-27 round 3 (Dot R-8, R-9; Opus R-16, R-20)
 
+    func testR4BudgetKeepsTheWholeSuffixBehindAPinnedMiddleStep() throws {
+        let store = try round3PersistentStore()
+        let canvas = store.create(name: "Pinned middle")
+        var image = heavyImage(fill: 71, bytes: 40_000_000)
+        XCTAssertTrue(autoreleasepool { store.perform(.put([image]), on: canvas.id).isSaved })
+        XCTAssertTrue(autoreleasepool { store.perform(.tags(["pin"]), on: canvas.id).isSaved })
+        let offered = try XCTUnwrap(store.undoStepID(on: canvas.id))
+        let pin = store.pinHistoryStep(offered)
+        for i in 1...3 { image.frame.x = Double(i); XCTAssertTrue(autoreleasepool { store.perform(.put([image]), on: canvas.id).isSaved }) }
+        evictEveryEarlierCanvas(store)
+        withExtendedLifetime(pin) {
+            for _ in 0..<3 { XCTAssertTrue(autoreleasepool { store.undo(on: canvas.id).isSaved }) }
+            XCTAssertEqual(store.undoStepID(on: canvas.id), offered)
+            XCTAssertTrue(autoreleasepool { store.undo(on: canvas.id).isSaved })
+            XCTAssertEqual(try? store.open(canvas.id).canvas.tags, [])
+        }
+    }
+
+    func testR4BudgetKeepsTheWholeRedoSuffixBehindAPinnedMiddleStep() throws {
+        let store = try round3PersistentStore()
+        let c = store.create(name: "Redo middle")
+        XCTAssertTrue(autoreleasepool { store.perform(.put([heavyImage(fill: 77, bytes: 40_000_000)]), on: c.id).isSaved })
+        var offered: UUID?
+        for i in 1...6 {
+            XCTAssertTrue(autoreleasepool { store.perform(.rename("Name \(i)"), on: c.id).isSaved })
+            if i == 3 { offered = store.undoStepID(on: c.id) }
+        }
+        let pin = store.pinHistoryStep(try XCTUnwrap(offered))
+        for _ in 0..<6 { XCTAssertTrue(autoreleasepool { store.undo(on: c.id).isSaved }) }
+        evictEveryEarlierCanvas(store)
+        withExtendedLifetime(pin) {
+            for _ in 0..<3 { XCTAssertTrue(autoreleasepool { store.redo(on: c.id).isSaved }) }
+            XCTAssertEqual(store.undoStepID(on: c.id), offered)
+            XCTAssertEqual(try? store.open(c.id).canvas.name, "Name 3")
+        }
+    }
+
+    func testR4StepCapNeverRemovesAnOfferedUndo() throws {
+        let store = try round3PersistentStore()
+        let canvas = store.create(name: "Offered")
+        XCTAssertTrue(store.perform(.saveCanvas, on: canvas.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: canvas.id).isSaved)
+        let offer = DrawRecentlyDeleted.restoreTracked([DrawDeletedItem(canvasID: canvas.id, objectID: nil)], store: store)
+        let head = try XCTUnwrap(offer.actions.first?.historyStepID)
+        for i in 0..<110 { XCTAssertTrue(store.perform(.rename("Name \(i)"), on: canvas.id).isSaved) }
+        withExtendedLifetime(offer) {
+            for _ in 0..<110 { XCTAssertTrue(store.undo(on: canvas.id).isSaved) }
+            XCTAssertEqual(store.undoStepID(on: canvas.id), head)
+            XCTAssertTrue(store.undo(on: canvas.id).isSaved)
+            XCTAssertNotNil(try? store.open(canvas.id).canvas.deletedAt)
+        }
+    }
+
+    func testR4OverBudgetPinsDoNotConsumeUnrelatedUndo() throws {
+        let store = try round3PersistentStore()
+        let heavy = store.create(name: "Pinned 40MB")
+        XCTAssertTrue(autoreleasepool { store.perform(.put([heavyImage(fill: 72, bytes: 40_000_000)]), on: heavy.id).isSaved })
+        let pin = store.pinHistoryStep(try XCTUnwrap(store.undoStepID(on: heavy.id)))
+        var light: [UUID] = []
+        for i in 0..<2 {
+            let c = store.create(name: "Light \(i)"); light.append(c.id)
+            XCTAssertTrue(autoreleasepool { store.perform(.put([DrawObject(content: .text("keep"))]), on: c.id).isSaved })
+        }
+        evictEveryEarlierCanvas(store)
+        withExtendedLifetime(pin) {
+            for id in light { XCTAssertTrue(autoreleasepool { store.undo(on: id).isSaved }); XCTAssertTrue(try! store.open(id).objects.isEmpty) }
+        }
+    }
+
+    func testR4BudgetDropsDecisiveHeavyHeadBeforeCheapSharedPrefixes() throws {
+        let store = try round3PersistentStore()
+        let moved = store.create(name: "Shared")
+        var image = heavyImage(fill: 73, bytes: 5_000_000)
+        XCTAssertTrue(autoreleasepool { store.perform(.put([image]), on: moved.id).isSaved })
+        for i in 1..<100 { image.frame.x = Double(i); XCTAssertTrue(autoreleasepool { store.perform(.put([image]), on: moved.id).isSaved }) }
+        let heavy = store.create(name: "Decisive")
+        XCTAssertTrue(autoreleasepool { store.perform(.put([heavyImage(fill: 74, bytes: 34_000_000)]), on: heavy.id).isSaved })
+        evictEveryEarlierCanvas(store)
+        XCTAssertEqual(store.historyChanges(on: moved.id)?.undo.count, 100)
+        for _ in 0..<100 { XCTAssertTrue(autoreleasepool { store.undo(on: moved.id).isSaved }) }
+        XCTAssertTrue(try store.open(moved.id).objects.isEmpty)
+    }
+
+    func testR4PurgeAndReloadReleaseLedgerImmediately() throws {
+        for purge in [true, false] {
+            let store = try round3PersistentStore()
+            let c = store.create(name: "Retained")
+            XCTAssertTrue(store.perform(.put([heavyImage(fill: 75, bytes: 4_000_000)]), on: c.id).isSaved)
+            if purge { XCTAssertTrue(store.perform(.deleteCanvas, on: c.id).isSaved) }
+            let date = try store.open(c.id).canvas.deletedAt
+            evictEveryEarlierCanvas(store)
+            func ledgerIDs() -> Set<UUID> {
+                let value = Mirror(reflecting: store).superclassMirror!.children.first { $0.label == "ledgered" }!.value
+                return Set(Mirror(reflecting: value).children.compactMap { Mirror(reflecting: $0.value).children.first?.value as? UUID })
+            }
+            XCTAssertTrue(ledgerIDs().contains(c.id))
+            if purge { XCTAssertEqual(store.purge([.canvas(c.id, deletedAt: date!)]).removed, 1) }
+            else { try store.reload(c.id) }
+            XCTAssertFalse(ledgerIDs().contains(c.id), "release retained buffers without a later eviction")
+        }
+    }
+
+    func testR4ReleasingAnOverBudgetOfferReclaimsWithoutAnotherEviction() async throws {
+        let store = try round3PersistentStore()
+        let c = store.create(name: "Released")
+        XCTAssertTrue(autoreleasepool { store.perform(.put([heavyImage(fill: 76, bytes: 40_000_000)]), on: c.id).isSaved })
+        var pin = store.pinHistoryStep(try XCTUnwrap(store.undoStepID(on: c.id)))
+        evictEveryEarlierCanvas(store)
+        XCTAssertNotNil(store.undoStepID(on: c.id))
+        withExtendedLifetime(pin) {}
+        pin = nil
+        // Release maintenance is event-driven on MainActor, including when
+        // an offer is dropped by a closure on another executor.
+        for _ in 0..<5 {
+            await withCheckedContinuation { next in DispatchQueue.main.async { next.resume() } }
+        }
+        XCTAssertNil(store.undoStepID(on: c.id))
+    }
+
+    func testR4NeverEvictedEditsTypingAndRedoDoNoLedgerWork() throws {
+        let store = try round3PersistentStore()
+        let c = store.create(name: "Hot path")
+        var shape = DrawObject(content: .shape(.rectangle))
+        HistoryLedgerProbe.reset()
+        for i in 0..<110 { shape.frame.x = Double(i); XCTAssertTrue(store.perform(.put([shape]), on: c.id).isSaved) }
+        let strokeVisits = HistoryLedgerProbe.stepVisits
+        let strokeObjects = HistoryLedgerProbe.objectVisits
+        let strokeSets = HistoryLedgerProbe.footprintSets
+        let text = DrawObject(content: .text("a"))
+        var next = text; next.content = .text("ab")
+        XCTAssertTrue(store.performTypingBurst([.put([text]), .put([next])], on: c.id).isSaved)
+        let typingVisits = HistoryLedgerProbe.stepVisits - strokeVisits
+        XCTAssertTrue(store.undo(on: c.id).isSaved)
+        HistoryLedgerProbe.reset()
+        XCTAssertTrue(store.redo(on: c.id).isSaved)
+        let redoVisits = HistoryLedgerProbe.stepVisits
+        var objects = (0..<500).map { DrawObject(zIndex: Int64($0), content: .shape(.rectangle)) }
+        XCTAssertTrue(store.perform(.put(objects), on: c.id).isSaved)
+        for i in objects.indices { objects[i].frame.x += 10 }
+        HistoryLedgerProbe.reset()
+        XCTAssertTrue(store.perform(.put(objects), on: c.id).isSaved)
+        let transformVisits = HistoryLedgerProbe.stepVisits
+        let transformObjects = HistoryLedgerProbe.objectVisits
+        XCTAssertEqual(transformVisits, 0); XCTAssertEqual(transformObjects, 0)
+        XCTAssertEqual(strokeSets, 0); XCTAssertEqual(HistoryLedgerProbe.footprintSets, 0)
+        print("R4_LEDGER_OPERATIONS transform500=\(transformVisits) transformObjects=\(transformObjects) strokeObjects=\(strokeObjects) strokeSets=\(strokeSets) strokes110=\(strokeVisits) keys2=\(typingVisits) redo1=\(redoVisits)")
+        XCTAssertEqual(strokeVisits, 0); XCTAssertEqual(typingVisits, 0); XCTAssertEqual(redoVisits, 0)
+    }
+
     private func round3PersistentStore() throws -> DrawPersistentStore {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawBudget-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -340,8 +489,7 @@ final class DrawStoreContractTests: XCTestCase {
         XCTAssertTrue(try store.open(original.id).objects.isEmpty)
     }
 
-    /// Opus R-20: accounting belongs to each committed step. Eviction adds
-    /// those footprints without walking any of the newcomer's objects.
+    /// Accounting is lazy: only the newcomer is measured, once at eviction.
     func testEvictionCountsOnlyTheNewlyEvictedHistory() throws {
         let store = try round3PersistentStore()
         for index in 0..<21 {
@@ -357,7 +505,10 @@ final class DrawStoreContractTests: XCTestCase {
         HistoryLedgerProbe.reset()
         _ = store.create(name: "One more")
         let visits = HistoryLedgerProbe.stepVisits
-        XCTAssertEqual(visits, 0, "eviction must use the committed steps' footprints (\(visits) steps remeasured)")
+        XCTAssertEqual(visits, 50, "only the newly evicted 50-step history is measured")
+        HistoryLedgerProbe.reset()
+        _ = store.historyLedgerWorkForTesting(rebuild: false)
+        XCTAssertEqual(HistoryLedgerProbe.stepVisits, 0, "already ledgered histories are never remeasured")
     }
 
     /// Opus R-20: the cost, measured. 20 evicted histories of 100 steps x 500
@@ -371,7 +522,7 @@ final class DrawStoreContractTests: XCTestCase {
             var objects = (0..<500).map { DrawObject(frame: DrawFrame(x: Double($0), y: 0, width: 10, height: 10), content: .shape(.rectangle)) }
             for step in 0..<100 {
                 if step > 0 { for slot in objects.indices { objects[slot].frame.x += Double(step % 3) + 1 } }
-                XCTAssertTrue(store.perform(.put(objects), on: canvas.id).isSaved)
+                XCTAssertTrue(autoreleasepool { store.perform(.put(objects), on: canvas.id).isSaved })
                 offers.append(try XCTUnwrap(store.pinHistoryStep(try XCTUnwrap(store.undoStepID(on: canvas.id)))))
             }
         }
@@ -402,7 +553,7 @@ final class DrawStoreContractTests: XCTestCase {
             for index in 0..<5 {
                 HistoryLedgerProbe.reset()
                 eviction.append(timed { _ = store.create(name: "Newcomer \(index)") })
-                XCTAssertEqual(HistoryLedgerProbe.stepVisits, 0, "even a newcomer uses its already measured steps")
+                XCTAssertEqual(HistoryLedgerProbe.stepVisits, 100, "only the 100 newcomer steps are measured lazily")
             }
             func formatted(_ values: [Double]) -> String { values.map { String(format: "%.3f", $0) }.joined(separator: ",") }
             print("BG27_R20_MS histories=20 steps=2000 objectsPerStep=500 rebuild=[\(formatted(full))] incremental=[\(formatted(incremental))] newcomerEviction=[\(formatted(eviction))]")
