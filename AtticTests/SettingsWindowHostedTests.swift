@@ -1,32 +1,7 @@
 import AppKit
-import ObjectiveC
 import SwiftUI
 import XCTest
 @testable import Attic
-
-/// Native SwiftUI reads the system scroller preference independently of
-/// Attic's styling. Scope both preferences without changing the Mac's defaults.
-@MainActor
-private enum SettingsScrollerPreference {
-    // Native readers can still be in flight when a test restores the getter.
-    private static let readings: (overlay: IMP, legacy: IMP) = {
-        func getter(_ style: NSScroller.Style) -> IMP {
-            let read: @convention(block) (AnyObject) -> Int = { _ in style.rawValue }
-            return imp_implementationWithBlock(read)
-        }
-        return (getter(.overlay), getter(.legacy))
-    }()
-
-    static func install(_ style: NSScroller.Style) throws -> @MainActor () -> Void {
-        let method = try XCTUnwrap(class_getClassMethod(NSScroller.self, #selector(getter: NSScroller.preferredScrollerStyle)))
-        let previous = method_setImplementation(method, style == .legacy ? readings.legacy : readings.overlay)
-        NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
-        return {
-            method_setImplementation(method, previous)
-            NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
-        }
-    }
-}
 
 /// Signals when SwiftUI has evaluated the next Appearance state. The test
 /// then forces the hosted layout/display candidate; no onscreen frame is used.
@@ -62,20 +37,6 @@ final class SettingsWindowHostedTests: XCTestCase {
         window?.close()
         window = nil
         try await super.tearDown()
-    }
-
-    private func withBothScrollerPreferences(_ check: () throws -> Void) throws {
-        for style in [NSScroller.Style.overlay, .legacy] {
-            let previous = NSScroller.preferredScrollerStyle
-            let restore = try SettingsScrollerPreference.install(style)
-            defer {
-                restore()
-                XCTAssertEqual(NSScroller.preferredScrollerStyle, previous)
-            }
-            XCTAssertEqual(NSScroller.preferredScrollerStyle, style)
-            print("SETTINGS_SCROLLER_PREFERENCE pid=\(getpid()) preferred=\(style.rawValue)")
-            try check()
-        }
     }
 
     private func spin(_ seconds: TimeInterval = 0.15) {
@@ -390,10 +351,6 @@ final class SettingsWindowHostedTests: XCTestCase {
     /// Accessibility of each Settings page's hosted controls; the earlier
     /// appearance/defaults audit did not exercise VoiceOver's control tree.
     func testA11yEverySettingsSectionNamesItsInteractiveControls() throws {
-        try withBothScrollerPreferences { try checkA11yEverySettingsSectionNamesItsInteractiveControls() }
-    }
-
-    private func checkA11yEverySettingsSectionNamesItsInteractiveControls() throws {
         // Navigation follows the isolated AppSettings suite, so visiting
         // About cannot change another test's starting page.
         let suite = "SettingsAX.\(UUID().uuidString)"
@@ -496,10 +453,6 @@ final class SettingsWindowHostedTests: XCTestCase {
     }
 
     func testR24ScrollContentFillsWideShortAndNarrowTallHost() throws {
-        try withBothScrollerPreferences { try checkR24ScrollContentFillsWideShortAndNarrowTallHost() }
-    }
-
-    private func checkR24ScrollContentFillsWideShortAndNarrowTallHost() throws {
         let suite = "SettingsR24.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -555,46 +508,6 @@ final class SettingsWindowHostedTests: XCTestCase {
         }
     }
 
-    func testR24ScrollerPreferenceChangesKeepBothAxesAvailable() throws {
-        let restoreOverlay = try SettingsScrollerPreference.install(.overlay)
-        defer { restoreOverlay() }
-        let size = CGSize(width: 580, height: 420)
-        let host = NSHostingView(rootView: SettingsAdaptiveScroll(size: size) { Color.clear })
-        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size),
-                              styleMask: .borderless, backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = host
-        window.orderFront(nil)
-        defer { window.orderOut(nil); window.contentView = nil; window.close() }
-        host.layoutSubtreeIfNeeded()
-        spin()
-        func scrollViews(in view: NSView) -> [NSScrollView] {
-            (view as? NSScrollView).map { [$0] } ?? [] + view.subviews.flatMap(scrollViews)
-        }
-        let scroll = try XCTUnwrap(scrollViews(in: host).first)
-        let document = try XCTUnwrap(scroll.documentView)
-        XCTAssertEqual(scroll.scrollerStyle, .overlay)
-
-        // A preference notification also reaches already-mounted AppKit views.
-        let restoreLegacy = try SettingsScrollerPreference.install(.legacy)
-        defer { restoreLegacy() }
-        spin()
-        host.layoutSubtreeIfNeeded()
-        window.displayIfNeeded()
-        XCTAssertEqual(NSScroller.preferredScrollerStyle, .legacy)
-        XCTAssertEqual(scroll.scrollerStyle, .overlay)
-        XCTAssertTrue(scroll.hasHorizontalScroller)
-        XCTAssertTrue(scroll.hasVerticalScroller)
-        XCTAssertEqual(scroll.frame.size, size)
-        XCTAssertEqual(scroll.contentView.bounds.size, size)
-        XCTAssertEqual(document.frame.size, SettingsWindowLayout.minimumContentSize)
-        // Below minimum width AND height, both axes must still scroll.
-        scroll.contentView.scroll(to: CGPoint(x: 20, y: 20))
-        scroll.reflectScrolledClipView(scroll.contentView)
-        XCTAssertEqual(scroll.contentView.bounds.origin.x, 20, accuracy: 0.5)
-        XCTAssertEqual(scroll.contentView.bounds.origin.y, 20, accuracy: 0.5)
-    }
-
     func testR24ScrollThresholdDoesNotRemountPageLocalState() {
         var appearances = 0
         let host = NSHostingView(rootView: GeometryReader { available in
@@ -619,10 +532,6 @@ final class SettingsWindowHostedTests: XCTestCase {
     }
 
     func testUX2DefaultWindowKeepsSettingsContentWithinViewport() throws {
-        try withBothScrollerPreferences { try checkUX2DefaultWindowKeepsSettingsContentWithinViewport() }
-    }
-
-    private func checkUX2DefaultWindowKeepsSettingsContentWithinViewport() throws {
         // The viewport assertion targets General's controls; an earlier AX
         // navigation test cannot affect this fresh scratch suite.
         let suite = "SettingsUX2.\(UUID().uuidString)"

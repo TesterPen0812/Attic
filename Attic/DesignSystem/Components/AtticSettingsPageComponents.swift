@@ -78,7 +78,6 @@ struct AtticSettingsScrollPage<Content: View>: View {
             if capture == nil {
                 ScrollView {
                     column
-                        .background(AtticOverlayScrollers())
                 }
                 .scrollIndicators(.automatic)
             } else {

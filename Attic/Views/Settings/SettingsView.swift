@@ -156,7 +156,6 @@ struct SettingsAdaptiveScroll<Content: View>: View {
                 // size the content past the window even when scrolling is off.
                 .frame(width: max(SettingsWindowLayout.minimumContentSize.width, size.width),
                        height: max(SettingsWindowLayout.minimumContentSize.height, size.height))
-                .background(AtticOverlayScrollers())
         }
         .scrollDisabled(!needsScroll)
         .scrollIndicators(needsScroll ? .visible : .hidden)
