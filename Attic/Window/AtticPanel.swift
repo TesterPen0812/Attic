@@ -431,6 +431,19 @@ final class AtticPanel: NSPanel {
                 // this new interaction at the untransformed content bounds.
                 onDirectContentInteraction?()
             }
+            // A History preview may remain first responder after another
+            // host detaches its TextKit engine. In that state AppKit can
+            // route Escape to SwiftUI without calling cancelOperation on
+            // the read-only preview, skipping its History/Composer fallback.
+            if event.type == .keyDown, event.keyCode == 53,
+               event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+               Self.isOwnEscape(event, in: self), isKeyWindow,
+               let editor = firstResponder as? NoteEditorTextView,
+               editor.window === self, !editor.isEditable,
+               editor.engine == nil, editor.escapeFallback != nil {
+                editor.cancelOperation(self)
+                return
+            }
             // Whatever view this press hits takes it, the overlay layer's
             // cards and bars included (2 Nov).
             if Self.takesFirstPress(event.type) { AtticFirstPress.prepare(event, in: self) }

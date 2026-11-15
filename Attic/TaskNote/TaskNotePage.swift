@@ -477,6 +477,9 @@ struct TaskNotePage: View {
         // presenter go, and resolve its Back action through the cleared relay.
         .onKeyPress(.escape) { [weak presenter] in
             guard let presenter, !presenter.model.isEditingTitle, presenter.model.renamingID == nil else { return .ignored }
+            // History is a layer over this task's page; its own preview or
+            // controls must get Escape before the page's Back action.
+            if controller.historyBrowser?.noteID == presenter.session?.noteID { return .ignored }
             presenter.menus.back()
             return .handled
         }

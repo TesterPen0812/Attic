@@ -853,11 +853,16 @@ final class PanelPullOutHostedTests: XCTestCase {
             XCTAssertTrue(editor.window === floating.panel, "History preview belongs to the floating Tasks window")
             XCTAssertTrue(floating.panel.makeFirstResponder(editor))
             XCTAssertTrue(floating.panel.firstResponder === editor)
+            XCTAssertNotNil(editor.escapeFallback, "the mounted History preview must own its native Escape fallback")
+            let installedEscape = editor.escapeFallback
+            var nativeEscapeCallbacks = 0
+            editor.escapeFallback = { nativeEscapeCallbacks += 1; installedEscape?() }
             let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: floating.panel.windowNumber,
                 context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
             NSApp.sendEvent(escape)
             spin(0.2)
+            XCTAssertEqual(nativeEscapeCallbacks, 1, "real Escape must reach the mounted preview fallback")
             XCTAssertNil(rig.noteDraft.pages.historyBrowser)
             XCTAssertTrue(floating.panel.isVisible)
         }
