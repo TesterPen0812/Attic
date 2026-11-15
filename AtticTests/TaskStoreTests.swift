@@ -553,6 +553,167 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(store.tasks.first).title, "Updated elsewhere")
     }
 
+    @MainActor
+    func testDataR1SeededEditRollbackReplicaAndFreshContextRoundTrips() throws {
+        struct State {
+            var title: String
+            var status: TaskStatus
+            var deleted = false
+            var copies = 1
+        }
+        for seed in [UInt64(0xDA7A_0001), 0xDA7A_0002] {
+            var random = seed
+            func draw(_ count: Int) -> Int {
+                random = random &* 6364136223846793005 &+ 1442695040888963407
+                return Int((random >> 33) % UInt64(count))
+            }
+            let gate = PersistenceGate()
+            let store = try makeTestStore(persist: gate.save)
+            let replicaID = UUID()
+            let fixtures = ModelContext(store.container)
+            for _ in 0..<2 {
+                fixtures.insert(TaskItem(id: replicaID, title: "Replica", createdAt: .distantPast,
+                                         updatedAt: .distantPast))
+            }
+            try fixtures.save()
+            store.refresh()
+            var expected: [UUID: State] = [replicaID: State(title: "Replica", status: .todo, copies: 2)]
+            var orderedIDs = [replicaID]
+
+            for step in 0..<240 {
+                let active = orderedIDs.filter { expected[$0]?.deleted == false }
+                let removed = orderedIDs.filter { expected[$0]?.deleted == true }
+                switch draw(8) {
+                case 0 where expected.count < 65:
+                    let title = "Created \(seed) \(step)"
+                    let task = try XCTUnwrap(store.create(title: title), "seed=\(seed) step=\(step)")
+                    expected[task.id] = State(title: title, status: .todo)
+                    orderedIDs.append(task.id)
+                case 1 where !active.isEmpty:
+                    let id = active[draw(active.count)]
+                    let title = "Edited \(seed) \(step)"
+                    XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: id)), to: title), "seed=\(seed) step=\(step)")
+                    expected[id]?.title = title
+                case 2 where !active.isEmpty:
+                    let id = active[draw(active.count)]
+                    let next: TaskStatus = expected[id]?.status == .done ? .todo : .done
+                    XCTAssertTrue(store.setStatus(next, for: try XCTUnwrap(store.task(withID: id))), "seed=\(seed) step=\(step)")
+                    expected[id]?.status = next
+                case 3 where !active.isEmpty:
+                    let id = active[draw(active.count)]
+                    XCTAssertTrue(store.delete(try XCTUnwrap(store.task(withID: id))), "seed=\(seed) step=\(step)")
+                    expected[id]?.deleted = true
+                case 4 where !removed.isEmpty:
+                    let id = removed[draw(removed.count)]
+                    XCTAssertTrue(store.restoreDeleted(taskID: id), "seed=\(seed) step=\(step)")
+                    expected[id]?.deleted = false
+                case 5 where !active.isEmpty:
+                    let id = active[draw(active.count)]
+                    gate.shouldFail = true
+                    let refused = store.rename(try XCTUnwrap(store.task(withID: id)), to: "Unsaved \(step)")
+                    gate.shouldFail = false
+                    XCTAssertFalse(refused, "seed=\(seed) step=\(step): refused save stays refused")
+                case 6 where !active.isEmpty && expected.count < 65:
+                    let id = active[draw(active.count)]
+                    let copy = try XCTUnwrap(store.duplicate(taskIDs: [id])?.first, "seed=\(seed) step=\(step)")
+                    expected[copy.id] = State(title: try XCTUnwrap(expected[id]).title, status: .todo)
+                    orderedIDs.append(copy.id)
+                default:
+                    store.refresh()
+                }
+
+                let disk = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+                XCTAssertEqual(Set(disk.map(\.id)), Set(expected.keys), "seed=\(seed) step=\(step): physical identity")
+                for (id, model) in expected {
+                    let family = disk.filter { $0.id == id }
+                    XCTAssertEqual(family.count, model.copies, "seed=\(seed) step=\(step) id=\(id): replicas")
+                    for row in family {
+                        XCTAssertEqual(row.title, model.title, "seed=\(seed) step=\(step) id=\(id)")
+                        XCTAssertEqual(row.status, model.status, "seed=\(seed) step=\(step) id=\(id)")
+                        XCTAssertEqual(row.deletedAt != nil, model.deleted, "seed=\(seed) step=\(step) id=\(id)")
+                    }
+                }
+                let activeIDs = Set(expected.filter { !$0.value.deleted }.map(\.key))
+                XCTAssertEqual(Set(store.tasks.map(\.id)), activeIDs, "seed=\(seed) step=\(step): presentation")
+                if step.isMultiple(of: 20) {
+                    let reopened = TaskStore(container: store.container)
+                    XCTAssertEqual(Set(reopened.tasks.map(\.id)), activeIDs,
+                                   "seed=\(seed) step=\(step): reload from saved state")
+                    for task in reopened.tasks {
+                        XCTAssertEqual(task.title, expected[task.id]?.title, "seed=\(seed) step=\(step)")
+                    }
+                }
+            }
+            print("DATA_R1_PERSISTENCE seed=\(seed) steps=240")
+        }
+    }
+
+    @MainActor
+    func testDataR1SeededUndoRedoRetainsEveryPhysicalReplicaThroughSaveRefusals() throws {
+        for seed in [UInt64(0xDA7A_0101), 0xDA7A_0102] {
+            var random = seed
+            func draw(_ count: Int) -> Int {
+                random = random &* 6364136223846793005 &+ 1442695040888963407
+                return Int((random >> 33) % UInt64(count))
+            }
+            let gate = PersistenceGate()
+            let store = try makeTestStore(persist: gate.save)
+            let id = UUID()
+            let seedContext = ModelContext(store.container)
+            for _ in 0..<2 {
+                seedContext.insert(TaskItem(id: id, title: "Original", createdAt: .distantPast,
+                                            updatedAt: .distantPast))
+            }
+            try seedContext.save()
+            store.refresh()
+            let library = AtticLibrary(tasks: store)
+            var title = "Original", status: TaskStatus = .todo
+
+            func check(_ expectedTitle: String, _ expectedStatus: TaskStatus, step: Int, phase: String) throws {
+                let disk = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>(
+                    predicate: #Predicate { $0.id == id }
+                ))
+                XCTAssertEqual(disk.count, 2, "seed=\(seed) step=\(step) phase=\(phase): physical replicas")
+                for row in disk {
+                    XCTAssertEqual(row.title, expectedTitle, "seed=\(seed) step=\(step) phase=\(phase)")
+                    XCTAssertEqual(row.status, expectedStatus, "seed=\(seed) step=\(step) phase=\(phase)")
+                    XCTAssertNil(row.deletedAt, "seed=\(seed) step=\(step) phase=\(phase)")
+                }
+                XCTAssertEqual(store.task(withID: id)?.title, expectedTitle)
+                XCTAssertEqual(store.task(withID: id)?.status, expectedStatus)
+                if step.isMultiple(of: 20) && phase == "redo" {
+                    let reopened = TaskStore(container: store.container)
+                    XCTAssertEqual(reopened.task(withID: id)?.title, expectedTitle,
+                                   "seed=\(seed) step=\(step): reopen from saved state")
+                    XCTAssertEqual(reopened.task(withID: id)?.status, expectedStatus)
+                }
+            }
+
+            for step in 0..<120 {
+                let previousTitle = title, previousStatus = status
+                let nextTitle = "Journal \(seed) \(step) \(draw(10_000))"
+                let nextStatus: TaskStatus = draw(2) == 0 ? .done : .todo
+                XCTAssertTrue(library.updateTask(id, title: nextTitle, status: nextStatus).isApplied,
+                              "seed=\(seed) step=\(step): update")
+                title = nextTitle; status = nextStatus
+                try check(title, status, step: step, phase: "update")
+
+                if step.isMultiple(of: 19) {
+                    gate.shouldFail = true
+                    let refused = library.undo(in: .tasks)
+                    gate.shouldFail = false
+                    XCTAssertFalse(refused.isApplied, "seed=\(seed) step=\(step): failed Undo must be retryable")
+                    try check(title, status, step: step, phase: "refused Undo")
+                }
+                XCTAssertTrue(library.undo(in: .tasks).isApplied, "seed=\(seed) step=\(step): Undo")
+                try check(previousTitle, previousStatus, step: step, phase: "undo")
+                XCTAssertTrue(library.redo(in: .tasks).isApplied, "seed=\(seed) step=\(step): Redo")
+                try check(title, status, step: step, phase: "redo")
+            }
+            print("DATA_R1_UNDO seed=\(seed) steps=120 undo=120 redo=120")
+        }
+    }
+
     #if ATTIC_LOCAL_ONLY
     /// The deferred CloudKit machinery must stay dormant in local-only
     /// builds, exactly like NoteStore and CanvasStore: no observers, no
