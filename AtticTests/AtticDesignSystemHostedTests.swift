@@ -947,6 +947,45 @@ extension AtticDesignSystemHostedTests {
         XCTAssertTrue(window.firstResponder === editor, "dismissing the status leaves the caret intact")
     }
 
+    func testNB4UnmarkPublishesCommittedSearchTextLikeANativeField() throws {
+        try requireKeyWindowTests()
+        let probe = SearchCompositionProbe()
+        let (window, hosting) = host(SearchCompositionHost(probe: probe), size: CGSize(width: 300, height: 70), key: true)
+        let field = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? AtticNativeSearchInput.Field }.first)
+        let plain = NSTextField(frame: CGRect(x: 0, y: 40, width: 260, height: 24))
+        plain.stringValue = "old"
+        hosting.addSubview(plain)
+        defer { plain.removeFromSuperview() }
+        XCTAssertTrue(window.makeFirstResponder(plain))
+        let nativeEditor = try XCTUnwrap(plain.currentEditor() as? NSTextView)
+        nativeEditor.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: 0, length: 3))
+        nativeEditor.unmarkText()
+        let nativeCommitted = nativeEditor.string
+        XCTAssertEqual(nativeCommitted, "日本")
+        window.makeFirstResponder(nil)
+        XCTAssertEqual(plain.stringValue, nativeCommitted)
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        var notifications: [String] = []
+        let token = NotificationCenter.default.addObserver(forName: NSControl.textDidChangeNotification, object: field, queue: .main) { _ in
+            MainActor.assumeIsolated { notifications.append(editor.string + ":marked=" + String(editor.hasMarkedText())) }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+        editor.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: 0, length: 3))
+        editor.unmarkText()
+        print("NB4_UNMARK notifications=\(notifications) native=\(editor.string) binding=\(probe.text)")
+        XCTAssertEqual(editor.string, nativeCommitted)
+        probe.placeholder = "Unrelated update"
+        spin(0.2)
+        XCTAssertEqual(field.placeholderAttributedString?.string, "Unrelated update")
+        XCTAssertEqual(editor.string, nativeCommitted, "an unchanged binding cannot overwrite a native commit")
+        window.makeFirstResponder(nil)
+        spin(0.1)
+        print("NB4_DEPART notifications=\(notifications) native=\(field.stringValue) binding=\(probe.text)")
+        XCTAssertEqual(field.stringValue, nativeCommitted)
+        XCTAssertEqual(probe.text, nativeCommitted)
+    }
+
     func testR3ExternalSearchClearDuringCompositionCannotResurrectCandidate() throws {
         try requireKeyWindowTests()
         for commitBeforeUpdate in [false, true] {
@@ -968,6 +1007,29 @@ extension AtticDesignSystemHostedTests {
             XCTAssertEqual(probe.text, "", "composition completion cannot undo the external clear")
             XCTAssertEqual(field.stringValue, "")
         }
+    }
+
+    func testR23MountedStatusTracksKeyboardPolicyWithoutAnUnrelatedRender() throws {
+        AtticFullKeyboardAccess.overrideForTesting = false
+        var targets = 0
+        AtticFullKeyboardAccess.keyboardTargetVisibilityForTesting = { targets += $0 ? 1 : -1 }
+        defer {
+            AtticFullKeyboardAccess.keyboardTargetVisibilityForTesting = nil
+            AtticFullKeyboardAccess.overrideForTesting = nil
+        }
+        let probe = TransientFocusProbe()
+        probe.shown = 1
+        _ = host(TransientFocusHost(probe: probe), size: CGSize(width: 350, height: 170), key: false)
+        spin(0.3)
+        let initialTargets = targets
+        XCTAssertGreaterThan(initialTargets, 0, "the mounted pill has keyboard stand-ins while FKA is off")
+        AtticFullKeyboardAccess.overrideForTesting = true
+        spin(0.3)
+        XCTAssertEqual(targets, 0, "no other state changes: enabling FKA retires every duplicate stand-in")
+        AtticFullKeyboardAccess.overrideForTesting = false
+        spin(0.3)
+        XCTAssertEqual(targets, initialTargets)
+        XCTAssertEqual(probe.statusOpens + probe.statusRetries + probe.statusCancels, 0)
     }
 
     func testBG66StatusDetailsRetryAndCancelAreKeyboardReachableWithoutStealingTyping() throws {

@@ -249,6 +249,61 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testR4EmptyBoxGeometryDoesNotJumpOnFirstCharacter() throws {
+        var callout = NoteBlock.text("item", style: "quote"); callout.callout = "💡"
+        for block in [callout, .text("item", style: "mono")] {
+            for titled in [true, false] {
+                let (engine, view, start, _) = bg14Engine(titled: titled, [block])
+                defer { engine.detachView() }
+                let (window, _) = try bg14Window(for: view)
+                defer { window.contentView = nil; window.close() }
+                view.setSelectedRange(NSRange(location: start, length: block.text.utf16.count))
+                view.deleteBackward(nil)
+                bg14Settle(view)
+                func viewRect(_ rect: CGRect, _ fragment: NoteBlockLayoutFragment) -> CGRect {
+                    rect.offsetBy(dx: fragment.layoutFragmentFrame.minX + view.textContainerOrigin.x,
+                                  dy: fragment.layoutFragmentFrame.minY + view.textContainerOrigin.y)
+                }
+                let beforeFragment: NoteBlockLayoutFragment
+                if titled {
+                    let location = try XCTUnwrap(engine.contentStorage.location(engine.contentStorage.documentRange.location, offsetBy: max(0, start - 1)))
+                    beforeFragment = try XCTUnwrap(engine.layoutManager?.textLayoutFragment(for: location) as? NoteBlockLayoutFragment)
+                } else { beforeFragment = try XCTUnwrap(engine.emptyBodyDecorationFragment()) }
+                let before = viewRect(try XCTUnwrap(beforeFragment.lastLineBoxRect), beforeFragment)
+                view.setSelectedRange(NSRange(location: start, length: 0))
+                view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+                bg14Settle(view)
+                let location = try XCTUnwrap(engine.contentStorage.location(engine.contentStorage.documentRange.location, offsetBy: start))
+                let fragment = try XCTUnwrap(engine.layoutManager?.textLayoutFragment(for: location) as? NoteBlockLayoutFragment)
+                let after = viewRect(try XCTUnwrap(block.style == "mono" ? fragment.monoBlockRect : fragment.calloutBoxRect), fragment)
+                print("R4_BOX titled=\(titled) style=\(block.style ?? "") before=\(before) after=\(after)")
+                XCTAssertEqual(before.minY, after.minY, accuracy: 0.5)
+                XCTAssertEqual(before.maxY, after.maxY, accuracy: 0.5)
+            }
+        }
+    }
+
+    func testR4BlankFirstHeadingReturnKeepsTheNativeCaretOnTyping() throws {
+        try requireKeyWindowTests()
+        for titled in [true, false] {
+            var heading = NoteBlock.text("", style: "heading"); heading.level = 2
+            let (engine, view, _, _) = bg14Engine(titled: titled, [heading])
+            defer { engine.detachView() }
+            let (window, _) = try bg14Window(for: view)
+            defer { window.contentView = nil; window.close() }
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            view.insertNewline(nil)
+            let before = try bg14NativeCaret(view)
+            view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.setSelectedRange(NSRange(location: engine.textStorage.length - 1, length: 0))
+            let after = try bg14NativeCaret(view)
+            print("R4_HEADING titled=\(titled) before=\(before) after=\(after)")
+            XCTAssertEqual(after.minY, before.minY, accuracy: 0.5)
+            XCTAssertEqual(after.minX, before.minX, accuracy: 0.5)
+            XCTAssertEqual(after.height, before.height, accuracy: 0.5)
+        }
+    }
+
     func testR3ClearedSoleBodyParagraphDrawsItsPendingDecoration() throws {
         var callout = NoteBlock.text("item", style: "quote"); callout.callout = "💡"
         for block in [NoteBlock.text("item", style: "bullet"), .text("item", style: "quote"), callout,

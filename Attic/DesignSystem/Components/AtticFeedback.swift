@@ -787,17 +787,54 @@ extension View {
 
 
 
+/// App-wide keyboard policy. A live preference change must update mounted
+/// controls; activation also refreshes in case a notification was missed.
+@MainActor
+final class AtticFullKeyboardAccess: ObservableObject {
+    static let shared = AtticFullKeyboardAccess()
+    static let changeNotification = Notification.Name("com.apple.KeyboardUIModeDidChange")
+    @Published private(set) var isEnabled: Bool
+    private var distributedObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
+    #if DEBUG
+    static var overrideForTesting: Bool? { didSet { shared.refresh() } }
+    static var keyboardTargetVisibilityForTesting: ((Bool) -> Void)?
+    #endif
+
+    private init() {
+        isEnabled = NSApp.isFullKeyboardAccessEnabled
+        distributedObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Self.changeNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refresh() }
+            }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refresh() }
+            }
+    }
+
+    private func refresh() {
+        #if DEBUG
+        let current = Self.overrideForTesting ?? NSApp.isFullKeyboardAccessEnabled
+        #else
+        let current = NSApp.isFullKeyboardAccessEnabled
+        #endif
+        if isEnabled != current { isEnabled = current }
+    }
+}
+
 /// Mouse activation and Tab have different macOS policies: activation focus
 /// keeps a click with the writer; a separate keyboard-only target lets Tab
 /// reach the same action with Full Keyboard Access off.
 struct AtticKeyboardReach: ViewModifier {
+    @ObservedObject private var keyboardAccess = AtticFullKeyboardAccess.shared
     let action: () -> Void
     let outline: AtticOwnFocusRing.Outline
     @Environment(\.isEnabled) private var isEnabled
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if NSApp.isFullKeyboardAccessEnabled {
+        if keyboardAccess.isEnabled {
             button(content).atticOwnFocusRing(outline)
         } else {
             button(content)
@@ -834,5 +871,9 @@ private struct AtticKeyboardActivationTarget: View {
         Color.clear.overlay {
             if isFocused && keyboardFocusVisible { AtticOwnFocusRing.ring(outline) }
         }
+        #if DEBUG
+        .onAppear { AtticFullKeyboardAccess.keyboardTargetVisibilityForTesting?(true) }
+        .onDisappear { AtticFullKeyboardAccess.keyboardTargetVisibilityForTesting?(false) }
+        #endif
     }
 }

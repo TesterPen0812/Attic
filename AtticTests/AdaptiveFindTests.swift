@@ -222,6 +222,177 @@ final class AdaptiveFindTests: XCTestCase {
         XCTAssertEqual(NoteFindTopRowField.count(query: "q", matches: 7, index: nil), "7")
     }
 
+    func testNB2FindOwnsItsPersistentNativeClientBeforePublishingOpen() throws {
+        try requireKeyWindowTests()
+        try withNote { host, panel, _, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            let note = try XCTUnwrap(engine.textView)
+            XCTAssertTrue(panel.makeFirstResponder(note))
+            let original = engine.document()
+            let field = try XCTUnwrap(descendants(of: host).compactMap { $0 as? AtticNativeSearchInput.Field }
+                .first { $0.accessibilityIdentifier() == NoteFindController.fieldIdentifier },
+                "the real Find field must already be attached while closed")
+            let identity = ObjectIdentifier(field)
+            XCTAssertFalse(engine.find.isShown)
+            NSApp.sendEvent(key(3, "f", flags: .command, in: panel))
+            XCTAssertTrue(engine.find.isShown)
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            XCTAssertTrue(panel.firstResponder === editor, "ownership must be synchronous, not a later mounting retry")
+            NSApp.sendEvent(key(0, "a", in: panel))
+            XCTAssertEqual(editor.string, "a")
+            NSApp.sendEvent(key(53, "\u{1b}", in: panel))
+            spin(0.5)
+            XCTAssertFalse(engine.find.isShown)
+            let closedField = try XCTUnwrap(descendants(of: host).compactMap { $0 as? AtticNativeSearchInput.Field }
+                .first { $0.accessibilityIdentifier() == NoteFindController.fieldIdentifier })
+            XCTAssertEqual(ObjectIdentifier(closedField), identity)
+            NSApp.sendEvent(key(3, "f", flags: .command, in: panel))
+            XCTAssertTrue(panel.firstResponder === editor, "reopening reuses the same native input client")
+            XCTAssertEqual(engine.document(), original)
+        }
+    }
+
+    func testNB6BurstAfterNativeCommandFindNeverLeaksIntoTheNote() throws {
+        try requireKeyWindowTests()
+        try withNote { _, panel, _, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            let view = try XCTUnwrap(engine.textView)
+            XCTAssertTrue(panel.makeFirstResponder(view))
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            let beforeControl = engine.textStorage.string
+            NSApp.sendEvent(key(6, "z", in: panel))
+            XCTAssertEqual(engine.textStorage.string, beforeControl + "z", "prove NSApp delivered native input before testing ownership")
+            let original = engine.document()
+            NSApp.sendEvent(key(3, "f", flags: .command, in: panel))
+            XCTAssertTrue(engine.find.isShown, "NSApp delivered Command-F before the burst")
+            for _ in 0..<300 { NSApp.sendEvent(key(0, "a", in: panel)) }
+            XCTAssertEqual(engine.document(), original, "all forwarded events are really delivered; no cap may release typing into the note")
+            XCTAssertEqual(engine.find.query, String(repeating: "a", count: 300))
+            XCTAssertTrue(engine.find.isShown)
+            spin(1.2)
+            NSApp.sendEvent(key(11, "b", in: panel))
+            XCTAssertEqual(engine.document(), original, "no expiry may release later typing")
+            XCTAssertEqual(engine.find.query, String(repeating: "a", count: 300) + "b")
+        }
+    }
+
+    func testNB1MarkedFindReturnAndEscapeStayWithTheNativeInputClient() throws {
+        try requireKeyWindowTests()
+        for (code, characters) in [(UInt16(36), "\r"), (UInt16(53), "\u{1b}")] {
+            try withNote { host, panel, _, engine, _ in
+                panel.makeKeyAndOrderFront(nil)
+                let plain = NSTextField(frame: CGRect(x: 0, y: 0, width: 200, height: 24))
+                plain.stringValue = "quote"
+                let nativePanel = NSPanel(contentRect: CGRect(x: -4000, y: -4000, width: 220, height: 50),
+                    styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+                nativePanel.isReleasedWhenClosed = false
+                nativePanel.contentView = plain
+                nativePanel.makeKeyAndOrderFront(nil)
+                defer { nativePanel.contentView = nil; nativePanel.close() }
+                XCTAssertTrue(nativePanel.makeFirstResponder(plain))
+                let native = try XCTUnwrap(plain.currentEditor() as? NSTextView)
+                native.setMarkedText("quote", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: 0, length: 5))
+                NSApp.sendEvent(key(code, characters, in: nativePanel))
+                let expectedText = native.string, expectedMarked = native.hasMarkedText()
+                nativePanel.orderOut(nil)
+                panel.makeKeyAndOrderFront(nil)
+                XCTAssertTrue(panel.makeFirstResponder(engine.textView))
+                NSApp.sendEvent(key(3, "f", flags: .command, in: panel))
+                spin(0.1)
+                engine.find.query = "quote"
+                spin(0.1)
+                let field = try XCTUnwrap(descendants(of: host).compactMap { $0 as? AtticNativeSearchInput.Field }
+                    .first { $0.accessibilityIdentifier() == NoteFindController.fieldIdentifier })
+                XCTAssertTrue(panel.makeFirstResponder(field))
+                let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+                editor.setMarkedText("quote", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: 0, length: 5))
+                XCTAssertTrue(editor.hasMarkedText())
+                XCTAssertTrue(engine.find.isShown, "Find is open before the marked event")
+                let index = engine.find.index, original = engine.document()
+                NSApp.sendEvent(key(code, characters, in: panel))
+                XCTAssertTrue(engine.find.isShown, "candidate Escape must not close Find")
+                XCTAssertEqual(engine.find.index, index, "candidate Return must not also navigate")
+                XCTAssertEqual(editor.string, expectedText)
+                XCTAssertEqual(editor.hasMarkedText(), expectedMarked, "the same native input client processing must occur")
+                XCTAssertEqual(engine.document(), original)
+            }
+        }
+    }
+
+    func testNB1QueryNavigationRemainsOrderedAndKeepsFindFocusForTableMatches() throws {
+        try requireKeyWindowTests()
+        let document = NoteDocument(blocks: [.text("Title"), .text("a"), .table(NoteTable(texts: [["a"]]))])
+        try withNote(document: document) { _, panel, _, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            XCTAssertTrue(panel.makeFirstResponder(engine.textView))
+            let original = engine.document()
+            NSApp.sendEvent(key(3, "f", flags: .command, in: panel))
+            NSApp.sendEvent(key(0, "a", in: panel))
+            XCTAssertEqual(engine.find.query, "a")
+            XCTAssertEqual(engine.find.matches.count, 2)
+            XCTAssertEqual(engine.find.index, 0)
+            NSApp.sendEvent(key(36, "\r", in: panel))
+            XCTAssertEqual(engine.find.query, "a", "navigation observes only input preceding Return")
+            XCTAssertEqual(engine.find.index, 1)
+            XCTAssertNotNil(engine.find.matches.last?.tableID)
+            let editor = try XCTUnwrap(panel.firstResponder as? NSTextView)
+            let field = try XCTUnwrap(editor.delegate as? NSTextField)
+            XCTAssertEqual(field.accessibilityIdentifier(), NoteFindController.fieldIdentifier,
+                           "the owner requires Find focus even when the match is in a table")
+            NSApp.sendEvent(key(11, "b", in: panel))
+            XCTAssertEqual(engine.find.query, "ab")
+            XCTAssertEqual(engine.document(), original)
+            spin(0.7)
+            XCTAssertEqual(engine.find.query, "ab")
+            XCTAssertEqual(engine.document(), original)
+        }
+    }
+
+    func testNB3NonASCIICommandMatchesNativeInterpretationWithoutPhysicalCutFallback() throws {
+        try requireKeyWindowTests()
+        let clipboard = NSPasteboard.withUniqueName()
+        defer { clipboard.releaseGlobally() }
+        AtticNativeSearchInput.QueryCell.makeFieldEditorForTesting = {
+            let editor = IsolatedClipboardEditor(usingTextLayoutManager: false)
+            editor.clipboard = clipboard
+            return editor
+        }
+        defer { AtticNativeSearchInput.QueryCell.makeFieldEditorForTesting = nil }
+        try withNote { host, panel, _, engine, _ in
+            panel.makeKeyAndOrderFront(nil)
+            let plain = NSTextField(frame: CGRect(x: 0, y: 0, width: 200, height: 24))
+            plain.cell = AtticNativeSearchInput.QueryCell(textCell: "token")
+            plain.isEditable = true
+            plain.isSelectable = true
+            plain.stringValue = "token"
+            let nativePanel = NSPanel(contentRect: CGRect(x: -4000, y: -4000, width: 220, height: 50),
+                styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+            nativePanel.isReleasedWhenClosed = false
+            nativePanel.contentView = plain
+            nativePanel.makeKeyAndOrderFront(nil)
+            defer { nativePanel.contentView = nil; nativePanel.close() }
+            clipboard.clearContents(); clipboard.setString("sentinel", forType: .string)
+            XCTAssertTrue(nativePanel.makeFirstResponder(plain))
+            let native = try XCTUnwrap(plain.currentEditor() as? NSTextView)
+            native.selectAll(nil)
+            NSApp.sendEvent(key(7, "ф", flags: .command, ignoring: "ф", in: nativePanel))
+            let expectedText = native.string
+            let expectedClipboard = clipboard.string(forType: .string)
+            nativePanel.orderOut(nil)
+            panel.makeKeyAndOrderFront(nil)
+            XCTAssertTrue(panel.makeFirstResponder(engine.textView))
+            let original = engine.document()
+            engine.find.query = "token"
+            clipboard.clearContents(); clipboard.setString("sentinel", forType: .string)
+            NSApp.sendEvent(key(3, "f", flags: .command, in: panel))
+            NSApp.sendEvent(key(7, "ф", flags: .command, ignoring: "ф", in: panel))
+            spin(0.8)
+            XCTAssertEqual(engine.find.query, expectedText)
+            XCTAssertEqual(clipboard.string(forType: .string), expectedClipboard)
+            XCTAssertEqual(engine.document(), original)
+        }
+    }
+
     // MARK: First-key speed
 
     func testBG72ComposingDeadKeyBeforeFindFieldMountsStaysWithNativeInput() throws {
@@ -780,5 +951,16 @@ private final class ComposingEditor: NSTextView {
         let marked = romaji == "ni" ? "に" : romaji
         setMarkedText(marked, selectedRange: NSRange(location: (marked as NSString).length, length: 0),
                       replacementRange: NSRange(location: NSNotFound, length: 0))
+    }
+}
+
+/// Redirect only Cut's clipboard destination to an isolated fixture board.
+/// Native event interpretation and selection/deletion are shared by both
+/// compared clients; the owner's general clipboard is never read or changed.
+private final class IsolatedClipboardEditor: NSTextView {
+    var clipboard: NSPasteboard?
+    override func cut(_ sender: Any?) {
+        guard let clipboard, writeSelection(to: clipboard, types: [.string]) else { return }
+        delete(sender)
     }
 }
