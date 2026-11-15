@@ -966,6 +966,24 @@ final class ComposerTests: XCTestCase {
         XCTAssertFalse(library.undo.canRedo(in: .tasks))
     }
 
+    func testRound2FailedSettleDoesNotClaimFieldRedo() throws {
+        _ = try XCTUnwrap(library.createTasks([TaskDraft(title: "Earlier task")])?.first)
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        page.noteTextEdit()
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Cannot save")
+        model.writing = "Atomic write fails"
+        saveFailure.on = true
+        model.submit()
+        let outcome = page.undo()
+        XCTAssertTrue(model.failed, "the pending write must actually have failed")
+        XCTAssertFalse(outcome.isApplied)
+        XCTAssertFalse(page.taskChangeOwnsRedo, "a failed settle must not grant the field an unrelated task Redo")
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+    }
+
     func testReviewR4EditMenuChromeUndoSettlesCreationBeforeHistory() throws {
         let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older history step")])?.first)
         page.services.acknowledgementDelay = .seconds(30)

@@ -515,13 +515,13 @@ final class AtticLibrary {
     // MARK: - Undo and redo, with outcomes
 
     /// Undoes the history's last step and says what happened (the toast's
-    /// Undo, ⌘Z): `.failed` keeps the step to try again; a step that can
-    /// never apply again is dropped and reported as not retryable.
+    /// Undo, ⌘Z). A failed pending acknowledgement leaves history untouched;
+    /// a failed history step stays retryable and an obsolete one is dropped.
     @discardableResult
     func undo(in history: UndoHistoryID, matching expectedStepID: UUID? = nil) -> CommandOutcome {
         // The library is shared by docked, floating, keyboard and Edit-menu
         // routes. A failed pending command cannot expose an older history step.
-        if TasksPageModel.settlePendingForHistory(history, store: tasks) == false { return .applied }
+        if let failure = failedPendingSettlement(in: history) { return failure }
         // Toast actions name a specific step. Check after settling every live
         // panel, when the shared history can no longer acquire a newer step.
         if let expectedStepID, undo.undoStepID(in: history) != expectedStepID { return .obsolete }
@@ -531,7 +531,7 @@ final class AtticLibrary {
 
     @discardableResult
     func redo(in history: UndoHistoryID) -> CommandOutcome {
-        if TasksPageModel.settlePendingForHistory(history, store: tasks) == false { return .applied }
+        if let failure = failedPendingSettlement(in: history) { return failure }
         let serial = tasks.errorSerial
         return historyOutcome(undo.redoStep(in: history), since: serial, verb: String(localized: "redo"))
     }
@@ -540,10 +540,20 @@ final class AtticLibrary {
     /// still use the same route and outcome mapping.
     @discardableResult
     func replay(in history: UndoHistoryID, redo: Bool) async -> CommandOutcome {
-        if TasksPageModel.settlePendingForHistory(history, store: tasks) == false { return .applied }
+        if let failure = failedPendingSettlement(in: history) { return failure }
         let serial = tasks.errorSerial
         return historyOutcome(await undo.replay(in: history, redo: redo), since: serial,
                               verb: redo ? String(localized: "redo") : String(localized: "undo"))
+    }
+
+    private func failedPendingSettlement(in history: UndoHistoryID) -> CommandOutcome? {
+        let serial = tasks.errorSerial
+        guard TasksPageModel.settlePendingForHistory(history, store: tasks) == false else { return nil }
+        let reported = tasks.errorSerial != serial ? tasks.lastErrorMessage : nil
+        // The failed acknowledgement was consumed, so retrying this Undo
+        // would target a different, older history step.
+        return recordFailure(CommandFailure(reported ?? String(localized: "Couldn’t save the pending change."),
+                                            canRetry: false))
     }
 
     private func historyOutcome(_ outcome: UndoOutcome?, since serial: UInt64, verb: String) -> CommandOutcome {
