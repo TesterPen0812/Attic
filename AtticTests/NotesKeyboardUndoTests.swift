@@ -10,18 +10,27 @@ import XCTest
 ///
 /// The Notes page is hosted as the panel hosts it, in an offscreen nonactivating
 /// key panel on CI, and real key events go through the same order AppKit uses: the
-/// local key monitor (`NotesLibraryKeys`) first, then the window's view
-/// hierarchy (`performKeyEquivalent`, where SwiftUI's `keyboardShortcut`
-/// lives), then the Edit menu's Undo, which reaches `undo:` on the first
-/// responder. The pure `keyAction` decision function alone cannot show which
-/// of these wins.
+    /// local key monitor (`NotesLibraryKeys`) first, then the focused native
+    /// library content responder (or a text editor), then window key equivalents
+    /// and the Edit menu's Undo. The pure `keyAction` decision function alone
+    /// cannot show which of these wins.
 @MainActor
 final class NotesKeyboardUndoTests: XCTestCase {
     /// A genuine key window on CI. The test dispatches what gets past the
     /// local monitors in AppKit's order itself, so sendEvent does not duplicate it.
     private final class KeyWindow: NSPanel {
         override var canBecomeKey: Bool { true }
-        override func sendEvent(_ event: NSEvent) {}
+        private(set) var contentKeyDispatches = 0
+        override func sendEvent(_ event: NSEvent) {
+            // NSApp's monitors run first. The library's actual native content
+            // responder now owns these keys; the harness models the editor
+            // and the menu's subsequent dispatch separately below.
+            guard event.type == .keyDown,
+                  let content = firstResponder as? NSView,
+                  content.accessibilityIdentifier() == "notes-library-content" else { return }
+            contentKeyDispatches += 1
+            content.keyDown(with: event)
+        }
 
         var traceFocusChanges = false
         var focusTransitions: [ObjectIdentifier?] = []
@@ -53,6 +62,8 @@ final class NotesKeyboardUndoTests: XCTestCase {
     private enum Route: Equatable {
         /// The library's local key monitor consumed it.
         case monitor
+        /// The focused library content view received it through the window.
+        case contentResponder
         /// A key equivalent in the window's views (a SwiftUI shortcut) took it.
         case viewKeyEquivalent
         /// The Edit menu's Undo/Redo, delivered to the first responder.
@@ -178,6 +189,10 @@ final class NotesKeyboardUndoTests: XCTestCase {
                        beforeTextDispatchForRegression: (() -> Void)? = nil, in harness: Harness) throws -> Route {
         diagnosticCommand = "characters=\(characters.debugDescription) keyCode=\(keyCode) flags=\(flags.rawValue) library=\(toTheLibrary)"
         let window = harness.window
+        if toTheLibrary {
+            XCTAssertTrue(focusLibraryContent(in: harness), "the library's real AppKit content must take focus before its keys")
+        }
+        let contentDispatchesBefore = window.contentKeyDispatches
         let event = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: flags,
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
@@ -204,7 +219,9 @@ final class NotesKeyboardUndoTests: XCTestCase {
         // handoff wins, particularly during native FKA traversal.
         beforeTextDispatchForRegression?()
         defer { spin(0.15) }
-        if toTheLibrary || libraryFingerprint(harness) != before { return .monitor }
+        if toTheLibrary || libraryFingerprint(harness) != before {
+            return window.contentKeyDispatches > contentDispatchesBefore ? .contentResponder : .monitor
+        }
         guard flags.contains(.command) else { return .nobody }
         // 2. A command key is offered to the window's views.
         if window.performKeyEquivalent(with: event) { return .viewKeyEquivalent }
@@ -218,6 +235,21 @@ final class NotesKeyboardUndoTests: XCTestCase {
 
     private func editorText(_ harness: Harness) -> String {
         harness.controller.active?.engine.plainText ?? ""
+    }
+
+    /// Locate the actual one-stop AppKit content responder under SwiftUI's
+    /// hosting tree, including in the offscreen, FKA-disabled test fixture.
+    private func focusLibraryContent(in harness: Harness) -> Bool {
+        harness.host.layoutSubtreeIfNeeded()
+        func find(_ view: NSView) -> NSView? {
+            if view.accessibilityIdentifier() == "notes-library-content" { return view }
+            for child in view.subviews {
+                if let found = find(child) { return found }
+            }
+            return nil
+        }
+        guard let content = find(harness.host) else { return false }
+        return harness.window.makeFirstResponder(content)
     }
 
     /// Opens `id` in the editor with the caret in its text.
@@ -457,7 +489,8 @@ final class NotesKeyboardUndoTests: XCTestCase {
         XCTAssertEqual(field.string, "", "the search text was undone")
         XCTAssertNil(harness.store.note(withID: beta), "the deleted note stayed deleted")
 
-        // Second ⌘Z: the field has nothing left, so the library answers.
+        // Second ⌘Z: the still-focused field has nothing left; the search-
+        // scoped monitor now hands the command to the library history.
         XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .monitor)
         XCTAssertNotNil(harness.store.note(withID: beta), "the library's Undo restored the note")
     }
@@ -488,8 +521,9 @@ final class NotesKeyboardUndoTests: XCTestCase {
         XCTAssertEqual(undo.title, "Undo Delete Note")
         XCTAssertFalse(undo.isDisabled)
 
-        // The key: ⌘Z with no field text goes to the library's history.
-        XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .monitor)
+        // The key: ⌘Z with no field text goes to the focused native library
+        // content responder, which owns its history even with no rows left.
+        XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .contentResponder)
         XCTAssertNotNil(harness.store.note(withID: only), "the note is back")
 
         // And through the menu command, Redo then Undo again.
