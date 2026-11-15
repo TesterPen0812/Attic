@@ -225,8 +225,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     static func performUnhandledUndo(redo: Bool, section: PanelSection, openTaskNoteID: UUID? = nil,
                                      store: TaskStore, notes: NotesPageController) {
         if let taskID = openTaskNoteID {
-            // The page's own Undo: it closes the open typing group and
-            // refuses while a publication, replay or input reservation is pending.
+            // The page's history closes typing groups and can queue an
+            // opposite shortcut behind an asynchronous journal replay.
             let history = notes.undoRoute.existingWorkspace(for: .taskWorkspace(taskID))
             _ = redo ? history?.redo() : history?.undo()
             return
@@ -257,7 +257,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                                         store: TaskStore, notes: NotesPageController) -> Bool {
         if let taskID = openTaskNoteID {
             let history = notes.undoRoute.existingWorkspace(for: .taskWorkspace(taskID))
-            return (redo ? history?.canRedo : history?.canUndo) ?? false
+            return history?.canRequestReplay(redo: redo) ?? false
         }
         if section.isNotes {
             if notes.isLibraryPresented { return redo ? notes.canRedoLibrary : notes.canUndoLibrary }

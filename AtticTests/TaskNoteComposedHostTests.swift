@@ -543,6 +543,47 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertEqual(tasks.task(withID: id)?.title, editedTitle)
     }
 
+    func testDataR1PanelRedoShortcutStaysAvailableWhileJournalUndoRuns() async throws {
+        let id = try seed(.boundary), presenter = try open(id)
+        let history = presenter.page.history
+        var enteredUndo = false, redoCalls = 0
+        var releaseUndo: CheckedContinuation<Void, Never>?
+        var step = UndoStep(name: "Journaled task edit", undoOutcome: {
+            XCTFail("A journaled step must replay asynchronously"); return .failed
+        }, redoOutcome: {
+            XCTFail("A journaled step must replay asynchronously"); return .failed
+        })
+        step.replay = { redo, publish in
+            if !redo {
+                enteredUndo = true
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    releaseUndo = continuation
+                }
+            }
+            do { try publish() } catch { return .failed }
+            if redo { redoCalls += 1 }
+            return .applied
+        }
+        notes.undoRoute.record(step, in: history.historyID)
+
+        XCTAssertTrue(AtticPanelController.canPerformUnhandledUndo(redo: false, section: .notes,
+            openTaskNoteID: id, store: tasks, notes: notes))
+        AtticPanelController.performUnhandledUndo(redo: false, section: .notes,
+            openTaskNoteID: id, store: tasks, notes: notes)
+        for _ in 0..<100 where !enteredUndo { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(enteredUndo)
+        XCTAssertTrue(presenter.host.engine.canRedoCommand, "the native editor offers queued Redo")
+        XCTAssertTrue(AtticPanelController.canPerformUnhandledUndo(redo: true, section: .notes,
+            openTaskNoteID: id, store: tasks, notes: notes), "the panel must offer the same queued Redo")
+        AtticPanelController.performUnhandledUndo(redo: true, section: .notes,
+            openTaskNoteID: id, store: tasks, notes: notes)
+        let continuation = releaseUndo
+        releaseUndo = nil
+        continuation?.resume()
+        for _ in 0..<100 where redoCalls == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(redoCalls, 1)
+    }
+
     func testJustUncheckedSubtaskMovesUpRelativeToItsHeldNeighbourRatherThanItsCanonicalIndex() throws {
         let id = try seed(.heavy), presenter = try open(id, expanded: true), model = presenter.model
         let export = try XCTUnwrap(model.rows.first { $0.title == "Export the blog posts" })
