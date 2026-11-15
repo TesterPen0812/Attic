@@ -979,11 +979,11 @@ class DrawStore: DrawStoreProtocol {
             pendingAvailability[id] = nil
             return (!(histories[id]?.undo.isEmpty ?? true), !(histories[id]?.redo.isEmpty ?? true))
         }
-        if let cached = pendingAvailability[id], cached.count == edits.count, cached.last == edits.last?.step.id {
+        if let cached = pendingAvailability[id], cached.count == edits.count, cached.last == edits.last?.id {
             return (cached.undo, cached.redo)
         }
         let history = projectedHistory(on: id)
-        let value = (edits.count, edits.last?.step.id, !history.undo.isEmpty, !history.redo.isEmpty)
+        let value = (edits.count, edits.last?.id, !history.undo.isEmpty, !history.redo.isEmpty)
         pendingAvailability[id] = value
         return (value.2, value.3)
     }
@@ -999,7 +999,9 @@ class DrawStore: DrawStoreProtocol {
         let step = stamped(redo ? next : next.reversed)
         show(step)
         pending[id]?.append(Pending(step: step, action: redo ? .redo : .undo))
-        return publishPending(id, outcome: pendingEdits[id]?.outcome ?? .retry(""))
+        let published = publishPending(id, outcome: pendingEdits[id]?.outcome ?? .retry(""))
+        guard !checkpointDirty.contains(id) else { return published }
+        return flush(id, head: .auto)
     }
 
     func duplicate(_ id: UUID, name: String? = nil) throws -> DrawCanvas? {

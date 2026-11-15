@@ -2851,3 +2851,51 @@ extension Draw3PageTests {
         XCTAssertNotEqual(route.redoStep(in: .library), .failed, "a withdrawn offer must never be offered and fail")
     }
 }
+extension Draw3PageTests {
+    func testR5AcknowledgedHistoryRetriesTheHeadWithoutAnotherEdit() throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID), url = try r5URL()
+        let first = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([first])).isSaved)
+        fail = true
+        _ = store.perform(.tags(["failed"]), on: id)
+        fail = false
+        XCTAssertTrue(store.acknowledgeHistory(redo: false, on: id).isSaved)
+        XCTAssertNil(store.pendingEdits[id])
+        XCTAssertEqual(try store.open(id).canvas.tags, [])
+        let reopened = try r5CrashReopen(url)
+        XCTAssertEqual(try reopened.open(id).canvas.tags, [])
+        XCTAssertEqual(try reopened.open(id).objects, [first])
+        use(reopened)
+    }
+
+    func testR5RetiredHeadCannotReusePendingHistoryAvailability() throws {
+        var mode = 0, allowance = 0
+        use(try persistentStore(fileBacked: true, save: { context in
+            if mode == 1 || (mode == 2 && allowance == 0) { throw NSError(domain: "R5", code: 1) }
+            if mode == 2 { allowance -= 1 }
+            try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID), url = try r5URL()
+        let object = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(store.perform(.put([object]), on: id).isSaved)
+        mode = 1
+        _ = store.perform(.tags(["pending"]), on: id)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 1)
+        XCTAssertFalse(store.acknowledgedHistoryAvailability(on: id).redo)
+        mode = 2; allowance = 1
+        _ = store.acknowledgeHistory(redo: false, on: id)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 1, "the edit committed; its Undo is now the failed head")
+        XCTAssertTrue(store.acknowledgedHistoryAvailability(on: id).redo,
+                      "same count and command ID do not identify the new pending inverse")
+        mode = 0
+        XCTAssertTrue(store.retry(on: id).isSaved)
+        let reopened = try r5CrashReopen(url)
+        XCTAssertEqual(try reopened.open(id).canvas.tags, [])
+        XCTAssertEqual(try reopened.open(id).objects, [object])
+        use(reopened)
+    }
+}
