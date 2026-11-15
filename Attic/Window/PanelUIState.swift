@@ -463,6 +463,19 @@ final class PanelUIState: ObservableObject {
         if confirmingTaskCompletionID != nil { confirmingTaskCompletionID = nil }
         if isCanvasConfirmationPresented { isCanvasConfirmationPresented = false }
         PerformanceSignposts.noteInput("page-selection-publish-begin")
+        // Direct selection routes (agent show, note-link completion, floating
+        // panel) also transfer the held resize's drawn-page ownership. A
+        // disappearing page freezes at its last live size; a page still
+        // travelling out remains live until its transition settles. Update
+        // the hold before publishing the new selection so the shell never
+        // receives a new current page paired with the previous drawn set.
+        updateLiveResizeHold { hold in
+            if pageTransit.departingPage != nil {
+                hold.keepDrawn(PanelPage(section))
+            } else {
+                hold.settle(current: PanelPage(section), size: panelSize)
+            }
+        }
         selectedSection = section
         PerformanceSignposts.noteInput("page-selection-publish-end")
         island.show(PanelPage(section))

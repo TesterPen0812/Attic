@@ -919,12 +919,13 @@ private struct PanelResizeStablePageHost<Content: View>: View, Equatable {
     @ViewBuilder let content: () -> Content
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        // On mouseDown, a previously hidden page changes from a live-size
-        // proposal to a frozen-size proposal at exactly the same size. Its
-        // content does not need to rebuild even for that first drag step.
-        // A visible page, or one still leaving, always receives the live
-        // proposal; release (rhs.frozenSize == nil) restores normal updates.
-        guard let frozenSize = rhs.frozenSize, !lhs.isCurrent,
+        // Taking the grip, or directly selecting another page while it is
+        // held, can change a page from live to frozen at the same proposal.
+        // Its content must not rebuild at the next step: the outer visibility
+        // modifier still owns input, accessibility and travel changes.
+        // A page still leaving stays live (rhs.frozenSize == nil); release
+        // likewise restores normal updates.
+        guard let frozenSize = rhs.frozenSize,
               (lhs.frozenSize ?? lhs.livePanelSize) == frozenSize else { return false }
         return lhs.page == rhs.page
             && lhs.cornerSize == rhs.cornerSize

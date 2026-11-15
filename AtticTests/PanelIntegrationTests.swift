@@ -764,6 +764,52 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    /// R-4 round 2: an agent/note-link's direct selectSection path must freeze
+    /// the former page at its last live width, without per-step hidden work.
+    func testDirectSectionSelectionDuringResizeFreezesHiddenPagesAtDepartureSize() throws {
+        #if ATTIC_LOCAL_ONLY
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        var layouts: [PanelPage: CGSize] = [:]
+        var tasksBodies = 0
+        PanelInvalidationProbe.pageLayout = { page, size in layouts[page] = size }
+        PanelInvalidationProbe.tasksHost = { tasksBodies += 1 }
+        defer {
+            PanelInvalidationProbe.pageLayout = nil
+            PanelInvalidationProbe.tasksHost = nil
+        }
+        for corner in [ScreenCorner.topLeft, .topRight] {
+            layouts = [:]
+            let held = try holdResizeGrip(building: [.notes, .calendar], scaleSeed: true, corner: corner)
+            defer { held.finish() }
+            try held.drag(24)
+            let departureWidth = held.liveWidth()
+            held.panel.uiState.selectSection(.notes) // AppCoordinator's direct show route.
+            spin(0.06)
+            XCTAssertEqual(try XCTUnwrap(held.panel.uiState.liveResize?.heldSize(for: .tasks)).width,
+                           departureWidth, accuracy: 1)
+            let beforeHidden = tasksBodies
+            try held.drag(40)
+            try held.drag(80)
+            XCTAssertEqual(try XCTUnwrap(held.panel.uiState.liveResize?.heldSize(for: .tasks)).width,
+                           departureWidth, accuracy: 1, "the direct route's frozen proposal must remain stable")
+            XCTAssertEqual(tasksBodies, beforeHidden, "hidden Tasks body must stay quiet across drag steps")
+            XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, departureWidth, accuracy: 1)
+            let notesDeparture = held.liveWidth()
+            held.panel.uiState.selectSection(.calendar)
+            spin(0.06)
+            XCTAssertEqual(try XCTUnwrap(held.panel.uiState.liveResize?.heldSize(for: .notes)).width,
+                           notesDeparture, accuracy: 1)
+            try held.release()
+            // Each corner owns an independent native panel. Hide the first
+            // before measuring the next so its delayed SwiftUI passes cannot
+            // write into this process-wide layout probe.
+            _ = held.panel.controller.requestHide { _ in }
+            spin(0.5)
+        }
+        #endif
+    }
+
     /// R-2: a hidden page does no work for the steps of a drag. Its top row,
     /// which reads the page's travel, must not re-run while the panel widens.
     func testLiveResizeHiddenPagesDoNoTopRowWorkDuringADrag() throws {
