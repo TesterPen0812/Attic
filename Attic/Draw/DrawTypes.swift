@@ -194,6 +194,8 @@ struct DrawPendingEdit: Equatable, Sendable {
     var outcome: DrawSaveResult
     /// How many edits on this canvas wait to be saved, in order.
     var count = 1
+    /// Receipt for the final queued edit, even when the queue length stays the same.
+    var lastStepID: UUID? = nil
 }
 
 enum DrawStoreError: Error { case missingCanvas, invalidClipboard, invalidObject, pendingEdit }
@@ -233,6 +235,10 @@ protocol DrawStoreProtocol: AnyObject {
     func reconcile(on id: UUID) -> DrawSaveResult
     /// Abandon the last failed rename only if its physical write did not commit.
     /// Other queued edits, their recovery proof and their Undo history survive.
+    /// Exact pending rename identity and its canonical names. A later edit
+    /// with the same names does not belong to the earlier field.
+    func pendingRename(on id: UUID, stepID: UUID) -> (before: String, after: String)?
+    func abandonPendingRename(on id: UUID, stepID: UUID) -> Bool
     func abandonPendingRename(on id: UUID, named name: String, restoring original: String) -> Bool
     func canUndo(on id: UUID) -> Bool
     func canRedo(on id: UUID) -> Bool
@@ -259,6 +265,8 @@ protocol DrawStoreProtocol: AnyObject {
 }
 
 extension DrawStoreProtocol {
+    func pendingRename(on id: UUID, stepID: UUID) -> (before: String, after: String)? { nil }
+    func abandonPendingRename(on id: UUID, stepID: UUID) -> Bool { false }
     func pinHistoryStep(_ stepID: UUID) -> AnyObject? { nil }
     func performTypingBurst(_ commands: [DrawCommand], on id: UUID) -> DrawSaveResult {
         var result: DrawSaveResult = .unchanged

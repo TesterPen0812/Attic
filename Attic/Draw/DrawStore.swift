@@ -763,7 +763,7 @@ class DrawStore: DrawStoreProtocol {
         if let preceding = remaining.last, let outcome = pendingEdits[id]?.outcome {
             pendingEdits[id] = DrawPendingEdit(canvas: preceding.step.after,
                                                objects: states[id]?.snapshot.objects ?? [],
-                                               outcome: outcome, count: remaining.count)
+                                               outcome: outcome, count: remaining.count, lastStepID: preceding.step.id)
         } else {
             pendingEdits[id] = nil
             recoveredCanvasIDs.remove(id)
@@ -771,6 +771,23 @@ class DrawStore: DrawStoreProtocol {
         }
         revision &+= 1
         return true
+    }
+
+    func pendingRename(on id: UUID, stepID: UUID) -> (before: String, after: String)? {
+        guard let edit = pending[id]?.first(where: { $0.action == .edit && $0.step.id == stepID }),
+              edit.step.change.objectsBefore.isEmpty, edit.step.change.objectsAfter.isEmpty,
+              edit.step.before.name != edit.step.after.name else { return nil }
+        var renamed = edit.step.before
+        renamed.name = edit.step.after.name
+        renamed.updatedAt = edit.step.after.updatedAt
+        guard renamed == edit.step.after else { return nil }
+        return (edit.step.before.name, edit.step.after.name)
+    }
+
+    func abandonPendingRename(on id: UUID, stepID: UUID) -> Bool {
+        guard pending[id]?.last?.step.id == stepID,
+              let rename = pendingRename(on: id, stepID: stepID) else { return false }
+        return abandonPendingRename(on: id, named: rename.after, restoring: rename.before)
     }
 
     func canUndo(on id: UUID) -> Bool {
@@ -1204,7 +1221,7 @@ class DrawStore: DrawStoreProtocol {
             }
         }
         pendingEdits[id] = DrawPendingEdit(canvas: last.step.after, objects: states[id]?.snapshot.objects ?? [],
-                                           outcome: published, count: edits.count)
+                                           outcome: published, count: edits.count, lastStepID: last.step.id)
         return published
     }
     private static func name(_ value: String?) -> String {

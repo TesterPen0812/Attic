@@ -1797,6 +1797,50 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertEqual(try store.open(id).objects.count, 701)
     }
 
+    func testR4DeletedCurrentCanvasLeavesDuringRename() throws {
+        for hasOther in [false, true] {
+            use(try persistentStore(fileBacked: true))
+            let id = try XCTUnwrap(model.canvasID)
+            XCTAssertTrue(model.perform(.saveCanvas).isSaved)
+            if hasOther {
+                let other = store.create(name: "Other")
+                XCTAssertTrue(store.perform(.saveCanvas, on: other.id).isSaved)
+            }
+            model.library.perform(.rename); model.library.nameDraft = "Unsaved rename"
+            XCTAssertTrue(store.performAgent(.deleteCanvas, on: id).isSaved)
+            model.syncExternalChanges()
+            XCTAssertNotEqual(model.canvasID, id)
+            XCTAssertNil(try store.open(XCTUnwrap(model.canvasID)).canvas.deletedAt)
+            model.library.cancelRename(); model.syncExternalChanges()
+            XCTAssertNotEqual(model.canvasID, id)
+            XCTAssertNotNil(model.saveNotice, "deletion must explain why the rename target left")
+        }
+    }
+
+    func testR4EscapeOwnsRenameWhenTheQueueCountDoesNotChange() throws {
+        var write = 0, failing = Set<Int>()
+        use(try persistentStore(fileBacked: true, save: { context in
+            write += 1
+            if failing.contains(write) { throw NSError(domain: "R4", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(model.perform(.saveCanvas).isSaved)
+        let original = try store.open(id).canvas.name
+        failing = [write + 1, write + 3]
+        _ = store.perform(.tags(["keep"]), on: id)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 1)
+        model.library.perform(.rename); model.library.nameDraft = "Cancelled"
+        model.library.commitRename()
+        XCTAssertEqual(store.pendingEdits[id]?.count, 1, "A committed, R failed; count stayed equal")
+        XCTAssertTrue(model.library.isRenaming)
+        model.library.cancelRename()
+        XCTAssertFalse(model.library.isRenaming)
+        failing = []
+        model.retrySave()
+        XCTAssertEqual(try store.open(id).canvas.name, original)
+        XCTAssertEqual(try store.open(id).canvas.tags, ["keep"])
+    }
+
     func testR4StoreRetryCannotLetUndoOvertakePageRedo() throws {
         var fail = false
         use(try persistentStore(fileBacked: true, save: { context in
