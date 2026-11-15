@@ -390,15 +390,17 @@ final class PanelUIState: ObservableObject {
         pageSlideGeneration &+= 1
         let generation = pageSlideGeneration
         let sliding = motion.travels
-        // Both pages stay drawn while the switch runs (a slide, or the fade
-        // Reduce Motion gives), so both keep following a held resize.
-        if motion.travels || motion.fades {
-            liveResize?.keepDrawn(PanelPage(selectedSection), PanelPage(section))
-        }
+        let leaving = PanelPage(selectedSection)
         pageTransit.departingPage = sliding ? PanelPage(selectedSection) : nil
         if pageTransit.sliding != sliding { pageTransit.sliding = sliding }
         withAnimation(motion.animation, completionCriteria: .removed) {
             selectSection(section)
+            // Publish the hold in the same transaction as the selection.
+            // Publishing it first, outside the animation, can flush the
+            // shell with its old selection and consume the switch's update.
+            if motion.travels || motion.fades {
+                liveResize?.keepDrawn(leaving, PanelPage(section))
+            }
             alongside()
         } completion: { [weak self] in
             // The page's actual animation has finished. An interrupted

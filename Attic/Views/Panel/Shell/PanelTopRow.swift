@@ -260,7 +260,7 @@ private struct PanelPageSlideKey: EnvironmentKey {
 
 /// A page's sideways move for a page switch, in two parts: `distance` is the
 /// whole way (signed, a panel width), `progress` runs from 0 (away) to 1 (in
-/// place) and is the part a switch animates. The offset is their product, so
+/// place). The offset is their product, so
 /// a page at rest behind the current one can hold a width that is no longer
 /// the panel's, while a held resize changes it, and the page a switch brings
 /// in still starts from the live width: the width is read when the switch is
@@ -274,14 +274,21 @@ struct PanelPageSlide: Equatable {
     var isAway: Bool { offset != 0 }
 }
 
-/// Moves a view by a `PanelPageSlide`, or by minus that, animating `progress`.
+/// Moves a view by a `PanelPageSlide`, or by minus that. Animate signed
+/// travel in panel widths: a live width applies immediately, and reversing
+/// direction carries the page's presented position into the new slide.
 struct PanelPageSlideOffset: ViewModifier, Animatable {
     var slide: PanelPageSlide
     var cancels = false
 
     var animatableData: CGFloat {
-        get { slide.progress }
-        set { slide.progress = newValue }
+        get {
+            let width = abs(slide.distance)
+            return width == 0 ? 0 : slide.offset / width
+        }
+        set {
+            slide = PanelPageSlide(distance: abs(slide.distance), progress: 1 - newValue)
+        }
     }
 
     func body(content: Content) -> some View {

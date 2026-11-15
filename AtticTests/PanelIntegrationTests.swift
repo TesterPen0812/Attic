@@ -515,27 +515,55 @@ final class PanelIntegrationTests: XCTestCase {
     func testLiveResizeFadingOutgoingPageKeepsLiveGeometry() throws {
         #if ATTIC_LOCAL_ONLY
         let previousStyle = AtticReducedMotionStyle.current
+        let previousTransparency = AtticTransparencySeam.systemOverride
+        let capturesRender = ProcessInfo.processInfo.environment["ATTIC_RESIZE_REVIEW_CAPTURE"] != nil
+        if capturesRender { AtticTransparencySeam.systemOverride = false }
         AtticMotionPreference.systemReduceMotionOverride = true
-        AtticReducedMotionStyle.current = .fade
         defer {
             AtticMotionPreference.systemReduceMotionOverride = nil
             AtticReducedMotionStyle.current = previousStyle
+            AtticTransparencySeam.systemOverride = previousTransparency
         }
         var layouts: [PanelPage: CGSize] = [:]
         PanelInvalidationProbe.pageLayout = { page, size in layouts[page] = size }
         defer { PanelInvalidationProbe.pageLayout = nil }
         let held = try holdResizeGrip(building: [.notes])
         defer { held.finish() }
+        // AppSettings initializes the process-wide style, so choose Fade
+        // through this panel's real setting after constructing it.
+        held.panel.settings.reducedMotionStyle = .fade
+        if capturesRender { held.panel.settings.appearance = .light; spin(0.1) }
         try held.drag(24)
         spin(0.06)
         let liveWidth = held.liveWidth()
         XCTAssertGreaterThan(liveWidth, held.initialWidth + 4)
-        held.panel.uiState.switchPage(to: .notes, motion: .current(reduceMotion: true))
+        let motion = PanelPageMotion.current(reduceMotion: true)
+        XCTAssertEqual(motion, .fade)
+        held.panel.uiState.switchPage(to: .notes, motion: motion)
         XCTAssertFalse(held.panel.uiState.isPageSwitchSliding, "the Fade style does not travel")
+        try held.drag(28)
+        let fadingWidth = held.liveWidth()
+        XCTAssertGreaterThan(fadingWidth, liveWidth + 1)
         spin(0.04)
-        XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, liveWidth, accuracy: 1,
+        XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, fadingWidth, accuracy: 1,
                        "the outgoing page is still drawn while it fades, at the live width")
-        XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, liveWidth, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, fadingWidth, accuracy: 1)
+        if let output = ProcessInfo.processInfo.environment["ATTIC_RESIZE_REVIEW_CAPTURE"] {
+            let content = try XCTUnwrap(held.panel.controller.panelForTesting.contentView)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int(content.bounds.width * 2),
+                pixelsHigh: Int(content.bounds.height * 2), bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+            ))
+            bitmap.size = content.bounds.size
+            content.cacheDisplay(in: content.bounds, to: bitmap)
+            let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                                           uniformTypeIdentifier: "public.png")
+            attachment.name = URL(fileURLWithPath: output).lastPathComponent
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
         try held.release()
         spin(0.3)
         #endif
@@ -558,7 +586,9 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(liveWidth, held.initialWidth + 4)
         let motion = PanelPageMotion.current(reduceMotion: false)
         held.panel.uiState.switchPage(to: .notes, motion: motion)
+        XCTAssertTrue(held.panel.uiState.isPageSwitchSliding, "the first switch must start a slide")
         spin(0.03)
+        XCTAssertTrue(held.panel.uiState.isPageSwitchSliding, "the second switch must interrupt a running slide")
         held.panel.uiState.switchPage(to: .calendar, motion: motion)
         spin(0.03)
         XCTAssertTrue(held.panel.uiState.isPageSwitchSliding)

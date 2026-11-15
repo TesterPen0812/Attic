@@ -231,6 +231,34 @@ final class PanelShellTests: XCTestCase {
         XCTAssertEqual(instant.settleDuration, 0)
     }
 
+    /// A held resize changes the incoming width; another page switch can
+    /// reverse that page before it arrives. Retargeting must keep its current
+    /// presentation position rather than mirroring it across the panel.
+    func testPageSlideKeepsItsPresentedPositionWhenDirectionReversesDuringResize() {
+        print("RESIZE_PROCESS pid=\(ProcessInfo.processInfo.processIdentifier) component=slide-retarget")
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        let frozen = PanelPageSlideOffset(slide: .init(distance: 320, progress: 0))
+        var arriving = PanelPageSlideOffset(slide: .init(distance: 344, progress: 1))
+        let arrivalTarget = arriving.animatableData
+        arriving.animatableData = frozen.animatableData
+        XCTAssertEqual(arriving.slide.offset, 344, accuracy: 0.001,
+                       "the incoming page starts at the live edge, not the frozen width")
+        arriving.animatableData = frozen.animatableData + (arrivalTarget - frozen.animatableData) * 0.4
+        let presented = arriving.slide.offset
+        XCTAssertEqual(presented, 206.4, accuracy: 0.001)
+
+        var departing = PanelPageSlideOffset(slide: .init(distance: -344, progress: 0))
+        let departureTarget = departing.animatableData
+        // SwiftUI carries the current animatable value into a retargeted
+        // modifier; its nonanimated distance is already the new target's.
+        departing.animatableData = arriving.animatableData
+        XCTAssertEqual(departing.slide.offset, presented, accuracy: 0.001,
+                       "an interrupted slide must continue from its presented position")
+        departing.animatableData = departureTarget
+        XCTAssertEqual(departing.slide.offset, -344, accuracy: 0.001)
+    }
+
     /// While a switch slides, the pages' scroll bars stay hidden (they never
     /// flash or cross); an instant switch never hides them.
     func testScrollBarsHideOnlyWhileTheSlideRuns() {
