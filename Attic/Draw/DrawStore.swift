@@ -5,6 +5,8 @@ import Observation
 @MainActor @Observable
 class DrawStore: DrawStoreProtocol {
     static let maxHistorySteps = 100
+    /// An evicted offer may protect at most this shared footprint per chain.
+    static let maxProtectedHistoryBytes = 128 * 1024 * 1024
     static let maxCachedStates = 8
     /// What canvases whose bodies were evicted may still hold in Undo/Redo
     /// steps (image bytes, stroke points, thumbnails), together.
@@ -238,6 +240,11 @@ class DrawStore: DrawStoreProtocol {
     /// enough real relief before touching small shared-buffer prefixes.
     private func boundEvictedHistories() {
         syncHistoryLedger()
+        for id in ledgered.keys {
+            if let history = histories[id], let entry = ledgered[id] {
+                expireOversizedOffers(history: history, prints: entry.prints)
+            }
+        }
         let pinRevision = pins.revision
         guard saturatedLedgerGeneration != ledgerGeneration || saturatedPinRevision != pinRevision else { return }
         var protected = HistoryLedger()
@@ -249,10 +256,9 @@ class DrawStore: DrawStoreProtocol {
                 }
             }
         }
-        // Count protected memory, but do not spend unrelated reachable Undo
-        // against a deficit it cannot solve. Overlarge offers get their own
-        // temporary overage plus the normal reclaimable allowance.
-        let budget = Self.maxEvictedHistoryBytes + (protected.total > Self.maxEvictedHistoryBytes ? protected.total : 0)
+        // Protected memory adds its footprint to the reclaimable allowance
+        // continuously, from its first byte. It never consumes unrelated Undo.
+        let budget = Self.maxEvictedHistoryBytes + protected.total
         struct Candidate {
             var canvas: UUID
             var undo: Int
@@ -847,9 +853,17 @@ class DrawStore: DrawStoreProtocol {
         return pending[id] == nil && !(histories[id]?.redo.isEmpty ?? true)
     }
 
-    /// Keeps a step an offer is bound to (the deletion toast's Undo, a grouped
-    /// Restore's Undo) in the bounded history for as long as the offer lives.
-    func pinHistoryStep(_ stepID: UUID) -> AnyObject? { pins.pin(stepID) }
+    /// Keeps an offered step reachable until its offer ends or exceeds the
+    /// 100-step / 128 MiB evicted-chain bounds, when the offer expires.
+    func pinHistoryStep(_ stepID: UUID) -> AnyObject? {
+        let pin = pins.pin(stepID)
+        func contains(_ history: History) -> Bool {
+            history.undo.contains { $0.id == stepID } || history.redo.contains { $0.id == stepID }
+        }
+        if let id = lastDelta?.canvas.id, let history = histories[id], contains(history) { capUndo(on: id) }
+        else if let entry = histories.first(where: { contains($0.value) }) { capUndo(on: entry.key) }
+        return pin
+    }
 
     private func historyMustResume() -> DrawSaveResult {
         .held(String(localized: "Undo and Redo are waiting for this drawing to finish saving."))
@@ -1244,6 +1258,7 @@ class DrawStore: DrawStoreProtocol {
             _ = histories[id]?.redo.popLast()
             appendUndo(step, on: id)
         }
+        capUndo(on: id)
         revision &+= 1
         let delta = DrawDelta(canvas: step.after,
                               upserted: step.change.objectsAfter.values.filter { $0.deletedAt == nil }.sorted(by: Self.objectOrder),
@@ -1260,10 +1275,27 @@ class DrawStore: DrawStoreProtocol {
 
     private func appendUndo(_ step: Step, on id: UUID) {
         histories[id, default: History()].undo.append(step)
-        capUndo(on: id)
+    }
+
+    /// Count bounds apply everywhere. Byte bounds use the existing evicted
+    /// ledger only; a never-evicted edit never walks payload footprints.
+    private func expireOversizedOffers(history: History, prints: [UUID: StepFootprint]? = nil) {
+        guard pins.hasPins else { return }
+        for stack in [history.undo, history.redo] {
+            while let first = stack.firstIndex(where: { pins.isPinned($0.id) }) {
+                let suffix = stack[first...]
+                if suffix.count > Self.maxHistorySteps { pins.expire(stack[first].id); continue }
+                guard let prints else { break }
+                var footprint = HistoryLedger()
+                for step in suffix { if let measured = prints[step.id] { footprint.add(measured) } }
+                if footprint.total > Self.maxProtectedHistoryBytes { pins.expire(stack[first].id); continue }
+                break
+            }
+        }
     }
 
     private func capUndo(on id: UUID) {
+        if let history = histories[id] { expireOversizedOffers(history: history) }
         let removable: Int = {
             guard let stack = histories[id]?.undo, stack.count > Self.maxHistorySteps else { return 0 }
             let excess = stack.count - Self.maxHistorySteps
@@ -1359,6 +1391,7 @@ final class DrawStepPins: @unchecked Sendable {
         lock.lock(); notificationPending = false; lock.unlock()
     }
     var revision: UInt64 { lock.lock(); defer { lock.unlock() }; return generation }
+    var hasPins: Bool { lock.lock(); defer { lock.unlock() }; return !counts.isEmpty }
     func pin(_ step: UUID) -> Pin {
         let token = UUID()
         lock.lock(); counts[step, default: []].insert(token); generation &+= 1; lock.unlock()

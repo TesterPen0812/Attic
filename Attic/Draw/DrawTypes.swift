@@ -250,7 +250,7 @@ protocol DrawStoreProtocol: AnyObject {
     func redoStepID(on id: UUID) -> UUID?
     /// An offer bound to a history step (a toast's Undo, a grouped Restore's
     /// Undo) holds the returned token for as long as it can be used; the
-    /// bounded history keeps that step while the token lives.
+    /// bounded history keeps that step until the offer ends or expires.
     func pinHistoryStep(_ stepID: UUID) -> AnyObject?
     /// A self-contained inverse sealed to the physical state after one saved
     /// edit, for the agent's versioned Undo journal across launches.

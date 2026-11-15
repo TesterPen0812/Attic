@@ -169,13 +169,19 @@ final class DrawStoreContractTests: XCTestCase {
         XCTAssertTrue(store.perform(.saveCanvas, on: canvas.id).isSaved)
         XCTAssertTrue(store.perform(.deleteCanvas, on: canvas.id).isSaved)
         let offer = DrawRecentlyDeleted.restoreTracked([DrawDeletedItem(canvasID: canvas.id, objectID: nil)], store: store)
-        let head = try XCTUnwrap(offer.actions.first?.historyStepID)
+        let group = try XCTUnwrap(RecentlyDeletedRestoreUndo.make(drawStore: store, actions: offer.actions, librarySteps: [], restored: 1))
+        let route = UndoRoute(); route.record(group, in: .library)
         for i in 0..<110 { XCTAssertTrue(store.perform(.rename("Name \(i)"), on: canvas.id).isSaved) }
         withExtendedLifetime(offer) {
-            for _ in 0..<110 { XCTAssertTrue(store.undo(on: canvas.id).isSaved) }
-            XCTAssertEqual(store.undoStepID(on: canvas.id), head)
-            XCTAssertTrue(store.undo(on: canvas.id).isSaved)
-            XCTAssertNotNil(try? store.open(canvas.id).canvas.deletedAt)
+            // Round 5 decision 4: withdraw the offer before normal prefix
+            // eviction; an offered step is never silently removed.
+            XCTAssertFalse(route.canUndo(in: .library))
+            XCTAssertNil(route.undoName(in: .library))
+            var undone = 0
+            while store.canUndo(on: canvas.id), store.undo(on: canvas.id).isSaved { undone += 1 }
+            XCTAssertEqual(undone, 100)
+            XCTAssertEqual(try? store.open(canvas.id).canvas.name, "Name 9")
+            XCTAssertNil(try? store.open(canvas.id).canvas.deletedAt)
         }
     }
 
@@ -748,4 +754,41 @@ final class DrawStoreContractTests: XCTestCase {
         XCTAssertEqual(store.undo(on: canvas.id), .unchanged, "Undo must not replay a stale step")
     }
 
+}
+extension DrawStoreContractTests {
+    func testR5OldestPinnedOfferExpiresBeforeItCanRetainFiveHundredEdits() throws {
+        let durable = try round3PersistentStore()
+        let c = durable.create(name: "Bounded offer")
+        XCTAssertTrue(durable.perform(.saveCanvas, on: c.id).isSaved)
+        XCTAssertTrue(durable.perform(.deleteCanvas, on: c.id).isSaved)
+        let store = DrawPersistentStore(container: durable.container)
+        let restored = DrawRecentlyDeleted.restoreTracked([DrawDeletedItem(canvasID: c.id, objectID: nil)], store: store)
+        XCTAssertEqual(store.historyChanges(on: c.id)?.undo.count, 1, "pin undo[0]")
+        let step = try XCTUnwrap(RecentlyDeletedRestoreUndo.make(drawStore: store, actions: restored.actions, librarySteps: [], restored: 1))
+        let route = UndoRoute(); route.record(step, in: .library)
+        XCTAssertTrue(route.canUndo(in: .library))
+        for i in 0..<500 { XCTAssertTrue(store.perform(.rename("Name \(i)"), on: c.id).isSaved) }
+        XCTAssertLessThanOrEqual(store.historyChanges(on: c.id)?.undo.count ?? Int.max, 100)
+        XCTAssertFalse(route.canUndo(in: .library), "an expired offer is visibly withdrawn")
+        XCTAssertNil(route.undoName(in: .library))
+        let pin = try XCTUnwrap(restored.actions.first?.pin)
+        let book = try XCTUnwrap(Mirror(reflecting: pin).children.first { $0.label == "book" }?.value)
+        let counts = try XCTUnwrap(Mirror(reflecting: book).children.first { $0.label == "counts" })
+        XCTAssertEqual(Mirror(reflecting: counts.value).children.count, 0)
+    }
+
+    func testR5ThirtyOneMiBPinDoesNotConsumeUnrelatedEightMiBUndo() throws {
+        let store = try round3PersistentStore()
+        let c = store.create(name: "31 MiB")
+        XCTAssertTrue(store.perform(.put([heavyImage(fill: 82, bytes: 31 * 1024 * 1024)]), on: c.id).isSaved)
+        let pin = store.pinHistoryStep(try XCTUnwrap(store.undoStepID(on: c.id)))
+        let other = store.create(name: "8 MiB unrelated")
+        XCTAssertTrue(store.perform(.put([heavyImage(fill: 83, bytes: 8 * 1024 * 1024)]), on: other.id).isSaved)
+        evictEveryEarlierCanvas(store)
+        withExtendedLifetime(pin) {
+            XCTAssertNotNil(store.undoStepID(on: other.id))
+            XCTAssertTrue(store.undo(on: other.id).isSaved)
+            XCTAssertTrue(try! store.open(other.id).objects.isEmpty)
+        }
+    }
 }
