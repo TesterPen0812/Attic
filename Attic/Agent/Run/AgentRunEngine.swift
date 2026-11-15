@@ -851,6 +851,11 @@ final class AgentRunEngine: AgentRunning {
             // may change the kind (for example open_page -> refused read).
             if let index = archive.entries.firstIndex(where: { $0.id == step.id }) {
                 archive.entries[index].text = step.title
+                // The chat shows failed batch items directly after the tool
+                // and before the receipt, so preserve this line in history.
+                if case let .partial(reason) = step.state {
+                    archive.entries.append(AgentThreadEntry(id: UUID(), role: "notice", text: reason))
+                }
             }
             if step.kind != .read && step.kind != .openPage {
                 recordedTargets.append(contentsOf: step.targets)

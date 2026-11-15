@@ -1205,6 +1205,69 @@ final class AgentRunHostedTests: XCTestCase {
         reopened.shutdown()
     }
 
+    func testR3PartialBatchFailureNoteAndUndoSurviveRelaunch() async throws {
+        let url = journalURL()
+        let helper = codexFixtureHelper()
+        let tools = FakeRunTools()
+        let receipt = AgentChangeSet(id: UUID(), title: "Created task", pages: [.tasks], count: 1)
+        tools.change = receipt
+        let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
+                                    tools: { tools }, journalURL: url, undo: { _ in })
+        let live = AgentChatModel()
+        live.pacing = .instant
+        live.connect(runner)
+        live.draft = "Create two tasks"
+        live.send()
+        await wait { self.codexTurnWasSent(helper) }
+
+        emitCodex(helper, "item/started", item: ["id": "batch-1", "type": "mcpToolCall",
+                                                   "server": "attic", "tool": "create_tasks",
+                                                   "arguments": ["tasks": [["title": "Saved task"], [:]]]])
+        let envelope: [String: Any] = [
+            "status": "partial", "message": "1 of 2 operations failed.",
+            "step": ["title": "Created 1 task", "kind": "create", "state": "partial",
+                     "reason": "1 of 2 operations failed.",
+                     "targets": [["page": "tasks", "title": "Saved task"]]],
+            "data": ["results": [["index": 0, "status": "done"],
+                                 ["index": 1, "status": "failed", "error": "Missing title"]]]
+        ]
+        let envelopeText = String(decoding: try JSONSerialization.data(withJSONObject: envelope), as: UTF8.self)
+        emitCodex(helper, "item/completed", item: ["id": "batch-1", "type": "mcpToolCall",
+                                                     "server": "attic", "tool": "create_tasks",
+                                                     "status": "completed",
+                                                     "result": ["content": [["type": "text", "text": envelopeText]]]])
+        emitCodex(helper, "turn/completed", turn: ["status": "completed"])
+        await wait { !runner.threadSnapshot().isRunning && !live.isBusy }
+
+        let liveRows = transcript(live)
+        guard let toolIndex = liveRows.firstIndex(of: "line:Created 1 task"),
+              let noteIndex = liveRows.firstIndex(where: { $0.contains("Item 2: Missing title") }),
+              let receiptIndex = liveRows.firstIndex(of: "receipt:\(receipt.id.uuidString)") else {
+            return XCTFail("Live partial batch must show its tool, failed item, and successful Undo receipt")
+        }
+        XCTAssertEqual(noteIndex, toolIndex + 1, "Item errors must follow the completed tool")
+        XCTAssertEqual(receiptIndex, noteIndex + 1, "A partial success must keep its Undo receipt")
+
+        var undone: UUID?
+        let relaunched = AgentRunEngine(selectedBackend: { .codex }, helper: { FakeRunHelper() },
+                                        tools: { FakeRunTools() }, journalURL: url,
+                                        undo: { undone = $0 }, recoverUndo: { $0 == receipt.id })
+        let restored = AgentChatModel()
+        restored.pacing = .instant
+        restored.connect(relaunched)
+        XCTAssertEqual(transcript(restored), liveRows,
+                       "Relaunch must keep the item failure note directly after its tool")
+        let undoStates = restored.entries.compactMap { entry -> AgentChatChanges.State? in
+            if case let .changes(changes) = entry.content { return changes.state }
+            return nil
+        }
+        XCTAssertEqual(undoStates, [.ready], "The successful part remains available to Undo")
+        try await relaunched.undo(changeSet: receipt.id)
+        XCTAssertEqual(undone, receipt.id, "The successful item must stay undoable")
+        runner.shutdown()
+        relaunched.shutdown()
+    }
+
     /// Exercise the actual CLI decoder and run journal under rapid, overlapping
     /// tool notifications. Every frame must preserve the transcript's order,
     /// including replies begun while an earlier tool is still running.
