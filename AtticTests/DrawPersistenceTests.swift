@@ -588,6 +588,57 @@ final class DrawPersistenceTests: XCTestCase {
             $0.hasPrefix("ZID |") || $0.hasPrefix("ZTHUMBNAILID |")
         }, "Only UUIDs may be binary in library metadata: \(columns)")
     }
+    func testR6DS15AgentResizesFlatLinesAlongTheirNonzeroAxisInBothDirections() throws {
+        let root = try temporaryDirectory()
+        let lines: [DrawObject] = [
+            DrawObject(frame: DrawFrame(x: 30, y: 30, width: 80, height: 0), content: .shape(.line)),
+            DrawObject(frame: DrawFrame(x: 180, y: 30, width: -80, height: 0), content: .shape(.line)),
+            DrawObject(frame: DrawFrame(x: 300, y: 30, width: 0, height: 80), content: .shape(.line)),
+            DrawObject(frame: DrawFrame(x: 420, y: 180, width: 0, height: -80), content: .shape(.line))
+        ]
+        var boardID = UUID()
+        try autoreleasepool {
+            let store = DrawPersistentStore(container: try container(at: root))
+            let board = store.create(name: "Flat lines")
+            boardID = board.id
+            XCTAssertTrue(store.perform(.put(lines), on: board.id).isSaved)
+            let tasks = try makeTestStore()
+            let agent = AgentActions(tasks: AgentTaskTools(store: tasks,
+                library: AtticLibrary(tasks: tasks)), draw: store)
+
+            for line in lines {
+                let response = try agent.drawAction("draw_read_canvas", ["canvas_id": board.id.uuidString], beforeMutation: {}).0
+                let JSON = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+                let rows = try XCTUnwrap(JSON["objects"] as? [[String: Any]])
+                let token = try XCTUnwrap(rows.first(where: { $0["id"] as? String == line.id.uuidString })?["object_token"] as? String)
+                let isHorizontal = line.frame.height == 0
+                let requestedWidth = isHorizontal ? 120.0 : 0.0
+                let requestedHeight = isHorizontal ? 0.0 : 120.0
+                _ = try agent.drawAction("draw_resize_object", [
+                    "canvas_id": board.id.uuidString, "object_id": line.id.uuidString,
+                    "object_token": token, "width": requestedWidth, "height": requestedHeight
+                ], beforeMutation: {})
+                let resized = try XCTUnwrap(try store.open(board.id).objects.first(where: { $0.id == line.id }))
+                let covered = DrawGeometry.frame(resized.frame)
+                XCTAssertEqual(Double(covered.width), requestedWidth, accuracy: 0.01)
+                XCTAssertEqual(Double(covered.height), requestedHeight, accuracy: 0.01)
+                if isHorizontal {
+                    XCTAssertEqual(resized.frame.width.sign, line.frame.width.sign, "Endpoint order must survive horizontal resize")
+                    XCTAssertEqual(resized.frame.height, 0)
+                } else {
+                    XCTAssertEqual(resized.frame.height.sign, line.frame.height.sign, "Endpoint order must survive vertical resize")
+                    XCTAssertEqual(resized.frame.width, 0)
+                }
+            }
+        } // Crash: release the store and agent without preparing Draw to quit.
+        let reopened = DrawPersistentStore(container: try container(at: root))
+        XCTAssertEqual(try reopened.open(boardID).objects.count, lines.count)
+        for line in lines {
+            let actual = try XCTUnwrap(try reopened.open(boardID).objects.first(where: { $0.id == line.id }))
+            let covered = DrawGeometry.frame(actual.frame)
+            XCTAssertEqual(Double(line.frame.height == 0 ? covered.width : covered.height), 120, accuracy: 0.01)
+        }
+    }
 }
 
 // Test-only replica fixtures: production never inserts replicas deliberately.

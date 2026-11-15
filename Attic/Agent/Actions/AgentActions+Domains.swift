@@ -471,11 +471,23 @@ extension AgentActions {
             default:
                 let width = try Self.number(args["width"], "width")
                 let height = try Self.number(args["height"], "height")
-                guard width > 0, height > 0 else { throw AgentActionsError.invalid("Draw dimensions must be positive.") }
+                let covered = DrawGeometry.frame(existing.frame)
+                let isLine: Bool = {
+                    if case .shape(let shape) = existing.content { return shape == .line || shape == .arrow }
+                    return false
+                }()
+                // A horizontal or vertical line has a deliberately zero
+                // extent. Resizing its existing nonzero axis must preserve
+                // that flat dimension and the signed endpoint direction.
+                let retainsFlatX = isLine && covered.width == 0 && covered.height > 0
+                let retainsFlatY = isLine && covered.height == 0 && covered.width > 0
+                guard width >= 0, height >= 0,
+                      (width > 0 || retainsFlatX), (height > 0 || retainsFlatY) else {
+                    throw AgentActionsError.invalid("Draw dimensions must be positive on each non-flat axis.")
+                }
                 // The size is explicit: the pointer's minimum extent has no say.
                 // `resized` measures the box the object covers, and a line or
                 // arrow's stored frame keeps signed endpoint differences.
-                let covered = DrawGeometry.frame(existing.frame)
                 let resized = DrawPageModel.resized([existing], handle: .bottomRight,
                     delta: CGPoint(x: width - covered.width, y: height - covered.height), shift: false,
                     minimum: 0)
