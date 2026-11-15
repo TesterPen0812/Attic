@@ -583,6 +583,8 @@ final class AgentChatModel: ObservableObject {
     private var runChangeCount = 0
     private var pendingItems: [AgentChatChange] = []
     private var pendingSteps: [UUID] = []
+    /// open_page steps never showed a row; their receipts can change kind.
+    private var silentStepIDs = Set<UUID>()
     /// This run's week strip. Each run has its own, so an earlier one stays as it was.
     private(set) var runWeek: UUID?
     private var weekReadTask: Task<Void, Never>?
@@ -1580,6 +1582,7 @@ final class AgentChatModel: ObservableObject {
     private func stepStarted(_ step: AgentStep) {
         phase = .acting
         if step.kind == .openPage {
+            silentStepIDs.insert(step.id)
             if isOpen, let page = step.targets.first?.page, page != currentPage() {
                 agentGoingTo = page
                 openPage?(page)
@@ -1616,14 +1619,15 @@ final class AgentChatModel: ObservableObject {
     }
 
     private func stepFinished(_ step: AgentStep) {
+        let wasSilent = silentStepIDs.remove(step.id) != nil
         if step.kind == .openPage {
             // Watching with no watcher to show it: the page comes forward as it is.
             if isOpen, let page = step.targets.first?.page, page != currentPage() {
                 agentGoingTo = page
                 openPage?(page)
             }
-            return
         }
+        guard !wasSilent else { return }
         update(step.id) { $0 = .step(step) }
         if step.kind == .read, step.targets.contains(where: { $0.page == .calendar }) {
             updateWeek { $0.read = true }
@@ -1660,6 +1664,7 @@ final class AgentChatModel: ObservableObject {
         guard isRunning else { return }
         closeReply()
         isRunning = false
+        silentStepIDs.removeAll()
         approval = nil
         queuedApprovals.removeAll()
         phase = .idle

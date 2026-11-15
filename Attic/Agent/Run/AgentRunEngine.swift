@@ -847,12 +847,10 @@ final class AgentRunEngine: AgentRunning {
         } else if case let .stepFinished(step) = event {
             activeReplyID = nil
             unfinishedStepIDs.remove(step.id)
-            if step.kind != .openPage {
-                if let index = archive.entries.firstIndex(where: { $0.id == step.id }) {
-                    archive.entries[index].text = step.title
-                } else {
-                    archive.entries.append(AgentThreadEntry(id: step.id, role: "tool", text: step.title))
-                }
+            // The start decided whether this ID has a visible row. Receipts
+            // may change the kind (for example open_page -> refused read).
+            if let index = archive.entries.firstIndex(where: { $0.id == step.id }) {
+                archive.entries[index].text = step.title
             }
             if step.kind != .read && step.kind != .openPage {
                 recordedTargets.append(contentsOf: step.targets)

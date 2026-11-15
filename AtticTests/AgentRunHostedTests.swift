@@ -1140,6 +1140,71 @@ final class AgentRunHostedTests: XCTestCase {
         }
     }
 
+    func testR2OpenPageRefusalDoesNotInsertAnUnseenJournalRow() async {
+        let url = journalURL()
+        let helper = codexFixtureHelper()
+        let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
+                                    tools: { FakeRunTools() }, journalURL: url)
+        let live = AgentChatModel()
+        live.pacing = .instant
+        live.connect(runner)
+        live.draft = "Open Tasks"
+        live.send()
+        await wait { self.codexTurnWasSent(helper) }
+
+        emitCodex(helper, "item/started", item: ["id": "page-1", "type": "mcpToolCall",
+                                                   "server": "attic", "tool": "open_page",
+                                                   "arguments": ["page": "tasks"]])
+        emitCodex(helper, "item/agentMessage/delta", delta: "x")
+        emitCodex(helper, "item/completed", item: ["id": "page-1", "type": "mcpToolCall",
+                                                     "server": "attic", "tool": "open_page", "status": "failed",
+                                                     "result": ["status": "refused", "message": "Read only",
+                                                                "approval_title": "Open Tasks?"]])
+        emitCodex(helper, "turn/completed", turn: ["status": "completed"])
+        await wait { !runner.threadSnapshot().isRunning && !live.isBusy }
+        let relaunched = AgentRunEngine(selectedBackend: { .codex }, helper: { FakeRunHelper() },
+                                        tools: { FakeRunTools() }, journalURL: url)
+        let restored = AgentChatModel()
+        restored.pacing = .instant
+        restored.connect(relaunched)
+        XCTAssertEqual(transcript(restored), transcript(live),
+                       "A refused open_page is invisible in both the live and restored chat")
+        runner.shutdown()
+        relaunched.shutdown()
+    }
+
+    func testR2StartedVisibleStepEndingAsOpenPageStillFinishesItsRow() async {
+        let url = journalURL()
+        let helper = codexFixtureHelper()
+        let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
+                                    tools: { FakeRunTools() }, journalURL: url)
+        let live = AgentChatModel()
+        live.pacing = .instant
+        live.connect(runner)
+        live.draft = "Perform an action"
+        live.send()
+        await wait { self.codexTurnWasSent(helper) }
+        emitCodex(helper, "item/started", item: ["id": "change-kind", "type": "mcpToolCall",
+                                                   "server": "attic", "tool": "update_task"])
+        emitCodex(helper, "item/completed", item: ["id": "change-kind", "type": "mcpToolCall",
+                                                     "server": "attic", "tool": "update_task",
+                                                     "status": "completed", "result": ["status": "done",
+                                                         "step": ["title": "Opened Tasks", "kind": "openPage",
+                                                                  "state": "done", "targets": []]]])
+        emitCodex(helper, "turn/completed", turn: ["status": "completed"])
+        await wait { !runner.threadSnapshot().isRunning && !live.isBusy }
+        let reopened = AgentRunEngine(selectedBackend: { .codex }, helper: { FakeRunHelper() },
+                                      tools: { FakeRunTools() }, journalURL: url)
+        let restored = AgentChatModel()
+        restored.pacing = .instant
+        restored.connect(reopened)
+        XCTAssertTrue(transcript(live).contains("line:Opened Tasks"),
+                      "A step shown at start must finish even if its receipt changes kind")
+        XCTAssertEqual(transcript(restored), transcript(live))
+        runner.shutdown()
+        reopened.shutdown()
+    }
+
     /// Exercise the actual CLI decoder and run journal under rapid, overlapping
     /// tool notifications. Every frame must preserve the transcript's order,
     /// including replies begun while an earlier tool is still running.
