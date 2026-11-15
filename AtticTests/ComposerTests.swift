@@ -883,6 +883,54 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(model.writing, "Keep the failed draft")
     }
 
+    func testReviewR4EditMenuChromeUndoSettlesCreationBeforeHistory() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older history step")])?.first)
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("New creation from another responder")
+        model.submit()
+        XCTAssertTrue(model.isCreating)
+
+        // AppKit's real Edit-menu route reaches AtticPanel's responder when
+        // chrome holds focus. Its controller delegates to this library.
+        let panel = AtticPanel(contentRect: CGRect(x: -4_000, y: -4_000, width: 320, height: 180),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        defer { panel.orderOut(nil); panel.close() }
+        panel.onUnhandledUndo = { [library] redo in
+            _ = redo ? library!.redo(in: .tasks) : library!.undo(in: .tasks)
+        }
+        panel.canPerformUnhandledUndo = { [library] redo in
+            redo ? library!.undo.canRedo(in: .tasks) : library!.undo.canUndo(in: .tasks)
+        }
+        let menu = NSMenu(title: "Edit")
+        let item = NSMenuItem(title: "Undo", action: #selector(AtticPanel.undo(_:)), keyEquivalent: "z")
+        item.target = panel
+        menu.addItem(item)
+        let shortcut = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: .command, timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+            characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6))
+        XCTAssertTrue(menu.performKeyEquivalent(with: shortcut))
+
+        XCTAssertTrue(liveTasks().contains { $0.id == older.id })
+        XCTAssertFalse(liveTasks().contains { $0.title == "New creation from another responder" })
+        XCTAssertTrue(library.undo.canRedo(in: .tasks), "the new task is the one just undone")
+    }
+
+    func testReviewR4OtherPanelUndoSettlesFirstPanelsPendingCreation() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older history step")])?.first)
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Creation waiting in first panel")
+        model.submit()
+        XCTAssertTrue(model.isCreating)
+        let other = TasksPageModel(library: library, services: TasksPageServices(now: { [self] in self.now }))
+
+        XCTAssertEqual(other.undo(), .applied)
+        XCTAssertTrue(liveTasks().contains { $0.id == older.id })
+        XCTAssertFalse(liveTasks().contains { $0.title == "Creation waiting in first panel" })
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+    }
+
     func testReviewR5MixedCompletionAcknowledgementsStopAtLatestFailure() throws {
         let created = try XCTUnwrap(library.createTasks([
             TaskDraft(title: "First completes"), TaskDraft(title: "Second save fails")

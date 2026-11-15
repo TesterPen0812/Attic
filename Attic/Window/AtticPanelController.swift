@@ -269,6 +269,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             return redo ? draw.canRedo : draw.library.canUndoDeletionIfOffered || draw.canUndo
         }
         guard let history = unhandledUndoHistory(for: section), let library = store.commandLibrary else { return false }
+        if TasksPageModel.hasPendingForHistory(history, store: store) { return true }
         return redo ? library.undo.canRedo(in: history) : library.undo.canUndo(in: history)
     }
 

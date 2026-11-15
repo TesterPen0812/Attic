@@ -519,12 +519,16 @@ final class AtticLibrary {
     /// never apply again is dropped and reported as not retryable.
     @discardableResult
     func undo(in history: UndoHistoryID) -> CommandOutcome {
+        // The library is shared by docked, floating, keyboard and Edit-menu
+        // routes. A failed pending command cannot expose an older history step.
+        if TasksPageModel.settlePendingForHistory(history, store: tasks) == false { return .applied }
         let serial = tasks.errorSerial
         return historyOutcome(undo.undoStep(in: history), since: serial, verb: String(localized: "undo"))
     }
 
     @discardableResult
     func redo(in history: UndoHistoryID) -> CommandOutcome {
+        if TasksPageModel.settlePendingForHistory(history, store: tasks) == false { return .applied }
         let serial = tasks.errorSerial
         return historyOutcome(undo.redoStep(in: history), since: serial, verb: String(localized: "redo"))
     }
@@ -533,6 +537,7 @@ final class AtticLibrary {
     /// still use the same route and outcome mapping.
     @discardableResult
     func replay(in history: UndoHistoryID, redo: Bool) async -> CommandOutcome {
+        if TasksPageModel.settlePendingForHistory(history, store: tasks) == false { return .applied }
         let serial = tasks.errorSerial
         return historyOutcome(await undo.replay(in: history, redo: redo), since: serial,
                               verb: redo ? String(localized: "redo") : String(localized: "undo"))

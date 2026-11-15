@@ -263,6 +263,55 @@ final class TasksTitleDraftState: ObservableObject {
 final class TasksPageModel: ObservableObject {
     private static let live = NSHashTable<TasksPageModel>.weakObjects()
 
+    private static var nextAcknowledgementOrder: UInt64 = 0
+
+    /// All panels with this store share Undo history, including an unhandled
+    /// Edit-menu command. Resolve only acknowledgements owned by that history.
+    static func settlePendingForHistory(_ history: UndoHistoryID, store: TaskStore) -> Bool? {
+        var latestSaved: Bool?
+        // Settle one click at a time in the order it was submitted, even if
+        // acknowledgements from two panels were interleaved.
+        while let model = live.allObjects.filter({ $0.store === store })
+            .compactMap({ model -> (TasksPageModel, UInt64)? in
+                model.nextPendingOrder(in: history).map { (model, $0) }
+            }).min(by: { $0.1 < $1.1 })?.0 {
+            latestSaved = model.settleNextPending(in: history)
+        }
+        return latestSaved
+    }
+
+    static func hasPendingForHistory(_ history: UndoHistoryID, store: TaskStore) -> Bool {
+        live.allObjects.contains { $0.store === store && $0.hasPending(in: history) }
+    }
+
+    private func hasPending(in history: UndoHistoryID) -> Bool {
+        (acknowledgedTaskHistory == history && acknowledgedTaskCommand != nil)
+            || (history == .tasks && !completingAfterAcknowledgement.isEmpty)
+    }
+
+    private func nextPendingOrder(in history: UndoHistoryID) -> UInt64? {
+        let taskOrder = acknowledgedTaskHistory == history ? acknowledgedTaskOrder : nil
+        let completionOrder = history == .tasks ? completingAfterAcknowledgement.first?.order : nil
+        return [taskOrder, completionOrder].compactMap { $0 }.min()
+    }
+
+    private func settleNextPending(in history: UndoHistoryID) -> Bool {
+        let taskOrder = acknowledgedTaskHistory == history ? acknowledgedTaskOrder : nil
+        let completionOrder = history == .tasks ? completingAfterAcknowledgement.first?.order : nil
+        if let taskOrder, taskOrder < (completionOrder ?? UInt64.max) {
+            return settlePendingTaskAcknowledgement()
+        }
+        if let next = completingAfterAcknowledgement.first, history == .tasks {
+            return settlePendingCompletionAcknowledgements(through: next.id, includingTaskCommand: false)
+        }
+        return true
+    }
+
+    private func noteAcknowledgementOrder() -> UInt64 {
+        Self.nextAcknowledgementOrder &+= 1
+        return Self.nextAcknowledgementOrder
+    }
+
     /// Quit must drain the visible acknowledgement before approving exit,
     /// including models retained by a pulled-out page. Other stores are unrelated.
     static func prepareForTermination(in store: TaskStore) -> Bool {
@@ -409,7 +458,7 @@ final class TasksPageModel: ObservableObject {
     @Published private(set) var held: [UUID: HeldPlace] = [:]
     /// A row can acknowledge a press before its family transaction runs.
     /// Retain the intent until that transaction has settled, including failure.
-    private var completingAfterAcknowledgement: [(id: UUID, settled: (CommandOutcome) -> Void)] = []
+    private var completingAfterAcknowledgement: [(id: UUID, order: UInt64, settled: (CommandOutcome) -> Void)] = []
     /// Transient value copies for a command awaiting its durable family
     /// transaction. The store's SwiftData instances are never modified by
     /// this preview, so rollback only removes the copies.
@@ -418,6 +467,8 @@ final class TasksPageModel: ObservableObject {
     private var acknowledgedCreated: [TaskItem] = []
     @Published private(set) var acknowledgementRevision: UInt64 = 0
     private var acknowledgedTaskCommand: (() -> Bool)?
+    private var acknowledgedTaskHistory: UndoHistoryID?
+    private var acknowledgedTaskOrder: UInt64?
     /// Includes failures from commands that reenter settlement to preserve Undo order.
     private var acknowledgementFailures: UInt64 = 0
     private var acknowledgedTaskToken: UUID?
@@ -2007,6 +2058,8 @@ final class TasksPageModel: ObservableObject {
         acknowledgementRevision &+= 1
         let token = UUID()
         acknowledgedTaskToken = token
+        acknowledgedTaskHistory = .tasks
+        acknowledgedTaskOrder = noteAcknowledgementOrder()
         acknowledgedTaskCommand = { [self] in
             let outcome = command()
             acknowledgedRows = [:]
@@ -2028,6 +2081,8 @@ final class TasksPageModel: ObservableObject {
         guard let command = acknowledgedTaskCommand else { return false }
         acknowledgedTaskCommand = nil
         acknowledgedTaskToken = nil
+        acknowledgedTaskHistory = nil
+        acknowledgedTaskOrder = nil
         return command()
     }
 
@@ -2147,7 +2202,8 @@ final class TasksPageModel: ObservableObject {
     /// frame and its eventual all-or-nothing task+writing save. The preview
     /// never enters the physical store or Undo history.
     @discardableResult
-    func createAcknowledged(_ draft: TaskDraft, save: @escaping (UUID) -> TaskItem?,
+    func createAcknowledged(_ draft: TaskDraft, in history: UndoHistoryID = .tasks,
+                            save: @escaping (UUID) -> TaskItem?,
                             settled: @escaping (TaskItem?) -> Void) -> UUID {
         settlePendingCompletionAcknowledgements()
         let id = UUID()
@@ -2159,6 +2215,8 @@ final class TasksPageModel: ObservableObject {
         acknowledgementRevision &+= 1
         let token = UUID()
         acknowledgedTaskToken = token
+        acknowledgedTaskHistory = history
+        acknowledgedTaskOrder = noteAcknowledgementOrder()
         acknowledgedTaskCommand = { [self] in
             let created = save(id)
             acknowledgedCreated = []
@@ -2252,7 +2310,7 @@ final class TasksPageModel: ObservableObject {
         let holdTab: TasksTab? = tab == .done ? nil : tab
         let index = holdTab.flatMap { rows(for: $0).firstIndex { $0.id == id } }
         if let holdTab, let index { hold(id, tab: holdTab, at: index) }
-        completingAfterAcknowledgement.append((id, settled))
+        completingAfterAcknowledgement.append((id, noteAcknowledgementOrder(), settled))
         Task { @MainActor [self, delay = services.acknowledgementDelay] in
             // The next main-queue callback is not necessarily a drawn frame.
             // Allow at least one display interval before the blocking save.
