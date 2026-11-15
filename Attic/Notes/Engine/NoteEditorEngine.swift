@@ -4008,14 +4008,18 @@ extension NoteEditorEngine {
                 guard before != styleValue else { continue }
                 let oldDepth = pendingParagraphStyle?.location == line.location ? pendingParagraphStyle!.state.indent : (indentAt(line.location) ?? 0)
                 let newDepth = [.bullet, .number, .checklist, .quote].contains(styleValue) ? oldDepth : 0
-                var metadata = pendingParagraphStyle?.state.block
-                if styleValue.isCallout || metadata?.calloutStart == true {
-                    let separate = styleValue.isCallout && calloutIconAbove(line.location) == styleValue.calloutIcon
-                    if separate || metadata != nil {
-                        if metadata == nil { metadata = .text("", style: styleValue.storageName) }
-                        metadata?.calloutStart = separate
-                    }
-                }
+                // Formatting is the mutation boundary. The installed block and
+                // its history snapshot must contain the same normalized fields;
+                // merely clearing text or replaying history never normalizes them.
+                var metadata = pendingParagraphStyle?.state.block ?? .text("")
+                metadata.style = styleValue.storageName
+                metadata.level = styleValue.level
+                metadata.indent = newDepth > 0 ? newDepth : nil
+                metadata.language = styleValue.language
+                metadata.callout = styleValue.calloutIcon
+                metadata.start = nil
+                metadata.calloutStart = styleValue.isCallout
+                    && calloutIconAbove(line.location) == styleValue.calloutIcon
                 history.recordParagraphStyleChange(location: line.location,
                     before: pendingParagraphStyle?.state ?? .init(style: before, indent: oldDepth),
                     after: .init(style: styleValue, indent: newDepth, block: metadata))
@@ -4098,8 +4102,11 @@ extension NoteEditorEngine {
     }
 
     private func block(for state: NoteUndoHistory.ParagraphState) -> NoteBlock {
-        var block = state.block ?? .text("")
-        block.style = state.style.storageName ?? (block.style == "body" ? "body" : nil)
+        // The style is only a rendering projection of stored fields. A body
+        // block may legally carry language/callout extras which that projection
+        // cannot represent. Preserve the canonical block without reconstruction.
+        if let block = state.block { return block }
+        var block = NoteBlock.text("", style: state.style.storageName)
         block.level = state.style.level
         if block.language != state.style.language { block.language = state.style.language }
         if block.callout != state.style.calloutIcon { block.callout = state.style.calloutIcon }
@@ -4138,12 +4145,10 @@ extension NoteEditorEngine {
     }
 
     private func setPendingParagraphStyle(_ value: NoteParagraphStyle, indent: Int = 0, at location: Int, metadata: NoteBlock? = nil, notifying: Bool = true) {
-        var block = metadata ?? pendingParagraphStyle?.state.block
-        block?.style = value.storageName
-        block?.level = value.level
-        if block?.language != value.language { block?.language = value.language }
-        if block?.callout != value.calloutIcon { block?.callout = value.calloutIcon }
-        block?.indent = indent > 0 ? indent : nil
+        // Callers performing explicit style/indent changes normalize once,
+        // before recording history. Replay, paste and hint restoration install
+        // their canonical snapshot verbatim instead of projecting it again.
+        let block = metadata
         pendingParagraphStyle = value == .body && block == nil ? nil : (location, .init(style: value, indent: indent, block: block))
         documentCache = nil
         var typing = style.paragraphAttributes(style: value.storageName, level: value.level, indent: indent,
@@ -4221,10 +4226,12 @@ extension NoteEditorEngine {
             let range = paragraphRange(at: location)
             let format = paragraphStyle(at: location) ?? .body
             if range.length == 0 {
+                let before = pendingParagraphStyle?.state ?? .init(style: format, indent: indentAt(location) ?? 0)
+                var metadata = block(for: before)
+                metadata.indent = depth > 0 ? depth : nil
                 history.recordParagraphStyleChange(location: location,
-                    before: pendingParagraphStyle?.state ?? .init(style: format, indent: indentAt(location) ?? 0),
-                    after: .init(style: format, indent: depth, block: pendingParagraphStyle?.state.block))
-                setPendingParagraphStyle(format, indent: depth, at: location)
+                    before: before, after: .init(style: format, indent: depth, block: metadata))
+                setPendingParagraphStyle(format, indent: depth, at: location, metadata: metadata)
                 changed = true
             } else {
                 let replacement = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))

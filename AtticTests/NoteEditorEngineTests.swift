@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import ObjectiveC
 import SwiftUI
+import SwiftData
 import XCTest
 @testable import Attic
 
@@ -308,6 +309,122 @@ final class NoteEditorEngineTests: XCTestCase {
                 print("R3_EMPTY_STYLE titled=\(titled) style=\(block.style ?? "body") callout=\(block.callout != nil) before=\(before) after=\(after)")
                 try bgRound2Capture(scroll, name: "R3-pending-\(titled)-\(block.style ?? "body")-\(block.callout != nil)-typed")
             }
+        }
+    }
+
+    /// NB-5: decode the accepted wire format, rather than creating a style
+    /// projection that has already discarded the foreign metadata.
+    func testNB5EmptyParagraphPreservesCanonicalMetadataAcrossSaveUndoAndRollback() throws {
+        enum Rejected: Error { case save }
+        for titled in [true, false] {
+            for initialText in ["Keep", ""] {
+                let blockID = UUID()
+                let wire = #"{"format":1,"requires":["taskNote"],"blocks":[{"kind":"text","text":"Title"},{"kind":"text","id":"ID","style":"body","text":"TEXT","language":"swift","callout":"hint","future":"kept"}]}"#
+                    .replacingOccurrences(of: "ID", with: blockID.uuidString)
+                    .replacingOccurrences(of: "TEXT", with: initialText)
+                guard case .editable(let decoded) = NoteContentCodec.decode(Data(wire.utf8)) else {
+                    return XCTFail("the fixture must be editable format 1")
+                }
+                let directory = ownedTemporaryDirectory(prefix: "NB5CanonicalBody")
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: directory)
+                let seed = ModelContext(container)
+                let noteID = UUID(), revision = UUID()
+                for _ in 0..<2 {
+                    let row = NoteItem(id: noteID, title: "Title", body: initialText)
+                    row.contentFormat = 1
+                    row.content = Data(wire.utf8)
+                    row.revisionID = revision
+                    seed.insert(row)
+                }
+                try seed.save()
+                var reject = false
+                let store = trackAttachmentReconciliation(of: NoteStore(container: container,
+                    persist: { if reject { throw Rejected.save }; try $0.save() },
+                    attachmentFileStore: makeTestAttachmentFileStore()))
+                let engine = NoteEditorEngine(noteID: noteID, document: decoded, bodyOnly: !titled)
+                let (scroll, view) = engine.makeView()
+                let window = F3UnshownWindow(contentRect: NSRect(x: -4000, y: -4000, width: 400, height: 240),
+                    styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = scroll
+                defer { engine.detachView(); window.contentView = nil; window.close() }
+                let start = titled ? 6 : 0
+                if !initialText.isEmpty {
+                    view.setSelectedRange(NSRange(location: start, length: initialText.utf16.count))
+                    view.deleteBackward(nil)
+                }
+                var expected = decoded.blocks.last!
+                expected.text = ""
+                XCTAssertEqual(engine.document().blocks.last, expected, "empty projection preserves every field")
+                var base = revision
+                func saveAndInspect(_ document: NoteDocument) throws {
+                    base = try store.saveDocument(noteID: noteID, document: document, baseRevisionID: base).get()
+                    let reopenedContainer = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: directory)
+                    let fresh = ModelContext(reopenedContainer)
+                    let replicas = try fresh.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == noteID }
+                    XCTAssertEqual(replicas.count, 2)
+                    for row in replicas {
+                        let content = try XCTUnwrap(row.content)
+                        XCTAssertEqual(NoteContentCodec.decode(content).document?.blocks.last, document.blocks.last)
+                        let reopened = NoteEditorEngine(noteID: noteID, document: try XCTUnwrap(NoteContentCodec.decode(content).document), bodyOnly: !titled)
+                        XCTAssertEqual(reopened.document().blocks.last, document.blocks.last)
+                    }
+                }
+                try saveAndInspect(engine.document())
+                if !initialText.isEmpty {
+                    XCTAssertTrue(engine.history.undo())
+                    XCTAssertEqual(engine.document().blocks.last, decoded.blocks.last)
+                    try saveAndInspect(engine.document())
+                    XCTAssertTrue(engine.history.redo())
+                    XCTAssertEqual(engine.document().blocks.last, expected)
+                    reject = true
+                    guard case .failure = store.saveDocument(noteID: noteID, document: engine.document(), baseRevisionID: base) else {
+                        return XCTFail("injected save must fail")
+                    }
+                    let reopenedContainer = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: directory)
+                    let fresh = ModelContext(reopenedContainer)
+                    for row in try fresh.fetch(FetchDescriptor<NoteItem>()).filter({ $0.id == noteID }) {
+                        XCTAssertEqual(NoteContentCodec.decode(try XCTUnwrap(row.content)).document?.blocks.last, decoded.blocks.last)
+                    }
+                    reject = false
+                    try saveAndInspect(engine.document())
+                }
+            }
+        }
+    }
+
+    func testNB5ExplicitEmptyParagraphStyleChangeAndHistoryUseCanonicalBlocks() throws {
+        for titled in [true, false] {
+            let blockID = UUID()
+            let wire = #"{"format":1,"requires":["taskNote"],"blocks":[{"kind":"text","text":"Title"},{"kind":"text","id":"ID","style":"body","text":"","language":"swift","callout":"hint","future":"kept"}]}"#
+                .replacingOccurrences(of: "ID", with: blockID.uuidString)
+            var document = try XCTUnwrap(NoteContentCodec.decode(Data(wire.utf8)).document)
+            // A wholly empty task body currently rejects paragraph commands
+            // in formattableParagraphs. Exercise this metadata boundary through
+            // the reachable empty final paragraph instead of that separate bug.
+            if !titled { document.blocks.insert(.text("Earlier"), at: 1) }
+            let engine = NoteEditorEngine(noteID: UUID(), document: document, bodyOnly: !titled)
+            let (scroll, view) = engine.makeView()
+            let window = F3UnshownWindow(contentRect: NSRect(x: -4000, y: -4000, width: 400, height: 240),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = scroll
+            defer { engine.detachView(); window.contentView = nil; window.close() }
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            var heading = try XCTUnwrap(document.blocks.last)
+            heading.style = "heading"
+            heading.level = 2
+            heading.language = nil
+            heading.callout = nil
+            XCTAssertTrue(engine.perform(.paragraph(.heading(2))))
+            XCTAssertEqual(engine.document().blocks.last, heading)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document().blocks.last, document.blocks.last,
+                           "Undo restores the canonical block, not a reconstruction of its projected body style")
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document().blocks.last, heading,
+                           "Redo installs the same normalized block as the original explicit style change")
         }
     }
 
