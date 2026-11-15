@@ -1345,7 +1345,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             return
         }
         if let escapeFallback { return escapeFallback() }
-        if let panel = window as? AtticPanel, let hide = panel.onUnhandledEscape { return hide() }
+        if let panel = window as? AtticPanel, panel.onUnhandledEscape?() == true { return }
         passEscapeOn(sender)
     }
 

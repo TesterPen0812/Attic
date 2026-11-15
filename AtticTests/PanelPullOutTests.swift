@@ -299,6 +299,8 @@ final class PanelPullOutHostedTests: XCTestCase {
         let state: PanelUIState
         let panel: AtticPanel
         let settings: AppSettings
+        let notes: NoteStore
+        let noteDraft: NoteDraftController
         var island: PanelIslandWindows { controller.islandWindowsForTesting }
         var pullOut: PanelPullOutController { controller.pullOut }
         var workArea: CGRect {
@@ -707,6 +709,43 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
+    /// The history editor's unhandled Escape must reach the Notes page's
+    /// exit command if its floating Composer had nothing to close.
+    func testFloatingNotesHistoryPreviewEscapeClosesHistory() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
+        try withRig { rig in
+            let id = UUID()
+            guard case .success = rig.notes.createDocumentNote(
+                id: id, document: NoteDocument(blocks: [.text("History Escape"), .text("One version")])) else {
+                return XCTFail("seed versioned note")
+            }
+            XCTAssertTrue(rig.notes.recordVersion(noteID: id, reason: .pause))
+            XCTAssertTrue(rig.noteDraft.pages.open(noteID: id))
+            rig.state.selectSection(.notes)
+            spin(0.4)
+            try pull(.notes, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .notes))
+            floating.makeKey()
+            var opened: Bool?
+            Task { @MainActor in opened = await rig.noteDraft.pages.openHistoryDurably() }
+            spin(until: { opened != nil }, timeout: 5)
+            XCTAssertEqual(opened, true)
+            spin(0.4)
+            let editor = try XCTUnwrap(rig.noteDraft.pages.historyBrowser?.preview?.engine.textView,
+                                       "history preview has its own native editor")
+            XCTAssertTrue(floating.panel.makeFirstResponder(editor))
+            XCTAssertFalse(floating.composerStateForTesting.model?.isOpen ?? false)
+            let escape = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: floating.panel.windowNumber, context: nil,
+                characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(escape)
+            spin(0.2)
+            XCTAssertNil(rig.noteDraft.pages.historyBrowser, "Escape from preview exits History")
+        }
+    }
+
     // MARK: Helpers
 
     /// Pulls `page` off the island and drops it at `point`.
@@ -766,9 +805,10 @@ final class PanelPullOutHostedTests: XCTestCase {
         let state = PanelUIState()
         let settings = AppSettings(defaults: defaults)
         let existing = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+        let draft = NoteDraftController(noteStore: notes)
         let controller = AtticPanelController(
             store: store, noteStore: notes, canvasSession: CanvasSession(store: CanvasStore(container: container)),
-            noteDraft: NoteDraftController(noteStore: notes), settings: settings, uiState: state
+            noteDraft: draft, settings: settings, uiState: state
         )
         let panel = try XCTUnwrap(NSApplication.shared.windows.compactMap { $0 as? AtticPanel }
             .first { !existing.contains(ObjectIdentifier($0)) })
@@ -782,7 +822,8 @@ final class PanelPullOutHostedTests: XCTestCase {
             spin(until: { hidden })
             panel.orderOut(nil)
         }
-        try body(Rig(controller: controller, state: state, panel: panel, settings: settings))
+        try body(Rig(controller: controller, state: state, panel: panel, settings: settings,
+                     notes: notes, noteDraft: draft))
     }
 
     private func elements(_ root: AnyObject) -> [AnyObject] {

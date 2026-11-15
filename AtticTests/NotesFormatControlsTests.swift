@@ -2235,7 +2235,7 @@ final class NotesFormatControlsTests: XCTestCase {
         popover.isReleasedWhenClosed = false
         windows += [panel, popover]
         var hides = 0
-        panel.onUnhandledEscape = { hides += 1 }
+        panel.onUnhandledEscape = { hides += 1; return true }
         panel.keyDown(with: escape(in: popover))
         XCTAssertEqual(hides, 0, "a pop-over's Esc never hides the panel as well")
         panel.keyDown(with: escape(in: panel))
