@@ -361,6 +361,7 @@ private struct AgentChatHistoryStore {
 final class AgentRunEngine: AgentRunning {
     var retainsThread: Bool { true }
     static let journalSaveFailure = "The agent thread could not be saved."
+    private static let interruptedRunNotice = "An agent run was interrupted. Review its changes before continuing."
     typealias HelperFactory = @MainActor () throws -> any AgentHelperTransmitting
     typealias ToolFactory = @MainActor () -> any AgentRunToolServing
 
@@ -398,6 +399,8 @@ final class AgentRunEngine: AgentRunning {
     private var watching = false
     private var mode: AgentChatMode = .askFirst
     private var activeReplyID: UUID?
+    /// A visible tool has a reserved row until its matching completion arrives.
+    private var unfinishedStepIDs = Set<UUID>()
     private var unflushedCharacters = 0
     private var currentEvents: [AgentEvent] = []
     private var recordedTargets: [AgentTarget] = []
@@ -439,7 +442,7 @@ final class AgentRunEngine: AgentRunning {
         if journalIssue == nil, let interruptedRun = archive.activeRun {
             archive.activeRun = nil
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error",
-                text: "An agent run was interrupted. Review its changes before continuing."))
+                text: Self.interruptedRunNotice))
             restoreMissingDurableReceipts(for: interruptedRun)
             _ = persist()
         }
@@ -471,6 +474,7 @@ final class AgentRunEngine: AgentRunning {
         }
         self.watching = watching
         activeReplyID = reply.id
+        unfinishedStepIDs.removeAll()
         unflushedCharacters = 0
         currentEvents = []
         recordedTargets = []
@@ -747,6 +751,12 @@ final class AgentRunEngine: AgentRunning {
 
     private func finishWith(_ event: AgentEvent) {
         guard isRunning else { return }
+        // The chat settles any step with no completion as "Stopped" on every
+        // terminal path, including a normal turn that left a tool open.
+        for index in archive.entries.indices where unfinishedStepIDs.contains(archive.entries[index].id) {
+            archive.entries[index].text = String(localized: "Stopped")
+        }
+        unfinishedStepIDs.removeAll()
         if case let .failed(message) = event {
             archive.entries.append(AgentThreadEntry(id: UUID(), role: "error", text: message))
         }
@@ -827,6 +837,7 @@ final class AgentRunEngine: AgentRunning {
             // other steps. Reserve their journal position at the same time.
             if step.kind != .openPage, !archive.entries.contains(where: { $0.id == step.id }) {
                 archive.entries.append(AgentThreadEntry(id: step.id, role: "tool", text: step.title))
+                unfinishedStepIDs.insert(step.id)
             }
         } else if case let .stepReworded(step) = event {
             activeReplyID = nil
@@ -835,6 +846,7 @@ final class AgentRunEngine: AgentRunning {
             }
         } else if case let .stepFinished(step) = event {
             activeReplyID = nil
+            unfinishedStepIDs.remove(step.id)
             if step.kind != .openPage {
                 if let index = archive.entries.firstIndex(where: { $0.id == step.id }) {
                     archive.entries[index].text = step.title
@@ -862,7 +874,7 @@ final class AgentRunEngine: AgentRunning {
             activeReplyID = nil
         }
         for subscriber in subscribers.values { subscriber.yield(event) }
-        if shouldCheckpoint { checkpointWriter.checkpoint(archive) }
+        if shouldCheckpoint { checkpointWriter.checkpoint(snapshotSafeAfterInterruption()) }
     }
 
     private func addSubscriber(replay: Bool) -> AsyncStream<AgentEvent> {
@@ -909,9 +921,21 @@ final class AgentRunEngine: AgentRunning {
     @discardableResult
     private func persist() -> Bool {
         guard journalIssue == nil else { return false }
-        let result = checkpointWriter.saveRequired(archive)
+        let result = checkpointWriter.saveRequired(snapshotSafeAfterInterruption())
         lastPersistedArchive = result.lastDurable
         return result.success
+    }
+
+    /// A crash can leave only a streaming checkpoint, with no terminal event
+    /// to settle an unfinished tool. Save its existing interruption wording on
+    /// disk while keeping the running title in the live model until it ends.
+    private func snapshotSafeAfterInterruption() -> AgentRunArchive {
+        guard archive.activeRun != nil, !unfinishedStepIDs.isEmpty else { return archive }
+        var snapshot = archive
+        for index in snapshot.entries.indices where unfinishedStepIDs.contains(snapshot.entries[index].id) {
+            snapshot.entries[index].text = Self.interruptedRunNotice
+        }
+        return snapshot
     }
 
     #if DEBUG

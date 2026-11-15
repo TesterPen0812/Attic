@@ -1022,6 +1022,124 @@ final class AgentRunHostedTests: XCTestCase {
                        "Closing and relaunching must preserve the order shown live")
     }
 
+    func testR1CancelledUnfinishedToolMatchesLiveChatAfterRelaunch() async {
+        let url = journalURL()
+        let helper = codexFixtureHelper()
+        let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
+                                    tools: { FakeRunTools() }, journalURL: url)
+        let live = AgentChatModel()
+        live.pacing = .instant
+        live.connect(runner)
+        live.draft = "Delete Buy milk"
+        live.send()
+        await wait { self.codexTurnWasSent(helper) }
+
+        emitCodex(helper, "item/started", item: ["id": "delete-1", "type": "mcpToolCall",
+                                                   "server": "attic", "tool": "delete_task",
+                                                   "arguments": ["title": "Buy milk"]])
+        await wait { self.transcript(live).contains { $0.contains("Deleting Buy milk") } }
+        live.stop()
+        await wait { !runner.threadSnapshot().isRunning && !live.isBusy }
+
+        let reopened = AgentRunEngine(selectedBackend: { .codex }, helper: { FakeRunHelper() },
+                                      tools: { FakeRunTools() }, journalURL: url)
+        let restored = AgentChatModel()
+        restored.pacing = .instant
+        restored.connect(reopened)
+        let liveRows = transcript(live)
+        let reopenedRows = transcript(restored)
+        XCTAssertTrue(liveRows.contains("line:Stopped"), "Stop must settle the live tool title")
+        XCTAssertEqual(reopenedRows, liveRows, "The persisted tool title must match Stop's live title")
+        XCTAssertFalse(reopenedRows.contains { $0.contains("Deleting Buy milk") },
+                       "A cancelled deletion cannot appear to be in progress after relaunch")
+        runner.shutdown()
+        reopened.shutdown()
+    }
+
+    func testR1CheckpointInterruptedToolIsRetitledOnCrashRecovery() async {
+        let url = journalURL()
+        let helper = codexFixtureHelper()
+        let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
+                                    tools: { FakeRunTools() }, journalURL: url)
+        _ = runner.send("Delete Buy milk", watching: false)
+        await wait { self.codexTurnWasSent(helper) }
+        emitCodex(helper, "item/started", item: ["id": "delete-1", "type": "mcpToolCall",
+                                                   "server": "attic", "tool": "delete_task",
+                                                   "arguments": ["title": "Buy milk"]])
+        await wait { runner.threadSnapshot().entries.contains { $0.text.contains("Deleting Buy milk") } }
+
+        // A long streamed reply triggers a real asynchronous journal checkpoint.
+        // Starting a second engine against that image simulates a fresh process
+        // after a crash without calling shutdown() on the first engine.
+        let checkpointText = String(repeating: "x", count: 300)
+        emitCodex(helper, "item/agentMessage/delta", delta: checkpointText)
+        await wait {
+            guard let data = try? Data(contentsOf: url),
+                  let saved = String(data: data, encoding: .utf8) else { return false }
+            return saved.contains(checkpointText) && saved.contains("activeRun")
+                && saved.contains("\"tool\"")
+        }
+
+        let relaunched = AgentRunEngine(selectedBackend: { .codex }, helper: { FakeRunHelper() },
+                                        tools: { FakeRunTools() }, journalURL: url)
+        let interrupted = "An agent run was interrupted. Review its changes before continuing."
+        let rows = relaunched.threadSnapshot().entries
+        XCTAssertEqual(rows.filter { $0.role == "tool" }.map(\.text), [interrupted],
+                       "Only an unfinished reserved tool must be marked interrupted")
+        XCTAssertFalse(rows.contains { $0.role == "tool" && $0.text.contains("Deleting Buy milk") })
+        let restored = AgentChatModel()
+        restored.pacing = .instant
+        restored.connect(relaunched)
+        let messages = transcript(restored)
+        guard let tool = messages.firstIndex(of: "line:\(interrupted)"),
+              let reply = messages.firstIndex(of: "assistant:\(checkpointText)") else {
+            return XCTFail("The interrupted tool and checkpointed reply must both survive relaunch")
+        }
+        XCTAssertLessThan(tool, reply, "Crash recovery must preserve the reserved tool's position")
+        runner.shutdown()
+        relaunched.shutdown()
+    }
+
+    func testR1UnfinishedToolOnCompletedFailedAndLostHelperTurns() async {
+        for ending in ["completed", "failed", "disconnected"] {
+            let url = journalURL()
+            let helper = codexFixtureHelper()
+            let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper },
+                                        tools: { FakeRunTools() }, journalURL: url)
+            let live = AgentChatModel()
+            live.pacing = .instant
+            live.connect(runner)
+            live.draft = "Delete Buy milk"
+            live.send()
+            await wait { self.codexTurnWasSent(helper) }
+            emitCodex(helper, "item/started", item: ["id": "delete-1", "type": "mcpToolCall",
+                                                       "server": "attic", "tool": "delete_task",
+                                                       "arguments": ["title": "Buy milk"]])
+            await wait { self.transcript(live).contains("line:Deleting Buy milk") }
+            emitCodex(helper, "item/started", item: ["id": "update-1", "type": "mcpToolCall",
+                                                       "server": "attic", "tool": "update_task",
+                                                       "arguments": ["title": "Pay rent"]])
+            await wait { self.transcript(live).contains("line:Updating Pay rent") }
+            if ending == "disconnected" {
+                helper.disconnect()
+            } else {
+                emitCodex(helper, "turn/completed", turn: ["status": ending])
+            }
+            await wait { !runner.threadSnapshot().isRunning && !live.isBusy }
+            let reopened = AgentRunEngine(selectedBackend: { .codex }, helper: { FakeRunHelper() },
+                                          tools: { FakeRunTools() }, journalURL: url)
+            let restored = AgentChatModel()
+            restored.pacing = .instant
+            restored.connect(reopened)
+            XCTAssertEqual(transcript(live).filter { $0 == "line:Stopped" }.count, 2,
+                           "\(ending) must stop every unfinished tool")
+            XCTAssertEqual(transcript(restored), transcript(live),
+                           "\(ending) must settle the tool row before the final save")
+            runner.shutdown()
+            reopened.shutdown()
+        }
+    }
+
     /// Exercise the actual CLI decoder and run journal under rapid, overlapping
     /// tool notifications. Every frame must preserve the transcript's order,
     /// including replies begun while an earlier tool is still running.
@@ -1302,6 +1420,64 @@ final class AgentRunHostedTests: XCTestCase {
 
     private func journalURL() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("attic-agent-hosted-\(UUID().uuidString).json")
+    }
+
+    private func codexFixtureHelper() -> FakeRunHelper {
+        let helper = FakeRunHelper()
+        helper.onInput = { line, helper in
+            guard let request = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+            else { return }
+            switch request["method"] as? String {
+            case "initialize": helper.emitLine(#"{"id":1,"result":{}}"#)
+            case "thread/start": helper.emitLine(#"{"id":2,"result":{"thread":{"id":"fixture-thread"}}}"#)
+            case "turn/start": helper.emitLine(#"{"id":3,"result":{"turn":{"id":"fixture-turn"}}}"#)
+            default: break
+            }
+        }
+        return helper
+    }
+
+    private func codexTurnWasSent(_ helper: FakeRunHelper) -> Bool {
+        helper.inputs.contains { line in
+            guard let request = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+            else { return false }
+            return request["method"] as? String == "turn/start"
+        }
+    }
+
+    private func emitCodex(_ helper: FakeRunHelper, _ method: String,
+                           item: [String: Any]? = nil, delta: String? = nil, turn: [String: Any]? = nil) {
+        var params: [String: Any] = [:]
+        if let item { params["item"] = item }
+        if let delta { params["delta"] = delta }
+        if let turn { params["turn"] = turn }
+        let line = try! JSONSerialization.data(withJSONObject: ["method": method, "params": params])
+        helper.emitLine(String(decoding: line, as: UTF8.self))
+    }
+
+    private func transcript(_ chat: AgentChatModel) -> [String] {
+        chat.entries.compactMap { entry -> String? in
+            switch entry.content {
+            case let .asked(text): return "user:\(text)"
+            case let .reply(reply): return "assistant:\(reply.raw)"
+            case let .step(step): return "line:\(step.title)"
+            case let .note(text): return "line:\(text)"
+            case let .changes(changes): return "receipt:\(changes.set.id.uuidString)"
+            case .week: return nil // Ephemeral visual context, not a message.
+            }
+        }
+    }
+
+    private func archivedTranscript(_ entries: [AgentThreadEntry]) -> [String] {
+        entries.compactMap { entry -> String? in
+            switch entry.role {
+            case "user": return "user:\(entry.text)"
+            case "assistant": return entry.text.isEmpty ? nil : "assistant:\(entry.text)"
+            case "tool", "error", "notice": return "line:\(entry.text)"
+            case "receipt": return entry.changeSet.map { "receipt:\($0.id.uuidString)" }
+            default: return nil
+            }
+        }
     }
 
     private func wait(_ predicate: @escaping @MainActor () -> Bool,
