@@ -500,6 +500,35 @@ final class DrawDataSafetyTests: XCTestCase {
         }
     }
 
+    func testR4NearFlatPointerResizeBoundsAmplificationAndRoundTrips() throws {
+        for width in [0.0009, 0.001, 0.002] {
+            for mirror in [false, true] {
+                let store = try persistent(at: directory()), page = DrawPageModel(store: store)
+                page.start()
+                page.setBoard(size: CGSize(width: 320, height: 460), clearInsets: NSEdgeInsets(top: 48.5, left: 15.5, bottom: 48.5, right: 15.5))
+                let frame = DrawFrame(x: 20, y: 80, width: mirror ? 3 : width, height: mirror ? width : 3)
+                let stroke = DrawObject(frame: frame, content: .stroke([DrawPoint(x: frame.x, y: frame.y), DrawPoint(x: frame.x + frame.width, y: frame.y + frame.height)]))
+                XCTAssertTrue(page.perform(.put([stroke])).isSaved)
+                page.setTool(.select); page.select([stroke.id])
+                let spot = try XCTUnwrap(page.handleSpots.first { $0.handle == .bottomRight })
+                let head = store.undoStepID(on: page.canvasID!)
+                page.pointerDown(at: spot.point, shift: true)
+                page.pointerDragged(to: CGPoint(x: spot.point.x + (mirror ? 0 : 1), y: spot.point.y + (mirror ? 1 : 0)), shift: true)
+                page.pointerUp(); page.flushAcknowledgedDraw()
+                let changed = try XCTUnwrap(page.objects.first)
+                let box = DrawGeometry.frame(changed.frame)
+                XCTAssertLessThanOrEqual(max(box.width, box.height), 4.01, "1 pt travel cannot amplify a 3 pt object to thousands")
+                if changed != stroke {
+                    page.undo(); XCTAssertEqual(page.objects, [stroke])
+                    page.redo(); XCTAssertEqual(page.objects, [changed])
+                } else {
+                    XCTAssertEqual(store.undoStepID(on: page.canvasID!), head, "a no-op does not consume history")
+                }
+                XCTAssertEqual(try DrawPersistentStore(container: store.container).open(page.canvasID!).objects, [changed])
+            }
+        }
+    }
+
     func testBG31AgentResizeOfSignedLineAndArrowFramesIsExact() throws {
         for kind in [DrawShape.line, .arrow] {
             for (signX, signY) in [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {

@@ -144,8 +144,9 @@ extension DrawPageModel {
                 } else if flatX || flatY {
                     s = 1 + (flatX ? dy : dx) / longest
                 } else if shortX && shortY {
-                    let rx = (box.width + dx) / box.width, ry = (box.height + dy) / box.height
-                    s = abs(rx - 1) >= abs(ry - 1) ? rx : ry
+                    // Normalize travel by the long axis. A near-zero short
+                    // axis must not amplify a one-point drag hundreds-fold.
+                    s = 1 + (abs(dx) >= abs(dy) ? dx : dy) / longest
                 } else {
                     // One short axis: the larger pointer travel counts, against
                     // the long axis (a tie goes to the long axis).
