@@ -4,46 +4,45 @@
 
 Repository: TesterPen0812/Attic. Write only phase-3/proimpl-draw-r6.
 Base: 4ba1f012460c59f3e5cc23406ab52b2cf7a066d6.
-Composer branch: phase-3/proimpl-composer-r2, based on 8f54bc4f; do not implement Composer before Draw.
+This turn is Draw only. Composer remains at its initial log checkpoint.
 No other branch writes, force pushes, pull requests, merges, builds, tests, CI dispatches, or user-store access.
 
 ## Verified prior checkpoints
 
 - Draw initial log: b5aa93fff7288e31cf4d698d9fc27bd61f53ee57.
 - Composer initial log: ed3cd1c53a73e948c7f36762860a1f2805c0d045.
-- DS-6 file-backed regression candidate: fac856c8adbd633f60447914f5acce87180180c3; its branch SHA was verified twice.
-- This checkpoint: DS-6 store correction and source extraction; resolve its SHA from the branch head/commit message. A commit cannot contain its own final SHA; the next checkpoint records it.
+- DS-6 file-backed store regression candidate: fac856c8adbd633f60447914f5acce87180180c3.
+- DS-6 store correction and source extraction: 94cd1a1e1bc2963e85ed74caaeed2e0ed87b7336. Verified as the exact branch head at the beginning of this resumed turn; RECOVERY.md and AGENTS.md read at that SHA.
+- This checkpoint adds DS-6 page-level regression candidates before the page fix. Resolve its SHA from this commit; the next checkpoint records it. No commit can embed its own final SHA.
 
 ## Current finding status
 
-DS-6 store correction is implemented in source, not compiled or tested: recovery requires a complete saved canvas load; an error retains the original record and blocks admission rather than installing objectsBefore as a complete body. Only an originally absent, empty, never-saved canvas may reconstruct from an absent base. Explicit store Retry reloads the complete base, then reconciles the original operation. Query metadata can still expose the recovery without inventing an object body.
+DS-6 remains PARTIAL. The store correction is implemented in source at 94cd1a1e, not compiled or tested: recovery requires a complete saved canvas load; an error retains the original record and blocks admission rather than installing objectsBefore as a complete body. Only an originally absent, empty, never-saved canvas may reconstruct from an absent base. Explicit store Retry reloads the complete base, then reconciles the original operation. Query metadata can expose recovery without inventing an object body.
 
-DS-6 remains PARTIAL at the UI integration boundary: DrawPageModel currently renders recoveryIssue without a Retry action. Next step below completes that route. Do not mark DS-6 complete yet.
+The page still renders recoveryIssue with canRetry=false. Its retrySave() visits only pendingEdits, while complete-load failures deliberately have no pendingEdits projection. open() also forgets a failed open request. The source fix for these page boundaries has NOT been applied in this checkpoint.
 
 DS-1 through DS-5 and DS-7 through DS-16: not implemented in this restart. Existing round-5 fixes remain to be verified. Composer CP-1 through CP-17 and carry findings: untouched.
 
-## Files touched in this checkpoint
+## Files changed in this checkpoint
 
-- Attic/Draw/DrawStore.swift: state/query/cache owner; new recoveryLoadFailures; reject open of a failed recovery load.
-- Attic/Draw/DrawStore+Recovery.swift: recovery reconstruction, per-canvas full-load error and explicit store Retry; existing write/flush behavior retained for later findings.
-- Attic/Draw/DrawStore+Commands.swift: extracted existing commands/typing/clipboard/thumbnail implementations.
-- Attic/Draw/DrawStore+History.swift: extracted existing history behavior.
-- Attic/Draw/DrawStore+HistoryBudget.swift: extracted existing ledger, pending its removal under DS-10/11/12.
-- Attic/Draw/DrawStore+Rename.swift: extracted existing cancellation/rebasing, pending removal under DS-5.
-- Attic/Draw/DrawStore+AgentUndo.swift: extracted existing exact physical agent inverse checks.
-- Attic/Draw/DrawStepPins.swift: extracted existing token bookkeeping, pending removal of protection semantics.
+- AtticTests/DrawR6RecoveryRetryTests.swift (new).
 - RECOVERY.md.
 
-The extraction keeps the same class and stored state, but makes cross-file implementation members module-internal rather than file-private. It introduces no SwiftData schema or new storage format. Remaining mechanisms are not claimed removed by this checkpoint.
+No production code changed and no existing test was deleted in this checkpoint.
+The prior DrawStore extraction remains unchanged: DrawStore.swift, DrawStore+Recovery.swift, DrawStore+Commands.swift, DrawStore+History.swift, DrawStore+HistoryBudget.swift, DrawStore+Rename.swift, DrawStore+AgentUndo.swift and DrawStepPins.swift. Its cross-file implementation members are module-internal; no schema/storage-format change was made.
 
-## Regression and verification
+## Regression candidates
 
-AtticTests/DrawR6RecoveryLoadTests.swift / testDS6FailedCompleteLoadNeverSubstitutesARenamesEmptyObjectPatch was committed before this source correction. It simulates an unretired committed rename, drops the store without close, reopens the same disk store with complete-load failure, asserts throwing open and retained ownership, then verifies full object identities and image bytes after Retry.
+- Existing: DrawR6RecoveryLoadTests.testDS6FailedCompleteLoadNeverSubstitutesARenamesEmptyObjectPatch.
+- New: DrawR6RecoveryRetryTests.testDS6PageNoticeRetriesCompleteLoadAndRestoresOriginalCanvas. Uses a real file-backed store, an unretired committed rename, store deallocation without close, a fresh container and injected full-load failures. Asserts the existing notice offers Retry, each repeated failed Retry attempts one full load without changing journal bytes, eventual Retry opens the requested complete canvas with exact image bytes, and a settled Retry does not replay/read again.
+- New: DrawR6RecoveryRetryTests.testDS6RecoveryRetryKeepsAnotherCanvasOpen. Recover the failed canvas while browsing a different one; Retry must not steal the user's later navigation.
 
-No executed red/green result exists. Nothing compiled, tested, launched, or measured. The owner's Mac runner must regenerate the project to include the new Swift files and execute all checks. No existing test has been deleted yet. GitHub is the source of truth; no local workspace is authoritative.
+These tests were authored before the page source change. No executed red/green result exists. Nothing has been compiled, tested, launched, or measured. The owner's Mac runner must regenerate the project for the new Swift files and execute all checks.
 
 ## Exact next step
 
-Verify this commit and phase-3/proimpl-draw-r6 head on GitHub. Finish DS-6's user-visible load-error Retry route through the existing notice mechanism, with a page-level regression and log update; then checkpoint and verify again before DS-7. DS-7 must add retryable journal reads and conservative admission. DS-8 must still fix swallowed retirement failures; this checkpoint intentionally does not claim it.
+Verify this commit and phase-3/proimpl-draw-r6 head on GitHub. In DrawPageModel.swift, expose Retry for known complete-recovery-load failures; have retrySave() attempt those original records once before ordinary pending saves (exclude them from a second attempt in that press); remember a failed open target and reopen it after successful Retry only if no other canvas has since opened. Keep the existing notice mechanism and exact existing load-error message. Commit the source fix with this log and verify its SHA before starting DS-7.
 
-Stop immediately on any GitHub write or SHA-verification failure. Never publish to any branch other than the two explicitly authorized branches.
+Then DS-7: retryable journal reads and conservative admission. DS-8 still must fix swallowed retirement failures. This checkpoint does not claim either.
+
+Stop immediately on any GitHub write or SHA-verification failure. GitHub, not the temporary local files or conversation, is authoritative.
