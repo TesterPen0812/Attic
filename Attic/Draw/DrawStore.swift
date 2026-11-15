@@ -596,6 +596,7 @@ class DrawStore: DrawStoreProtocol {
             // An earlier edit isn't saved yet: this one shows at once and
             // waits behind it (never lost), then everything is tried again.
             let queued = stamped(step)
+            expireRedoOffers(on: id)
             show(queued)
             pending[id]?.append(Pending(step: queued, action: .edit))
             let published = publishPending(id, outcome: pendingEdits[id]?.outcome ?? .retry(""))
@@ -642,6 +643,7 @@ class DrawStore: DrawStoreProtocol {
                 states[id] = original
                 return .held("Could not safely merge the text edits.")
             }
+            expireRedoOffers(on: id)
             typingStepsPending[id, default: [:]][merged.id] = steps
             if let recovery {
                 unsubmittedHeads.insert(id)
@@ -1103,6 +1105,7 @@ class DrawStore: DrawStoreProtocol {
     }
 
     private func execute(_ step: Step, action: Action) -> DrawSaveResult {
+        if action == .edit { expireRedoOffers(on: step.change.canvasID) }
         let step = stamped(step)
         if let recovery, step.change.before != nil || step.change.after != nil {
             unsubmittedHeads.insert(step.change.canvasID)
@@ -1229,7 +1232,9 @@ class DrawStore: DrawStoreProtocol {
     private func commit(_ step: Step, action: Action) -> DrawDelta {
         let id = step.change.canvasID
         switch action {
-        case .edit: appendUndo(step, on: id); histories[id]?.redo = []
+        case .edit:
+            expireRedoOffers(on: id)
+            appendUndo(step, on: id); histories[id]?.redo = []
         case .undo:
             _ = histories[id]?.undo.popLast()
             // Recovery may only know a merged typing head. The concrete
@@ -1247,6 +1252,10 @@ class DrawStore: DrawStoreProtocol {
         lastDelta = delta
         trimCachedStates(protecting: id)
         return delta
+    }
+
+    private func expireRedoOffers(on id: UUID) {
+        for step in histories[id]?.redo ?? [] { pins.expire(step.id) }
     }
 
     private func appendUndo(_ step: Step, on id: UUID) {
@@ -1342,53 +1351,58 @@ enum HistoryLedgerProbe {
 /// book is lock-protected because a closure can be released from anywhere.
 final class DrawStepPins: @unchecked Sendable {
     private let lock = NSLock()
-    private var counts: [UUID: Int] = [:]
+    private var counts: [UUID: Set<UUID>] = [:]
     private var generation: UInt64 = 0
     var didRelease: (@Sendable () -> Void)?
     private var notificationPending = false
-
     func acknowledgeReleaseChange() {
         lock.lock(); notificationPending = false; lock.unlock()
     }
-
-    var revision: UInt64 {
-        lock.lock(); defer { lock.unlock() }
-        return generation
-    }
-
+    var revision: UInt64 { lock.lock(); defer { lock.unlock() }; return generation }
     func pin(_ step: UUID) -> Pin {
-        lock.lock(); counts[step, default: 0] += 1; generation &+= 1; lock.unlock()
-        return Pin(book: self, step: step)
+        let token = UUID()
+        lock.lock(); counts[step, default: []].insert(token); generation &+= 1; lock.unlock()
+        return Pin(book: self, step: step, token: token)
     }
-
     func isPinned(_ step: UUID) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return counts[step] != nil
+        return counts[step]?.isEmpty == false
     }
-
-    private func release(_ step: UUID) {
+    private func contains(_ step: UUID, token: UUID) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return counts[step]?.contains(token) == true
+    }
+    func expire(_ step: UUID) {
         lock.lock()
-        guard let held = counts[step] else { lock.unlock(); return }
-        if held <= 1 { counts[step] = nil } else { counts[step] = held - 1 }
+        guard counts.removeValue(forKey: step) != nil else { lock.unlock(); return }
+        changedWhileLocked()
+    }
+    private func release(_ step: UUID, token: UUID) {
+        lock.lock()
+        guard var held = counts[step], held.remove(token) != nil else { lock.unlock(); return }
+        counts[step] = held.isEmpty ? nil : held
+        changedWhileLocked()
+    }
+    private func changedWhileLocked() {
         generation &+= 1
         let notify = !notificationPending
         notificationPending = true
         lock.unlock()
         if notify { didRelease?() }
     }
-
     final class Pin: @unchecked Sendable {
         let book: DrawStepPins
         let step: UUID
+        private let token: UUID
         private let lock = NSLock()
         private var cancelled = false
-        init(book: DrawStepPins, step: UUID) { self.book = book; self.step = step }
+        var isActive: Bool { book.contains(step, token: token) }
+        init(book: DrawStepPins, step: UUID, token: UUID) { self.book = book; self.step = step; self.token = token }
         func cancel() {
             lock.lock()
             guard !cancelled else { lock.unlock(); return }
-            cancelled = true
-            lock.unlock()
-            book.release(step)
+            cancelled = true; lock.unlock()
+            book.release(step, token: token)
         }
         deinit { cancel() }
     }

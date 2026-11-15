@@ -130,8 +130,10 @@ final class DrawLibraryMenuModel: ObservableObject {
     /// Only the still-offered canvas deletion owns the board's Undo key.
     var canUndoDeletionIfOffered: Bool {
         guard let toasts, let deletionToastID else { return false }
-        return toasts.current?.id == deletionToastID && toasts.current?.answersUndoKey == true
+        return toasts.current?.id == deletionToastID && toasts.current?.answersUndoKey == true && deletionOfferIsActive
     }
+
+    private var deletionOfferIsActive: Bool { (deletionOffer as? DrawStepPins.Pin)?.isActive ?? true }
 
     func undoDeletionIfOffered() -> Bool {
         guard canUndoDeletionIfOffered, let toasts else { return false }
@@ -405,10 +407,14 @@ final class DrawLibraryMenuModel: ObservableObject {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.followingDeletions = false
+                    if !self.deletionOfferIsActive, self.toasts?.current?.id == self.deletionToastID {
+                        self.toasts?.dismiss(); self.deletionToastID = nil
+                    }
                     for deletion in self.queuedDeletions.values.sorted(by: { $0.order < $1.order }) {
                         let id = deletion.canvas.id
                         guard self.store.pendingEdits[id] == nil else { continue }
                         self.queuedDeletions[id] = nil
+                        if let pin = deletion.pin as? DrawStepPins.Pin, !pin.isActive { continue }
                         if self.store.undoStepID(on: id) == deletion.stepID,
                            (try? self.store.open(id).canvas.deletedAt) != nil {
                             AtticSounds.play(.trashed)
@@ -422,10 +428,12 @@ final class DrawLibraryMenuModel: ObservableObject {
     }
 
     private func offerDeletionUndo(_ canvas: DrawCanvas, stepID deletionStepID: UUID, pin offer: AnyObject?) {
+        guard (offer as? DrawStepPins.Pin)?.isActive ?? true else { return }
         let store = store
         let actions = actions
         toasts?.show(String(localized: "Deleted “\(Self.displayName(canvas.name))”")) {
             defer { withExtendedLifetime(offer) {} }
+            guard (offer as? DrawStepPins.Pin)?.isActive ?? true else { return .obsolete }
             // The toast is an Undo of this deletion, not a new Restore edit.
             let id = canvas.id
             // An earlier press of this Undo wrote nothing (the disk was full):

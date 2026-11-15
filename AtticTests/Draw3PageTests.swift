@@ -2826,3 +2826,28 @@ extension Draw3PageTests {
         failSave = false; use(recovered)
     }
 }
+extension Draw3PageTests {
+    func testR5BranchingEditWithdrawsRecentlyDeletedRedoAndReleasesPin() throws {
+        use(try persistentStore(fileBacked: true))
+        let image = DrawObject(content: .image(DrawImage(original: Draw3Images.encoded(width: 2, height: 2), pixelWidth: 2, pixelHeight: 2)))
+        let second = DrawObject(content: image.content)
+        let other = store.create(name: "Other image")
+        XCTAssertTrue(model.perform(.put([image])).isSaved)
+        XCTAssertTrue(store.perform(.put([second]), on: other.id).isSaved)
+        XCTAssertTrue(model.perform(.remove([image.id])).isSaved)
+        XCTAssertTrue(store.perform(.remove([second.id]), on: other.id).isSaved)
+        let deleted = RecentlyDeletedModel(library: nil, draw: { [weak store] in store })
+        deleted.start(); XCTAssertEqual(deleted.listedEntries.count, 2)
+        deleted.restore(deleted.listedEntries)
+        let route = try XCTUnwrap(Mirror(reflecting: deleted).children.first { $0.label == "drawOnlyUndo" }?.value as? UndoRoute)
+        XCTAssertTrue(deleted.canUndo)
+        deleted.undo()
+        XCTAssertTrue(route.canRedo(in: .library))
+        XCTAssertEqual(try r5PinCount(), 2, "the group owns a pin on each canvas")
+        XCTAssertTrue(model.perform(.put([DrawObject(content: .shape(.rectangle))])).isSaved)
+        XCTAssertFalse(route.canRedo(in: .library), "the offered Redo must disappear with its branch")
+        XCTAssertNil(route.redoName(in: .library))
+        XCTAssertEqual(try r5PinCount(), 0, "withdrawing a group releases every member pin")
+        XCTAssertNotEqual(route.redoStep(in: .library), .failed, "a withdrawn offer must never be offered and fail")
+    }
+}

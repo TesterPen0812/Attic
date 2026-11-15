@@ -193,7 +193,17 @@ enum RecentlyDeletedRestoreUndo {
         // a step the library is still offering to undo.
         let pins = actions.compactMap { $0.pin ?? drawStore?.pinHistoryStep($0.historyStepID) }
 
+        func offerIsAvailable() -> Bool {
+            guard pins.allSatisfy({ ($0 as? DrawStepPins.Pin)?.isActive ?? true }) else {
+                // A composite offer ends as a whole, including its untouched canvases.
+                for pin in pins { (pin as? DrawStepPins.Pin)?.cancel() }
+                return false
+            }
+            return true
+        }
+
         func replay(undo: Bool) -> UndoOutcome {
+            guard offerIsAvailable() else { return .obsolete }
             let ordered = undo ? Array(members.reversed()) : members
             var changed: [Member] = []
             for member in ordered {
@@ -225,6 +235,7 @@ enum RecentlyDeletedRestoreUndo {
             undoOutcome: { withExtendedLifetime(pins) { replay(undo: true) } },
             redoOutcome: { withExtendedLifetime(pins) { replay(undo: false) } }
         )
+        step.isAvailable = { offerIsAvailable() }
         step.isEnabled = {
             awaitingInitialSaves = awaitingInitialSaves.filter { drawStore?.pendingEdits[$0] != nil }
             return awaitingInitialSaves.isEmpty
