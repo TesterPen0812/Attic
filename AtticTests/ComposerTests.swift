@@ -193,6 +193,9 @@ final class ComposerTests: XCTestCase {
     }
 
     override func tearDown() {
+        // Drain acknowledged work while its fixture and callbacks still exist.
+        // A 30-second test delay must not save into a later test's store.
+        page?.settlePendingCompletionAcknowledgements()
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
         windows.forEach { $0.contentView = nil; $0.close() }
@@ -1020,6 +1023,18 @@ final class ComposerTests: XCTestCase {
         for action in toastUndos { _ = action() }
         XCTAssertEqual(library.undo.undoStepID(in: .tasks), historyAfterUndo)
         XCTAssertEqual(liveTasks().map(\.id), [older.id], "any toast emitted while settling must be harmless once its named creation has been undone")
+    }
+
+    func testRound2TearDownSettlesHeldAcknowledgements() {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Held until teardown")
+        model.submit()
+        XCTAssertTrue(page.hasPendingAcknowledgement)
+        tearDown()
+        XCTAssertFalse(page.hasPendingAcknowledgement)
+        XCTAssertFalse(model.isCreating)
+        page.settlePendingCompletionAcknowledgements()
     }
 
     func testReviewR4EditMenuChromeUndoSettlesCreationBeforeHistory() throws {
