@@ -539,10 +539,21 @@ final class ScrollEdgeHangTests: XCTestCase {
         try check(reduceMotion: false, deltas: [-140, 280], mode: .dark, surface: .glass, stationaryHover: true)
     }
 
+    #if DEBUG
+    /// Opus R-6: a throwing first hover must leave no global diagnostics
+    /// enabled for the later hosted tests in the same process.
+    func testThrowingInitialHoverCleansGlobalDiagnostics() throws {
+        defer { AtticTaskRow.stopHoverDiagnostics() }
+        XCTAssertThrowsError(try check(reduceMotion: false, deltas: [], stationaryHover: true,
+                                       failInitialHover: true))
+        XCTAssertFalse(AtticTaskRow.recordsHoverDiagnostics)
+    }
+    #endif
+
     private func check(reduceMotion: Bool, deltas: [CGFloat] = [-170, 11, 11, 340],
                        extraRows: Int = 0, enablesAccessibility: Bool = true,
                        mode: AtticDesignContext.Mode = .light, surface: PanelSurfaceStyle = .solid,
-                       stationaryHover: Bool = false) throws {
+                       stationaryHover: Bool = false, failInitialHover: Bool = false) throws {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
         NSApp.accessibilitySetValue(enablesAccessibility, forAttribute: enhanced)
@@ -619,21 +630,22 @@ final class ScrollEdgeHangTests: XCTestCase {
         let list = try XCTUnwrap(lists.max { $0.documentView?.frame.height ?? 0 < $1.documentView?.frame.height ?? 0 },
                                  "the Now list")
         var tracked: Set<ObjectIdentifier> = []
-        if stationaryHover {
-            print("ATTIC_SCROLL_HOVER initial_frames=\(pointer.frames.values.sorted { $0.minY < $1.minY }.prefix(15)) clip=\(list.contentView.bounds) document=\(list.documentView?.frame ?? .zero)")
-            AtticTaskRow.drawsOpen = [:]
-            AtticTaskRow.stopHoverDiagnostics()
-            AtticTaskRow.recordsHoverDiagnostics = true
-            try Self.hover(window: window, at: CGPoint(x: size.width * 0.5, y: size.height * 0.55), tracked: &tracked)
-            settle(0.7)
-            print("ATTIC_SCROLL_HOVER before_scroll=\(AtticTaskRow.hoverHistory.values) open=\(AtticTaskRow.drawsOpen)")
-            TasksFoldLayoutProbe.shared.start()
-        }
         defer {
             if stationaryHover {
                 TasksFoldLayoutProbe.shared.stop()
                 AtticTaskRow.stopHoverDiagnostics()
             }
+        }
+        if stationaryHover {
+            print("ATTIC_SCROLL_HOVER initial_frames=\(pointer.frames.values.sorted { $0.minY < $1.minY }.prefix(15)) clip=\(list.contentView.bounds) document=\(list.documentView?.frame ?? .zero)")
+            AtticTaskRow.drawsOpen = [:]
+            AtticTaskRow.stopHoverDiagnostics()
+            AtticTaskRow.recordsHoverDiagnostics = true
+            if failInitialHover { throw NSError(domain: "InjectedInitialHoverFailure", code: 1) }
+            try Self.hover(window: window, at: CGPoint(x: size.width * 0.5, y: size.height * 0.55), tracked: &tracked)
+            settle(0.7)
+            print("ATTIC_SCROLL_HOVER before_scroll=\(AtticTaskRow.hoverHistory.values) open=\(AtticTaskRow.drawsOpen)")
+            TasksFoldLayoutProbe.shared.start()
         }
         for (index, delta) in deltas.enumerated() {
             let (_, elapsed) = try watchdog.run("scroll \(index) by \(delta)") {
