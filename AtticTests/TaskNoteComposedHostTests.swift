@@ -497,6 +497,52 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertEqual(model.rows.first { $0.id == freeze.id }?.isDone, true)
     }
 
+    func testDataR1TitleFieldAndPanelUndoReplayJournaledWorkspaceStep() async throws {
+        let id = try seed(.boundary), presenter = try open(id), model = presenter.model
+        let oldTitle = try XCTUnwrap(tasks.task(withID: id)).title
+        let editedTitle = "Changed by a workspace command"
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: editedTitle))
+
+        var undoCalls = 0, redoCalls = 0
+        var step = UndoStep(name: "Journaled task edit", undoOutcome: {
+            XCTFail("An async workspace step must use its replay closure")
+            return .failed
+        }, redoOutcome: {
+            XCTFail("An async workspace step must use its replay closure")
+            return .failed
+        })
+        step.replay = { redo, publish in
+            guard let current = self.tasks.task(withID: id),
+                  self.tasks.update(current, title: redo ? editedTitle : oldTitle) else { return .failed }
+            do { try publish() } catch { return .failed }
+            if redo { redoCalls += 1 } else { undoCalls += 1 }
+            return .applied
+        }
+        library.undo.record(step, in: model.history.historyID)
+
+        // Both native title/rename fields use this synchronous fallback.
+        model.undoWorkspace()
+        for _ in 0..<100 where undoCalls == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(undoCalls, 1, "title-field Undo must replay journaled operations")
+        XCTAssertEqual(tasks.task(withID: id)?.title, oldTitle)
+        XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first?.title, oldTitle)
+        model.redoWorkspace()
+        for _ in 0..<100 where redoCalls == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(redoCalls, 1, "rename/title-field Redo must replay journaled operations")
+        XCTAssertEqual(tasks.task(withID: id)?.title, editedTitle)
+
+        // The panel's Edit menu reaches WorkspaceHistory.undo/redo too.
+        AtticPanelController.performUnhandledUndo(redo: false, section: .notes, openTaskNoteID: id,
+            store: tasks, notes: notes)
+        for _ in 0..<100 where undoCalls == 1 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(undoCalls, 2, "panel Undo must replay the same step")
+        AtticPanelController.performUnhandledUndo(redo: true, section: .notes, openTaskNoteID: id,
+            store: tasks, notes: notes)
+        for _ in 0..<100 where redoCalls == 1 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(redoCalls, 2, "panel Redo must replay the same step")
+        XCTAssertEqual(tasks.task(withID: id)?.title, editedTitle)
+    }
+
     func testJustUncheckedSubtaskMovesUpRelativeToItsHeldNeighbourRatherThanItsCanonicalIndex() throws {
         let id = try seed(.heavy), presenter = try open(id, expanded: true), model = presenter.model
         let export = try XCTUnwrap(model.rows.first { $0.title == "Export the blog posts" })

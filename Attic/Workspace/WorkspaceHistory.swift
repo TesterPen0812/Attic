@@ -504,8 +504,25 @@ final class WorkspaceHistory {
         guard route.undoStepID(in: historyID) == stepID else { return nil }
         return await replay(redo: false)
     }
-    @discardableResult func undo() -> Bool { closeGroup(); return canUndo && route.undo(in: historyID) }
-    @discardableResult func redo() -> Bool { closeGroup(); return canRedo && route.redo(in: historyID) }
+    @discardableResult
+    func undo() -> Bool {
+        closeGroup()
+        guard canUndo else { return false }
+        if route.steps(in: historyID, redo: false).last?.replay != nil {
+            return requestReplay(redo: false)
+        }
+        return route.undo(in: historyID)
+    }
+
+    @discardableResult
+    func redo() -> Bool {
+        closeGroup()
+        guard canRedo else { return false }
+        if route.steps(in: historyID, redo: true).last?.replay != nil {
+            return requestReplay(redo: true)
+        }
+        return route.redo(in: historyID)
+    }
     func replay(redo: Bool) async -> UndoOutcome? {
         guard redo ? canRedo : canUndo else { return nil }
         closeGroup()

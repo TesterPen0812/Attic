@@ -747,8 +747,8 @@ final class TaskNotePageModel: ObservableObject {
     }
 
     /// ⌘Z past a field's own draft: the workspace's history.
-    func undoWorkspace() { _ = library.undo.undo(in: historyID) }
-    func redoWorkspace() { _ = library.undo.redo(in: historyID) }
+    func undoWorkspace() { _ = history.undo() }
+    func redoWorkspace() { _ = history.redo() }
 
     /// Return commits and moves the keyboard to the block (§ 7).
     @discardableResult
