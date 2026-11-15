@@ -122,6 +122,29 @@ final class ScrollEdgeHangTests: XCTestCase {
                       "a loop that wakes again at once for ten seconds is the stall")
     }
 
+    /// Dot R-1: 120 Hz frames can do 7.6 ms of work and sleep for just 0.7 ms.
+    /// The watchdog samples during the busy portion, exactly 30 frames apart,
+    /// without ever finding a 1 ms wait. Progress must not turn into a kill.
+    func testAHealthy120HzPointSevenMillisecondWaitNeverLooksContinuous() {
+        let clock = FakeClock()
+        let (probe, url) = makeProbe(clock)
+        for frame in 0..<3_600 {
+            clock.advance(milliseconds: 0.7)
+            probe.runLoop(.afterWaiting)
+            clock.advance(milliseconds: 7.6)
+            if frame.isMultiple(of: 30) { probe.checkForHang() }
+            probe.runLoop(.beforeWaiting)
+        }
+        XCTAssertNil(dump(url), "30 s of healthy 120 Hz turns must not publish a false HANG")
+
+        // Positive control: one genuinely stuck turn must still be detected.
+        clock.advance(milliseconds: 3_100)
+        probe.runLoop(.afterWaiting)
+        clock.advance(milliseconds: 3_100)
+        probe.checkForHang()
+        XCTAssertTrue(dump(url)?.hasPrefix("HANG: unfinished-run-loop-turn") == true)
+    }
+
     /// Dot R-6 (the probe's half). Every dump says how many real waits the loop
     /// has had, so a reader can tell a continuous stall from busy bursts.
     func testEveryDumpCarriesTheHealthyWaitCount() {

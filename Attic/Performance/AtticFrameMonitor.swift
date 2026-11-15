@@ -115,10 +115,9 @@ final class AtticHangProbe: @unchecked Sendable {
 
     /// A run loop that has not gone to sleep for this long is stalled.
     private let stallNanos: UInt64 = 3_000_000_000
-    /// A wait of at least this long, between `beforeWaiting` and `afterWaiting`,
-    /// proves the loop had nothing to do. A livelock wakes at once (microseconds);
-    /// a healthy 120 Hz animation still sleeps whatever its frame leaves free.
-    /// Never derived from frame time.
+    /// Upper bound for the wait that counts as meaningful sleep. The actual
+    /// threshold also scales with work done in the preceding turn, so a 120 Hz
+    /// frame with a genuine 0.7 ms wait cannot be mistaken for a busy loop.
     private let realWaitNanos: UInt64
     private let dumpIntervalNanos: UInt64 = 2_000_000_000
 
@@ -134,6 +133,8 @@ final class AtticHangProbe: @unchecked Sendable {
     private var lastValues: [String: String] = [:]
     private var sleeping = false
     private var waitStarted: UInt64
+    private var lastWake: UInt64?
+    private var lastBusyNanos: UInt64?
     private var lastCompletedTurn: UInt64
     private var lastRealWait: UInt64
     private var turns: UInt64 = 0
@@ -201,13 +202,21 @@ final class AtticHangProbe: @unchecked Sendable {
             let now = clock()
             switch activity {
             case .afterWaiting:
-                if sleeping, Self.age(now, since: waitStarted) >= realWaitNanos {
+                // Compare with the preceding busy interval, rather than a
+                // fixed millisecond: a healthy shorter frame has shorter
+                // sleeps as well. A near-immediate wake after a long busy
+                // interval remains distinguishable from real idle time.
+                let requiredWait = lastBusyNanos.map { min(realWaitNanos, max(1, $0 / 16)) }
+                    ?? realWaitNanos
+                if sleeping, Self.age(now, since: waitStarted) >= requiredWait {
                     lastRealWait = now
                     healthyWaits &+= 1
                 }
                 sleeping = false
+                lastWake = now
                 turns &+= 1
             case .beforeWaiting:
+                if let lastWake { lastBusyNanos = Self.age(now, since: lastWake) }
                 sleeping = true
                 waitStarted = now
                 lastCompletedTurn = now
