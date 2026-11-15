@@ -646,6 +646,12 @@ final class SettingsWindowHostedTests: XCTestCase {
     }
 
     func testUX2DefaultWindowKeepsSettingsContentWithinViewport() throws {
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withScrollerPreference(style) { try checkUX2DefaultWindowKeepsSettingsContentWithinViewport() }
+        }
+    }
+
+    private func checkUX2DefaultWindowKeepsSettingsContentWithinViewport() throws {
         // The viewport assertion targets General's controls; an earlier AX
         // navigation test cannot affect this fresh scratch suite.
         let suite = "SettingsUX2.\(UUID().uuidString)"
