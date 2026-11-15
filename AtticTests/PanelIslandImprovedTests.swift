@@ -221,6 +221,34 @@ final class PanelIslandImprovedTests: XCTestCase {
         XCTAssertFalse(island.isAwake)
     }
 
+    /// Hiding the island must forget the previous keyboard hold so a fresh
+    /// focus notification on reveal can wake the rest dots again.
+    func testKeyboardFocusReacquiredAfterSettleWakesIsland() {
+        let clock = Clock()
+        let island = model(clock)
+        island.setKeyboardFocused(true)
+        XCTAssertTrue(island.isAwake)
+        island.settle()
+        XCTAssertFalse(island.isAwake)
+        island.setKeyboardFocused(true)
+        XCTAssertTrue(island.isAwake, "a fresh focus after hide must expand the dots")
+    }
+
+    /// A hide must not leave a focus flag that later blocks the accepted
+    /// 300 ms pointer-leave settle, even when no focus change follows.
+    func testPointerSettlesAfterFocusedIslandIsHidden() {
+        let clock = Clock()
+        let island = model(clock)
+        let rest = CGRect(x: 100, y: 100, width: 13, height: 43)
+        let awake = CGRect(x: 100, y: 56, width: 27, height: 99)
+        island.setKeyboardFocused(true)
+        island.settle()
+        island.track(pointer: CGPoint(x: rest.midX, y: rest.midY), rest: rest, awake: awake)
+        island.track(pointer: CGPoint(x: 300, y: 120), rest: rest, awake: awake)
+        clock.advance(0.31)
+        XCTAssertFalse(island.isAwake, "a hidden focus must not hold a pointer wake")
+    }
+
     // MARK: I5, I6
 
     func testNotesIsAPageAndDrawIsAPencilAndScribble() {

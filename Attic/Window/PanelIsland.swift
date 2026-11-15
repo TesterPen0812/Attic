@@ -652,6 +652,7 @@ final class PanelIslandModel: ObservableObject {
         settleTurn &+= 1
         settleScheduled = false
         pointerNear = false
+        hasKeyboardFocusedItem = false
         if pointedItem != nil { point(atItem: nil) }
         if isAwake { isAwake = false }
     }
