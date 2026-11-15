@@ -665,7 +665,11 @@ final class NotesLibraryKeys: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self, let window = self.window, event.window === window, window.isKeyWindow,
                       let handler = self.handler else { return event }
-                return handler(event) ? nil : event
+                let consumed = handler(event)
+                #if DEBUG
+                PanelKeyStopSeam.monitorDecisions.append("library monitor key=\(event.keyCode) modifiers=\(event.modifierFlags.rawValue) consumed=\(consumed) responder=\(String(describing: window.firstResponder))")
+                #endif
+                return consumed ? nil : event
             }
         }
     }

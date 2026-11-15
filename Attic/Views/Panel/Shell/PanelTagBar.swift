@@ -340,7 +340,12 @@ struct NotesTagBar: View {
         .background(AtticSelectionMarker(cornerRadius: m.pillRadius))
         .clipShape(shape)
         .atticFocusRing(managesOwnTabOrder && state.keyFocused && !state.isOpen, cornerRadius: m.pillRadius)
-        .onChange(of: summaryFocus) { _, now in state.noteSummaryFocus(now, owner: summaryOwner) }
+        .onChange(of: summaryFocus) { _, now in
+            #if DEBUG
+            PanelKeyStopSeam.focusCallbacks.append("tag summary \(idPrefix) focus=\(String(describing: now))")
+            #endif
+            state.noteSummaryFocus(now, owner: summaryOwner)
+        }
         .onChange(of: shown) { _, now in if !now { releaseSummary() } }
         .onDisappear { releaseSummary() }
         .modifier(PanelTagKeyFocus(state: state, requests: focusRequests, seam: idPrefix, managed: managesOwnTabOrder, reachable: shown,
@@ -749,6 +754,9 @@ private struct PanelTagKeyFocus: ViewModifier {
                 arm()
             }
             .onChange(of: focused) { _, now in
+                #if DEBUG
+                PanelKeyStopSeam.focusCallbacks.append("tag key \(seam) focused=\(now) reachable=\(reachable) managed=\(managed)")
+                #endif
                 state.noteKeyFocus(now)
                 if now {
                     lender = requests
@@ -871,6 +879,9 @@ final class PanelTagBarKeys: ObservableObject {
         let action = Self.action(keyCode: event.keyCode, characters: event.charactersIgnoringModifiers,
                                  modifiers: event.modifierFlags, isOpen: state.isOpen,
                                  hasKeyboard: state.hasKeyboard, hasCursor: state.cursor != nil)
+        #if DEBUG
+        PanelKeyStopSeam.monitorDecisions.append("tag monitor key=\(event.keyCode) modifiers=\(event.modifierFlags.rawValue) action=\(action) consumed=\(action != .none)")
+        #endif
         let stops = PanelTagBarStop.stops(tags: context.tags, picks: context.picks)
         switch action {
         case .none:
@@ -922,6 +933,9 @@ final class PanelTagBarKeys: ObservableObject {
     /// (a library row is no focus target, so nothing else would).
     private func handleClick(_ event: NSEvent) {
         guard let context, let view, let window = view.window, event.window === window else { return }
+        #if DEBUG
+        PanelKeyStopSeam.monitorDecisions.append("tag click type=\(event.type) open=\(context.state.isOpen) focused=\(context.state.keyFocused) pending=\(context.state.keyFocusPending)")
+        #endif
         guard context.state.isOpen || context.state.keyFocused || (!context.managed && context.state.keyFocusPending) else { return }
         let point = view.convert(event.locationInWindow, from: nil)
         guard !view.bounds.contains(point) else { return }

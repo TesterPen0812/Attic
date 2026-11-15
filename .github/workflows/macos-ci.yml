@@ -187,6 +187,11 @@ jobs:
             testR3RevealAddsNoShellBodyPass
             testR3ThePickedSummaryButtonsShowFocusAndOwnReturnAndSpaceWithFullKeyboardAccess
             testR3TheTabDriverUsesTheApplicationsKeyboardPath
+            testR4CalendarPlusHasItsOwnNativeTabReach
+            testR4DrawPlusHasItsOwnNativeTabReach
+            testR4NativeFocusTraceRecordsBothSidesOfEveryInput
+            testR4NotesPlusHasItsOwnNativeTabReach
+            testR4OffscreenAndOnDisplayExposeTheSameCalendarAXControl
             testReturnAndSpaceOnTheNotesPlusBothOpenTheCardWithFullKeyboardAccess
             testReturnWhileThePlusHoldsTheKeyboardIsNotTheLibrarysOpen
             testTabbingAcrossThePickedTagsSummaryVisitsOnlyItsTwoButtonsWithFullKeyboardAccess

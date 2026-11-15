@@ -212,6 +212,10 @@ enum PanelKeyStopSeam {
     static var plusFocusReports: [PanelPage: (Bool) -> Void] = [:]
     static var plusActivationKeys: Set<KeyEquivalent> = []
     static var summaryFocusRings: [String: Bool] = [:]
+    /// Observations, rather than inferred ownership, for the native FKA lane.
+    static var focusCallbacks: [String] = []
+    static var monitorDecisions: [String] = []
+    static var actions: [String] = []
 }
 #endif
 
@@ -322,6 +326,9 @@ private struct PanelPlusFocus: ViewModifier {
     }
 
     private func noteFocus(_ now: Bool) {
+        #if DEBUG
+        PanelKeyStopSeam.focusCallbacks.append("plus page=\(page) focused=\(now) reachable=\(reachable) taskManaged=\(page.managesOwnTabOrder)")
+        #endif
         if now {
             lender = requests
             requests?.note(PanelPlusFocusID(), focused: true, owner: keyboardOwner)
@@ -448,6 +455,12 @@ struct PanelSharedBottomBar: View {
         // leave at once too; opacity outside a glass group cannot hide it.
         let covered = chrome.covered.contains(page)
         let taken = chrome.plusHandedOver || covered
+        let activatePlus: () -> Void = {
+            #if DEBUG
+            PanelKeyStopSeam.actions.append("plus action page=\(page) taken=\(chrome.plusHandedOver) covered=\(chrome.covered.contains(page))")
+            #endif
+            actions.plus()
+        }
         #if DEBUG
         let _ = Self.drawsPlus = look.plus != nil && !folded && !taken
         let _ = Self.drawsAgentChat = look.plus != nil && !folded && agentChat?.isConnected == true
@@ -486,10 +499,10 @@ struct PanelSharedBottomBar: View {
                             AtticRaisedButton(systemName: "plus", label: String.LocalizationValue(stringLiteral: plus.label), size: CGSize(width: side, height: side),
                                               help: plus.help, emphasisedGlyph: true,
                                               flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
-                                              action: actions.plus)
+                                              action: activatePlus)
                                 .atticDesignCorners()
                                 .modifier(PanelPlusFocus(page: page, reachable: look.shown && !taken, revealCount: revealCount, reveals: reveals,
-                                                         requests: actions.focusRequests, chrome: chrome, action: actions.plus))
+                                                         requests: actions.focusRequests, chrome: chrome, action: activatePlus))
                         }
                             .allowsHitTesting(!taken)
                             .accessibilityIdentifier(plus.identifier)
