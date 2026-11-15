@@ -395,6 +395,52 @@ final class ComposerTests: XCTestCase {
         XCTAssertFalse(state.closeForUnhandledEscape(), "A second Escape can dismiss the panel")
     }
 
+    /// The docked card and each pulled-out page have separate retained
+    /// drafts. A close or quit in one must never overwrite another card's
+    /// words; the same keys must recover them after new models are made.
+    func testMultiplePanelDraftsSurviveQuitAndClosingAnotherPanel() throws {
+        let suite = "ComposerPanelDrafts.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let locations: [PanelPage?] = [nil, .tasks, .notes, .calendar]
+        let inputs = [
+            ComposerDraftStore.Draft(title: "Docked task", writing: "Keep first", kind: "task"),
+            ComposerDraftStore.Draft(title: "Floating tasks", writing: "Keep second", kind: "task"),
+            ComposerDraftStore.Draft(title: "Floating note", writing: "Keep third", kind: "note"),
+            ComposerDraftStore.Draft(title: "Floating event", writing: "Keep fourth", kind: "event")
+        ]
+        let active = locations.map { ComposerDraftStore.forPanel(defaults: defaults, floatingPage: $0) }
+        for (index, store) in active.enumerated() { store.save(inputs[index]) }
+        let reopened = locations.map { ComposerDraftStore.forPanel(defaults: defaults, floatingPage: $0) }
+        for (index, store) in reopened.enumerated() {
+            XCTAssertEqual(store.load(), inputs[index], "relaunch kept panel \(index)'s draft")
+        }
+
+        reopened[1].save(nil) // Tasks in its own panel has been submitted.
+        XCTAssertNil(reopened[1].load())
+        for index in [0, 2, 3] {
+            XCTAssertEqual(reopened[index].load(), inputs[index], "closing one panel cannot erase panel \(index)")
+        }
+    }
+
+    /// Splitting the panels' kept words must still leave a failed Calendar
+    /// submission available for retry from whichever panel opens Calendar.
+    func testFailedCalendarEventRecoveryIsSharedBetweenDockedAndFloatingPanels() throws {
+        let suite = "ComposerFailedEventPanels.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let docked = ComposerDraftStore.forPanel(defaults: defaults, floatingPage: nil)
+        let floating = ComposerDraftStore.forPanel(defaults: defaults, floatingPage: .calendar)
+        let event = ComposerDraftStore.FailedEvent(title: "Retry calendar event", writing: "Unsaved details",
+                                                   day: nil, length: 60, calendarID: "test-calendar")
+        docked.saveFailedEvents([event])
+        XCTAssertEqual(floating.loadFailedEvents(), [event], "a pulled-out Calendar can recover the failed event")
+        floating.saveFailedEvents([])
+        XCTAssertTrue(docked.loadFailedEvents().isEmpty, "a successful retry clears the shared backup")
+    }
+
     func testAnInFlightEventCreatesOnceAndLeavesAReopenedDraftAlone() async throws {
         let staged = expectation(description: "event proof staged off main")
         let release = DispatchSemaphore(value: 0)

@@ -198,6 +198,29 @@ final class PanelIslandImprovedTests: XCTestCase {
         XCTAssertFalse(island.isAwake, "the island settles 300 ms after exit even when input continues outside")
     }
 
+    /// Keyboard navigation can put focus on an island button while the
+    /// pointer is elsewhere. It must not turn into an invisible dot while
+    /// the key-focused button is still the target of Return or Space.
+    func testFocusedIslandItemStaysExpandedUntilKeyboardFocusLeaves() {
+        let clock = Clock()
+        let island = model(clock)
+        let rest = CGRect(x: 100, y: 100, width: 13, height: 43)
+        let awake = CGRect(x: 100, y: 56, width: 27, height: 99)
+
+        island.setKeyboardFocused(true)
+        XCTAssertTrue(island.isAwake)
+        for index in 0..<360 {
+            island.track(pointer: CGPoint(x: 300 + index, y: 120), rest: rest, awake: awake)
+            clock.advance(0.01)
+            XCTAssertTrue(island.isAwake, "focused item collapsed after off-island pointer move \(index)")
+        }
+        island.setKeyboardFocused(false)
+        clock.advance(0.29)
+        XCTAssertTrue(island.isAwake, "ordinary 300 ms pointer-leave delay still applies")
+        clock.advance(0.02)
+        XCTAssertFalse(island.isAwake)
+    }
+
     // MARK: I5, I6
 
     func testNotesIsAPageAndDrawIsAPencilAndScribble() {

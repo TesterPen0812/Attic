@@ -28,6 +28,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     let uiState = PanelUIState()
     let calendarPageState = CalendarPageState()
     let toasts = PanelToastCenter()
+    private let composerState = PanelComposerState()
     private let hostingView: AtticPanelHostingView
     private let chrome = PanelChromeInteractionState()
     private let store: TaskStore
@@ -64,7 +65,8 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
                 // Its own page state (its own Search and drafts), the
                 // remembered views shared with the docked panel's.
                 tasksPageState: TasksPageState(memory: deps.tasksMemory),
-                calendarPageState: calendarPageState),
+                calendarPageState: calendarPageState,
+                composerState: composerState),
             panelCornerRadius: deps.settings.panelCornerSize,
             dockedCorner: deps.settings.corner,
             chromeInteractionState: chrome)
@@ -104,6 +106,10 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in self?.onPressed?() }
+        panel.onUnhandledEscape = { [weak self] in
+            guard let self, self.panel.isVisible else { return }
+            _ = self.composerState.closeForUnhandledEscape()
+        }
         panel.onUnhandledUndo = { [weak self] redo in
             guard let self else { return }
             AtticPanelController.performUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
@@ -192,6 +198,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     func close() {
         fadeGeneration += 1
         isHiding = false
+        composerState.model?.saveKeptDraft()
         hostingView.cancelActiveInteraction(reason: .explicitHide)
         toasts.dismiss()
         panel.orderOut(nil)
@@ -226,6 +233,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
 
     #if DEBUG
     var hostingViewForTesting: AtticPanelHostingView { hostingView }
+    var composerStateForTesting: PanelComposerState { composerState }
     var calendarEventRowsOverrideForTesting: CalendarEventRowState?
     #endif
 

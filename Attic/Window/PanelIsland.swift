@@ -491,6 +491,8 @@ final class PanelIslandModel: ObservableObject {
     private var settleTurn = 0
     private var settleScheduled = false
     private var labelHiddenAt: Date?
+    /// Whether an island control currently owns keyboard focus.
+    private var hasKeyboardFocusedItem = false
     /// Whether the pointer was within the wake zone at its last move.
     private var pointerNear = false
     /// A pull off the island is under way: it stays awake.
@@ -599,6 +601,12 @@ final class PanelIslandModel: ObservableObject {
         onOpenSettings()
     }
 
+    func setKeyboardFocused(_ focused: Bool) {
+        guard hasKeyboardFocusedItem != focused else { return }
+        hasKeyboardFocusedItem = focused
+        if focused { wake() } else { settleIfAway() }
+    }
+
     // MARK: Resting and waking (D4)
 
     func wake() {
@@ -625,14 +633,16 @@ final class PanelIslandModel: ObservableObject {
 
     /// Settles in 300 ms unless something holds it awake by then.
     private func settleIfAway() {
-        guard isAwake, !pointerNear, !isSnapTarget, !isPulling, !settleScheduled else { return }
+        guard isAwake, !pointerNear, !isSnapTarget, !isPulling,
+              !hasKeyboardFocusedItem, !settleScheduled else { return }
         settleScheduled = true
         settleTurn &+= 1
         let turn = settleTurn
         schedule(PanelIslandLayout.settleDelay) { [weak self] in
             guard let self, self.settleTurn == turn else { return }
             self.settleScheduled = false
-            guard !self.pointerNear, !self.isSnapTarget, !self.isPulling else { return }
+            guard !self.pointerNear, !self.isSnapTarget, !self.isPulling,
+                  !self.hasKeyboardFocusedItem else { return }
             self.settle()
         }
     }
@@ -730,7 +740,7 @@ struct PanelIslandView: View {
                 .accessibilityHidden(true)
         }
         .padding(L.windowMargin)
-        .onChange(of: focused) { _, now in if now != nil { model.wake() } }
+        .onChange(of: focused) { _, now in model.setKeyboardFocused(now != nil) }
         .accessibilityElement(children: isStandIn ? .ignore : .contain)
         .accessibilityLabel(String(localized: "Pages"))
         .accessibilityIdentifier(isStandIn ? "" : "panel-section-picker")

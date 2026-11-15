@@ -101,6 +101,17 @@ struct ComposerDraftStore {
 
     let defaults: UserDefaults
     var key = "composerKeptDraft"
+    /// Failed Calendar writes are recoverable from any panel. Their backup
+    /// stays shared even though each panel now owns its own unsent words.
+    var failedEventsKey: String? = nil
+
+    /// Each pulled-out page has its own + card. Its saved words must not
+    /// replace the docked card's draft or another pulled-out page's draft.
+    /// The docked key stays unchanged for existing saved drafts.
+    static func forPanel(defaults: UserDefaults, floatingPage: PanelPage?) -> Self {
+        Self(defaults: defaults, key: floatingPage.map { "composerKeptDraft.floating.\($0.rawValue)" }
+            ?? "composerKeptDraft", failedEventsKey: "composerKeptDraft.failedEvents")
+    }
 
     func load() -> Draft? {
         guard let data = defaults.data(forKey: key) else { return nil }
@@ -117,12 +128,12 @@ struct ComposerDraftStore {
     }
 
     func loadFailedEvents() -> [FailedEvent] {
-        guard let data = defaults.data(forKey: key + ".failedEvents") else { return [] }
+        guard let data = defaults.data(forKey: failedEventsKey ?? key + ".failedEvents") else { return [] }
         return (try? JSONDecoder().decode([FailedEvent].self, from: data)) ?? []
     }
 
     func saveFailedEvents(_ events: [FailedEvent]) {
-        let storageKey = key + ".failedEvents"
+        let storageKey = failedEventsKey ?? key + ".failedEvents"
         guard !events.isEmpty else { defaults.removeObject(forKey: storageKey); return }
         guard let data = try? JSONEncoder().encode(events) else { return }
         defaults.set(data, forKey: storageKey)

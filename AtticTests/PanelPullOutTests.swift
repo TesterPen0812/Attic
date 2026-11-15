@@ -166,6 +166,69 @@ final class PanelPullOutTests: XCTestCase {
         XCTAssertTrue(PanelPullOutState.restored([], workAreas: [visible]).floating.isEmpty)
         XCTAssertTrue(PanelPullOutState.decode(Data("junk".utf8)).isEmpty)
     }
+
+    /// Generated pull/dock/raise/pin/move sequences with a separate oracle.
+    /// Every step verifies the page routes and the saved floating stack;
+    /// periodic reloads simulate quitting and rebuilding state from disk.
+    func testSeededPanelSequencesRetainOneDockedPageAndSurviveRelaunch() throws {
+        let pages = PanelPage.allCases
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 875)
+        for seed in [UInt64(0xC0FFEE), 0xF005BA11, 0x12AB56CD, 0xBEEFFACE, 0x5EED2026] {
+            var random = seed
+            func next() -> UInt64 {
+                random = random &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                return random >> 32
+            }
+            var state = PanelPullOutState()
+            var expected: [PanelPullOutState.Floating] = []
+            for step in 0..<420 {
+                let page = pages[Int(next() % UInt64(pages.count))]
+                let frame = CGRect(x: 50 + CGFloat(next() % 800), y: 30 + CGFloat(next() % 250),
+                                   width: 340, height: 560)
+                let pinned = next() % 2 == 0
+                switch next() % 6 {
+                case 0:
+                    state.dockedShows(page)
+                case 1:
+                    let shouldPull = !expected.contains(where: { $0.page == page }) && expected.count < pages.count - 1
+                    XCTAssertEqual(state.pullOut(page, at: frame, pinned: pinned), shouldPull, "seed \(seed), step \(step)")
+                    if shouldPull { expected.append(.init(page: page, frame: frame, isPinned: pinned)) }
+                case 2:
+                    state.raise(page)
+                    if let index = expected.firstIndex(where: { $0.page == page }) {
+                        expected.append(expected.remove(at: index))
+                    }
+                case 3:
+                    state.setPinned(page, pinned)
+                    if let index = expected.firstIndex(where: { $0.page == page }) { expected[index].isPinned = pinned }
+                case 4:
+                    state.move(page, to: frame)
+                    if let index = expected.firstIndex(where: { $0.page == page }) { expected[index].frame = frame }
+                default:
+                    state.dockIn(page)
+                    expected.removeAll { $0.page == page }
+                }
+                let context = "seed \(seed), step \(step)"
+                XCTAssertEqual(state.floating, expected, context)
+                XCTAssertLessThan(state.floating.count, pages.count, context)
+                XCTAssertEqual(state.outPages, Set(expected.map(\.page)), context)
+                XCTAssertEqual(state.hidingWithDocked, expected.filter { !$0.isPinned }.map(\.page), context)
+                for item in pages {
+                    XCTAssertEqual(state.route(for: item), expected.contains(where: { $0.page == item }) ? .raise : .switchDocked,
+                                   context)
+                    if !state.isOut(item), expected.count < pages.count - 1 {
+                        XCTAssertNotNil(state.fallback(for: item), context)
+                    }
+                }
+                let saved = try XCTUnwrap(state.encoded())
+                XCTAssertEqual(PanelPullOutState.decode(saved), expected, context)
+                if step.isMultiple(of: 43) {
+                    state = PanelPullOutState.restored(PanelPullOutState.decode(saved), workAreas: [screen])
+                    XCTAssertEqual(state.floating, expected, "\(context): restored")
+                }
+            }
+        }
+    }
 }
 
 /// The pull-out with real panels in the invisible test host.
@@ -604,6 +667,74 @@ final class PanelPullOutHostedTests: XCTestCase {
             spin(0.8)
             XCTAssertNotNil(element("tasks-find", in: host), "its own Search")
             XCTAssertNil(element("calendar-search", in: docked), "the docked panel's stays shut")
+        }
+    }
+
+    /// The panel gets Escape when the keyboard has moved from the composer
+    /// onto its chrome. A floating page must close its own card, just as the
+    /// docked page does, without changing the docked page or losing a draft.
+    func testFloatingPanelEscapeFromChromeClosesItsComposer() throws {
+        try withRig { rig in
+            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
+            let host = floating.hostingViewForTesting
+            let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+            let previous = NSApp.accessibilityAttributeValue(enhanced)
+            NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+            defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+            spin(0.4)
+
+            let plus = try XCTUnwrap(elements(host).first {
+                ($0.accessibilityIdentifier?() ?? "") == "tasks-new-task"
+            })
+            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
+            spin(0.4)
+            func cardOpen() -> Bool {
+                elements(host).contains { ($0.accessibilityIdentifier?() ?? "") == "composer-card" }
+            }
+            XCTAssertTrue(cardOpen(), "the floating page owns an open composer")
+            XCTAssertTrue(floating.panel.makeFirstResponder(host), "Escape comes from the panel chrome")
+            let escape = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 1,
+                windowNumber: floating.panel.windowNumber, context: nil,
+                characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                isARepeat: false, keyCode: 53))
+            floating.panel.keyDown(with: escape)
+            spin(0.4)
+            XCTAssertFalse(cardOpen(), "unhandled Escape folds the floating panel's composer")
+            XCTAssertTrue(floating.isVisible, "the composer gets first refusal; the panel stays")
+            XCTAssertEqual(rig.state.selectedSection, .notes, "the docked page is unchanged")
+        }
+    }
+
+    /// Closing a pulled-out window to dock it must save its separate + draft.
+    /// Pulling the same page out again recreates the window and composer.
+    func testDockingFloatingPagePreservesUnsubmittedDraftAcrossNewWindow() throws {
+        try withRig { rig in
+            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
+            let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+            let previous = NSApp.accessibilityAttributeValue(enhanced)
+            NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+            defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+            spin(0.4)
+            let plus = try XCTUnwrap(elements(floating.hostingViewForTesting).first {
+                ($0.accessibilityIdentifier?() ?? "") == "tasks-new-task"
+            })
+            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
+            spin(0.4)
+            let draft = try XCTUnwrap(floating.composerStateForTesting.model)
+            draft.tasks.addBar = TaskAddBarText(text: "Unsubmitted floating title")
+            draft.writing = "Writing that must not vanish"
+
+            XCTAssertTrue(rig.pullOut.dockIn(.tasks))
+            spin(until: { rig.pullOut.panel(for: .tasks) == nil })
+            XCTAssertNil(rig.pullOut.panel(for: .tasks))
+            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let reopened = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
+            spin(until: { reopened.composerStateForTesting.model != nil })
+            XCTAssertEqual(reopened.composerStateForTesting.model?.tasks.addBar.text, "Unsubmitted floating title")
+            XCTAssertEqual(reopened.composerStateForTesting.model?.writing, "Writing that must not vanish")
         }
     }
 
