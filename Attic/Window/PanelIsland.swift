@@ -741,7 +741,13 @@ struct PanelIslandView: View {
                 .accessibilityHidden(true)
         }
         .padding(L.windowMargin)
-        .onChange(of: focused) { _, now in model.setKeyboardFocused(now != nil) }
+        .onChange(of: focused) { _, now in
+            model.setKeyboardFocused(now != nil && focusTracker.isKeyboardDriving
+                                     && NSApp.keyWindow is PanelIslandWindow)
+        }
+        .onChange(of: focusTracker.isKeyboardDriving) { _, driving in
+            if !driving { model.setKeyboardFocused(false) }
+        }
         .accessibilityElement(children: isStandIn ? .ignore : .contain)
         .accessibilityLabel(String(localized: "Pages"))
         .accessibilityIdentifier(isStandIn ? "" : "panel-section-picker")
@@ -1127,6 +1133,7 @@ final class PanelIslandWindow: NSPanel {
     /// The island can take the keyboard (Full Keyboard Access, VoiceOver);
     /// the label window never can.
     var allowsKey = false
+    var onResignKey: (() -> Void)?
     /// The left button's presses, drags and releases, in screen points,
     /// before SwiftUI sees them (pulling a page off the island).
     var onPointer: ((PanelIslandPointer) -> Void)?
@@ -1135,6 +1142,11 @@ final class PanelIslandWindow: NSPanel {
     private var pressing = false
     private var trackedRelease = false
     private var tracingIdlePress = false
+
+    override func resignKey() {
+        super.resignKey()
+        onResignKey?()
+    }
 
     override func nextEvent(matching mask: NSEvent.EventTypeMask) -> NSEvent? {
         let event = super.nextEvent(matching: mask)
@@ -1369,6 +1381,9 @@ final class PanelIslandWindows {
         self.standIn = standIn
         island.onIdleTraceContext = { [weak self] in self?.onIdleTraceContext?() }
         island.onPointer = { [weak self] pointer in self?.handlePointer(pointer) }
+        // SwiftUI may retain @FocusState after another window becomes key.
+        // That old focus must not keep the island awake away from the pointer.
+        island.onResignKey = { [weak model] in model?.setKeyboardFocused(false) }
     }
 
     /// The panel starts to move: the stand-in in its motion layer takes

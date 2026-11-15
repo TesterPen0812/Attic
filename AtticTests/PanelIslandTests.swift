@@ -1068,6 +1068,113 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    /// A focused island control must stop holding the capsule open once
+    /// another window takes the keyboard, even if SwiftUI retains focus.
+    func testKeyFocusDoesNotHoldIslandAwakeAfterWindowResignsKey() throws {
+        try requireIslandKeyboard()
+        try withController { controller, state, panel in
+            let windows = controller.islandWindowsForTesting
+            try focusIslandButton(windows, keyboard: state.keyboardFocus)
+            panel.makeKey()
+            spin(until: { panel.isKeyWindow && !windows.island.isKeyWindow })
+            XCTAssertFalse(windows.island.isKeyWindow)
+            trackAway(windows)
+            spin(0.35)
+            XCTAssertFalse(windows.model.isAwake, "an unfocused window cannot hold the island open")
+        }
+    }
+
+    /// The local Air does not enable Full Keyboard Access. Drive the same
+    /// already-focused model through a real window-key resignation without
+    /// changing that machine's global keyboard settings.
+    func testResigningKeyIslandWindowReleasesItsKeyboardFocusHold() throws {
+        try requireIslandKeyboard()
+        try withController { controller, state, panel in
+            let windows = controller.islandWindowsForTesting
+            NSApp.activate(ignoringOtherApps: true)
+            windows.island.makeKey()
+            spin(until: { windows.island.isKeyWindow })
+            XCTAssertTrue(windows.island.isKeyWindow)
+            state.keyboardFocus.noteKeyboardNavigation()
+            windows.model.setKeyboardFocused(true)
+            XCTAssertTrue(windows.model.isAwake)
+            panel.makeKey()
+            spin(until: { panel.isKeyWindow && !windows.island.isKeyWindow })
+            XCTAssertTrue(panel.isKeyWindow)
+            trackAway(windows)
+            spin(0.35)
+            XCTAssertFalse(windows.model.isAwake, "resigning key must release the old keyboard hold")
+        }
+    }
+
+    /// The hunt's original island claim: pointer leave must not collapse a
+    /// Button still reached by Tab in the key island window.
+    func testTabFocusedIslandButtonStaysAwakeWithPointerAway() throws {
+        try requireIslandKeyboard()
+        try withController { controller, state, _ in
+            let windows = controller.islandWindowsForTesting
+            try focusIslandButton(windows, keyboard: state.keyboardFocus)
+            trackAway(windows)
+            spin(0.35)
+            XCTAssertTrue(windows.island.isKeyWindow)
+            XCTAssertTrue(windows.model.isAwake, "the focused island Button must not collapse")
+        }
+    }
+
+    /// After hide/reveal, Tab changes the SwiftUI focus binding again and
+    /// must wake the island's real Buttons from their resting dots.
+    func testHiddenFocusedIslandCanWakeWithNextTabOnReveal() throws {
+        try requireIslandKeyboard()
+        try withController { controller, state, panel in
+            let windows = controller.islandWindowsForTesting
+            try focusIslandButton(windows, keyboard: state.keyboardFocus)
+            windows.hide()
+            XCTAssertFalse(windows.model.isAwake)
+            windows.show(attachedTo: panel)
+            windows.island.makeKey()
+            spin(until: { windows.island.isKeyWindow })
+            state.keyboardFocus.noteKeyboardNavigation()
+            sendIslandTab(to: windows.island)
+            spin(0.1)
+            XCTAssertTrue(windows.model.isAwake, "Tab after hide must reveal the focused control")
+        }
+    }
+
+    private func requireIslandKeyboard() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
+    }
+
+    private func sendIslandTab(to window: NSWindow) {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                    timestamp: ProcessInfo.processInfo.systemUptime,
+                                    windowNumber: window.windowNumber, context: nil,
+                                    characters: "\t", charactersIgnoringModifiers: "\t",
+                                    isARepeat: false, keyCode: 48)!
+        NSApp.sendEvent(event)
+    }
+
+    private func focusIslandButton(_ windows: PanelIslandWindows, keyboard: AtticKeyboardFocusTracker) throws {
+        try XCTSkipUnless(NSApp.isFullKeyboardAccessEnabled,
+                          "native island Button Tab traversal requires Full Keyboard Access (CI only)")
+        let window = windows.island
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKey()
+        spin(until: { window.isKeyWindow })
+        XCTAssertTrue(window.isKeyWindow, "the island must own keyboard navigation")
+        XCTAssertFalse(windows.model.isAwake, "test starts on the resting dots")
+        keyboard.noteKeyboardNavigation()
+        for _ in 0..<8 where !windows.model.isAwake {
+            sendIslandTab(to: window)
+            spin(0.05)
+        }
+        XCTAssertTrue(windows.model.isAwake, "a real Tab must reach the onChange focus binding")
+    }
+
+    private func trackAway(_ windows: PanelIslandWindows) {
+        windows.model.track(pointer: CGPoint(x: windows.islandFrame.maxX + 100, y: windows.islandFrame.midY),
+                            rest: windows.restFrame, awake: windows.islandFrame)
+    }
+
     /// The stand-in (in the panel's own window) and the island window draw
     /// the same glass state at every swap, key and not key.
     func testTheStandInAndTheIslandDrawTheSameGlassStateAtEverySwap() throws {
@@ -1264,10 +1371,10 @@ final class PanelIslandTests: XCTestCase {
 
     // MARK: Helpers
 
-    private func withController(configure: (AppSettings) -> Void = { _ in },
+    private func withController(reduceMotion: Bool = false, configure: (AppSettings) -> Void = { _ in },
                                 _ body: @MainActor (AtticPanelController, PanelUIState, AtticPanel) throws -> Void) throws {
         // GitHub's runners turn both on; these tests state them.
-        AtticMotionPreference.systemReduceMotionOverride = false
+        AtticMotionPreference.systemReduceMotionOverride = reduceMotion
         AtticTransparencySeam.systemOverride = false
         defer {
             AtticMotionPreference.systemReduceMotionOverride = nil
