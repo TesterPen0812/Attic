@@ -156,6 +156,26 @@ final class AdaptiveTasksTests: XCTestCase {
         }
     }
 
+    /// Find's cross-tab counts need matching roots, never another page's
+    /// ordered rows. Keep that cold work out of the first-key budget.
+    func testElsewhereCountsDoNotBuildOtherTabsOrderedSnapshots() throws {
+        let (store, model) = try makeModel()
+        _ = store.commit([TaskDraft(title: "Launch now"),
+                          TaskDraft(title: "Launch later", status: .backlog)])
+        let done = try XCTUnwrap(store.create(title: "Launch finished"))
+        XCTAssertTrue(model.library.completeTask(done.id).isApplied)
+        _ = model.rows(for: .now) // The panel is shown before Find receives a key.
+        let builds = store.scopeSnapshotBuildCount
+        print("CI7_ELSEWHERE_COUNTS pid=\(ProcessInfo.processInfo.processIdentifier) baseline=\(builds)")
+        for tab in TasksTab.allCases {
+            model.setSearchQuery("launch", for: tab)
+            let expected = TasksTab.allCases.filter { $0 != tab }.map { TasksElsewhereCount(tab: $0, count: 1) }
+            XCTAssertEqual(model.searchMatchesElsewhere(from: tab), expected)
+            XCTAssertEqual(store.scopeSnapshotBuildCount, builds,
+                           "A cross-tab count must not build and sort an unrequested page")
+        }
+    }
+
     /// Now's Find counts Done's matches through the Done log's index, so
     /// Now's first key still shows at once on 5,000 finished tasks: the
     /// count's median stays in Done's own 16 ms query budget.
@@ -242,7 +262,15 @@ final class AdaptiveTasksTests: XCTestCase {
             let plus = try XCTUnwrap(frame(of: "tasks-new-task", in: host))
             XCTAssertEqual(one.minX, insets.leading, accuracy: 0.5)
             let key = try XCTUnwrap(frame(of: "tasks-tag-bar-key", in: host))
-            XCTAssertLessThan(one.width - key.width, 100, "All and #launch after the open \"#\": a short bar")
+            let all = try XCTUnwrap(frame(of: "tasks-tag-bar-all", in: host))
+            let launch = try XCTUnwrap(frame(of: "tasks-tag-bar-launch", in: host))
+            let divider = all.minX - key.maxX
+            print("CI7_TAG_GEOMETRY bar=\(one.width) key=\(key.width) divider=\(divider) trailing=\(one.maxX - launch.maxX)")
+            XCTAssertEqual(divider, 6 + AtticHairline.width, accuracy: 0.5,
+                           "Accepted 13 Nov 1A: the divider and its two 3 pt gaps")
+            XCTAssertEqual(one.maxX - launch.maxX, 3, accuracy: 0.5,
+                           "the bar ends at its last pill's prescribed inset")
+            XCTAssertLessThan(one.width - key.width - divider, 100, "All and #launch after the open \"#\": a short bar")
             _ = store.commit([TaskDraft(title: "Two", tags: ["team"])])
             spin(0.6)
             let two = try XCTUnwrap(frame(of: "tasks-tag-bar", in: host))

@@ -135,6 +135,12 @@ final class TaskNotePageModel: ObservableObject {
     private(set) var lastFocusedRowID: UUID?
 
     private var observations: Set<AnyCancellable> = []
+    private var storeRefreshQueued = false
+    #if DEBUG
+    private(set) var refreshCountForTesting = 0
+
+    func resetRefreshCountForTesting() { refreshCountForTesting = 0 }
+    #endif
 
     init(taskID: UUID, store: TaskStore, library: AtticLibrary, history: WorkspaceHistory,
          defaults: UserDefaults? = .standard, parser: TaskTextParser = TaskTextParser(),
@@ -161,7 +167,21 @@ final class TaskNotePageModel: ObservableObject {
         // Only this task's family touches the page (§ 9: a task change
         // touches only its row, cards, head and block).
         store.$revision.dropFirst().sink { [weak self] _ in
-            DispatchQueue.main.async { self?.refresh() }
+            guard let self else { return }
+            if let changed = self.store.revisionChangedTaskIDs {
+                let hasAffectedChild = self.rows.contains { changed.contains($0.id) }
+                let acquiredChild = changed.contains { id in
+                    self.store.task(withID: id)?.parentID == self.taskID
+                }
+                guard changed.contains(self.taskID) || hasAffectedChild || acquiredChild else { return }
+            }
+            guard !self.storeRefreshQueued else { return }
+            self.storeRefreshQueued = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.storeRefreshQueued else { return }
+                self.storeRefreshQueued = false
+                self.refresh()
+            }
         }.store(in: &observations)
         store.fileMigration.$statuses.sink { [weak self] _ in
             DispatchQueue.main.async { self?.refreshEarlierFiles() }
@@ -182,6 +202,7 @@ final class TaskNotePageModel: ObservableObject {
 
     func suspend() {
         observations.removeAll()
+        storeRefreshQueued = false
         // A reveal for the moment ends with the page (C1 review P2); a
         // section remount does not suspend, so it keeps the reveal. Fields
         // were resolved before the page closed.
@@ -230,6 +251,9 @@ final class TaskNotePageModel: ObservableObject {
 
     /// Re-reads the task and its subtasks. Publishes only what changed.
     func refresh(animated: Bool = false) {
+        #if DEBUG
+        refreshCountForTesting += 1
+        #endif
         guard !history.hasPendingPublication || !hasFieldDrafts else { return }
         // A task moved to the Done log still has its page (`p3-22` row 3).
         let task = store.listedTask(withID: taskID)
@@ -909,9 +933,19 @@ final class TaskNotePageModel: ObservableObject {
         pendingReopen = nil
         guard reopenTask() else { return }
         switch request {
-        case let .toggle(id): _ = toggle(id)
+        case let .toggle(id): _ = finishDeferredUncheck(id)
         case .addSubtask: _ = commitNewSubtask()
         }
+    }
+
+    /// The reopen operation may already have unchecked a child completed
+    /// with its parent. This is a requested result, not another relative tap.
+    @discardableResult
+    private func finishDeferredUncheck(_ id: UUID) -> Bool {
+        guard let child = store.listedTask(withID: id) else { return report(.taskGone) }
+        guard child.status == .done else { return true }
+        let outcome = AtticSounds.play(.undone, after: library.updateTask(id, status: .todo, in: historyID))
+        return settle(outcome) { [weak self] in _ = self?.finishDeferredUncheck(id) }
     }
 
     /// Completing from the head (circle, ⇧⌘↩): the toast names the scope

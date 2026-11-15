@@ -1153,6 +1153,66 @@ final class NotesFormatControlsTests: XCTestCase {
 
     // MARK: Links
 
+    func testBG24EditingAnUnchangedInternalLinkNeverSelectsAnotherMatchingNote() {
+        let model = NoteFormatCardModel()
+        let otherIDs = (0..<4).map { _ in UUID() }
+        let targetID = UUID()
+        let originalURL = NoteLinkPolicy.noteURL(targetID)
+        model.noteCandidates = {
+            otherIDs.map { NoteLinkCandidate(id: $0, title: "Plan") }
+                + [NoteLinkCandidate(id: targetID, title: "Plan")]
+        }
+        var committed: String?
+        model.onCommitLink = { committed = $0; return true }
+        model.openLink(url: originalURL)
+        XCTAssertEqual(model.linkText, "Plan")
+        model.submitLink()
+        XCTAssertEqual(committed, originalURL, "existing destination wins over capped suggestions")
+
+        // Seed 20261113: repeat open/commit with 128 changing suggestion
+        // orders; neither label equality nor candidate rank owns the link.
+        let candidates = otherIDs.map { NoteLinkCandidate(id: $0, title: "Plan") }
+            + [NoteLinkCandidate(id: targetID, title: "Plan")]
+        for step in 0..<128 {
+            let offset = (20261113 + step * 3) % candidates.count
+            model.noteCandidates = { Array(candidates[offset...]) + Array(candidates[..<offset]) }
+            committed = nil
+            model.openLink(url: originalURL)
+            model.submitLink()
+            XCTAssertEqual(committed, originalURL, "candidate shuffle \(step)")
+        }
+    }
+
+    func testBG24ReturnCommitsTheSuggestionHighlightedByHoverNotTheOpenedLink() {
+        let model = NoteFormatCardModel()
+        let ideas = UUID(), ideasTwo = UUID()
+        model.noteCandidates = {
+            [NoteLinkCandidate(id: ideas, title: "Ideas"), NoteLinkCandidate(id: ideasTwo, title: "Ideas 2")]
+        }
+        var committed: String?
+        model.onCommitLink = { committed = $0; return true }
+        model.openLink(url: NoteLinkPolicy.noteURL(ideas))
+        XCTAssertEqual(model.linkSuggestions.map(\.id), [ideas, ideasTwo])
+        // The suggestion rows set the index directly on hover.
+        model.linkSuggestionIndex = 1
+        model.submitLink()
+        XCTAssertEqual(committed, NoteLinkPolicy.noteURL(ideasTwo),
+                       "Return commits the row the person is pointing at, as the highlight and VoiceOver say")
+    }
+
+    func testBG24EditingAnUnchangedInternalLinkNamedLikeAWebsiteKeepsItsUUID() {
+        let model = NoteFormatCardModel()
+        let targetID = UUID()
+        let originalURL = NoteLinkPolicy.noteURL(targetID)
+        model.noteCandidates = { [NoteLinkCandidate(id: targetID, title: "example.com")] }
+        var committed: String?
+        model.onCommitLink = { committed = $0; return true }
+        model.openLink(url: originalURL)
+        XCTAssertTrue(model.linkSuggestions.isEmpty, "web-shaped note titles suppress suggestions")
+        model.submitLink()
+        XCTAssertEqual(committed, originalURL, "the title must not become an https URL")
+    }
+
     func testAuditB6LinkFieldOffersNoteTitlesAndStoresTheSelectedIdentity() throws {
         AtticMotionPreference.systemReduceMotionOverride = true
         AtticTransparencySeam.systemOverride = false

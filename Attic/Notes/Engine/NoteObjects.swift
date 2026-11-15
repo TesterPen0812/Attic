@@ -68,11 +68,15 @@ final class NoteChecklistAttachment: NoteObjectAttachment {
 
 /// A structural rule occupying a whole paragraph, with stable identity.
 final class NoteDividerAttachment: NoteObjectAttachment {
+    let extras: [String: NoteJSON]
     /// The rule's thickness: 1 pt (R14, Codex's divider; Increase Contrast
     /// raises its ink, not its weight).
     static func ruleThickness(increaseContrast: Bool) -> CGFloat { AtticNoteType.dividerThickness }
 
-    override init(objectID: UUID = UUID()) { super.init(objectID: objectID) }
+    init(objectID: UUID = UUID(), extras: [String: NoteJSON] = [:]) {
+        self.extras = extras
+        super.init(objectID: objectID)
+    }
     override var isBlockObject: Bool { true }
     override var accessibilityDescription: String { String(localized: "Divider") }
 

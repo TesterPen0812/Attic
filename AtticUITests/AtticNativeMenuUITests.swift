@@ -79,8 +79,8 @@ final class AtticNativeMenuUITests: XCTestCase {
         wait(for: [XCTNSPredicateExpectation(predicate: changed, object: nil)], timeout: 5)
     }
 
-    /// A pop-up row opens Attic's own opaque list (round 13), not a system
-    /// menu: one button for VoiceOver, its choices as labelled entries.
+    /// Accepted 12 Nov evening moves picker cards onto system-menu glass.
+    /// The opener stays one button for VoiceOver, with labelled choices.
     func testThePopUpRowOpensItsListWithItsChoices() throws {
         let row = app.descendants(matching: .any)["menu-lab-popup"]
         XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "menu-lab-popup").count, 1, "The row is one element for VoiceOver")
@@ -90,7 +90,7 @@ final class AtticNativeMenuUITests: XCTestCase {
         let glass = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Glass")).firstMatch
         XCTAssertTrue(glass.waitForExistence(timeout: 5), "The pop-up row opens a list with its choices")
         XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Solid")).firstMatch.exists)
-        glass.click()
+        clickGlassMenuItem(glass, titled: "Glass", in: app)
         let changed = NSPredicate { _, _ in self.state().hasSuffix("glass") }
         wait(for: [XCTNSPredicateExpectation(predicate: changed, object: nil)], timeout: 5)
     }

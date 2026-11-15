@@ -1,5 +1,7 @@
 import AppKit
+import Darwin
 import Foundation
+import SwiftData
 import SwiftUI
 
 /// What the "+" card makes (Accepted 2026-10-29, "The '+' card").
@@ -87,6 +89,7 @@ struct ComposerDraftStore {
         var title: String
         var writing: String
         var kind: String
+        var recoveringTaskID: UUID? = nil
     }
 
     /// The shown owner and the other owner's words travel together. An empty
@@ -106,15 +109,83 @@ struct ComposerDraftStore {
         var calendarID: String?
     }
 
-    let defaults: UserDefaults
-    var key = "composerKeptDraft"
+    /// A failed task must outlive a newer draft and a panel relaunch. The
+    /// queued words and picked values are separate from the active card.
+    struct FailedTask: Codable, Equatable {
+        enum Origin: Codable, Equatable {
+            case tasks(Int)
+            case calendar(DueDay)
+        }
 
-    func load() -> Draft? {
-        guard let kept = loadKeptDrafts() else { return nil }
-        return kept.shown.title.isEmpty && kept.shown.writing.isEmpty ? kept.aside : kept.shown
+        var id: UUID
+        var title: String
+        var writing: String
+        var pickedDay: DueDay?
+        var pickedPriority: TaskPriority?
+        var pickedTags: [String]
+        var status: TaskStatus
+        var origin: Origin
+
+        init(id: UUID, title: TaskAddBarText, writing: String, status: TaskStatus, page: ComposerPage) {
+            self.id = id
+            self.title = title.text
+            self.writing = writing
+            pickedDay = title.picked.day
+            pickedPriority = title.picked.priority
+            pickedTags = title.picked.tags
+            self.status = status
+            switch page {
+            case let .tasks(tab): origin = .tasks(tab.rawValue)
+            case let .calendar(day): origin = .calendar(day)
+            case .notes: origin = .tasks(TasksTab.now.rawValue)
+            }
+        }
+
+        var page: ComposerPage {
+            switch origin {
+            case let .tasks(raw): .tasks(TasksTab(rawValue: raw) ?? .now)
+            case let .calendar(day): .calendar(selected: day)
+            }
+        }
+
+        var addBar: TaskAddBarText {
+            var result = TaskAddBarText(text: title)
+            result.picked.day = pickedDay
+            result.picked.priority = pickedPriority
+            result.picked.tags = pickedTags
+            return result
+        }
     }
 
-    func loadKeptDrafts() -> KeptDrafts? {
+    let defaults: UserDefaults
+    var key = "composerKeptDraft"
+    /// Production supplies a sidecar next to its local store. Tests must
+    /// explicitly supply a temporary URL; nil retains the legacy test seam.
+    var taskRecoveryURL: URL? = nil
+    var persistTaskRecovery: (Data, URL) throws -> Void = ComposerDraftStore.writeTaskRecovery
+
+    private static func writeTaskRecovery(_ data: Data, _ url: URL) throws {
+        // The store directory already exists. Atomic replacement plus both
+        // fsyncs acknowledges process-crash durability before clearing text.
+        try data.write(to: url, options: .atomic)
+        for target in [url, url.deletingLastPathComponent()] {
+            let fd = open(target.path, O_RDONLY | O_CLOEXEC)
+            guard fd >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+            defer { close(fd) }
+            guard fsync(fd) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        }
+    }
+
+    /// One atomic document owns both the kept card and pending submissions.
+    /// Consuming a kept draft and adding its pending record cannot tear apart
+    /// across a crash, even when UserDefaults still contains an older copy.
+    struct TaskRecovery: Codable, Equatable {
+        var tasks: [FailedTask]
+        var draft: Draft?
+        var aside: Draft? = nil
+    }
+
+    private func loadLegacyKeptDrafts() -> KeptDrafts? {
         guard let data = defaults.data(forKey: key) else { return nil }
         if let kept = try? JSONDecoder().decode(KeptDrafts.self, from: data) { return kept }
         // The former single-entry format remains readable without changing
@@ -122,24 +193,63 @@ struct ComposerDraftStore {
         return (try? JSONDecoder().decode(Draft.self, from: data)).map { KeptDrafts(shown: $0) }
     }
 
-    func saveKeptDrafts(_ kept: KeptDrafts) {
-        guard !kept.shown.title.isEmpty || !kept.shown.writing.isEmpty || kept.aside != nil else {
-            if defaults.object(forKey: key) != nil { defaults.removeObject(forKey: key) }
-            return
+    func loadKeptDrafts() -> KeptDrafts? {
+        guard let recovery = try? readRecovery() else { return nil }
+        guard let shown = recovery.draft else {
+            return recovery.aside.map { KeptDrafts(shown: $0) }
         }
-        if let data = defaults.data(forKey: key),
-           let previous = try? JSONDecoder().decode(KeptDrafts.self, from: data), previous == kept { return }
-        guard let data = try? JSONEncoder().encode(kept) else { return }
-        defaults.set(data, forKey: key)
+        return KeptDrafts(shown: shown, aside: recovery.aside)
     }
 
-    func save(_ draft: Draft?) {
-        guard let draft, !(draft.title.isEmpty && draft.writing.isEmpty) else {
-            if defaults.object(forKey: key) != nil { defaults.removeObject(forKey: key) }
-            return
+    @discardableResult
+    func saveKeptDrafts(_ kept: KeptDrafts) -> Bool {
+        if taskRecoveryURL != nil {
+            do {
+                var recovery = try readRecovery()
+                recovery.draft = kept.shown
+                recovery.aside = kept.aside
+                try persistRecovery(recovery)
+                return true
+            } catch { return false }
         }
-        guard load() != draft, let data = try? JSONEncoder().encode(draft) else { return }
+        guard !kept.shown.title.isEmpty || !kept.shown.writing.isEmpty || kept.aside != nil else {
+            defaults.removeObject(forKey: key)
+            return true
+        }
+        guard let data = try? JSONEncoder().encode(kept) else { return false }
         defaults.set(data, forKey: key)
+        return true
+    }
+
+    private func loadLegacyDraft() -> Draft? { loadLegacyKeptDrafts()?.shown }
+
+    func load() -> Draft? {
+        if let taskRecoveryURL, FileManager.default.fileExists(atPath: taskRecoveryURL.path) {
+            return (try? readRecovery())?.draft
+        }
+        return loadKeptDrafts().map { $0.shown.title.isEmpty && $0.shown.writing.isEmpty ? ($0.aside ?? $0.shown) : $0.shown }
+    }
+
+    @discardableResult
+    func save(_ input: Draft?) -> Bool {
+        let draft = input.flatMap { $0.title.isEmpty && $0.writing.isEmpty ? nil : $0 }
+        if taskRecoveryURL != nil {
+            do {
+                var recovery = try readRecovery()
+                recovery.draft = draft
+                recovery.aside = nil
+                try persistRecovery(recovery)
+                return true
+            } catch { return false }
+        }
+        guard let draft else {
+            if defaults.object(forKey: key) != nil { defaults.removeObject(forKey: key) }
+            return true
+        }
+        guard loadLegacyDraft() != draft else { return true }
+        guard let data = try? JSONEncoder().encode(draft) else { return false }
+        defaults.set(data, forKey: key)
+        return true
     }
 
     func loadFailedEvents() -> [FailedEvent] {
@@ -153,6 +263,58 @@ struct ComposerDraftStore {
         guard let data = try? JSONEncoder().encode(events) else { return }
         defaults.set(data, forKey: storageKey)
     }
+
+    func loadFailedTasks() -> [FailedTask] {
+        (try? readFailedTasks()) ?? []
+    }
+
+    func readFailedTasks() throws -> [FailedTask] { try readRecovery().tasks }
+
+    private func readRecovery() throws -> TaskRecovery {
+        if let taskRecoveryURL, FileManager.default.fileExists(atPath: taskRecoveryURL.path) {
+            let bytes = try Data(contentsOf: taskRecoveryURL)
+            if let recovery = try? JSONDecoder().decode(TaskRecovery.self, from: bytes) { return recovery }
+            // Adopt the earlier pending-only JSON without a SwiftData migration.
+            return TaskRecovery(tasks: try JSONDecoder().decode([FailedTask].self, from: bytes), draft: loadLegacyDraft(), aside: loadLegacyKeptDrafts()?.aside)
+        }
+        let tasks = try defaults.data(forKey: key + ".failedTasks").map {
+            try JSONDecoder().decode([FailedTask].self, from: $0)
+        } ?? []
+        return TaskRecovery(tasks: tasks, draft: loadLegacyDraft(), aside: loadLegacyKeptDrafts()?.aside)
+    }
+
+    private func persistRecovery(_ recovery: TaskRecovery) throws {
+        guard let taskRecoveryURL else { return }
+        let previous = try readRecovery() // unreadable ownership is never overwritten
+        if previous != recovery || !FileManager.default.fileExists(atPath: taskRecoveryURL.path) {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .sortedKeys
+            try persistTaskRecovery(try encoder.encode(recovery), taskRecoveryURL)
+        }
+        // The durable document now supersedes both legacy defaults keys.
+        defaults.removeObject(forKey: key)
+        defaults.removeObject(forKey: key + ".failedTasks")
+    }
+
+    @discardableResult
+    func saveFailedTasks(_ tasks: [FailedTask], consumingKeptDraft: Bool = false) -> Bool {
+        if taskRecoveryURL != nil {
+            do {
+                var recovery = try readRecovery()
+                recovery.tasks = tasks
+                if consumingKeptDraft { recovery.draft = nil }
+                try persistRecovery(recovery)
+                return true
+            } catch { return false }
+        }
+        let storageKey = key + ".failedTasks"
+        guard let data = try? JSONEncoder().encode(tasks) else { return false }
+        if tasks.isEmpty { defaults.removeObject(forKey: storageKey) }
+        else { defaults.set(data, forKey: storageKey) }
+        if consumingKeptDraft { save(nil) }
+        return true
+    }
+
 }
 
 /// The "+" card's state. It lives as long as the panel, so a draft dismissed
@@ -191,6 +353,11 @@ final class ComposerModel: ObservableObject {
     private var recoveringFailedEvent: ComposerDraftStore.FailedEvent?
     private var seededTags: [String]?
     private var openingTags: [String]?
+    private var failedTaskDrafts: [ComposerDraftStore.FailedTask] = []
+    private var failedTaskContents: [UUID: (title: TaskAddBarText, files: [TasksComposerFiles])] = [:]
+    private var recoveringFailedTaskID: UUID?
+    private var taskRecoveryReadable = true
+
 
     static let lengths = [30, 60, 90, 120]
 
@@ -198,7 +365,27 @@ final class ComposerModel: ObservableObject {
         self.tasks = tasks
         self.services = services
         failedEventDrafts = services.drafts?.loadFailedEvents() ?? []
+        do { failedTaskDrafts = try services.drafts?.readFailedTasks() ?? [] }
+        catch { taskRecoveryReadable = false }
+        // The process may have stopped after the physical save but before
+        // dismissing the pending recovery record. A UUID already in the
+        // store is proof that submission succeeded; never submit it twice.
+        let keptRecoveryID = services.drafts?.load()?.recoveringTaskID
+        if !failedTaskDrafts.isEmpty || keptRecoveryID != nil {
+            do {
+                let ids = failedTaskDrafts.map(\.id) + [keptRecoveryID].compactMap { $0 }
+                let persisted = try ModelContext(tasks.store.container).fetch(FetchDescriptor<TaskItem>(
+                    predicate: #Predicate { ids.contains($0.id) }))
+                let committed = Set(persisted.map(\.id)) // includes tombstones and every replica
+                if let kept = services.drafts?.load(), let id = kept.recoveringTaskID, committed.contains(id) {
+                    services.drafts?.save(nil)
+                }
+                failedTaskDrafts.removeAll { committed.contains($0.id) }
+                if !committed.isEmpty { services.drafts?.saveFailedTasks(failedTaskDrafts) }
+            } catch { taskRecoveryReadable = false }
+        }
         restoreKeptDraft()
+        _ = restoreFailedTaskIfAvailable(restoringKeptDraft: true)
     }
 
     // MARK: The kept draft (A2)
@@ -216,13 +403,72 @@ final class ComposerModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    private func rememberFailedTask(_ draft: ComposerDraftStore.FailedTask,
+                                    title: TaskAddBarText, files: [TasksComposerFiles], consumingKeptDraft: Bool = false) -> Bool {
+        var pending = failedTaskDrafts
+        if let index = pending.firstIndex(where: { $0.id == draft.id }) {
+            pending[index] = draft
+        } else {
+            pending.append(draft)
+        }
+        let preserved = services.drafts?.saveFailedTasks(pending, consumingKeptDraft: consumingKeptDraft) != false
+        failedTaskDrafts = pending
+        // A write can report failure after replacement. Keep its logical ID,
+        // while the editor still owns files that have not been submitted.
+        failedTaskContents[draft.id] = (title, consumingKeptDraft && !preserved ? [] : files)
+        return preserved
+    }
+
+    private func retireFailedTask(_ id: UUID?) {
+        guard let id else { return }
+        failedTaskDrafts.removeAll { $0.id == id }
+        failedTaskContents[id] = nil
+        services.drafts?.saveFailedTasks(failedTaskDrafts)
+    }
+
+    /// A failed task waits behind a newer draft. Once that draft is used,
+    /// restore the oldest failed task with its own staged files. Its text,
+    /// picks and original page also survive a panel-model relaunch.
+    @discardableResult
+    private func restoreFailedTaskIfAvailable(restoringKeptDraft: Bool = false) -> Bool {
+        guard kind == .task, !isCreating, tasks.addBarState.stagingFiles == 0 else { return false }
+        let preferredID = recoveringFailedTaskID ?? (restoringKeptDraft ? services.drafts?.load()?.recoveringTaskID : nil)
+        guard let saved = preferredID.flatMap({ id in failedTaskDrafts.first { $0.id == id } })
+                ?? failedTaskDrafts.first else { return false }
+        let alreadyRecovering = recoveringFailedTaskID == saved.id
+        // Identical words can belong to a genuinely newer draft with other
+        // picks or files. Only the kept card's submission identity proves
+        // that an occupied editor belongs to this recovery record.
+        let keptRecovery = restoringKeptDraft && services.drafts?.load()?.recoveringTaskID == saved.id
+        guard !hasDraft || alreadyRecovering || keptRecovery,
+              tasks.addBarState.files.isEmpty || alreadyRecovering else { return false }
+        if !alreadyRecovering {
+            let keptTitle = tasks.addBar.text
+            tasks.addBar = failedTaskContents[saved.id]?.title ?? saved.addBar
+            if keptRecovery { tasks.addBar.text = keptTitle }
+            else { writing = saved.writing }
+            if let contents = failedTaskContents[saved.id] {
+                tasks.restoreComposerFiles(contents.files)
+                // Ownership moves to the editor. Keeping a second copy here
+                // could later advertise files the user removed from the card.
+                failedTaskContents[saved.id] = (contents.title, [])
+            }
+        }
+        recoveringFailedTaskID = saved.id
+        failed = true
+        saveKeptDraft()
+        return true
+    }
+
     /// Saves what the card holds now (or forgets it once used up). Called
     /// when the card closes, after a creation and as the app quits.
     func saveKeptDraft() {
         guard let drafts = services.drafts else { return }
         drafts.saveKeptDrafts(ComposerDraftStore.KeptDrafts(
-            shown: .init(title: tasks.addBar.text, writing: writing, kind: kind.rawValue),
+            shown: .init(title: tasks.addBar.text, writing: writing, kind: kind.rawValue, recoveringTaskID: recoveringFailedTaskID),
             aside: asideDraft.map { .init(title: $0.text.text, writing: $0.writing, kind: $0.owner.rawValue) }))
+
     }
 
     var title: TasksAddBarState { tasks.addBarState }
@@ -233,7 +479,11 @@ final class ComposerModel: ObservableObject {
             || !writing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    var canCreate: Bool { !isCreating && !TaskDraftBuilder.collapsed(tasks.addBar.text).isEmpty }
+    // Keep Create reachable while Task files prepare, so submission can
+    // explain the wait through the same notice as the detached add bar.
+    var canCreate: Bool {
+        !isCreating && !TaskDraftBuilder.collapsed(tasks.addBar.text).isEmpty
+    }
 
     // MARK: Opening and closing
 
@@ -246,7 +496,7 @@ final class ComposerModel: ObservableObject {
     private func seedTags(_ tags: [String]) {
         guard !tags.isEmpty, tasks.addBar == TaskAddBarText(), writing.isEmpty else { return }
         tasks.addBar.picked.tags = tags
-        seededTags = tags
+        title.seededTags = tags
     }
 
     /// "+" opens on the page's own kind unless a note draft was kept; ⇧⌘N
@@ -274,10 +524,11 @@ final class ComposerModel: ObservableObject {
         openingTags = nil
         if kind != .event { recoveringFailedEvent = nil }
         let recovered = restoreFailedEventIfAvailable()
-        fillCalendarDay()
+        if kind != .task || recoveringFailedTaskID == nil { fillCalendarDay() }
+        let recoveredTask = restoreFailedTaskIfAvailable()
         if kind == .event { requestCalendars() }
-        failed = kind == .event && (recovered
-            || failedEventDrafts.contains(where: { $0.title == tasks.addBar.text && $0.writing == writing }))
+        failed = recoveredTask || (kind == .event && (recovered
+            || failedEventDrafts.contains(where: { $0.title == tasks.addBar.text && $0.writing == writing })))
         if !failedEventDrafts.isEmpty {
             services.eventFailure(recovered
                 ? String(localized: "Couldn’t save event. Your draft is kept here for retry.")
@@ -312,8 +563,8 @@ final class ComposerModel: ObservableObject {
         // A filter's defaults belong to this opening unless there is writing
         // to keep. Explicitly changed picks remain the person's draft.
         if !hasDraft {
-            if tasks.addBar.picked.tags == seededTags { tasks.addBar.picked.tags = [] }
-            seededTags = nil
+            if tasks.addBar.picked.tags == title.seededTags { tasks.addBar.picked.tags = [] }
+            title.seededTags = nil
         }
         restoreFocus()
         saveKeptDraft()
@@ -345,10 +596,11 @@ final class ComposerModel: ObservableObject {
         draftGeneration += 1
         if newKind != .event { recoveringFailedEvent = nil }
         let recovered = restoreFailedEventIfAvailable()
-        fillCalendarDay()
+        if newKind != .task || recoveringFailedTaskID == nil { fillCalendarDay() }
+        let recoveredTask = restoreFailedTaskIfAvailable()
         if newKind == .event { requestCalendars() }
-        failed = newKind == .event && (recovered
-            || failedEventDrafts.contains(where: { $0.title == tasks.addBar.text && $0.writing == writing }))
+        failed = recoveredTask || (newKind == .event && (recovered
+            || failedEventDrafts.contains(where: { $0.title == tasks.addBar.text && $0.writing == writing })))
         if !failedEventDrafts.isEmpty {
             services.eventFailure(recovered
                 ? String(localized: "Couldn’t save event. Your draft is kept here for retry.")
@@ -531,20 +783,42 @@ final class ComposerModel: ObservableObject {
     /// a failure removes the row and restores its text to this card.
     private func submitTaskAcknowledged(openingPage: Bool) {
         guard isOpen, canCreate, tasks.composerFilesReadyForSubmission() else { return }
+        guard taskRecoveryReadable else { failed = true; AtticSounds.play(.failed); return }
+
         var finished = tasks.addBar
         finished.typedReplacesPicks(parser: tasks.parser, caret: nil)
         let day = finished.parts(parser: tasks.parser).dueDay
+        let recovering = recoveringFailedTaskID.flatMap { id in failedTaskDrafts.first { $0.id == id } }
+        let submittedPage = recovering?.page ?? page
         // In Progress while Now shows only that (13 Nov), so the task
         // doesn't vanish as you make it.
-        let status: TaskStatus = page == .tasks(.backlog) && day == nil ? .backlog
-            : page.tasksTab.map(tasks.newOpenStatus(from:)) ?? .todo
+        let status: TaskStatus
+        if let recovering {
+            // A failed task retains the status it was submitted with. A
+            // changed date can still move a Later task into or out of Later.
+            status = submittedPage == .tasks(.backlog)
+                ? (day == nil ? .backlog : .todo) : recovering.status
+        } else {
+            status = submittedPage == .tasks(.backlog) && day == nil ? .backlog
+                : submittedPage.tasksTab.map(tasks.newOpenStatus(from:)) ?? .todo
+        }
         guard let draft = finished.draft(parser: tasks.parser, status: status) else { return }
-        let submittedWriting = writing, submittedPage = page
+        let submittedWriting = writing
+        let failedSubmission = ComposerDraftStore.FailedTask(id: recovering?.id ?? UUID(),
+            title: finished, writing: submittedWriting, status: status, page: submittedPage)
+        // A failed recovery write leaves the editor and its files untouched;
+        // no optimistic row or asynchronous store command has been issued.
+        guard rememberFailedTask(failedSubmission, title: finished, files: tasks.addBarState.files, consumingKeptDraft: true) else {
+            recoveringFailedTaskID = failedSubmission.id
+            failed = true
+            AtticSounds.play(.failed)
+            return
+        }
         // A file dropped into the next draft while the first saves belongs
         // to the next draft, even if the first save finishes afterwards.
         let submittedFiles = tasks.takeComposerFiles()
         isCreating = true
-        tasks.createAcknowledged(draft, save: { [library = tasks.library] id in
+        tasks.createAcknowledged(draft, id: failedSubmission.id, save: { [library = tasks.library] id in
             library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
         }, settled: { [weak self] created in
             guard let self else { return }
@@ -552,22 +826,21 @@ final class ComposerModel: ObservableObject {
             guard let created else {
                 self.failed = true
                 AtticSounds.play(.failed)
-                self.tasks.restoreComposerFiles(submittedFiles)
-                // Another submission can have its own text already. Never
-                // overwrite it with a failed older draft.
-                if self.tasks.addBar.text.isEmpty && self.writing.isEmpty {
-                    self.tasks.addBar = finished
-                    self.writing = submittedWriting
-                }
+                self.rememberFailedTask(failedSubmission, title: finished, files: submittedFiles)
+                // Recover as soon as there is no newer draft to displace.
+                // Its files must travel with its own words, never with the
+                // next task's attachment strip.
+                let recovered = self.restoreFailedTaskIfAvailable()
+                if !recovered { self.saveKeptDraft() }
                 self.isOpen = true
-                self.focusRequest &+= 1
-                self.saveKeptDraft()
+                if recovered { self.focusRequest &+= 1 }
                 return
             }
             self.failed = false
+            self.retireFailedTask(failedSubmission.id)
             // Only retire a kept draft after the task's family write commits.
             // Until then an earlier backup remains available after a crash.
-            self.saveKeptDraft()
+            if !self.isOpen || !self.restoreFailedTaskIfAvailable() { self.saveKeptDraft() }
             AtticSounds.play(.created)
             self.tasks.attachComposerFiles(submittedFiles, to: created.id)
             // A task "+" made while filtered stays in view (13 Nov), as
@@ -579,15 +852,18 @@ final class ComposerModel: ObservableObject {
                 self.services.openTaskPage(created.id)
             } else if case let .tasks(tab) = submittedPage {
                 if tab == .done || (tab == .backlog && status == .todo) {
-                    self.services.toast(String(localized: "Added to Now"), self.undoCreation())
+                    self.services.toast(String(localized: "Added to Now"), self.undoCreation(in: submittedPage.history))
                 } else {
                     self.tasks.addedRequest = TasksPageModel.ScrollRequest(id: created.id)
                 }
             }
         })
+        // From this point the card's words have moved to an asynchronous
+        // save. Persist them before clearing the editor: quitting in that
+        // interval must still leave a recoverable task.
         clearDraft()
         // The next task starts with the picked tags too (13 Nov).
-        if case .tasks = page { tasks.startDraftFromFilter() }
+        if !openingPage, case .tasks = page { tasks.startDraftFromFilter() }
         if openingPage { isOpen = false }
         else { fillCalendarDay(); focusRequest &+= 1 }
     }
@@ -663,6 +939,8 @@ final class ComposerModel: ObservableObject {
     private func createImmediately(openingPage: Bool) -> Bool {
         guard isOpen, canCreate, kind != .event else { return false }
         if kind != .task, filesWaitForATask() { return false }
+        if kind == .task, !tasks.composerFilesReadyForSubmission() { return false }
+
         let made = kind == .task
             ? IdleLatencyTrace.span("task_add_submit") { createTask(openingPage: openingPage) }
             : createNote(openingPage: openingPage)
@@ -678,8 +956,8 @@ final class ComposerModel: ObservableObject {
         guard made else { return false }
         clearDraft()
         // The next task starts with the picked tags too (13 Nov).
-        if kind == .task, case .tasks = page { tasks.startDraftFromFilter() }
-        saveKeptDraft()
+        if !openingPage, kind == .task, case .tasks = page { tasks.startDraftFromFilter() }
+        if openingPage || kind != .task || !restoreFailedTaskIfAvailable() { saveKeptDraft() }
         if openingPage {
             isOpen = false
         } else {
@@ -691,27 +969,39 @@ final class ComposerModel: ObservableObject {
 
     private func createTask(openingPage: Bool) -> Bool {
         guard tasks.composerFilesReadyForSubmission() else { return false }
+        guard taskRecoveryReadable else { return false }
+
         var finished = tasks.addBar
         finished.typedReplacesPicks(parser: tasks.parser, caret: nil)
         tasks.addBar = finished
         let day = finished.parts(parser: tasks.parser).dueDay
+        let recovering = recoveringFailedTaskID.flatMap { id in failedTaskDrafts.first { $0.id == id } }
+        let submittedPage = recovering?.page ?? page
         // Later makes an undated put-off task; Done (and a dated task from
         // Later) creates in Now.
         // In Progress while Now shows only that (13 Nov), so the task
         // doesn't vanish as you make it.
-        let status: TaskStatus = page == .tasks(.backlog) && day == nil ? .backlog
-            : page.tasksTab.map(tasks.newOpenStatus(from:)) ?? .todo
+        let status: TaskStatus
+        if let recovering {
+            status = submittedPage == .tasks(.backlog)
+                ? (day == nil ? .backlog : .todo) : recovering.status
+        } else {
+            status = submittedPage == .tasks(.backlog) && day == nil ? .backlog
+                : submittedPage.tasksTab.map(tasks.newOpenStatus(from:)) ?? .todo
+        }
         guard let draft = finished.draft(parser: tasks.parser, status: status),
-              let task = tasks.library.createTask(draft, writing: writing, in: page.history) else { return false }
+              let task = tasks.library.createTask(draft, writing: writing, in: submittedPage.history, id: recovering?.id) else { return false }
+        retireFailedTask(recovering?.id)
         tasks.attachComposerFiles(to: task.id)
         let destination: TasksTab = task.listedStatus == .backlog ? .backlog : .now
         tasks.keepInView(task.id, on: destination)
         tasks.unfoldAddedTask(task.id, on: destination)
+
         if openingPage {
             services.openTaskPage(task.id)
-        } else if case let .tasks(tab) = page {
+        } else if case let .tasks(tab) = submittedPage {
             if tab == .done || (tab == .backlog && status == .todo) {
-                services.toast(String(localized: "Added to Now"), undoCreation())
+                services.toast(String(localized: "Added to Now"), undoCreation(in: submittedPage.history))
             } else {
                 tasks.addedRequest = TasksPageModel.ScrollRequest(id: task.id)
             }
@@ -789,10 +1079,10 @@ final class ComposerModel: ObservableObject {
     /// length and calendar stay as the person last chose them.
     func clearDraft() {
         title.clearDraft()
-        seededTags = nil
         writing = ""
         pinned = false
         recoveringFailedEvent = nil
+        recoveringFailedTaskID = nil
     }
 
     // MARK: Calendars
@@ -835,10 +1125,14 @@ final class ComposerModel: ObservableObject {
 
     /// The Undo a creation's toast offers: the history the creation went
     /// into, fixed now (the card may be on another page by the click).
-    private func undoCreation() -> @MainActor () -> CommandOutcome {
+    private func undoCreation(in submittedHistory: UndoHistoryID? = nil) -> @MainActor () -> CommandOutcome {
         let library = tasks.library
-        let history = page.history
-        return { library.undo(in: history) }
+        let history = submittedHistory ?? page.history
+        let step = library.undo.undoStepID(in: history)
+        return {
+            guard let step, library.undo.undoStepID(in: history) == step else { return .applied }
+            return library.undo(in: history)
+        }
     }
 
     func undoPage() {

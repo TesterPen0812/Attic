@@ -198,6 +198,10 @@ final class PanelUIState: ObservableObject {
     @Published var isPanelPinned = false
     @Published var dockingPreviewCorner: ScreenCorner?
     @Published private(set) var panelSize = PanelGeometry.defaultPanelSize
+    /// During a live resize, invisible retained pages can keep their last
+    /// proposal. Only the page the user is resizing needs each intermediate
+    /// size; the retained pages catch up on release.
+    @Published private(set) var retainedPageSizeDuringLiveResize: CGSize?
     @Published private(set) var selectedSection: PanelSection = .tasks {
         didSet { resumeDefaults?.set(selectedSection.rawValue, forKey: "AtticPanel.lastPage") }
     }
@@ -236,6 +240,9 @@ final class PanelUIState: ObservableObject {
         } else {
             guard managedInteractionLocks.contains(reason) else { return }
             managedInteractionLocks.remove(reason)
+        }
+        if reason == .windowResize {
+            retainedPageSizeDuringLiveResize = isActive ? panelSize : nil
         }
     }
 

@@ -2321,13 +2321,17 @@ struct AtticMenuAnchor: NSViewRepresentable {
     let holder: AtticMenuAnchor.Holder
     /// Context-menu and keyboard-only anchors do not handle ordinary clicks.
     var isMenuTrigger = true
-    private static let triggers = NSHashTable<AnchorView>.weakObjects()
+    private static let triggers = NSHashTable<NSView>.weakObjects()
+
+    static func registerTrigger(_ view: NSView) { triggers.add(view) }
 
     static func containsTrigger(for event: NSEvent) -> Bool {
         guard let window = event.window, let content = window.contentView else { return false }
         let hit = content.hitTest(content.convert(event.locationInWindow, from: nil))
         return triggers.allObjects.contains { view in
-            view.isMenuTrigger && view.window === window && AtticContextMenus.isShown(view)
+            let opensMenu = (view as? AnchorView)?.isMenuTrigger
+                ?? (view as? any AtticMenuTrigger)?.opensAtticMenu(for: event) ?? false
+            return opensMenu && view.window === window && AtticContextMenus.isShown(view)
                 && view.bounds.contains(view.convert(event.locationInWindow, from: nil))
                 && (hit.map { AtticContextMenus.shares($0, with: view) } ?? true)
         }
@@ -2393,7 +2397,11 @@ struct AtticMenuAnchor: NSViewRepresentable {
 
     final class AnchorView: NSView {
         weak var holder: Holder?
-        var isMenuTrigger = true
+        var isMenuTrigger = true {
+            didSet {
+                if isMenuTrigger, window != nil { AtticMenuAnchor.triggers.add(self) }
+            }
+        }
         override var isFlipped: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() {

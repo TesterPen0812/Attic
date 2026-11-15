@@ -5,19 +5,19 @@ import UniformTypeIdentifiers
 /// Something added with the composer's +, shown as a chip until the message goes.
 enum AgentChatAttachment: Identifiable, Equatable {
     case item(AgentTarget)
-    case file(AgentFileAttachment)
+    case file(AgentFileAttachment, id: UUID)
 
     var id: String {
         switch self {
         case let .item(target): "item:\(target.page.rawValue):\(target.itemID?.uuidString ?? target.title ?? "")"
-        case let .file(file): "file:\(file.name)"
+        case let .file(_, id): "file:\(id.uuidString)"
         }
     }
 
     var name: String {
         switch self {
         case let .item(target): target.title.flatMap { $0.isEmpty ? nil : $0 } ?? target.page.rawValue.capitalized
-        case let .file(file): file.name
+        case let .file(file, _): file.name
         }
     }
 }

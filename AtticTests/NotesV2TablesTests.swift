@@ -1,5 +1,6 @@
 import AppKit
 import ObjectiveC
+import SwiftData
 import XCTest
 @testable import Attic
 
@@ -10,6 +11,46 @@ import XCTest
 /// export, and a keystroke's cost in a long note. Then the feature.
 @MainActor
 final class NotesV2TablesTests: XCTestCase {
+    func testDS12HugeFiniteTableWidthLaysOutWithoutChangingStoredValue() throws {
+        var table = NoteTable(texts: [["This cell survives"]])
+        table.columns[0].width = 1e20
+        let original = NoteDocument(blocks: [.text("Title"), .table(table)], requires: ["table-v1"])
+        let encoded = try NoteContentCodec.encode(original)
+        let decoded = try XCTUnwrap(NoteContentCodec.decode(encoded).document)
+        let attachment = NoteTableAttachment(objectID: UUID(), table: try XCTUnwrap(decoded.blocks[1].table))
+        let rendered = attachment.layout(width: 264)
+        XCTAssertTrue(rendered.width.isFinite)
+        XCTAssertLessThanOrEqual(rendered.columnWidths[0], 10_000, "only the displayed width should be bounded")
+        XCTAssertEqual(attachment.table.columns[0].width, 1e20)
+        XCTAssertEqual(NoteContentCodec.decode(try NoteContentCodec.encode(decoded)).document, original)
+    }
+
+    func testDS12StoredTableAndPrivateFragmentPreserveHugeSourceWidth() throws {
+        var table = NoteTable(texts: [["Source content"]])
+        table.columns[0].width = 1e20
+        let document = NoteDocument(blocks: [.text("Wide note"), .table(table)], requires: ["table-v1"])
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: document) else {
+            return XCTFail("table note must save")
+        }
+        let saved = try XCTUnwrap(ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        let reloaded = try XCTUnwrap(NoteContentCodec.decode(XCTUnwrap(saved.content)).document)
+        let reopened = NoteEditorEngine(noteID: id, document: reloaded)
+        let tableObject = try XCTUnwrap(reopened.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        XCTAssertLessThanOrEqual(tableObject.layout(width: 264).width, 10_000)
+        XCTAssertEqual(reloaded.blocks[1].table?.columns[0].width, 1e20)
+
+        let fragmentData = try NoteContentCodec.encode(NoteDocument(blocks: [.table(table)], requires: ["table-v1"]))
+        let fragment = try XCTUnwrap(NoteContentCodec.decode(fragmentData, context: .fragment).document)
+        let inserted = NoteTextCodec.document(from: NoteTextCodec.attributedString(from: fragment,
+                                          style: NoteTextStyle(), firstBlockIsTitle: false),
+                                          template: fragment, firstBlockIsTitle: false)
+        XCTAssertEqual(inserted.blocks[0].table?.columns[0].width, 1e20)
+        let insertedAttachment = NoteTableAttachment(objectID: UUID(), table: try XCTUnwrap(inserted.blocks[0].table))
+        XCTAssertLessThanOrEqual(insertedAttachment.layout(width: 264).width, 10_000)
+    }
+
     private typealias M = AtticNoteTableMetrics
     private var windows: [NSWindow] = []
 

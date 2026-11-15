@@ -156,7 +156,16 @@ struct AtticDragTracking {
 /// A row's or a column's grip: a 5 × 14 (row) or 18 × 5 (column) pill with
 /// three dots along it.
 @MainActor
-final class AtticNoteTableGripView: AtticNoteTableControlView {
+final class AtticNoteTableGripView: AtticNoteTableControlView, AtticMenuTrigger {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { AtticMenuAnchor.registerTrigger(self) }
+    }
+
+    func opensAtticMenu(for event: NSEvent) -> Bool {
+        event.type == .leftMouseDown && !event.modifierFlags.contains(.control) && onClick != nil
+    }
+
     override var hoverCursor: NSCursor { onDrag == nil ? .arrow : .openHand }
     enum Axis { case row, column }
     let axis: Axis

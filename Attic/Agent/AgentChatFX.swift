@@ -135,6 +135,14 @@ final class AgentChatFX: ObservableObject {
         var onLand: (() -> Void)?
     }
 
+    /// Historical flights are reverse-animation geometry only. The live flight
+    /// owns its landing callback until landing; history must not extend the
+    /// lifetime of model/page state captured by that closure.
+    private struct ReverseFlight {
+        var title: String
+        var from, to: CGPoint
+    }
+
     private struct Scan {
         var rows: [CGRect]
         var age = 0.0
@@ -161,7 +169,7 @@ final class AgentChatFX: ObservableObject {
     private(set) var flash = 0.0
     private(set) var angle = 0.0
     /// What each step did on screen, so Undo can run it backwards.
-    private var history: [UUID: (flights: [Flight], rows: [CGRect])] = [:]
+    private var history: [UUID: (flights: [ReverseFlight], rows: [CGRect])] = [:]
 
     func wake() {
         if isIdle { isIdle = false }
@@ -197,6 +205,7 @@ final class AgentChatFX: ObservableObject {
     /// Test seam: how much is alive.
     var liveCount: Int { particles.count + rings.count + flights.count + scans.count }
     var ringCount: Int { rings.count }
+    var retainedHistoryCount: Int { history.count }
     /// The colour's circle, as a scale of its full radius, last drawn.
     var lastAuraScale: CGFloat?
     #endif
@@ -296,7 +305,9 @@ final class AgentChatFX: ObservableObject {
             made.append(Flight(title: move.title, from: from, to: move.to, delay: Double(index) * 0.24, onLand: move.onLand))
         }
         flights += made
-        history[step, default: ([], [])].flights = made
+        history[step, default: ([], [])].flights = made.map {
+            ReverseFlight(title: $0.title, from: $0.from, to: $0.to)
+        }
         wake()
     }
 

@@ -2,6 +2,19 @@ import Foundation
 import XCTest
 @testable import Attic
 
+private final class PF29OneShot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var taken = false
+
+    func take() -> Bool {
+        lock.withLock {
+            guard !taken else { return false }
+            taken = true
+            return true
+        }
+    }
+}
+
 @MainActor
 final class AgentRunHostedTests: XCTestCase {
     /// Explicit Air-only integration gate: the real signed-in Codex process
@@ -122,6 +135,149 @@ final class AgentRunHostedTests: XCTestCase {
     private static func session(_ id: String) -> String { #"{"type":"system","subtype":"init","session_id":""# + id + #""}"# }
     private static func text(_ text: String) -> String {
         #"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":""# + text + #""}}}"#
+    }
+
+    func testR3ShutdownDrainsBlockedToolAndTextCheckpointsBeforeReturning() async throws {
+        let url = journalURL()
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let returned = DispatchSemaphore(value: 0)
+        let once = PF29OneShot()
+        let tools = FakeRunTools()
+        tools.holdDrain = true
+        defer { returned.signal(); release.signal(); tools.releaseDrain() }
+        let helper = FakeRunHelper()
+        helper.onInput = { line, helper in
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return }
+            switch obj["method"] as? String {
+            case "initialize": helper.emitLine(#"{"id":1,"result":{}}"#)
+            case "thread/start": helper.emitLine(#"{"id":2,"result":{"thread":{"id":"checkpoint-thread"}}}"#)
+            case "turn/start": helper.emitLine(#"{"id":3,"result":{"turn":{"id":"turn"}}}"#)
+            default: break
+            }
+        }
+        let runner = AgentRunEngine(selectedBackend: { .codex }, helper: { helper }, tools: { tools },
+                                    journalURL: url, checkpointGate: {
+            if once.take() { entered.signal(); release.wait() }
+        })
+        _ = runner.send("Keep completed steps on quit", watching: false)
+        await wait {
+            helper.inputs.contains { line in
+                guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return false }
+                return object["method"] as? String == "turn/start"
+            }
+        }
+        helper.emitLine(#"{"method":"item/started","params":{"item":{"id":"1","type":"mcpToolCall","server":"attic","tool":"list_tasks"}}}"#)
+        helper.emitLine(#"{"method":"item/completed","params":{"item":{"id":"1","type":"mcpToolCall","server":"attic","tool":"list_tasks","status":"completed"}}}"#)
+        await wait { entered.wait(timeout: .now()) == .success }
+        let text = String(repeating: "x", count: 256)
+        helper.emitLine(String(decoding: try JSONSerialization.data(withJSONObject: [
+            "method": "item/agentMessage/delta", "params": ["delta": text]
+        ]), as: UTF8.self))
+        await wait { runner.threadSnapshot().entries.contains { $0.role == "assistant" && $0.text == text } }
+        let expectedTool = try XCTUnwrap(runner.threadSnapshot().entries.first { $0.role == "tool" }?.text)
+        DispatchQueue.global().async {
+            // A fixed shutdown waits here; the original returns while the gate
+            // stays closed until the test has read the on-disk archive.
+            _ = returned.wait(timeout: .now() + 0.25)
+            release.signal()
+        }
+        runner.shutdown()
+        let disk = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let rows = try XCTUnwrap(disk["entries"] as? [[String: Any]])
+        returned.signal()
+        let savedTool = rows.contains { $0["role"] as? String == "tool" && $0["text"] as? String == expectedTool }
+        let savedText = rows.contains { $0["role"] as? String == "assistant" && $0["text"] as? String == text }
+        print("R3 toolDurableAtShutdown=\(savedTool) textDurableAtShutdown=\(savedText)")
+        XCTAssertTrue(savedTool, "Quit must flush a completed tool row before returning")
+        XCTAssertTrue(savedText, "Quit must also flush the pending coalesced text checkpoint")
+        tools.releaseDrain()
+        await wait { !runner.threadSnapshot().isRunning }
+    }
+
+    func testPF29FirstDeltaIsDeliveredBeforeBlockedCheckpointCompletes() async throws {
+        final class Result: @unchecked Sendable {
+            private let lock = NSLock()
+            private var received = false
+            func set(_ value: Bool) { lock.withLock { received = value } }
+            var value: Bool { lock.withLock { received } }
+        }
+        let gateEntered = DispatchSemaphore(value: 0)
+        let gateRelease = DispatchSemaphore(value: 0)
+        let delivered = DispatchSemaphore(value: 0)
+        let firstGate = PF29OneShot()
+        let result = Result()
+        defer { gateRelease.signal() }
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: journalURL(),
+                                    checkpointGate: {
+            if firstGate.take() {
+                gateEntered.signal()
+                _ = gateRelease.wait(timeout: .now() + 12)
+            }
+        })
+        let stream = runner.send("Verify provisional delivery", watching: true)
+        let observing = Task.detached {
+            for await event in stream {
+                if case .textDelta = event { delivered.signal(); return }
+            }
+        }
+        defer { observing.cancel() }
+        await wait { !helper.inputs.isEmpty }
+        DispatchQueue.global(qos: .userInitiated).async {
+            if gateEntered.wait(timeout: .now() + 12) == .success {
+                result.set(delivered.wait(timeout: .now() + 5) == .success)
+            }
+            gateRelease.signal()
+        }
+        helper.emitLine(Self.text(String(repeating: "x", count: 256)))
+        await wait { runner.threadSnapshot().events.contains { if case .textDelta = $0 { true } else { false } } }
+        helper.emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        print("PF29 firstDeltaBeforeCheckpointCompletion=\(result.value ? 1 : 0)")
+        XCTAssertTrue(result.value, "Provisional subscriber delivery cannot depend on checkpoint I/O")
+    }
+
+    func testPF29StreamingPublishesWhileCheckpointBlockedAndCoalescesPendingSnapshots() async throws {
+        let url = journalURL()
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let firstCheckpoint = PF29OneShot()
+        defer { release.signal() }
+        let helper = FakeRunHelper()
+        let runner = AgentRunEngine(helper: { helper }, tools: { FakeRunTools() }, journalURL: url,
+                                    checkpointGate: {
+            if firstCheckpoint.take() {
+                entered.signal()
+                release.wait()
+            }
+        })
+        _ = runner.send("Stream without blocking the panel", watching: true)
+        await wait { !helper.inputs.isEmpty }
+        let chunk = String(repeating: "x", count: 256)
+        helper.emitLine(Self.text(chunk))
+        await wait { runner.threadSnapshot().entries.last?.text == chunk }
+        await wait { entered.wait(timeout: .now()) == .success }
+
+        for _ in 0..<100 { helper.emitLine(Self.text(chunk)) }
+        let expected = String(repeating: chunk, count: 101)
+        await wait { runner.threadSnapshot().entries.last?.text == expected }
+        XCTAssertEqual(runner.threadSnapshot().events.filter {
+            if case .textDelta = $0 { return true }
+            return false
+        }.count, 101, "All provisional text must arrive while persistence is held")
+        XCTAssertLessThanOrEqual(runner.checkpointDiagnostics.maximumBuffered, 2,
+                                 "The checkpoint writer keeps only one active and one pending snapshot")
+        XCTAssertEqual(runner.checkpointDiagnostics.writes, 1, "No blocked checkpoint writes have completed")
+
+        release.signal()
+        helper.emitLine(Self.done)
+        await wait { !runner.threadSnapshot().isRunning }
+        let disk = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        let rows = try XCTUnwrap(disk?["entries"] as? [[String: Any]])
+        XCTAssertEqual(rows.first { $0["role"] as? String == "assistant" }?["text"] as? String, expected)
+        XCTAssertGreaterThan(runner.checkpointDiagnostics.writes, 1,
+                             "Required final save must commit after pending checkpoints")
     }
 
     func testFailedFirstThreadSaveRollsBackAndNextSaveCannotResurrectMessage() async throws {
@@ -945,6 +1101,42 @@ final class AgentRunHostedTests: XCTestCase {
         XCTAssertTrue(runner.threadSnapshot().entries.contains {
             $0.role == "assistant" && $0.text == "New chat reply."
         })
+    }
+
+    func testBG47StopCancelsQueuedNewChatRequestWithoutAbandoningOldDrain() async {
+        let tools = FakeRunTools()
+        tools.holdDrain = true
+        let originalChange = AgentChangeSet(id: UUID(), title: "Existing receipt", pages: [.tasks], count: 1)
+        tools.change = originalChange
+        var helpers: [FakeRunHelper] = []
+        let runner = AgentRunEngine(helper: {
+            let helper = FakeRunHelper()
+            helpers.append(helper)
+            return helper
+        }, tools: { tools }, journalURL: journalURL())
+        let chat = AgentChatModel()
+        chat.pacing = .instant
+        chat.connect(runner)
+        chat.draft = "Original change"
+        chat.send()
+        await wait { helpers.count == 1 && helpers[0].inputs.count == 1 }
+
+        chat.newChat()
+        chat.draft = "Do not run this"
+        let attachment = AgentTarget(page: .tasks, itemID: UUID(), title: "Keep this context")
+        chat.attach(attachment)
+        chat.send()
+        XCTAssertEqual(chat.phase, .waiting)
+        chat.stop()
+        tools.releaseDrain()
+        try? await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertEqual(helpers.count, 1, "Stop must prevent starting the waiting helper")
+        XCTAssertEqual(chat.phase, .idle, "The cancelled new message must leave Stop state")
+        XCTAssertEqual(chat.draft, "Do not run this", "The stopped message is recoverable")
+        XCTAssertEqual(chat.attachments, [.item(attachment)], "Stopping preserves the queued attachment")
+        XCTAssertTrue(runner.chats().contains { $0.title == "Original change" },
+                      "The old run still records its committed receipt")
     }
     #endif
 

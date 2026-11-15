@@ -176,6 +176,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
         }
 
         private func applyDrawn() {
+            if !drawn { model?.flushScrollOffsets() }
             guard let scroll = enclosingScrollView, scroll.isHidden == drawn else { return }
             scroll.isHidden = !drawn
         }
@@ -192,6 +193,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
             applyDrawn()
             proxies?.scrollViews[tab] = scroll
             observe(scroll.contentView)
+            if let window { observeWindowLifecycle(window) }
             if let model, let pointer {
                 marquee = TasksMarqueeSelection(scroll: scroll, model: model, pointer: pointer, tab: tab,
                     focusSelection: { [weak self] id in self?.focusSelection(id) })
@@ -203,7 +205,33 @@ struct TasksScrollKeeper: NSViewRepresentable {
             DispatchQueue.main.async { [weak self] in self?.restore() }
         }
 
+        override func viewDidHide() {
+            super.viewDidHide()
+            model?.flushScrollOffsets()
+        }
+
         private var styleObserver: NSObjectProtocol?
+        private var lifecycleObservers: [NSObjectProtocol] = []
+
+        private func observeWindowLifecycle(_ window: NSWindow) {
+            lifecycleObservers.append(NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.model?.flushScrollOffsets() }
+            })
+            lifecycleObservers.append(NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+            ) { [weak self, weak window] _ in
+                MainActor.assumeIsolated {
+                    if window?.isVisible == false { self?.model?.flushScrollOffsets() }
+                }
+            })
+            for name in [NSApplication.willTerminateNotification, NSApplication.didHideNotification] {
+                lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.model?.flushScrollOffsets() }
+                })
+            }
+        }
 
         /// Overlay scrollers now, when the system sets them back (AppKit
         /// restyles every scroll view when the "Show scroll bars" setting
@@ -240,20 +268,23 @@ struct TasksScrollKeeper: NSViewRepresentable {
         }
 
         func stopObserving() {
+            model?.flushScrollOffsets()
             marquee = nil
             if let observer { NotificationCenter.default.removeObserver(observer) }
             observer = nil
             observedClip = nil
             if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
             styleObserver = nil
+            lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            lifecycleObservers.removeAll()
         }
 
         private func record() {
             if let scroll = enclosingScrollView, scroll.scrollerStyle != .overlay {
                 TasksScrollKeeper.styleScrollers(of: scroll, hidden: proxies?.scrollersHidden ?? false)
             }
-            guard !restoring, let clip = observedClip, let model else { return }
-            model.scrollOffsets[tab] = clip.bounds.origin.y
+            guard drawn, !restoring, let clip = observedClip, let model else { return }
+            model.recordScrollOffset(clip.bounds.origin.y, on: tab)
         }
 
         private func restore() {
@@ -308,6 +339,10 @@ struct PanelResumeScrollKeeper: NSViewRepresentable {
         view.update(ready: ready, navigationID: navigationID)
     }
 
+    static func dismantleNSView(_ view: KeeperView, coordinator: ()) {
+        view.stopObserving()
+    }
+
     final class KeeperView: NSView {
         private let defaults: UserDefaults?
         private let key: String
@@ -317,6 +352,9 @@ struct PanelResumeScrollKeeper: NSViewRepresentable {
         private var restoring = true
         private var ready: Bool
         private var navigationID: String
+        private var lastObservedPosition: Double?
+        private var pendingPosition: Double?
+        private var checkpoint: DispatchWorkItem?
 
         init(defaults: UserDefaults?, key: String, ready: Bool = true, navigationID: String = "") {
             self.defaults = defaults
@@ -329,10 +367,43 @@ struct PanelResumeScrollKeeper: NSViewRepresentable {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         func update(ready: Bool, navigationID: String) {
-            if self.navigationID != navigationID { restoring = false }
+            if self.navigationID != navigationID {
+                restoring = false
+                // An explicit navigation can have already set a new resume
+                // target. An old scroll must not overwrite that target later.
+                discardPendingPosition()
+                lastObservedPosition = nil
+            }
             self.navigationID = navigationID
             self.ready = ready
             if ready && restoring { scheduleRestore() }
+        }
+
+        private func recordPosition(_ y: CGFloat) {
+            let value = Double(y)
+            guard lastObservedPosition != value else { return }
+            lastObservedPosition = value
+            pendingPosition = value
+            guard checkpoint == nil else { return }
+            let item = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated { self?.flushPendingPosition() }
+            }
+            checkpoint = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+        }
+
+        private func discardPendingPosition() {
+            checkpoint?.cancel()
+            checkpoint = nil
+            pendingPosition = nil
+        }
+
+        private func flushPendingPosition() {
+            guard let position = pendingPosition else { return }
+            discardPendingPosition()
+            if (defaults?.object(forKey: key) as? Double) != position {
+                defaults?.set(position, forKey: key)
+            }
         }
 
         private func scheduleRestore() {
@@ -363,9 +434,7 @@ struct PanelResumeScrollKeeper: NSViewRepresentable {
                 MainActor.assumeIsolated {
                     guard let self, !self.restoring, let y = self.clip?.bounds.origin.y,
                           y.isFinite, abs(y) < 10_000_000 else { return }
-                    if self.defaults?.double(forKey: self.key) != Double(y) {
-                        self.defaults?.set(Double(y), forKey: self.key)
-                    }
+                    self.recordPosition(y)
                 }
             })
             observers.append(NotificationCenter.default.addObserver(forName: NSScrollView.willStartLiveScrollNotification,
@@ -381,14 +450,33 @@ struct PanelResumeScrollKeeper: NSViewRepresentable {
                     return event
                 }
             }
+            observers.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.flushPendingPosition() }
+            })
+            observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self, weak window] _ in
+                MainActor.assumeIsolated {
+                    if window?.isVisible == false { self?.flushPendingPosition() }
+                }
+            })
+            for name in [NSApplication.willTerminateNotification, NSApplication.didHideNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.flushPendingPosition() }
+                })
+            }
             scheduleRestore()
         }
 
-        private func stopObserving() {
+        func stopObserving() {
+            flushPendingPosition()
             observers.forEach { NotificationCenter.default.removeObserver($0) }
             observers.removeAll()
             if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
             wheelMonitor = nil
+        }
+
+        override func viewDidHide() {
+            super.viewDidHide()
+            flushPendingPosition()
         }
 
         deinit {

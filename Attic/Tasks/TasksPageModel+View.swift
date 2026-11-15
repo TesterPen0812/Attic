@@ -399,9 +399,7 @@ extension TasksPageModel {
             switch other {
             case .now, .backlog:
                 let scope: TaskScope = other == .backlog ? .backlog : .tasks
-                count = store.snapshot(for: scope).sections.filter { $0.status != .done }.reduce(0) { total, section in
-                    total + section.tasks.filter { tagged($0) && store.matchesItemSearch($0, query: query) }.count
-                }
+                count = store.openItemSearchCount(for: scope, matching: query, tags: tag)
             case .done:
                 count = store.doneTodayTasks().filter { tagged($0) && store.matchesItemSearch($0, query: query) }.count
                     + store.indexedDoneLogCount(matching: query, tags: tag)

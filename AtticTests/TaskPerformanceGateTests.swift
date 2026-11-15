@@ -3,10 +3,518 @@ import SwiftData
 import XCTest
 @testable import Attic
 
+private struct PF5CountedID: Hashable {
+    let value: Int
+    nonisolated(unsafe) static var comparisons = 0
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        comparisons += 1
+        return lhs.value == rhs.value
+    }
+
+    func hash(into hasher: inout Hasher) { hasher.combine(value / 2) }
+}
+
 /// Scaling costs compare three interleaved runs with the same-job reference
 /// in macos-ci.yml. Functional invariants and paired memoization gates stay.
 @MainActor
 final class TaskPerformanceGateTests: XCTestCase {
+
+    func testPF8TagTotalsDoNotEvictActiveDoneSearchBetweenPages() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        for index in 0..<120 {
+            let task = TaskItem(title: index.isMultiple(of: 3) ? "alpha \(index)" : "other \(index)", status: .done)
+            task.doneLoggedAt = Date(timeIntervalSince1970: Double(1_700_000_000 + index))
+            task.tags = [index.isMultiple(of: 2) ? "work" : "home"]
+            seed.insert(task)
+        }
+        try seed.save()
+        let store = TaskStore(container: container)
+        let work = TagPicks(["work"])
+        let home = TagPicks(["home"])
+        #if DEBUG
+        store.resetDoneSearchFullScanVisits()
+        #endif
+
+        let first = store.indexedDoneLogPage(limit: 5, matching: "alpha", tags: work)
+        XCTAssertNil(first.failure)
+        XCTAssertEqual(first.tasks.count, 5)
+        XCTAssertEqual(store.indexedDoneLogCount(matching: "alpha", tags: work), 20)
+        XCTAssertEqual(store.indexedDoneLogCount(tags: work), 60)
+        let second = store.indexedDoneLogPage(from: first.next, limit: 5, matching: "alpha", tags: work)
+        XCTAssertNil(second.failure)
+        XCTAssertEqual(second.tasks.count, 5)
+        XCTAssertTrue(Set(first.tasks.map(\.id)).isDisjoint(with: second.tasks.map(\.id)))
+        #if DEBUG
+        XCTAssertEqual(store.doneSearchFullScanVisits, 240,
+            "One search and one tag-total scan; the next matching page must reuse the first scan")
+        print("PF8_COUNTS first_page_count_second_page_visits=\(store.doneSearchFullScanVisits)")
+        #endif
+
+        // The no-tag total is already O(1), and must not evict a query.
+        #if DEBUG
+        store.resetDoneSearchFullScanVisits()
+        #endif
+        let noTagFirst = store.indexedDoneLogPage(limit: 5, matching: "alpha", tags: .none)
+        XCTAssertEqual(store.indexedDoneLogCount(), 120)
+        _ = store.indexedDoneLogPage(from: noTagFirst.next, limit: 5, matching: "alpha", tags: .none)
+        #if DEBUG
+        XCTAssertEqual(store.doneSearchFullScanVisits, 120)
+        #endif
+
+        // Tag changes change the cache key; a repeated count for that tag is free.
+        #if DEBUG
+        store.resetDoneSearchFullScanVisits()
+        #endif
+        XCTAssertEqual(store.indexedDoneLogCount(tags: home), 60)
+        XCTAssertEqual(store.indexedDoneLogCount(tags: home), 60)
+        #if DEBUG
+        XCTAssertEqual(store.doneSearchFullScanVisits, 120)
+        store.doneSearchLocaleOverrideForTesting = "perf-test-locale-1"
+        XCTAssertEqual(store.indexedDoneLogCount(tags: home), 60)
+        XCTAssertEqual(store.doneSearchFullScanVisits, 240, "Locale changes invalidate cached comparisons")
+        store.doneSearchLocaleOverrideForTesting = nil
+        #endif
+
+        // A change imported from another context invalidates both entries.
+        let external = ModelContext(container)
+        let imported = TaskItem(title: "alpha new", status: .done)
+        imported.doneLoggedAt = Date(timeIntervalSince1970: 1_700_001_000)
+        imported.tags = ["work"]
+        external.insert(imported)
+        try external.save()
+        store.refresh()
+        #if DEBUG
+        store.resetDoneSearchFullScanVisits()
+        #endif
+        XCTAssertEqual(store.indexedDoneLogCount(matching: "alpha", tags: work), 21)
+        XCTAssertEqual(store.indexedDoneLogCount(tags: work), 61)
+        #if DEBUG
+        XCTAssertEqual(store.doneSearchFullScanVisits, 242,
+            "A changed archived tag invalidates both search and total entries")
+        #endif
+    }
+
+    func testPF3ReparentRefreshesOldAndNewFamiliesWithoutTouchingUnrelatedRows() async throws {
+        let store = TaskStore(container: try PersistenceController.makeContainer(inMemory: true))
+        let library = AtticLibrary(tasks: store)
+        let first = try XCTUnwrap(store.create(title: "Source parent"))
+        let second = try XCTUnwrap(store.create(title: "Target parent"))
+        _ = try XCTUnwrap(store.create(title: "Unrelated parent"))
+        let child = try XCTUnwrap(store.create(title: "Child", parentID: first.id))
+        let model = TasksPageModel(library: library)
+        let firstPage = TaskNotePageModel(taskID: first.id, store: store, library: library,
+            history: WorkspaceHistory(route: library.undo, historyID: .tasks), defaults: nil)
+        let secondPage = TaskNotePageModel(taskID: second.id, store: store, library: library,
+            history: WorkspaceHistory(route: library.undo, historyID: .tasks), defaults: nil)
+        XCTAssertEqual(model.rows(for: .now).count, 3)
+        XCTAssertEqual(firstPage.rows.map(\.id), [child.id])
+        XCTAssertTrue(secondPage.rows.isEmpty)
+        model.resetRowProjectionBuildCount()
+        firstPage.resetRefreshCountForTesting()
+        secondPage.resetRefreshCountForTesting()
+
+        XCTAssertTrue(store.reparentSubtask(child.id, to: second.id))
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        let rows = model.rows(for: .now)
+        let formerParent = try XCTUnwrap(rows.first { $0.id == first.id })
+        XCTAssertNil(formerParent.model.subtasks, "An empty family hides its checklist indicator")
+        let receivingParent = try XCTUnwrap(rows.first { $0.id == second.id })
+        XCTAssertEqual(receivingParent.model.subtasks?.total, 1)
+        XCTAssertLessThanOrEqual(model.rowProjectionBuildCount, 2)
+        XCTAssertTrue(firstPage.rows.isEmpty)
+        XCTAssertEqual(secondPage.rows.map(\.id), [child.id])
+        XCTAssertEqual(firstPage.refreshCountForTesting, 1)
+        XCTAssertEqual(secondPage.refreshCountForTesting, 1)
+    }
+
+    func testPF3ReboundRootMovesBetweenWarmedSectionsWithoutResortingOtherRoots() throws {
+        let store = TaskStore(container: try PersistenceController.makeContainer(inMemory: true))
+        let moving = try XCTUnwrap(store.create(title: "Move this root"))
+        let staying = try XCTUnwrap(store.create(title: "Keep this root"))
+        XCTAssertEqual(store.snapshot(for: .tasks).visibleCount, 2)
+        XCTAssertEqual(store.snapshot(for: .backlog).visibleCount, 0)
+        store.resetSnapshotRootKeyBuilds()
+
+        XCTAssertTrue(store.setStatus(.backlog, for: moving))
+        let now = store.snapshot(for: .tasks)
+        let later = store.snapshot(for: .backlog)
+        XCTAssertEqual(now.sections.flatMap(\.tasks).map(\.id), [staying.id])
+        XCTAssertEqual(now.activeCount, 1)
+        XCTAssertEqual(later.sections.flatMap(\.tasks).map(\.id), [moving.id])
+        XCTAssertEqual(later.visibleCount, 1)
+
+        XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: moving.id)), to: "Renamed in Backlog"))
+        XCTAssertEqual(store.snapshot(for: .backlog).sections.flatMap(\.tasks).map(\.title), ["Renamed in Backlog"])
+        XCTAssertEqual(store.snapshotRootKeyBuilds, 0,
+            "Confirmed same-family changes should only reinsert the affected sort slot")
+
+        // A complete fresh-context rebuild is the ordering oracle: the
+        // incrementally maintained snapshots must have identical membership.
+        let warmedNowIDs = store.snapshot(for: .tasks).sections.flatMap(\.tasks).map(\.id)
+        let warmedLaterIDs = store.snapshot(for: .backlog).sections.flatMap(\.tasks).map(\.id)
+        store.refresh()
+        XCTAssertEqual(store.snapshot(for: .tasks).sections.flatMap(\.tasks).map(\.id), warmedNowIDs)
+        XCTAssertEqual(store.snapshot(for: .backlog).sections.flatMap(\.tasks).map(\.id), warmedLaterIDs)
+    }
+
+    func testPF3SingleTaskEditReprojectsOnlyAffectedRowsAndCoalescesTaskNotes() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let ids = (0..<250).map { index -> UUID in
+            let task = TaskItem(title: "Task \(index)")
+            seed.insert(task)
+            return task.id
+        }
+        try seed.save()
+        let store = TaskStore(container: container)
+        let library = AtticLibrary(tasks: store)
+        let model = TasksPageModel(library: library)
+        let observed = TaskNotePageModel(taskID: ids[0], store: store, library: library,
+            history: WorkspaceHistory(route: library.undo, historyID: .tasks), defaults: nil)
+        let affected = TaskNotePageModel(taskID: ids[1], store: store, library: library,
+            history: WorkspaceHistory(route: library.undo, historyID: .tasks), defaults: nil)
+        XCTAssertEqual(model.rows(for: .now).count, 250)
+        model.resetRowProjectionBuildCount()
+        store.resetSnapshotRootKeyBuilds()
+        observed.resetRefreshCountForTesting()
+        affected.resetRefreshCountForTesting()
+        for revision in 0..<10 {
+            XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: ids[1])), to: "Edited \(revision)"))
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertEqual(model.rows(for: .now).count, 250)
+        XCTAssertLessThanOrEqual(model.rowProjectionBuildCount, 2,
+            "One task edit must not rebuild the other 249 projected row models")
+        XCTAssertLessThanOrEqual(store.snapshotRootKeyBuilds, 2,
+            "A warmed scope must not recreate 250 unrelated section sort keys")
+        XCTAssertEqual(observed.refreshCountForTesting, 0, "Unrelated task pages do not refresh")
+        XCTAssertEqual(affected.refreshCountForTesting, 1, "Ten synchronous revisions coalesce once")
+        XCTAssertEqual(affected.head.title, "Edited 9")
+        print("PF3_COUNTS projections=\(model.rowProjectionBuildCount) root_keys=\(store.snapshotRootKeyBuilds) unrelated_refreshes=\(observed.refreshCountForTesting) affected_refreshes=\(affected.refreshCountForTesting)")
+    }
+
+    func testPF4OrdinaryNoteRevisionAvoidsTaskWritingJoinsAndAffectedTaskOwnerStaysIndexed() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let task = TaskItem(title: "Root")
+        seed.insert(task)
+        let owned = NoteItem(title: "Task's writing", body: "needle in task writing")
+        owned.taskID = task.id
+        seed.insert(owned)
+        for index in 0..<75 {
+            let note = NoteItem(title: "Task note \(index)", body: String(repeating: "text ", count: 300))
+            note.taskID = UUID()
+            seed.insert(note)
+        }
+        let ordinary = NoteItem(title: "Ordinary", body: "original")
+        seed.insert(ordinary)
+        try seed.save()
+
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = TaskStore(container: container)
+        store.observeItemWriting(notes)
+        XCTAssertTrue(store.matchesItemSearch(try XCTUnwrap(store.task(withID: task.id)), query: "needle"))
+        let page = TasksPageModel(library: AtticLibrary(tasks: store))
+        XCTAssertEqual(page.rows(for: .now).count, 1)
+        store.resetItemWritingBodyJoins()
+        XCTAssertTrue(notes.update(try XCTUnwrap(notes.note(withID: ordinary.id)), body: "ordinary edit"))
+        XCTAssertEqual(store.itemWritingBodyJoins, 0,
+            "An ordinary note must leave every task-writing contribution untouched")
+        let ordinaryJoins = store.itemWritingBodyJoins
+
+        store.resetItemWritingBodyJoins()
+        page.resetRowProjectionBuildCount()
+        XCTAssertTrue(notes.update(try XCTUnwrap(notes.note(withID: owned.id)), body: "replaced term"))
+        XCTAssertLessThanOrEqual(store.itemWritingBodyJoins, 1,
+            "Editing one task note must not join unrelated task notes")
+        let winner = try XCTUnwrap(store.task(withID: task.id))
+        XCTAssertFalse(store.matchesItemSearch(winner, query: "needle"))
+        XCTAssertTrue(store.matchesItemSearch(winner, query: "replaced"))
+        XCTAssertEqual(page.rows(for: .now).count, 1)
+        XCTAssertEqual(page.rowProjectionBuildCount, 0,
+            "Search-index publications must not rebuild an unfiltered task row")
+        print("PF4_COUNTS ordinary_joins=\(ordinaryJoins) changed_owner_joins=\(store.itemWritingBodyJoins) unfiltered_row_projections=\(page.rowProjectionBuildCount)")
+    }
+
+    func testPF2ConfirmedMembershipChangesDoNotReloadUnrelatedArchive() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        for index in 0..<400 {
+            let archived = TaskItem(title: "Old done \(index)", status: .done)
+            archived.doneLoggedAt = Date(timeIntervalSince1970: 1_650_000_000)
+            seed.insert(archived)
+        }
+        try seed.save()
+        let store = TaskStore(container: container)
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let destination = try XCTUnwrap(store.create(title: "Destination"))
+        store.resetFullTaskReloadCount()
+        let child = try XCTUnwrap(store.create(title: "New child", parentID: parent.id))
+        XCTAssertEqual(store.fullTaskReloadCount, 0, "Confirmed insertion should not fetch all archived tasks")
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.id), [child.id])
+
+        XCTAssertTrue(store.reparentSubtask(child.id, to: destination.id))
+        XCTAssertEqual(store.fullTaskReloadCount, 0, "Confirmed move should invalidate old and new family locally")
+        XCTAssertTrue(store.subtasks(of: parent.id).isEmpty)
+        XCTAssertEqual(store.subtasks(of: destination.id).map(\.id), [child.id])
+        print("PF2_COUNTS plain_insert_reparent_full_reloads=\(store.fullTaskReloadCount)")
+
+        // Whole-item deletion writes a preservation receipt through the
+        // journaled compatibility writer. Its source context cannot become
+        // the fresh presentation context; keep the full reload until that
+        // durability boundary has a separately verified incremental design.
+        let beforeDeletionRevision = store.revision
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.task(withID: child.id))))
+        XCTAssertEqual(store.fullTaskReloadCount, 1, "Journaled deletion must replace its staging context")
+        XCTAssertEqual(store.revision, beforeDeletionRevision + 1,
+            "One durable deletion must publish one coherent presentation revision")
+        XCTAssertNil(store.task(withID: child.id))
+        XCTAssertTrue(store.subtasks(of: destination.id).isEmpty)
+        let childID = child.id
+        let durableRows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == childID }))
+        XCTAssertTrue(durableRows.allSatisfy { $0.deletedAt != nil })
+        print("PF2_COUNTS journaled_deletion_full_reloads=\(store.fullTaskReloadCount)")
+    }
+
+    func testPF2JournaledPresentationReadFailureRecoversFromFreshContext() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = TaskStore(container: container)
+        let task = try XCTUnwrap(store.create(title: "To delete"))
+        store.resetFullTaskReloadCount()
+        store.listRefreshFailures = 1
+        let beforeDeletionRevision = store.revision
+
+        XCTAssertTrue(store.delete(task), "The durable save cannot be refused by a presentation read")
+        XCTAssertEqual(store.listRefreshFailures, 0)
+        XCTAssertEqual(store.fullTaskReloadCount, 2,
+            "After a failed journaled presentation read, retry a fresh-context reload")
+        XCTAssertEqual(store.revision, beforeDeletionRevision + 1,
+            "Do not notify subscribers before the successful recovery read")
+        XCTAssertNil(store.revisionChangedTaskIDs,
+            "A journaled read failure cannot be published as a confirmed narrow change")
+        XCTAssertNil(store.task(withID: task.id))
+        let taskID = task.id
+        let durableRows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID }))
+        XCTAssertTrue(durableRows.allSatisfy { $0.deletedAt != nil })
+        XCTAssertNotNil(store.create(title: "Safe follow-up"), "Subsequent writes must use the refreshed context")
+    }
+
+    func testPF2ExhaustedPresentationRecoveryRefusesWritesUntilFreshRead() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = TaskStore(container: container)
+        let task = try XCTUnwrap(store.create(title: "Durably deleted"))
+        store.resetFullTaskReloadCount()
+        // The first two reads fail after the deletion is durable; the next
+        // command also cannot get an authoritative context on its first try.
+        store.listRefreshFailures = 3
+
+        XCTAssertTrue(store.delete(task))
+        XCTAssertEqual(store.fullTaskReloadCount, 2)
+        XCTAssertNil(store.create(title: "Must be refused while recovery is blocked"))
+        XCTAssertEqual(store.fullTaskReloadCount, 3)
+        let allRows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertFalse(allRows.contains { $0.title == "Must be refused while recovery is blocked" })
+
+        XCTAssertNotNil(store.create(title: "Created after recovery"))
+        XCTAssertEqual(store.fullTaskReloadCount, 4)
+        XCTAssertNil(store.task(withID: task.id))
+        XCTAssertTrue(allRows.contains { $0.id == task.id && $0.deletedAt != nil })
+    }
+
+    /// Review R-1: a failed refresh must not make every later save that skips
+    /// `prepareTaskEdit` refuse. The staged edit saves, then the list recovers.
+    func testPF2RestoreDeletedStillSavesAfterFailedRefresh() throws {
+        let store = try makeTestStore()
+        let gone = try XCTUnwrap(store.create(title: "Gone"))
+        let kept = try XCTUnwrap(store.create(title: "Kept"))
+        XCTAssertTrue(store.delete(gone))
+        // The rename is durable; its publish read and the fallback refresh fail.
+        store.listRefreshFailures = 2
+        XCTAssertTrue(store.rename(kept, to: "Renamed"))
+        XCTAssertEqual(store.listRefreshFailures, 0)
+
+        XCTAssertTrue(store.restoreDeleted(taskID: gone.id), "A stale list must not refuse the restore")
+        XCTAssertNotNil(store.task(withID: gone.id))
+        XCTAssertEqual(store.task(withID: kept.id)?.title, "Renamed")
+        XCTAssertTrue(store.tasks.contains { $0.id == gone.id })
+        let goneID = gone.id
+        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == goneID }))
+        XCTAssertTrue(rows.allSatisfy { $0.deletedAt == nil })
+        XCTAssertNotNil(store.create(title: "Follow-up"), "The list is fresh again")
+    }
+
+    /// Review R-1: the daily cleanup removes rows from `tasks` before saving;
+    /// a refused save would leave the list and the family index disagreeing.
+    func testPF2DoneLogCleanupStaysCoherentAfterFailedRefresh() throws {
+        let store = try makeTestStore()
+        let done = try XCTUnwrap(store.create(title: "Done long ago"))
+        let kept = try XCTUnwrap(store.create(title: "Kept"))
+        XCTAssertTrue(store.setStatus(.done, for: done))
+        store.listRefreshFailures = 2
+        XCTAssertTrue(store.rename(kept, to: "Renamed"))
+        XCTAssertEqual(store.listRefreshFailures, 0)
+
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: Date().addingTimeInterval(86_400)), 1)
+        XCTAssertFalse(store.tasks.contains { $0.id == done.id })
+        XCTAssertNil(store.task(withID: done.id), "List and family index must agree")
+        XCTAssertNotNil(store.task(withID: kept.id))
+    }
+
+    /// Review R-2: the incremental publish must leave the family index
+    /// usable by the synchronous `@Published` sinks, which read it in willSet
+    /// before `revision` advances. No full rebuild on the rebind fast path.
+    func testPF3RenameOnRebindFastPathDoesNotRebuildFamilyIndex() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        for index in 0..<250 { seed.insert(TaskItem(title: "Task \(index)")) }
+        try seed.save()
+        let store = TaskStore(container: container)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let rows = model.rows(for: .now)
+        XCTAssertEqual(rows.count, 250)
+        let target = try XCTUnwrap(store.task(withID: rows[100].id))
+        store.resetFamilyIndexRebuilds()
+
+        XCTAssertTrue(store.rename(target, to: "Renamed"))
+        XCTAssertEqual(store.familyIndexRebuilds, 0, "A rebound edit must not rebuild the whole index")
+        XCTAssertEqual(store.task(withID: target.id)?.title, "Renamed")
+        XCTAssertEqual(store.familyIndexRebuilds, 0)
+        XCTAssertEqual(model.rows(for: .now).count, 250)
+        XCTAssertEqual(store.familyIndexRebuilds, 0)
+    }
+
+    func testPF2ReparentUpdatesEveryPhysicalReplicaWithoutReload() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let from = TaskItem(title: "Old parent")
+        let to = TaskItem(title: "New parent")
+        let id = UUID()
+        seed.insert(from)
+        seed.insert(to)
+        seed.insert(TaskItem(id: id, title: "Old replica", updatedAt: Date(timeIntervalSince1970: 100),
+                             parentID: from.id))
+        seed.insert(TaskItem(id: id, title: "New replica", updatedAt: Date(timeIntervalSince1970: 200),
+                             parentID: from.id))
+        try seed.save()
+        let store = TaskStore(container: container)
+        XCTAssertEqual(store.subtasks(of: from.id).map(\.id), [id])
+        store.resetFullTaskReloadCount()
+
+        XCTAssertTrue(store.reparentSubtask(id, to: to.id))
+        XCTAssertEqual(store.fullTaskReloadCount, 0)
+        XCTAssertTrue(store.subtasks(of: from.id).isEmpty)
+        XCTAssertEqual(store.subtasks(of: to.id).map(\.id), [id])
+        let replicas = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        XCTAssertEqual(replicas.count, 2)
+        XCTAssertTrue(replicas.allSatisfy { $0.parentID == to.id },
+                      "A presentation optimization cannot skip another physical UUID replica")
+        XCTAssertEqual(store.subtasks(of: to.id).first?.title, "New replica")
+    }
+
+    func testPF5BulkDeleteFocusIsLinearAndKeepsSelectionBoundaries() {
+        let ids = (0..<120).map { PF5CountedID(value: $0) }
+        PF5CountedID.comparisons = 0
+        let chosen = TaskDeletionFocus.next(visible: ids, deleting: ids.filter { $0.value.isMultiple(of: 2) || $0.value == 119 })
+        XCTAssertEqual(chosen?.value, 117)
+        XCTAssertLessThanOrEqual(PF5CountedID.comparisons, 120 * 8,
+                                 "Deleting many selected rows must not perform nested linear searches")
+        print("PF5_COUNTS comparisons=\(PF5CountedID.comparisons)")
+
+        XCTAssertEqual(TaskDeletionFocus.next(visible: [0, 1, 2, 3], deleting: [1]), 2)
+        XCTAssertEqual(TaskDeletionFocus.next(visible: [0, 1, 2], deleting: [0, 2]), 1)
+        XCTAssertEqual(TaskDeletionFocus.next(visible: [0, 1, 2], deleting: [999]), 1)
+        XCTAssertNil(TaskDeletionFocus.next(visible: [0, 1, 2], deleting: [0, 1, 2]))
+        XCTAssertNil(TaskDeletionFocus.next(visible: [0], deleting: [0]))
+    }
+
+    func testPF6ArchivedSelectionSkipsUnrelatedRevisionsAndBatchesUnknownChanges() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let live = TaskItem(title: "Unrelated active task")
+        seed.insert(live)
+        var archivedIDs: [UUID] = []
+        for index in 0..<160 {
+            let archived = TaskItem(title: "Archived \(index)", status: .done)
+            archived.doneLoggedAt = Date(timeIntervalSince1970: 1_700_000_000)
+            archivedIDs.append(archived.id)
+            seed.insert(archived)
+        }
+        try seed.save()
+        let store = TaskStore(container: container)
+        let page = TasksPageModel(library: AtticLibrary(tasks: store))
+        page.select(tab: .done)
+        page.selectCopies(archivedIDs)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+
+        store.resetDoneLookupCounts()
+        XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: live.id)), to: "Changed unrelated task"))
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertEqual(page.selection.count, archivedIDs.count)
+        XCTAssertEqual(store.doneIndividualLookupFetches + store.doneBatchLookupFetches, 0,
+                       "An unrelated known-ID edit must not query selected archived rows")
+        let knownFetches = store.doneIndividualLookupFetches + store.doneBatchLookupFetches
+
+        let beforeBurstPrunes = page.selectionPruneExecutions
+        for index in 0..<10 {
+            XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: live.id)), to: "Burst \(index)"))
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertLessThanOrEqual(page.selectionPruneExecutions - beforeBurstPrunes, 1,
+            "Ten synchronous store revisions must schedule at most one reconciliation")
+        XCTAssertEqual(store.doneIndividualLookupFetches + store.doneBatchLookupFetches, 0)
+
+        store.resetDoneLookupCounts()
+        store.refresh() // Unknown changed-ID set must reconcile every logical selected family.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertEqual(page.selection.count, archivedIDs.count)
+        XCTAssertLessThanOrEqual(store.doneIndividualLookupFetches + store.doneBatchLookupFetches, 1,
+                                 "Unknown revisions must batch canonical Done lookups")
+        print("PF6_COUNTS known_fetches=\(knownFetches) unknown_fetches=\(store.doneIndividualLookupFetches + store.doneBatchLookupFetches)")
+    }
+
+    func testPF6UnknownRefreshResolvesDivergentArchivedReplicaFamilies() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let listedID = UUID(), deletedID = UUID()
+        let old = Date(timeIntervalSince1970: 100)
+        let recent = Date(timeIntervalSince1970: 200)
+        for id in [listedID, deletedID] {
+            let older = TaskItem(id: id, title: "Old copy", status: .done, updatedAt: old)
+            older.doneLoggedAt = old
+            seed.insert(older)
+            let newer = TaskItem(id: id, title: "New copy", status: .done, updatedAt: recent)
+            newer.doneLoggedAt = recent
+            if id == deletedID { newer.deletedAt = recent }
+            seed.insert(newer)
+        }
+        try seed.save()
+        let store = TaskStore(container: container)
+        let page = TasksPageModel(library: AtticLibrary(tasks: store))
+        page.select(tab: .done)
+        page.selectCopies([listedID, deletedID])
+        store.resetDoneLookupCounts()
+        store.refresh()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertEqual(page.selection, [listedID], "The newest deleted replica excludes its logical family")
+        XCTAssertEqual(store.doneIndividualLookupFetches, 0)
+        XCTAssertEqual(store.doneBatchLookupFetches, 1)
+    }
 
     func testR04BulkAcknowledgementsRollBackEveryReplicaAndPreserveOneUndoStep() async throws {
         struct Rejected: Error {}

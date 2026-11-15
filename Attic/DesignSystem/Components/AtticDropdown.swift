@@ -442,6 +442,7 @@ enum AtticDropdownDiagnostics {
     static var hintRetains = 0
     static var reveals = 0
     static var contentMaskBuilds = 0
+    static var contentMaskBuildsByOwner: [UUID: Int] = [:]
 }
 #endif
 
@@ -1770,6 +1771,11 @@ extension EnvironmentValues {
     @Entry var atticUnfoldCornerRadius: CGFloat = AtticDropdownMetrics.cornerRadius
     /// An enclosing `AtticUnfoldContent` already cuts and blurs this content.
     @Entry var atticUnfoldTreated = false
+    #if DEBUG
+    /// Stable fixture identity for mask diagnostics; unrelated hosts may
+    /// still finish an animation while this card is being exercised.
+    @Entry var atticUnfoldDiagnosticsOwner: UUID? = nil
+    #endif
 }
 
 /// A card that unfolds: its coordinate space and corners, so its contents
@@ -1830,9 +1836,15 @@ struct AtticUnfoldContent: ViewModifier {
     }
 
     @MainActor
-    static func contentPath(in rect: CGRect, cornerRadius: CGFloat, reveal: CGFloat, fromTop: Bool) -> Path {
+    static func contentPath(in rect: CGRect, cornerRadius: CGFloat, reveal: CGFloat, fromTop: Bool,
+                            diagnosticsOwner: UUID? = nil) -> Path {
         #if DEBUG
-        if AtticDropdownDiagnostics.enabled { AtticDropdownDiagnostics.contentMaskBuilds += 1 }
+        if AtticDropdownDiagnostics.enabled {
+            AtticDropdownDiagnostics.contentMaskBuilds += 1
+            if let diagnosticsOwner, let count = AtticDropdownDiagnostics.contentMaskBuildsByOwner[diagnosticsOwner] {
+                AtticDropdownDiagnostics.contentMaskBuildsByOwner[diagnosticsOwner] = count + 1
+            }
+        }
         #endif
         return AtticUnfoldShape(cornerRadius: cornerRadius, reveal: reveal, fromTop: fromTop).path(in: rect)
     }
@@ -1846,6 +1858,9 @@ private struct AtticUnfoldContentMask: View, Equatable {
     let fromTop: Bool
     let cornerRadius: CGFloat
     @StateObject private var geometry = AtticUnfoldContentPathCache()
+    #if DEBUG
+    @Environment(\.atticUnfoldDiagnosticsOwner) private var diagnosticsOwner
+    #endif
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.reveal == rhs.reveal && lhs.fromTop == rhs.fromTop && lhs.cornerRadius == rhs.cornerRadius
@@ -1855,7 +1870,12 @@ private struct AtticUnfoldContentMask: View, Equatable {
         if let reveal {
             GeometryReader { proxy in
                 if let card = proxy.bounds(of: .named(AtticUnfoldCard.space)) {
+                    #if DEBUG
+                    geometry.path(in: card, cornerRadius: cornerRadius, reveal: reveal, fromTop: fromTop,
+                                  diagnosticsOwner: diagnosticsOwner)
+                    #else
                     geometry.path(in: card, cornerRadius: cornerRadius, reveal: reveal, fromTop: fromTop)
+                    #endif
                 } else {
                     Rectangle()
                 }
@@ -1872,10 +1892,12 @@ private struct AtticUnfoldContentMask: View, Equatable {
 private final class AtticUnfoldContentPathCache: ObservableObject {
     private var cached: (rect: CGRect, cornerRadius: CGFloat, reveal: CGFloat, fromTop: Bool, path: Path)?
 
-    func path(in rect: CGRect, cornerRadius: CGFloat, reveal: CGFloat, fromTop: Bool) -> Path {
+    func path(in rect: CGRect, cornerRadius: CGFloat, reveal: CGFloat, fromTop: Bool,
+              diagnosticsOwner: UUID? = nil) -> Path {
         if let cached, cached.rect == rect, cached.cornerRadius == cornerRadius,
            cached.reveal == reveal, cached.fromTop == fromTop { return cached.path }
-        let path = AtticUnfoldContent.contentPath(in: rect, cornerRadius: cornerRadius, reveal: reveal, fromTop: fromTop)
+        let path = AtticUnfoldContent.contentPath(in: rect, cornerRadius: cornerRadius, reveal: reveal, fromTop: fromTop,
+                                                diagnosticsOwner: diagnosticsOwner)
         cached = (rect, cornerRadius, reveal, fromTop, path)
         return path
     }

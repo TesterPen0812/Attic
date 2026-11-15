@@ -1191,9 +1191,41 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
             coordinator.controls = controls
             chrome.controls = controls
             let objects = NoteObjectControls(engine: engine, textView: textView)
+            objects.requestSource = { [weak coordinator, weak presenter, weak objects] request in
+                guard let coordinator, let presenter, presenter.lease != nil,
+                      let session = presenter.session, let controller = presenter.page.controller,
+                      session.engine === engine, !session.isReadOnly else { return }
+                if let previous = coordinator.filePickerOwner { TaskAttachmentPickerSession.cancel(owner: previous) }
+                let owner = UUID(), taskID = presenter.taskID
+                coordinator.filePickerOwner = owner
+                TaskAttachmentPickerSession.present(owner: owner, parentWindow: textView.window,
+                    allowedTypes: [.item], allowsMultipleSelection: false) { [weak coordinator, weak presenter, weak objects] urls in
+                    guard let coordinator, coordinator.filePickerOwner == owner else { return }
+                    coordinator.filePickerOwner = nil
+                    guard let presenter, presenter.lease != nil, presenter.taskID == taskID,
+                          presenter.session === session, session.engine === engine,
+                          !session.isReadOnly, let url = urls.first else { return }
+                    switch request {
+                    case let .retry(id):
+                        Task { @MainActor in _ = await controller.retryFailedFile(id, with: url, in: session) }
+                    case let .locate(id):
+                        objects?.locate(id, at: url)
+                    }
+                }
+            }
             coordinator.objects = objects
             chrome.objectControls = objects
         }
+    }
+
+    /// Hosted tests inspect the actual control installation without opening an OS file picker.
+    static func configuredControlsForTesting(presenter: TaskNotePresenter) -> Coordinator {
+        let view = TaskNoteHostRepresentable(presenter: presenter, chrome: NotesPageChrome(),
+            columnInset: 28, topInset: 76, bottomInset: 60, design: .default,
+            engineGeneration: presenter.engineGeneration)
+        let coordinator = view.makeCoordinator()
+        view.configureControls(coordinator)
+        return coordinator
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {

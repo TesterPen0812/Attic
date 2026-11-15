@@ -96,12 +96,8 @@ struct RecentlyDeletedSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(sections, id: \.kind) { section in
                 SettingsGroup(title: section.kind.sectionTitle, identifier: "recently-deleted-\(section.kind.rawValue)") {
-                    ForEach(Array(section.entries.enumerated()), id: \.element.id) { index, entry in
-                        if index > 0 {
-                            AtticGroupDivider(leadingInset: AtticSettingsRowMetrics.iconTextInset)
-                        }
+                    RecentlyDeletedSectionRows(entries: section.entries) { entry in
                         row(entry)
-                            .id(entry.id)
                     }
                 }
             }
@@ -246,6 +242,25 @@ struct RecentlyDeletedSettingsView: View {
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
+    }
+}
+
+/// Keep each section's existing group-card shape and separators while
+/// allowing its rows to be measured against large deletion inventories.
+struct RecentlyDeletedSectionRows<Content: View>: View {
+    let entries: [RecentlyDeletedEntry]
+    @ViewBuilder let row: (RecentlyDeletedEntry) -> Content
+
+    var body: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                if index > 0 {
+                    AtticGroupDivider(leadingInset: AtticSettingsRowMetrics.iconTextInset)
+                }
+                row(entry)
+                    .id(entry.id)
+            }
+        }
     }
 }
 

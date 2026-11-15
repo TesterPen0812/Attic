@@ -304,22 +304,43 @@ final class PhaseXHunt9Tests: XCTestCase {
         XCTAssertEqual(store.revision, revision, "presentation refresh never saves")
     }
 
-    func testH11_08DeletedSubtaskParentReleasesFailedCreationHold() throws {
+    func testH11_08DeletedSubtaskParentReleasesFailedCreationHold() async throws {
+        print("CI8R2_SUBTASK pid=\(getpid())")
         let gate = PersistenceGate()
         let store = try makeTestStore(persist: gate.save), library = AtticLibrary(tasks: store)
         let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let parentID = parent.id
         let model = TasksPageModel(library: library, services: TasksPageServices())
-        model.beginAddingSubtask(to: parent.id)
+        model.beginAddingSubtask(to: parentID)
         model.newSubtaskTitle = "Unsaved child"
         gate.shouldFail = true
         XCTAssertFalse(model.commitNewSubtask())
         gate.shouldFail = false
+        // Drain the initial revision's queued prune while the parent still
+        // exists, so only deletion can satisfy the editor-idle observation.
+        let ready = expectation(description: "initial task revision settled")
+        DispatchQueue.main.async { ready.fulfill() }
+        await fulfillment(of: [ready], timeout: 0.15)
         XCTAssertTrue(model.hasUnsavedEdit)
-        XCTAssertTrue(library.delete(AtticItemRef(.task, parent.id)))
-        spin()
+        let idle = expectation(description: "deleting the parent releases the failed subtask editor")
+        let observation = model.editorsIdle.first().sink { idle.fulfill() }
+        defer { observation.cancel() }
+        XCTAssertTrue(library.delete(AtticItemRef(.task, parentID)))
+        await fulfillment(of: [idle], timeout: 0.15)
+        print("CI8R2_SUBTASK live=\(store.task(withID: parentID) != nil) listed=\(store.listedTask(withID: parentID) != nil) editor=\(String(describing: model.newSubtaskParentID))")
         XCTAssertNil(model.newSubtaskParentID)
         XCTAssertFalse(model.hasUnsavedEdit, "missing editor cannot hold every subsequent agent reveal")
         XCTAssertNil(model.failedSave, "or offer a retry against its deleted parent")
+    }
+
+    func testCI8R2FailedSubtaskCleanupFromMainActorTask() async {
+        let returned = expectation(description: "subtask cleanup harness returned")
+        Task { @MainActor in
+            do { try await self.testH11_08DeletedSubtaskParentReleasesFailedCreationHold() }
+            catch { XCTFail("Subtask fixture failed: \(error)") }
+            returned.fulfill()
+        }
+        await fulfillment(of: [returned], timeout: 5)
     }
 
     func testCoverageRenameSurvivesRollbackThenClosesForMoveAndUndoDoesNotReopenIt() throws {

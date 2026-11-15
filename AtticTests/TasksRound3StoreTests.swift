@@ -514,6 +514,51 @@ final class PanelUndoKeyTests: XCTestCase {
         window.keyDown(with: event)
     }
 
+    func testBG71PanelHeaderUndoTargetsOpenTaskNoteBeforeCoveredTasksHistory() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let taskID = try TaskNotePreviewSeed.seed(.boundary, in: container)
+        let tasks = TaskStore(container: container)
+        let library = AtticLibrary(tasks: tasks)
+        let noteStore = trackAttachmentReconciliation(of: NoteStore(container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()))
+        let draft = NoteDraftController(noteStore: noteStore)
+        draft.pages.attachUndoRoute(library.undo)
+        await draft.pages.startAndWait()
+        let suite = "PanelUndoTaskNote.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let uiState = PanelUIState()
+        let panel = AtticPanelController(store: tasks, noteStore: noteStore,
+            canvasSession: CanvasSession(store: CanvasStore(container: container)),
+            noteDraft: draft, settings: AppSettings(defaults: defaults), uiState: uiState)
+        let presenter = try draft.pages.openTaskNote(taskID: taskID, tasks: tasks,
+            library: library, design: .default, columnInset: 28, defaults: nil)
+        uiState.openTaskNote(taskID, from: .tasks)
+        let child = try XCTUnwrap(tasks.subtasks(of: taskID).first { $0.title == "Write release notes" })
+        XCTAssertTrue(library.updateTask(child.id, status: .done,
+            in: .taskWorkspace(taskID)).isApplied)
+        XCTAssertEqual(tasks.task(withID: child.id)?.status, .done)
+        XCTAssertTrue(library.updateTask(taskID, title: "Changed under the task note", in: .tasks).isApplied)
+        XCTAssertTrue(library.undo.canUndo(in: .tasks))
+        XCTAssertTrue(library.undo.canUndo(in: .taskWorkspace(taskID)))
+
+        let window = panel.panelForTesting
+        XCTAssertTrue(window.canPerformUnhandledUndo?(false) == true)
+        sendUndoKey(false, to: window)
+        for _ in 0..<100 where tasks.task(withID: child.id)?.status == .done { await Task.yield() }
+        XCTAssertEqual(tasks.task(withID: child.id)?.status, .todo,
+            "the task note overlay owns Undo even with the Tasks page underneath")
+        XCTAssertEqual(tasks.task(withID: taskID)?.title, "Changed under the task note",
+            "Tasks history must remain untouched")
+        XCTAssertTrue(library.undo.canUndo(in: .tasks))
+        XCTAssertTrue(window.canPerformUnhandledUndo?(true) == true)
+        sendUndoKey(true, to: window)
+        for _ in 0..<100 where tasks.task(withID: child.id)?.status == .todo { await Task.yield() }
+        XCTAssertEqual(tasks.task(withID: child.id)?.status, .done)
+        let closed = await presenter.close()
+        XCTAssertTrue(closed)
+    }
+
     func testNotesLibraryUndoFromNonEditorFocusRestoresThePersistedPin() async throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let tasks = TaskStore(container: container)

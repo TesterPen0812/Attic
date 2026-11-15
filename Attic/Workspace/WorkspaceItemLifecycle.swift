@@ -5,6 +5,9 @@ import SwiftData
 /// lives on the rows themselves; there is no additional manifest or redirect.
 @MainActor
 enum WorkspaceItemLifecycle {
+    #if DEBUG
+    static var writingRowsExamined = 0
+    #endif
     static func has(_ name: String, in context: ModelContext) -> Bool {
         context.container.schema.entities.contains { $0.name == name }
     }
@@ -19,14 +22,31 @@ enum WorkspaceItemLifecycle {
         return tasks.contains(where: { includingDeleted || $0.deletedAt == nil }) ? id : nil
     }
     static func writing(taskIDs: Set<UUID>, in context: ModelContext) throws -> [NoteItem] {
-        guard has("NoteItem", in: context) else { return [] }
-        let all = try context.fetch(FetchDescriptor<NoteItem>())
-        let links = has("TaskNoteAssociation", in: context) ? try context.fetch(FetchDescriptor<TaskNoteAssociation>()) : []
-        let ids = Set(all.filter { $0.taskID.map(taskIDs.contains) == true }.map(\.id))
-            .union(links.filter { taskIDs.contains($0.taskID) && $0.detachedAt == nil }.map(\.noteID))
-        let rows = all.filter { ids.contains($0.id) }
+        guard has("NoteItem", in: context), !taskIDs.isEmpty else { return [] }
+        let owners = taskIDs.map(Optional.some)
+        let attached = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate {
+            owners.contains($0.taskID)
+        }))
+        let taskIDsArray = Array(taskIDs)
+        let linked = has("TaskNoteAssociation", in: context)
+            ? try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate {
+                taskIDsArray.contains($0.taskID) && $0.detachedAt == nil
+            })) : []
+        let selectedIDs = Set(attached.map(\.id)).union(linked.map(\.noteID))
+        guard !selectedIDs.isEmpty else { return [] }
+        let ids = Array(selectedIDs)
+        // Load every physical replica and every competing live association for
+        // the selected IDs. A foreign owner must still fail the same guard.
+        let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { ids.contains($0.id) }))
+        let competing = has("TaskNoteAssociation", in: context)
+            ? try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate {
+                ids.contains($0.noteID) && $0.detachedAt == nil
+            })) : []
+        #if DEBUG
+        writingRowsExamined += attached.count + linked.count + rows.count + competing.count
+        #endif
         guard rows.allSatisfy({ $0.taskID == nil || taskIDs.contains($0.taskID!) }),
-              links.filter({ ids.contains($0.noteID) && $0.detachedAt == nil }).allSatisfy({ taskIDs.contains($0.taskID) }) else {
+              competing.allSatisfy({ taskIDs.contains($0.taskID) }) else {
             throw WorkspaceFoundationError.conflict
         }
         return rows

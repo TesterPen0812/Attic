@@ -1947,6 +1947,17 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 }
 
+extension NoteEditorTextView: AtticMenuTrigger {
+    func opensAtticMenu(for event: NSEvent) -> Bool {
+        if AtticContextMenus.isContextPress(event) { return true }
+        guard event.type == .leftMouseDown else { return false }
+        if objectInteraction?.opensAtticMenu(for: event) == true { return true }
+        guard engine != nil, isEditable else { return false }
+        let point = convert(event.locationInWindow, from: nil)
+        return codeLabel(at: point) != nil || calloutIcon(at: point) != nil
+    }
+}
+
 /// Present an AppKit text context menu through Attic's glass menu. TextKit
 /// owns this menu's system rows (spelling, Look Up, Services, Writing Tools,
 /// Cut/Copy/Paste), while Notes inserts its own Format/Insert/link rows.
@@ -2059,6 +2070,7 @@ final class NoteUndoManagerShim: UndoManager {
 /// leaves the event to the text view.
 @MainActor
 protocol NoteObjectInteraction: AnyObject {
+    func opensAtticMenu(for event: NSEvent) -> Bool
     func handleMouseDown(_ event: NSEvent) -> Bool
     func objectMenu(for event: NSEvent) -> NSMenu?
     func objectContextCommands(for event: NSEvent) -> [AtticMenuCommand]?

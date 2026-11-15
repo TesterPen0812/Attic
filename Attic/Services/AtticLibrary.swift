@@ -747,16 +747,40 @@ final class AtticLibrary {
         let cutoff = RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar)
         let report = purgeDeleted(before: cutoff)
         // Deleted tasks that own notes go through the coordinated purge
-        // (Phase 3), after the legacy collector, without holding it up.
-        if let taskNotePurge {
-            Task { @MainActor [weak self] in
-                let writing = self?.deletedGroupWritingRefs() ?? [:]
-                let removed = await taskNotePurge(cutoff, nil, nil)
-                self?.invalidatePurgedTaskHistory(removed, writing: writing)
-                self?.forgetPresentation(ofTasks: removed)
-            }
+        // (Phase 3). Only expired candidates start this asynchronous work;
+        // activation bursts share one owned task and one pending follow-up.
+        if taskNotePurge != nil,
+           TaskNotePurge.hasExpiredCandidates(in: ModelContext(container), before: cutoff) {
+            enqueueCoordinatedPurge(before: cutoff)
         }
         return report
+    }
+
+    private var coordinatedPurgeTask: Task<Void, Never>?
+    private var coordinatedPurgeNextCutoff: Date?
+
+    private func enqueueCoordinatedPurge(before cutoff: Date) {
+        if coordinatedPurgeTask != nil {
+            coordinatedPurgeNextCutoff = max(coordinatedPurgeNextCutoff ?? cutoff, cutoff)
+            return
+        }
+        coordinatedPurgeTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var currentCutoff = cutoff
+            repeat {
+                if TaskNotePurge.hasExpiredCandidates(in: ModelContext(self.container), before: currentCutoff),
+                   let taskNotePurge = self.taskNotePurge {
+                    let writing = self.deletedGroupWritingRefs()
+                    let removed = await taskNotePurge(currentCutoff, nil, nil)
+                    self.invalidatePurgedTaskHistory(removed, writing: writing)
+                    self.forgetPresentation(ofTasks: removed)
+                }
+                guard let next = self.coordinatedPurgeNextCutoff else { break }
+                self.coordinatedPurgeNextCutoff = nil
+                currentCutoff = max(currentCutoff, next)
+            } while !Task.isCancelled
+            self.coordinatedPurgeTask = nil
+        }
     }
 
     /// Phase 3: removes for good deleted task families that own notes, each
@@ -789,20 +813,31 @@ final class AtticLibrary {
 
     /// Capture group writing before the coordinated purge removes its rows.
     /// Surviving independent writing keeps its materialization history.
+    private(set) var lastDeletedGroupWritingInventoryRows = 0
+
     private func deletedGroupWritingRefs() -> [UUID: Set<AtticItemRef>] {
+        lastDeletedGroupWritingInventoryRows = 0
         let context = ModelContext(container)
-        guard let tasks = try? context.fetch(FetchDescriptor<TaskItem>()),
+        guard let tasks = try? context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.deletionGroupID != nil })),
               WorkspaceItemLifecycle.has("NoteItem", in: context),
-              let notes = try? context.fetch(FetchDescriptor<NoteItem>()) else { return [:] }
-        let byGroup = Dictionary(grouping: notes.filter { $0.deletionGroupID != nil }, by: { $0.deletionGroupID! })
+              let groupedNotes = try? context.fetch(FetchDescriptor<NoteItem>(
+                predicate: #Predicate { $0.deletionGroupID != nil })),
+              let deletedNotes = try? context.fetch(FetchDescriptor<NoteItem>(
+                predicate: #Predicate { $0.deletedAt != nil })) else { return [:] }
+        lastDeletedGroupWritingInventoryRows = tasks.count + groupedNotes.count + deletedNotes.count
+        let byGroup = Dictionary(grouping: groupedNotes, by: { $0.deletionGroupID! })
         var refs: [UUID: Set<AtticItemRef>] = [:]
         for task in tasks {
             guard let group = task.deletionGroupID else { continue }
             refs[task.id, default: []].formUnion((byGroup[group] ?? []).map { .init(.note, $0.id) })
         }
         if WorkspaceItemLifecycle.has("TaskNoteAssociation", in: context),
-           let redirects = try? context.fetch(FetchDescriptor<TaskNoteAssociation>()) {
-            for redirect in redirects where redirect.detachedAt != nil && notes.contains(where: { $0.id == redirect.noteID && $0.deletedAt != nil }) {
+           let redirects = try? context.fetch(FetchDescriptor<TaskNoteAssociation>(
+                predicate: #Predicate { $0.detachedAt != nil })) {
+            lastDeletedGroupWritingInventoryRows += redirects.count
+            let deletedNoteIDs = Set(deletedNotes.map(\.id))
+            for redirect in redirects where deletedNoteIDs.contains(redirect.noteID) {
                 refs[redirect.taskID, default: []].insert(.init(.note, redirect.noteID))
             }
         }
@@ -810,12 +845,15 @@ final class AtticLibrary {
     }
 
     private func invalidatePurgedTaskHistory(_ removed: Set<UUID>, writing: [UUID: Set<AtticItemRef>]) {
+        guard !removed.isEmpty else { return }
         var refs = Set(removed.map { AtticItemRef(.task, $0) })
         // A removed task may leave independent writing alive. Conversely a
         // redirect note can have its own group. Invalidate note history only
         // after a fresh physical read proves that note was actually collected.
-        let context = ModelContext(container)
-        if let surviving = try? context.fetch(FetchDescriptor<NoteItem>()) {
+        let possibleNotes = Array(Set(removed.flatMap { (writing[$0] ?? []).map(\.id) }))
+        if !possibleNotes.isEmpty,
+           let surviving = try? ModelContext(container).fetch(FetchDescriptor<NoteItem>(
+                predicate: #Predicate { possibleNotes.contains($0.id) })) {
             let present = Set(surviving.map(\.id))
             for id in removed { refs.formUnion((writing[id] ?? []).filter { !present.contains($0.id) }) }
         }

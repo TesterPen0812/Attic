@@ -149,6 +149,9 @@ struct AgentChatWeekDay: Equatable, Identifiable {
     var day: Date
     /// One entry per bar: where it starts and how tall it is, 0...1 of the day.
     var bars: [ClosedRange<Double>]
+    /// The task due marks among `bars`, so a refresh can keep the ones the
+    /// strip was built with and replace only the Calendar bars.
+    var dueMarks: [ClosedRange<Double>] = []
     var id: Date { day }
 }
 
@@ -168,6 +171,9 @@ struct AgentChatWeek: Equatable {
 struct AgentChatReply: Equatable {
     var raw = ""
     var wordTimes: [Date] = []
+    /// A visible reply reuses completed paragraph text. Hidden runs defer
+    /// presentation work until reveal.
+    var parsed: AgentReplyPresentation? = nil
     /// When the underlines start: set once the reply is complete.
     var marksStart: Date?
 }
@@ -280,6 +286,146 @@ enum AgentChatWords {
         /// Written straight after the word before, with no space: the comma in
         /// `**Friday**,` is a word of its own so the underline stops at Friday.
         var joinsPrevious = false
+    }
+
+    /// Parses appended text once while preserving the reference parser's
+    /// cross-chunk `**` marks, whitespace and paragraph boundaries.
+    @MainActor
+    final class Stream {
+        private(set) var words: [Word] = []
+        private var breaks: [Int] = []
+        private var currentWord: Int?
+        private var partHasCharacters = false
+        private var partFirstWhitespace = false
+        private var partLastWhitespace = false
+        private var partWords = 0
+        private var touching = false
+        private var inKey = false
+        private var key = 0
+        private var pendingStar = false
+        private var previousNewline = false
+        private(set) var charactersExamined = 0
+        private(set) var wordsMaterialized = 0
+        private let presentation = AgentReplyPresentation()
+        private var presentedBreaks = 0
+        private var presentedParagraphStart = 0
+
+        var wordCount: Int { words.count + (pendingStar && currentWord == nil ? 1 : 0) }
+
+        func word(at index: Int) -> Word {
+            if index < words.count {
+                var result = words[index]
+                if pendingStar && currentWord == index { result.text += "*" }
+                return result
+            }
+            return Word(text: "*", key: inKey ? key : nil,
+                        joinsPrevious: partWords == 0 && touching && (!partHasCharacters || !partFirstWhitespace))
+        }
+
+        func append(_ text: String) {
+            charactersExamined += text.utf16.count
+            for character in text {
+                if character == "*" {
+                    previousNewline = false
+                    if pendingStar {
+                        pendingStar = false
+                        if partHasCharacters { touching = !partLastWhitespace }
+                        partHasCharacters = false
+                        partWords = 0
+                        currentWord = nil
+                        inKey.toggle()
+                        if inKey { key += 1 }
+                    } else {
+                        pendingStar = true
+                    }
+                    continue
+                }
+                if pendingStar {
+                    consume("*")
+                    pendingStar = false
+                }
+                if character == "\n", previousNewline {
+                    if words.count > (breaks.last ?? 0) { breaks.append(words.count) }
+                    partHasCharacters = false
+                    partWords = 0
+                    currentWord = nil
+                    touching = false
+                    previousNewline = false
+                } else {
+                    consume(character)
+                    previousNewline = character == "\n"
+                }
+            }
+        }
+
+        private func consume(_ character: Character) {
+            let whitespace = character.isWhitespace
+            if !partHasCharacters {
+                partHasCharacters = true
+                partFirstWhitespace = whitespace
+            }
+            partLastWhitespace = whitespace
+            if whitespace {
+                currentWord = nil
+            } else if let currentWord {
+                words[currentWord].text.append(character)
+            } else {
+                words.append(Word(text: String(character), key: inKey ? key : nil,
+                                  joinsPrevious: partWords == 0 && touching && !partFirstWhitespace))
+                partWords += 1
+                currentWord = words.count - 1
+            }
+        }
+
+        /// Only newly settled words and the unfinished tail reach the view.
+        /// The parser keeps one word buffer and reuses completed paragraph Text.
+        func present() -> AgentReplyPresentation {
+            let settled = currentWord ?? words.count
+            while presentation.committedWords < settled {
+                let index = presentation.committedWords
+                wordsMaterialized += 1
+                presentation.commit(words[index], at: index, paragraphStart: paragraphStart(at: index))
+            }
+            if currentWord != nil || pendingStar {
+                let index = currentWord ?? words.count
+                wordsMaterialized += 1
+                presentation.showTail(word(at: index), at: index, paragraphStart: paragraphStart(at: index))
+            } else {
+                presentation.showTail(nil, at: words.count, paragraphStart: 0)
+            }
+            return presentation
+        }
+
+        private func paragraphStart(at index: Int) -> Int {
+            while presentedBreaks < breaks.count, breaks[presentedBreaks] <= index {
+                presentedParagraphStart = breaks[presentedBreaks]
+                presentedBreaks += 1
+            }
+            return presentedParagraphStart
+        }
+
+        func paragraphs() -> [[Word]] {
+            var snapshot = words
+            if pendingStar {
+                if let currentWord {
+                    snapshot[currentWord].text += "*"
+                } else {
+                    snapshot.append(word(at: snapshot.count))
+                }
+            }
+            var paragraphs: [[Word]] = []
+            var start = 0
+            for end in breaks where end > start {
+                wordsMaterialized += end - start
+                paragraphs.append(Array(snapshot[start..<end]))
+                start = end
+            }
+            if start < snapshot.count {
+                wordsMaterialized += snapshot.count - start
+                paragraphs.append(Array(snapshot[start...]))
+            }
+            return paragraphs
+        }
     }
 
     /// Paragraphs of words, in order. `**` marks a key phrase and never
@@ -406,6 +552,9 @@ final class AgentChatModel: ObservableObject {
     var rowTitles: () -> [(id: UUID, title: String)] = { [] }
     /// What the week strip shows, for the week holding a day.
     var weekDays: (Date) -> [AgentChatWeekDay] = { AgentChatModel.emptyWeek(holding: $0) }
+    /// EventKit weeks arrive through its async worker; the immediate strip
+    /// can still show task marks and motion while calendar bars are loading.
+    var loadWeekDays: ((Date) async -> [AgentChatWeekDay])?
     /// Told when the pages with a dot change.
     var onDotsChanged: ((Set<AgentPage>) -> Void)?
     var pacing = AgentChatPacing()
@@ -436,6 +585,8 @@ final class AgentChatModel: ObservableObject {
     private var pendingSteps: [UUID] = []
     /// This run's week strip. Each run has its own, so an earlier one stays as it was.
     private(set) var runWeek: UUID?
+    private var weekReadTask: Task<Void, Never>?
+    private var weekReadGeneration: UInt64 = 0
     /// The page the agent itself is going to: arriving there keeps the chat open.
     private var agentGoingTo: AgentPage?
     /// The page the agent switched to while it is watched: the chip names it
@@ -456,6 +607,11 @@ final class AgentChatModel: ObservableObject {
     private var presented: Set<UUID> = []
     private var nextWordTime: Date?
     private var replyEnds: Date?
+    private var replyParser: AgentChatWords.Stream?
+    #if DEBUG
+    private(set) var replyParsingCharactersExamined = 0
+    private(set) var replyParsingWordsMaterialized = 0
+    #endif
     /// While a saved thread is put back: its words are already written.
     private var restoring = false
 
@@ -487,6 +643,7 @@ final class AgentChatModel: ObservableObject {
             : nil
         let archived = activeStart.map { Array(snapshot.entries[..<$0]) } ?? snapshot.entries
         restore(archived)
+        presented = Set(entries.map(\.id))
         refreshHistory()
         guard snapshot.isRunning else { return }
         if let activeStart { entries.append(AgentChatEntry(.asked(snapshot.entries[activeStart].text))) }
@@ -504,6 +661,7 @@ final class AgentChatModel: ObservableObject {
         let resting = phase
         defer { restoring = false; phase = resting }
         entries = []
+        replyParser = nil
         for message in archived {
             switch message.role {
             case "user": entries.append(AgentChatEntry(.asked(message.text)))
@@ -724,6 +882,7 @@ final class AgentChatModel: ObservableObject {
         progress = nil
         pendingItems = []
         pendingSteps = []
+        cancelWeekRead()
         runWeek = nil
         nextWordTime = nil
         replyEnds = nil
@@ -966,6 +1125,26 @@ final class AgentChatModel: ObservableObject {
         #if DEBUG && ATTIC_LOCAL_ONLY
         AgentPassProbe.mark("StopRequested")
         #endif
+        if let queued = newChatQueuedSend {
+            // The visible Stop belongs to the pending new thread, while the
+            // previous thread still has committed action receipts to drain.
+            // Cancelling its runner would not cancel this queued intent.
+            newChatQueuedSend = nil
+            if let last = entries.last, case let .asked(text) = last.content, text == queued.text {
+                entries.removeLast()
+            }
+            if draft.isEmpty && attachments.isEmpty {
+                draft = queued.text
+                attachments = queued.attachments
+            } else {
+                entries.append(AgentChatEntry(.note(Self.unsentQueuedNotice(queued))))
+            }
+            phase = .idle
+            isRunning = false
+            progress = nil
+            refreshBar()
+            return
+        }
         runner?.cancel()
     }
 
@@ -1038,6 +1217,7 @@ final class AgentChatModel: ObservableObject {
         stopWatching()
         isRunning = false
         entries = []
+        replyParser = nil
         approval = nil
         queuedApprovals.removeAll()
         phase = .idle
@@ -1046,6 +1226,7 @@ final class AgentChatModel: ObservableObject {
         presented = []
         pendingItems = []
         pendingSteps = []
+        cancelWeekRead()
         runWeek = nil
         includesPage = true
         attachments = []
@@ -1078,6 +1259,7 @@ final class AgentChatModel: ObservableObject {
         unread = false
         pendingItems = []
         pendingSteps = []
+        cancelWeekRead()
         runWeek = nil
         restore(runner.threadSnapshot().entries)
         presented = Set(entries.map(\.id))
@@ -1110,7 +1292,7 @@ final class AgentChatModel: ObservableObject {
         for attachment in attachments {
             switch attachment {
             case let .item(target): context.items.append(target)
-            case let .file(file): context.files.append(file)
+            case let .file(file, _): context.files.append(file)
             }
         }
         return context
@@ -1134,8 +1316,7 @@ final class AgentChatModel: ObservableObject {
     func attachFile(at url: URL) {
         switch AgentChatFiles.read(url) {
         case let .success(file):
-            let attachment = AgentChatAttachment.file(file)
-            attachments.removeAll { $0.id == attachment.id }
+            let attachment = AgentChatAttachment.file(file, id: UUID())
             attachments.append(attachment)
             attachmentRefusal = nil
         case let .failure(refusal):
@@ -1315,6 +1496,7 @@ final class AgentChatModel: ObservableObject {
                 presented = Set(entries.map(\.id))
                 pendingItems = []
                 pendingSteps = []
+                cancelWeekRead()
                 runWeek = nil
                 runChangeCount = 0
                 nextWordTime = nil
@@ -1341,16 +1523,32 @@ final class AgentChatModel: ObservableObject {
             reply = current
             id = last.id
         }
+        if id == nil { replyParser = AgentChatWords.Stream() }
+        let parser = replyParser ?? AgentChatWords.Stream()
+        replyParser = parser
         reply.raw += text
-        let words = AgentChatWords.paragraphs(reply.raw).flatMap { $0 }
+        #if DEBUG
+        let previousCharacters = parser.charactersExamined
+        #endif
+        parser.append(text)
+        #if DEBUG
+        replyParsingCharactersExamined += parser.charactersExamined - previousCharacters
+        #endif
         // Closed, or with Reduce Motion: already written when it is next seen.
         let writes = isOpen && !reducesMotion() && !restoring
         var next = writes ? max(nextWordTime ?? time, time) : time
-        while reply.wordTimes.count < words.count {
-            let word = words[reply.wordTimes.count]
+        while reply.wordTimes.count < parser.wordCount {
+            let word = parser.word(at: reply.wordTimes.count)
             reply.wordTimes.append(writes ? next : .distantPast)
             next += AgentChatWords.gap(after: word.text, pacing: pacing)
         }
+        #if DEBUG
+        let previousMaterialized = parser.wordsMaterialized
+        #endif
+        reply.parsed = isOpen && !restoring ? parser.present() : nil
+        #if DEBUG
+        replyParsingWordsMaterialized += parser.wordsMaterialized - previousMaterialized
+        #endif
         nextWordTime = next
         replyEnds = next.addingTimeInterval(pacing.settle)
         if let id {
@@ -1366,6 +1564,7 @@ final class AgentChatModel: ObservableObject {
         reply.marksStart = isOpen && !reducesMotion() && !restoring
             ? (replyEnds?.addingTimeInterval(-pacing.settle) ?? now()) : .distantPast
         update(last.id) { $0 = .reply(reply) }
+        replyParser = nil
     }
 
     private func stepStarted(_ step: AgentStep) {
@@ -1383,9 +1582,15 @@ final class AgentChatModel: ObservableObject {
             weekID = showWeek(holding: day, target: day, dots: step.targets.count)
         } else if step.kind == .read, step.targets.contains(where: { $0.page == .calendar }) {
             // Adaptive UI: an empty week would be seven blank boxes.
-            let days = runWeek == nil ? weekDays(now()) : nil
+            let day = now()
+            let days = runWeek == nil ? weekDays(day) : nil
             if days?.contains(where: { !$0.bars.isEmpty }) ?? true {
-                weekID = showWeek(holding: now(), target: nil, dots: 0, days: days)
+                weekID = showWeek(holding: day, target: nil, dots: 0, days: days)
+                if days != nil, let weekID { refreshWeekDays(holding: day, entryID: weekID) }
+            } else if loadWeekDays != nil {
+                // A read containing only EventKit events has no task marks to
+                // show yet. The async result decides whether a strip appears.
+                refreshWeekDays(holding: day, entryID: nil, after: step.id)
             }
         }
         guard isOpen else {
@@ -1483,13 +1688,18 @@ final class AgentChatModel: ObservableObject {
             let entry = AgentChatEntry(.week(AgentChatWeek(days: days ?? weekDays(day), target: target, dots: dots)))
             entries.append(entry)
             runWeek = entry.id
+            if days == nil { refreshWeekDays(holding: day, entryID: entry.id) }
             return entry.id
         }
         guard let target else { return runWeek }
         let calendar = Calendar.autoupdatingCurrent
+        var switchedWeek = false
         update(runWeek) {
             guard case var .week(week) = $0 else { return }
-            if !week.days.contains(where: { calendar.isDate($0.day, inSameDayAs: target) }) { week.days = weekDays(target) }
+            if !week.days.contains(where: { calendar.isDate($0.day, inSameDayAs: target) }) {
+                week.days = weekDays(target)
+                switchedWeek = true
+            }
             if let shown = week.target, calendar.isDate(shown, inSameDayAs: target) {
                 week.dots += dots
             } else {
@@ -1499,7 +1709,73 @@ final class AgentChatModel: ObservableObject {
             }
             $0 = .week(week)
         }
+        if switchedWeek { refreshWeekDays(holding: day, entryID: runWeek) }
         return runWeek
+    }
+
+    private func cancelWeekRead() {
+        weekReadGeneration &+= 1
+        weekReadTask?.cancel()
+        weekReadTask = nil
+    }
+
+    private func refreshWeekDays(holding day: Date, entryID: UUID?, after stepID: UUID? = nil) {
+        guard let loadWeekDays else { return }
+        cancelWeekRead()
+        let generation = weekReadGeneration
+        weekReadTask = Task { [weak self] in
+            let days = await loadWeekDays(day)
+            guard let self, !Task.isCancelled, self.weekReadGeneration == generation else { return }
+            self.weekReadTask = nil
+            if let entryID {
+                guard self.runWeek == entryID, let newFirst = days.first?.day else { return }
+                self.update(entryID) {
+                    guard case var .week(week) = $0,
+                          let oldFirst = week.days.first?.day,
+                          Calendar.autoupdatingCurrent.isDate(oldFirst, inSameDayAs: newFirst) else { return }
+                    week.days = Self.keepingDueMarks(of: week.days, in: days)
+                    $0 = .week(week)
+                }
+            } else if self.runWeek == nil, days.contains(where: { !$0.bars.isEmpty }),
+                      let stepIndex = self.entries.firstIndex(where: { $0.id == stepID }) {
+                // A short agent run may finish before EventKit replies. Its
+                // original read still owns this generation until a new run
+                // explicitly invalidates it. The strip goes under its step,
+                // and only a live run owns it.
+                let entry = AgentChatEntry(.week(AgentChatWeek(days: days, target: nil, dots: 0)))
+                self.entries.insert(entry, at: stepIndex + 1)
+                if self.isRunning { self.runWeek = entry.id }
+            }
+        }
+    }
+
+    /// Source-change callbacks refresh existing calendar bars through the
+    /// same invalidatable async path without replaying move animations.
+    func calendarWeekSourceChanged() {
+        // A finished run's strip stays as the agent saw it.
+        guard isRunning, let runWeek,
+              let entry = entries.first(where: { $0.id == runWeek }),
+              case let .week(week) = entry.content,
+              let day = week.days.first?.day else { return }
+        refreshWeekDays(holding: day, entryID: runWeek)
+    }
+
+    /// A refreshed week keeps the due marks the strip was built with (a move
+    /// draws the task going to its day) and takes only the new Calendar bars.
+    private static func keepingDueMarks(of old: [AgentChatWeekDay], in new: [AgentChatWeekDay]) -> [AgentChatWeekDay] {
+        let calendar = Calendar.autoupdatingCurrent
+        return new.map { day in
+            guard let kept = old.first(where: { calendar.isDate($0.day, inSameDayAs: day.day) }),
+                  !(kept.dueMarks.isEmpty && day.dueMarks.isEmpty) else { return day }
+            var bars = day.bars
+            for mark in day.dueMarks {
+                if let index = bars.firstIndex(of: mark) { bars.remove(at: index) }
+            }
+            var merged = day
+            merged.bars = (bars + kept.dueMarks).sorted { $0.lowerBound < $1.lowerBound }
+            merged.dueMarks = kept.dueMarks
+            return merged
+        }
     }
 
     private func updateWeek(_ change: (inout AgentChatWeek) -> Void) {
@@ -1539,7 +1815,7 @@ final class AgentChatModel: ObservableObject {
                 return top...(top + 0.24)
             }
             guard let next = calendar.date(byAdding: .day, value: 1, to: entry.day) else {
-                return AgentChatWeekDay(day: entry.day, bars: taskMarks)
+                return AgentChatWeekDay(day: entry.day, bars: taskMarks, dueMarks: taskMarks)
             }
             let interval = DateInterval(start: entry.day, end: next)
             let seconds = next.timeIntervalSince(entry.day)
@@ -1559,7 +1835,8 @@ final class AgentChatModel: ObservableObject {
                 } else { busy.append(span) }
             }
             return AgentChatWeekDay(day: entry.day,
-                                    bars: (busy + taskMarks).sorted { $0.lowerBound < $1.lowerBound })
+                                    bars: (busy + taskMarks).sorted { $0.lowerBound < $1.lowerBound },
+                                    dueMarks: taskMarks)
         }
     }
 

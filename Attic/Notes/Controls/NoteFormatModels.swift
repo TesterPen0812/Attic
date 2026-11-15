@@ -531,6 +531,12 @@ final class NoteFormatCardModel: ObservableObject {
     @Published var linkSuggestionIndex = 0
     var noteCandidates: (() -> [NoteLinkCandidate])?
     var onLinkSuggestionsChange: (() -> Void)?
+    /// A title is only the editable label; an existing link keeps its exact
+    /// destination until the person edits or explicitly picks a suggestion.
+    private var openedLink: (url: String, text: String)?
+    /// The highlighted row when the card opened. Return commits the opened
+    /// link only while the highlight is still there; arrows or hover move it.
+    private var openedLinkSuggestionIndex = 0
 
     func refreshLinkSuggestions() {
         let query = linkText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -607,15 +613,22 @@ final class NoteFormatCardModel: ObservableObject {
         if let noteID {
             linkText = noteCandidates?().first(where: { $0.id == noteID })?.title ?? ""
         } else { linkText = url ?? "" }
+        openedLink = url.map { (url: $0, text: linkText) }
         linkError = nil
         card = .link(hasLink: url != nil)
         refreshLinkSuggestions()
         if let noteID, let index = linkSuggestions.firstIndex(where: { $0.id == noteID }) {
             linkSuggestionIndex = index
         }
+        openedLinkSuggestionIndex = linkSuggestionIndex
     }
 
     func submitLink() {
+        if let openedLink, linkText == openedLink.text, linkSuggestionIndex == openedLinkSuggestionIndex {
+            if onCommitLink?(openedLink.url) == true { return }
+            linkError = String(localized: "This link could not be updated.")
+            return
+        }
         if !linkSuggestions.isEmpty { chooseNote(linkSuggestionIndex); return }
         let url = Self.normalizedURL(linkText)
         if onCommitLink?(url) == true { return }

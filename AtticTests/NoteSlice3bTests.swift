@@ -1034,6 +1034,35 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertEqual(controller.active?.engine.objectState(retryID), .importFailed("Failed"))
     }
 
+    func testRetryFailedFileIsNotDroppedWhenTypingAndAutosaveLandDuringTheLoad() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        let doc = NoteDocument(blocks: [.text("Plan"),
+            .file(filename: "retry.png", contentTypeIdentifier: "public.png", byteCount: 0, importFailure: "Failed")])
+        guard case .success = store.createDocumentNote(id: id, document: doc) else { return XCTFail() }
+        let loader = FirstSuspendedLoader(try stagedImage())
+        let controller = NotesPageController(store: store, journal: nil, imageLoader: { await loader.load($0) })
+        await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let retryID = try XCTUnwrap(doc.blocks.last?.id)
+        XCTAssertEqual(session.engine.objectState(retryID), .importFailed("Failed"))
+        let source = URL(fileURLWithPath: "/tmp/AtticRetryDuringEdit-\(UUID().uuidString).png")
+        let retry = Task { @MainActor in await controller.retryFailedFile(retryID, with: source) }
+        for _ in 0..<100 {
+            if await loader.started { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let didStart = await loader.started
+        XCTAssertTrue(didStart)
+        // The person keeps typing, and an autosave lands, while the file loads.
+        session.engine.onTextChange?()
+        _ = controller.preserve(session)
+        await loader.release()
+        let replaced = await retry.value
+        XCTAssertTrue(replaced, "a newer draft must not silently drop the file the person picked")
+        XCTAssertNotEqual(session.engine.objectState(retryID), .importFailed("Failed"))
+    }
+
     func testR6AggregateLimitUsesLogicalDraftAndRetainedIDsWithoutStaging() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let items = (0..<7).map { staged("\($0).pdf") }

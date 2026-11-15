@@ -181,6 +181,9 @@ final class NoteStore: ObservableObject {
 
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var revision: UInt64 = 0
+    /// Nil for imports or a commit whose changed note owners cannot be
+    /// identified; task-writing search then makes a complete reconciliation.
+    private(set) var revisionChangedNoteIDs: Set<UUID>?
     let purgedNoteIDs = PassthroughSubject<Set<UUID>, Never>()
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
 #if os(macOS)
@@ -1569,6 +1572,11 @@ final class NoteStore: ObservableObject {
     func present(_ note: NoteItem) {
         guard !notes.contains(where: { $0.id == note.id }) else { return }
         notes.append(note)
+        guard note.taskID != nil else { return }
+        // A newly inserted plain-text note was not in the published array
+        // when its save revision fired. Publish its new owner after present.
+        revisionChangedNoteIDs = [note.id]
+        revision &+= 1
     }
 
     /// Every physical row of a live note (throws when none).
@@ -1699,18 +1707,29 @@ final class NoteStore: ObservableObject {
         do {
             invalidateTagInventory(in: context)
             invalidateAttachmentProofs(in: context)
+            let changedNotes = Set((context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray)
+                .compactMap { ($0 as? NoteItem)?.id })
+            // An attachment can move between owners or disappear during a
+            // document replacement. The safe fallback recomputes every owner.
+            let changedAttachments = (context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray)
+                .contains { $0 is NoteAttachment }
             #if os(macOS)
             try PerformanceSignposts.storeSave { try Self.persistStoreContext(context, using: persist) }
             #else
             try Self.persistStoreContext(context, using: persist)
             #endif
+            var changedNoteIDs: Set<UUID>?
             do {
-                if try !WorkspaceLegacyBridge.wasPlainCommit(in: context) { try reloadModels(preservingAttachmentProofs: true) }
+                if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
+                    if !changedAttachments { changedNoteIDs = changedNotes }
+                } else {
+                    try reloadModels(preservingAttachmentProofs: true)
+                }
                 lastErrorMessage = nil
             } catch {
                 lastErrorMessage = "Saved, but presentation is still updating: \(error.localizedDescription)"
             }
-            registerSuccessfulLocalSave()
+            registerSuccessfulLocalSave(changedNoteIDs: changedNoteIDs)
             return true
         } catch {
             let saveError = error is WorkspaceLegacyBridge.CommitHeld
@@ -1734,8 +1753,9 @@ final class NoteStore: ObservableObject {
         installPresentation(presentation, using: refreshedContext, preservingAttachmentProofs: preservingAttachmentProofs)
     }
 
-    private func registerSuccessfulLocalSave() {
+    private func registerSuccessfulLocalSave(changedNoteIDs: Set<UUID>? = nil) {
         tagInventoryDidSave()
+        revisionChangedNoteIDs = changedNoteIDs
         revision &+= 1
         #if !ATTIC_LOCAL_ONLY
         cloudSyncProtection.noteLocalSave()
@@ -1781,6 +1801,7 @@ final class NoteStore: ObservableObject {
         let availableIDs = Set(attachmentsByNoteID.values.flatMap { $0.map(\.id) })
         attachmentFailures = attachmentFailures.filter { availableIDs.contains($0.key) }
         attachmentRetryVersions = attachmentRetryVersions.filter { availableIDs.contains($0.key) }
+        revisionChangedNoteIDs = nil
         revision &+= 1
         reconcileFileStorage(with: presentation.attachments)
     }
@@ -1847,6 +1868,7 @@ final class NoteStore: ObservableObject {
         documentReplicaCapabilityCache.removeAll()
         itemWritingIDs = Self.itemWritingIDs(from: fetchedNotes)
         notes = visibleUniqueNotes(from: fetchedNotes).filter { $0.deletedAt == nil }
+        revisionChangedNoteIDs = nil
         revision &+= 1
     }
 #endif

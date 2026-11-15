@@ -492,8 +492,9 @@ final class AppSettings: ObservableObject {
         revealDisplays = RevealDisplays(rawValue: defaults.string(forKey: Key.revealDisplays) ?? "") ?? .all
         revealDisplayIDs = Array(Set((defaults.stringArray(forKey: Key.revealDisplayIDs) ?? []).filter { !$0.isEmpty })).sorted()
         if let code = defaults.object(forKey: Key.quickCaptureKeyCode) as? Int,
-           let mask = defaults.object(forKey: Key.quickCaptureModifiers) as? Int, code >= 0, mask >= 0 {
-            let stored = GlobalHotKeyCombination(keyCode: UInt32(code), modifiers: UInt32(mask))
+           let mask = defaults.object(forKey: Key.quickCaptureModifiers) as? Int,
+           let keyCode = UInt32(exactly: code), let modifiers = UInt32(exactly: mask) {
+            let stored = GlobalHotKeyCombination(keyCode: keyCode, modifiers: modifiers)
             // A stored value Attic can't claim safely falls back to the default.
             quickCaptureShortcut = stored.recordingProblem == nil ? stored : .newTask
         } else {

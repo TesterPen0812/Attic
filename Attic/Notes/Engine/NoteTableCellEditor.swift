@@ -13,7 +13,11 @@ import QuartzCore
 /// - Keys that cross a cell's edge go to the table: arrows at the text's
 ///   ends, Tab, Return, ⌥Return (a line break), Esc, ⌘A.
 @MainActor
-final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
+final class NoteTableCellEditor: NSTextView, NSTextViewDelegate, AtticMenuTrigger {
+    func opensAtticMenu(for event: NSEvent) -> Bool {
+        AtticContextMenus.isContextPress(event) && table?.engine != nil
+    }
+
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         if let value = (link as? URL)?.absoluteString ?? link as? String { table?.engine?.openLink(value) }
         return true

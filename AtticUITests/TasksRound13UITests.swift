@@ -99,10 +99,10 @@ final class TasksRound13UITests: XCTestCase {
         XCTAssertEqual(editors("Title").count, 0, "and the title editor did not open")
     }
 
-    /// Settings ▸ General ▸ Animations opens Attic's own pop-over list (an
-    /// opaque surface, not the system menu's blur) and choosing an entry sets
-    /// the row's value; the original choice is put back.
-    func testTheAnimationsPopUpOpensAnOpaqueListAndChooses() throws {
+    /// Settings pickers use system-menu glass (Accepted 12 Nov evening;
+    /// menus-conform explicitly includes Settings pop-ups). Choosing an
+    /// entry sets the row's value; the original choice is put back.
+    func testTheAnimationsPopUpOpensItsGlassListAndChooses() throws {
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows["Attic Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "Settings opens")
@@ -113,12 +113,12 @@ final class TasksRound13UITests: XCTestCase {
         popUp.click()
         let choice = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", other)).firstMatch
         XCTAssertTrue(choice.waitForExistence(timeout: 3), "the list offers \(other)")
-        choice.click()
+        clickGlassMenuItem(choice, titled: other, in: app)
         waitFor((popUp.value as? String) == other, "the row shows \(other)")
         popUp.click()
         let back = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", original)).firstMatch
         XCTAssertTrue(back.waitForExistence(timeout: 3))
-        back.click()
+        clickGlassMenuItem(back, titled: original, in: app)
         waitFor((popUp.value as? String) == original, "and the original choice is back")
     }
 }

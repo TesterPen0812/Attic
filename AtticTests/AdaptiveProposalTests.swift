@@ -102,6 +102,44 @@ final class AdaptiveProposalTests: XCTestCase {
         XCTAssertTrue(NoteProposalChangeSet(current: Self.current, proposed: proposed).changes.isEmpty)
     }
 
+    func testBG15RefreshedComparisonKeepsOppositeDecisionsOnRepeatedChanges() throws {
+        let current = NoteDocument(blocks: [
+            .text("Title"), .text("A"), .text("K"), .text("A"), .text("L"), .text("C"),
+        ])
+        let proposed = NoteDocument(blocks: [
+            .text("Title"), .text("B"), .text("K"), .text("B"), .text("L"), .text("D"),
+        ])
+        let before = NoteProposalChangeSet(current: current, proposed: proposed)
+        let repeated = before.changes.filter { before.key(for: $0) == before.key(for: before.changes[0]) }
+        XCTAssertEqual(repeated.count, 2)
+        var decisions = NoteProposalDecisions()
+        decisions.decide([repeated[0].id], accept: true)
+        decisions.decide([repeated[1].id], accept: false)
+
+        // An unrelated proposed paragraph changes during the review refresh.
+        var refreshedProposal = proposed
+        refreshedProposal.blocks[5] = .text("Another ending")
+        let refreshed = NoteProposalChangeSet(current: current, proposed: refreshedProposal)
+        let sameChanges = refreshed.changes.filter { refreshed.key(for: $0) == before.key(for: repeated[0]) }
+        XCTAssertEqual(sameChanges.count, 2)
+        let carried = decisions.carried(from: before, to: refreshed)
+        XCTAssertEqual(carried.accepted[sameChanges[0].id], true, "first occurrence keeps Accept")
+        XCTAssertEqual(carried.accepted[sameChanges[1].id], false, "second occurrence keeps Reject")
+
+        // Seed 20261113: 128 successive refreshes with different unrelated
+        // endings must never transfer one repeated occurrence's decision.
+        for step in 0..<128 {
+            var changed = proposed
+            changed.blocks[5] = .text("Ending \(20261113 + step)")
+            let next = NoteProposalChangeSet(current: current, proposed: changed)
+            let copies = next.changes.filter { next.key(for: $0) == before.key(for: repeated[0]) }
+            XCTAssertEqual(copies.count, 2, "refresh \(step)")
+            let choices = decisions.carried(from: before, to: next)
+            XCTAssertEqual(choices.accepted[copies[0].id], true, "refresh \(step)")
+            XCTAssertEqual(choices.accepted[copies[1].id], false, "refresh \(step)")
+        }
+    }
+
     func testTheReviewShowsEachUndecidedChangeInPlaceAndDecidedOnesAsTheyWillRead() {
         let set = NoteProposalChangeSet(current: Self.current, proposed: Self.proposed)
         let open = set.display(decisions: [:])

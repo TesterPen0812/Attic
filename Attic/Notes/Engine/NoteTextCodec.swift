@@ -83,7 +83,7 @@ enum NoteTextCodec {
                     byteCount: block.byteCount ?? 0, importFailure: block.importFailure, extras: block.extras)
                 paragraph.append(attachmentString(file, attributes: attributes))
             case .divider:
-                paragraph.append(attachmentString(NoteDividerAttachment(objectID: block.id ?? UUID()), attributes: attributes))
+                paragraph.append(attachmentString(NoteDividerAttachment(objectID: block.id ?? UUID(), extras: block.extras), attributes: attributes))
             case .opaque:
                 let opaque = NoteOpaqueAttachment(objectID: block.opaqueID ?? UUID(), value: block.opaque ?? .null, isInline: false)
                 paragraph.append(attachmentString(opaque, attributes: attributes))
@@ -313,7 +313,9 @@ enum NoteTextCodec {
                 blocks.append(.opaque(opaque.value))
             case let divider as NoteDividerAttachment:
                 finishCurrent()
-                blocks.append(.divider(id: divider.objectID))
+                var block = NoteBlock.divider(id: divider.objectID)
+                block.extras = divider.extras
+                blocks.append(block)
             case let table as NoteTableAttachment:
                 finishCurrent()
                 var block = NoteBlock.table(table.table, id: table.objectID)

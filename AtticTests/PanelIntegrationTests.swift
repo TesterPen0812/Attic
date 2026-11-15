@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import ObjectiveC
+import QuartzCore
 import SwiftData
 import SwiftUI
 import XCTest
@@ -141,6 +142,194 @@ final class PanelIntegrationTests: XCTestCase {
         let unrelatedUIStateCounts = zip(counts, beforeUnrelatedUIState).map { current, previous in current - previous }
         print("GAP_R01 unrelated_ui_state_changes shell=\(unrelatedUIStateCounts[0]) tasks_host=\(unrelatedUIStateCounts[1]) notes_host=\(unrelatedUIStateCounts[2])")
         XCTAssertEqual(unrelatedUIStateCounts, [0, 0, 0], "A composer attachment picker flag should not redraw retained pages")
+        #endif
+    }
+
+    /// Deliver an edge drag to the real AppKit hosting responder; the window
+    /// frame, controller callback and retained SwiftUI pages all participate.
+    /// The hidden page should keep its layout until the drag is released.
+    func testLiveResizeUpdatesCurrentPageWithoutRebuildingRetainedNotesOnEachStep() throws {
+        #if ATTIC_LOCAL_ONLY
+        var counts = [0, 0, 0]
+        PanelInvalidationProbe.shell = { counts[0] += 1 }
+        PanelInvalidationProbe.tasksHost = { counts[1] += 1 }
+        PanelInvalidationProbe.notesHost = { counts[2] += 1 }
+        defer {
+            PanelInvalidationProbe.shell = nil
+            PanelInvalidationProbe.tasksHost = nil
+            PanelInvalidationProbe.notesHost = nil
+        }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        panel.uiState.prepareBuiltPage(.notes)
+        spin(0.6)
+        let before = counts
+        let window = panel.controller.panelForTesting
+        let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
+        host.suppressCaptureWatchdogForSyntheticTests = true
+        defer { host.suppressCaptureWatchdogForSyntheticTests = false }
+        let initial = window.visibleContentFrame
+        let pullsFromLeft = [.topRight, .bottomRight].contains(panel.controller.currentCorner)
+        let grip = CGPoint(x: pullsFromLeft ? initial.minX + 2 : initial.maxX - 2,
+                           y: initial.midY)
+        let direction: CGFloat = pullsFromLeft ? -1 : 1
+        func event(_ type: NSEvent.EventType, at point: CGPoint, timestamp: TimeInterval) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: window.convertPoint(fromScreen: point),
+                modifierFlags: [], timestamp: timestamp, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1
+            ))
+        }
+        host.mouseDown(with: try event(.leftMouseDown, at: grip, timestamp: 1))
+        XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.windowResize))
+        var stepTimesMs: [Double] = []
+        for index in 1...60 {
+            let location = CGPoint(x: grip.x + direction * CGFloat(index), y: grip.y)
+            let dragged = try event(.leftMouseDragged, at: location, timestamp: 1 + Double(index) * 0.02)
+            let began = CACurrentMediaTime()
+            host.mouseDragged(with: dragged)
+            host.layoutSubtreeIfNeeded()
+            stepTimesMs.append((CACurrentMediaTime() - began) * 1_000)
+            spin(0.015)
+        }
+        XCTAssertEqual(window.visibleContentFrame.width, initial.width + 60, accuracy: 1,
+                       "The edge drag must actually change the native panel frame")
+        let during = zip(counts, before).map { current, prior in current - prior }
+        print("RESIZE_HOST_COUNTS steps=60 shell=\(during[0]) tasks=\(during[1]) retained_notes=\(during[2])")
+        let ordered = stepTimesMs.sorted()
+        print(String(format: "RESIZE_STEP_MAIN_THREAD steps=60 median_ms=%.3f p95_ms=%.3f worst_ms=%.3f",
+                     ordered[ordered.count / 2], ordered[56], ordered.last ?? 0))
+        // Retain numbers in xcresult even when -quiet hides XCTest stdout.
+        XCTContext.runActivity(named: String(format:
+            "RESIZE_MEASURE steps=60 shell=%d tasks=%d retained_notes=%d median_ms=%.3f p95_ms=%.3f worst_ms=%.3f",
+            during[0], during[1], during[2], ordered[ordered.count / 2], ordered[56], ordered.last ?? 0
+        )) { _ in }
+        XCTAssertGreaterThan(during[0], 0, "The visible shell must follow the window size")
+        XCTAssertGreaterThan(during[1], 0, "The current Tasks page must receive the new geometry")
+        XCTAssertLessThanOrEqual(during[2], 3, "The hidden Notes page should not rebuild for intermediate resize sizes")
+        let beforeEnd = counts[2]
+        let release = CGPoint(x: grip.x + direction * 60, y: grip.y)
+        host.mouseUp(with: try event(.leftMouseUp, at: release, timestamp: 2.3))
+        spin(0.2)
+        XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.windowResize))
+        XCTAssertGreaterThan(counts[2], beforeEnd, "The retained page must receive the final geometry at release")
+        XCTAssertEqual(panel.uiState.panelSize.width, initial.width + 60, accuracy: 1)
+        #endif
+    }
+
+    /// Exercise a whole resize gesture repeatedly, including the exposed
+    /// corner, while Tasks/Notes are both retained behind other pages. A
+    /// synthetic AppKit event enters the production hosting responder and
+    /// changes the native window frame at every intermediate step.
+    func testLiveResizeRetainedPagesSurviveRepeatedEdgeAndCornerDragsOnEveryPage() throws {
+        #if ATTIC_LOCAL_ONLY
+        var tasksUpdates = 0
+        var notesUpdates = 0
+        PanelInvalidationProbe.tasksHost = { tasksUpdates += 1 }
+        PanelInvalidationProbe.notesHost = { notesUpdates += 1 }
+        defer {
+            PanelInvalidationProbe.tasksHost = nil
+            PanelInvalidationProbe.notesHost = nil
+        }
+
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        panel.uiState.prepareBuiltPage(.notes)
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
+        host.suppressCaptureWatchdogForSyntheticTests = true
+        defer { host.suppressCaptureWatchdogForSyntheticTests = false }
+
+        let docked = panel.controller.currentCorner
+        let leftGrip = docked == .topRight || docked == .bottomRight
+        let bottomGrip = docked == .topLeft || docked == .topRight
+        let xDirection: CGFloat = leftGrip ? -1 : 1
+        let yDirection: CGFloat = bottomGrip ? -1 : 1
+        func event(_ type: NSEvent.EventType, at point: CGPoint, timestamp: TimeInterval) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: window.convertPoint(fromScreen: point),
+                modifierFlags: [], timestamp: timestamp, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1
+            ))
+        }
+
+        // Setting enhanced UI uses the same AppKit seam as existing AX tests.
+        // It exercises the AX-enabled layout path, without claiming an
+        // external assistive-technology client is connected.
+        let axAttribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let originalAX = NSApp.accessibilityAttributeValue(axAttribute)
+        defer { NSApp.accessibilitySetValue(originalAX, forAttribute: axAttribute) }
+        var drags = 0
+        for page in PanelPage.allCases {
+            panel.uiState.selectSection(page.section)
+            spin(0.6)
+            XCTAssertEqual(PanelPage(panel.uiState.selectedSection), page)
+            for isCorner in [false, true] {
+                var hiddenTasksDuringDrag = 0
+                var hiddenNotesDuringDrag = 0
+                var stepTimesMs: [[Double]] = [[], []]
+                for repeatIndex in 0..<14 {
+                    if repeatIndex == 0 || repeatIndex == 7 {
+                        NSApp.accessibilitySetValue(repeatIndex == 7, forAttribute: axAttribute)
+                        spin(0.1) // Do not count AX mode changes as resize work.
+                    }
+                    let frame = window.visibleContentFrame
+                    let xInset: CGFloat = isCorner ? 12 : 2
+                    let start = CGPoint(x: leftGrip ? frame.minX + xInset : frame.maxX - xInset,
+                                        y: isCorner
+                                            ? (bottomGrip ? frame.minY + 12 : frame.maxY - 12)
+                                            : frame.midY)
+                    let grow: CGFloat = repeatIndex.isMultiple(of: 2) ? 1 : -1
+                    let begin = Double(drags * 10 + 1)
+                    host.mouseDown(with: try event(.leftMouseDown, at: start, timestamp: begin))
+                    XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.windowResize),
+                                  "\(page) \(isCorner ? "corner" : "edge") should capture the grip")
+                    let beforeTasks = tasksUpdates
+                    let beforeNotes = notesUpdates
+                    for step in 1...3 {
+                        let offset = CGFloat(step) * 2 * grow
+                        let point = CGPoint(x: start.x + xDirection * offset,
+                                            y: start.y + (isCorner ? yDirection * offset : 0))
+                        let began = CACurrentMediaTime()
+                        host.mouseDragged(with: try event(.leftMouseDragged, at: point,
+                                                        timestamp: begin + Double(step) * 0.02))
+                        host.layoutSubtreeIfNeeded()
+                        stepTimesMs[repeatIndex >= 7 ? 1 : 0].append((CACurrentMediaTime() - began) * 1_000)
+                        spin(0.01)
+                    }
+                    if page != .tasks { hiddenTasksDuringDrag += tasksUpdates - beforeTasks }
+                    if page != .notes { hiddenNotesDuringDrag += notesUpdates - beforeNotes }
+                    let width = frame.width + 6 * grow
+                    let height = frame.height + (isCorner ? 6 * grow : 0)
+                    XCTAssertEqual(window.visibleContentFrame.width, width, accuracy: 1)
+                    XCTAssertEqual(window.visibleContentFrame.height, height, accuracy: 1)
+                    let end = CGPoint(x: start.x + xDirection * 6 * grow,
+                                      y: start.y + (isCorner ? yDirection * 6 * grow : 0))
+                    host.mouseUp(with: try event(.leftMouseUp, at: end, timestamp: begin + 0.1))
+                    XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.windowResize))
+                    spin(0.04)
+                    drags += 1
+                }
+                // Tasks' remaining body evaluations are measured above for the
+                // next optimization round. The regression being guarded here
+                // is native Notes remeasurement through retained page layout.
+                XCTAssertLessThanOrEqual(hiddenNotesDuringDrag, 3,
+                    "A retained Notes page must not rebuild on 42 intermediate \(page) resize steps")
+                for (axIndex, timings) in stepTimesMs.enumerated() {
+                    let sorted = timings.sorted()
+                    XCTAssertEqual(sorted.count, 21)
+                    XCTContext.runActivity(named: String(format:
+                        "RESIZE_STRESS page=%@ grip=%@ enhanced_ax=%d drags=7 steps=%d median_ms=%.3f p95_ms=%.3f worst_ms=%.3f hidden_tasks=%d hidden_notes=%d",
+                        page.rawValue, isCorner ? "corner" : "edge", axIndex, sorted.count,
+                        sorted[sorted.count / 2], sorted[Int(Double(sorted.count - 1) * 0.95)], sorted.last ?? 0,
+                        hiddenTasksDuringDrag, hiddenNotesDuringDrag)) { _ in }
+                }
+            }
+        }
+        XCTAssertEqual(drags, 112)
         #endif
     }
 

@@ -6,6 +6,20 @@ import XCTest
 @testable import Attic
 
 final class AppSettingsTests: XCTestCase {
+    /// A vetoed quit reveals the panel and takes the key, which is the product
+    /// behaviour. A coordinator these tests build then leaves a key AtticPanel
+    /// and an active application behind for every later test, and tests that
+    /// need no key window or an inactive host failed on it (CI 43520365761).
+    /// Whatever this test revealed goes away with the test.
+    @MainActor
+    override func tearDown() async throws {
+        for window in NSApp.windows where window is AtticPanel || window is PanelIslandWindow {
+            window.orderOut(nil)
+        }
+        if NSApp.isActive { NSApp.deactivate() }
+        try await super.tearDown()
+    }
+
     @MainActor
     func testR8QuitDrainsAllMatchingModelsVetoesFailureAndLeavesOtherStoresAlone() async throws {
         struct Rejected: Error {}
@@ -188,6 +202,22 @@ final class AppSettingsTests: XCTestCase {
             }
         }
         print("CATCHUP_R12 pid=\(ProcessInfo.processInfo.processIdentifier)")
+    }
+
+    @MainActor
+    func testDS13OversizedStoredHotkeyFallsBackWithoutChangingPreferences() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        for key in ["quickCaptureKeyCode", "quickCaptureModifiers"] {
+            for oversized in [Int(UInt32.max) + 1, Int.max] {
+                defaults.set(12, forKey: "quickCaptureKeyCode")
+                defaults.set(0, forKey: "quickCaptureModifiers")
+                defaults.set(oversized, forKey: key)
+                let settings = AppSettings(defaults: defaults, motionLabAvailable: false)
+                XCTAssertEqual(settings.quickCaptureShortcut, .newTask)
+                XCTAssertEqual(defaults.object(forKey: key) as? Int, oversized)
+            }
+        }
     }
 
     @MainActor

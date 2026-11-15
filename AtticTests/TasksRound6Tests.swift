@@ -420,10 +420,13 @@ extension TasksRound6Tests {
         // run-loop spin does not prove that the queued handoff was evaluated.
         // The barrier runs after that handoff (including one rejected by its
         // guards), so both the positive and negative assertions are definite.
+        // The barrier is the event itself: main-queue blocks run in order, so
+        // resuming from one proves the earlier handoff ran. A wall-clock
+        // timeout here only measured how busy a shared runner was.
         func drainFocusQueue() async {
-            let drained = expectation(description: "queued focus handoff evaluated")
-            DispatchQueue.main.async { drained.fulfill() }
-            await fulfillment(of: [drained], timeout: 0.05)
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume() }
+            }
         }
 
         destination.request(.plus)
