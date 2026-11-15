@@ -435,6 +435,7 @@ final class PanelIntegrationTests: XCTestCase {
         panel.uiState.switchPage(to: .notes, motion: .current(reduceMotion: false))
         host.layoutSubtreeIfNeeded()
         spin(0.06)
+        XCTAssertEqual(panel.uiState.selectedSection, .notes)
         XCTAssertEqual(try XCTUnwrap(layouts[.tasks]).width, liveWidth, accuracy: 1,
                        "The departing Tasks page must use the live width while sliding")
         XCTAssertEqual(try XCTUnwrap(layouts[.notes]).width, liveWidth, accuracy: 1)

@@ -215,6 +215,7 @@ struct AtticPanelView: View {
                         let slideSide: CGFloat = page == currentPage
                             ? (uiState.lastPageSwitch.flatMap { $0.to == page ? $0.restingSide(of: page) : nil } ?? 0)
                             : page.side(from: currentPage)
+                        let restingOffset = pageMotion.restingOffset(side: slideSide, width: slideWidth)
                         PanelResizeStablePageHost(
                             page: page,
                             isCurrent: page == currentPage,
@@ -253,7 +254,7 @@ struct AtticPanelView: View {
                                 isCurrent: page == currentPage,
                                 // A page kept built rests on its side of the
                                 // current one, so it moves in from there.
-                                restingOffset: pageMotion.restingOffset(side: slideSide, width: slideWidth),
+                                restingOffset: restingOffset,
                                 motion: pageMotion,
                                 // Canvas and Notes have page-local shortcuts;
                                 // hidden, they must not fire. Tasks has none
@@ -1038,9 +1039,6 @@ extension EnvironmentValues {
 }
 
 struct PanelPageVisibility: ViewModifier {
-    /// The shell's page, so a local-only probe can report what this modifier
-    /// was actually given. Nil for a view that is not one of the four pages.
-    var page: PanelPage?
     let isCurrent: Bool
     /// Where the page rests while hidden, and where it came from when it is
     /// the page a switch brings in (it is in place when it is current).
@@ -1058,11 +1056,23 @@ struct PanelPageVisibility: ViewModifier {
         let animation: Animation?
     }
 
-    func body(content: Content) -> some View {
+    init(page: PanelPage? = nil, isCurrent: Bool, restingOffset: CGFloat,
+         motion: PanelPageMotion = .instant, disablesWhenHidden: Bool,
+         opacityOverride: OpacityOverride? = nil) {
+        self.isCurrent = isCurrent
+        self.restingOffset = restingOffset
+        self.motion = motion
+        self.disablesWhenHidden = disablesWhenHidden
+        self.opacityOverride = opacityOverride
         #if ATTIC_LOCAL_ONLY
+        // Observe the actual input even when SwiftUI reuses the modifier's
+        // body and updates its attributes without evaluating it again.
         if let page { PanelInvalidationProbe.pageRestingOffset?(page, restingOffset) }
         #endif
-        return content
+    }
+
+    func body(content: Content) -> some View {
+        content
             .transformEnvironment(\.atticPanelPageIsCurrent) { $0 = $0 && isCurrent }
             .environment(\.panelPageMotion, motion)
             .transformEnvironment(\.panelPageSlide) { slide in
