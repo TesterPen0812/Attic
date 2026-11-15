@@ -703,17 +703,23 @@ final class PanelPullOutHostedTests: XCTestCase {
                 elements(host).contains { ($0.accessibilityIdentifier?() ?? "") == "composer-card" }
             }
             XCTAssertTrue(cardOpen(), "the floating page owns an open composer")
+            XCTAssertTrue(floating.composerStateForTesting.model?.isOpen == true, "the floating model owns the open card")
             floating.makeKey()
             spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.isKeyWindow, "the floating panel owns the key event")
             XCTAssertTrue(floating.panel.makeFirstResponder(host), "Escape comes from the panel chrome")
             let escape = try XCTUnwrap(NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 1,
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: floating.panel.windowNumber, context: nil,
                 characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
                 isARepeat: false, keyCode: 53))
             NSApp.sendEvent(escape)
-            spin(0.4)
-            XCTAssertFalse(cardOpen(), "unhandled Escape folds the floating panel's composer")
+            spin(until: { floating.composerStateForTesting.model?.isOpen == false }, timeout: 2)
+            XCTAssertFalse(floating.composerStateForTesting.model?.isOpen ?? false,
+                           "Escape closes the floating Composer model")
+            // Composer keeps its native card mounted to avoid a reopening
+            // hitch. AX child enumeration can outlive the folding animation;
+            // the model is the source of truth for whether the card is open.
             XCTAssertTrue(floating.isVisible, "the composer gets first refusal; the panel stays")
             XCTAssertEqual(rig.state.selectedSection, dockedPageBeforeEscape, "the previously shown docked page is unchanged")
         }
@@ -757,8 +763,8 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
-    /// The history editor's unhandled Escape must reach the Notes page's
-    /// exit command if its floating Composer had nothing to close.
+    /// The native history preview must close History on Escape after the
+    /// floating Composer has had its chance to handle the key.
     func testFloatingNotesHistoryPreviewEscapeClosesHistory() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
         try withRig { rig in
@@ -791,6 +797,23 @@ final class PanelPullOutHostedTests: XCTestCase {
             NSApp.sendEvent(escape)
             spin(0.2)
             XCTAssertNil(rig.noteDraft.pages.historyBrowser, "Escape from preview exits History")
+            XCTAssertTrue(floating.panel.isVisible, "History Escape leaves the Notes panel visible")
+
+            // A version switch replaces the preview session and native editor.
+            // Its newly mounted editor must still route Escape back to History.
+            var reopened: Bool?
+            Task { @MainActor in reopened = await rig.noteDraft.pages.openHistoryDurably() }
+            spin(until: { reopened != nil }, timeout: 5)
+            XCTAssertEqual(reopened, true)
+            let browser = try XCTUnwrap(rig.noteDraft.pages.historyBrowser)
+            browser.showsCurrent.toggle()
+            rig.noteDraft.pages.refreshHistoryPreview()
+            spin(0.4)
+            let newEditor = try XCTUnwrap(browser.preview?.engine.textView)
+            XCTAssertTrue(floating.panel.makeFirstResponder(newEditor))
+            NSApp.sendEvent(escape)
+            spin(0.2)
+            XCTAssertNil(rig.noteDraft.pages.historyBrowser, "Escape from remounted preview exits History")
         }
     }
 
