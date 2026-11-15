@@ -94,6 +94,15 @@ final class AtticHangProbe: @unchecked Sendable {
         shared.record(kind, key: key(), value: value(), detail: detail)
     }
 
+    /// Compare geometry before printing it: identical SwiftUI layout passes
+    /// must not pay to stringify CGRects and proposal/child signatures.
+    static func noteRaw<Value: Equatable>(_ kind: String, key: @autoclosure () -> String,
+                                          value: @autoclosure () -> Value,
+                                          detail: @autoclosure () -> String = "") {
+        guard let shared else { return }
+        shared.recordRaw(kind, key: key(), value: value(), detail: detail)
+    }
+
     private struct Event {
         let millis: UInt64
         let description: String
@@ -131,6 +140,7 @@ final class AtticHangProbe: @unchecked Sendable {
     private var totals: [String: Int] = [:]
     private var changes: [String: Int] = [:]
     private var lastValues: [String: String] = [:]
+    private var lastRawValues: [String: Any] = [:]
     private var sleeping = false
     private var waitStarted: UInt64
     private var lastWake: UInt64?
@@ -243,6 +253,41 @@ final class AtticHangProbe: @unchecked Sendable {
         // Format outside the lock: a slow detail must never lengthen the
         // transaction the run loop and the watchdog share.
         let description = "\(identity) \(previous ?? "<first>") -> \(value) \(detail())"
+        lock.withLock {
+            let now = clock()
+            events[nextEvent] = Event(millis: Self.age(now, since: startNanos) / 1_000_000, description: description)
+            nextEvent = (nextEvent + 1) % events.count
+            eventCount = min(events.count, eventCount + 1)
+        }
+    }
+
+    private func recordRaw<Value: Equatable>(_ kind: String, key: String, value: Value,
+                                             detail: () -> String) {
+        let identity = "\(kind)[\(key)]"
+        let (changed, wantsEvent, previous, knownValue): (Bool, Bool, String?, String?) = lock.withLock {
+            let count = totals[identity, default: 0] + 1
+            totals[identity] = count
+            let changed = (lastRawValues[identity] as? Value).map { $0 != value } ?? true
+            let previous = lastValues[identity]
+            if changed {
+                lastRawValues[identity] = value
+                changes[identity, default: 0] += 1
+            }
+            return (changed, changed || count.isMultiple(of: 128), previous, previous)
+        }
+        guard changed || wantsEvent else { return }
+        // Only format a newly changed raw value. Even on the 128th identical
+        // pass the ring can reuse the last formatted value.
+        let formatted = changed ? String(describing: value) : (knownValue ?? "<pending>")
+        if changed {
+            lock.withLock {
+                if let current = lastRawValues[identity] as? Value, current == value {
+                    lastValues[identity] = formatted
+                }
+            }
+        }
+        guard wantsEvent else { return }
+        let description = "\(identity) \(previous ?? "<first>") -> \(formatted) \(detail())"
         lock.withLock {
             let now = clock()
             events[nextEvent] = Event(millis: Self.age(now, since: startNanos) / 1_000_000, description: description)

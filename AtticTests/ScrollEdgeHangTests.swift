@@ -255,6 +255,38 @@ final class ScrollEdgeHangTests: XCTestCase {
         AtticHangProbe.note("kind", key: "key", value: "value", detail: detail())
         XCTAssertEqual(lockWasFree, true, "the lock is not held while a detail is formatted")
     }
+
+    /// Opus R-4: identical geometry across many lazy layout passes must not
+    /// stringify a CGRect on every call just to discover it was unchanged.
+    func testArmedGeometryProbeFormatsOnlyChangedRawValues() {
+        final class Counter { var renders = 0 }
+        struct Geometry: Equatable, CustomStringConvertible {
+            let frame: CGRect
+            let counter: Counter
+            static func == (lhs: Self, rhs: Self) -> Bool { lhs.frame == rhs.frame }
+            var description: String {
+                counter.renders += 1
+                return "\(frame)"
+            }
+        }
+        let clock = FakeClock()
+        let (probe, _) = makeProbe(clock)
+        AtticHangProbe.testInstance = probe
+        defer { AtticHangProbe.testInstance = nil }
+        let counter = Counter()
+        let geometry = Geometry(frame: CGRect(x: 2, y: 20, width: 290, height: 45), counter: counter)
+        let start = ProcessInfo.processInfo.systemUptime
+        for _ in 0..<5_000 { AtticHangProbe.noteRaw("row.slotFrame.transform", key: "row", value: geometry) }
+        let elapsed = (ProcessInfo.processInfo.systemUptime - start) * 1_000_000 / 5_000
+        print("FZ_ARMED_GEOMETRY_US_PER_PASS=\(elapsed) rendered=\(counter.renders)")
+        XCTAssertEqual(probe.callCount(kind: "row.slotFrame.transform", key: "row"), 5_000)
+        XCTAssertEqual(counter.renders, 1,
+                       "the same CGRect across 5,000 passes is formatted once, not once per pass")
+        let changed = Geometry(frame: CGRect(x: 2, y: 21, width: 290, height: 45), counter: counter)
+        AtticHangProbe.noteRaw("row.slotFrame.transform", key: "row", value: changed)
+        AtticHangProbe.noteRaw("row.slotFrame.transform", key: "row", value: changed)
+        XCTAssertEqual(counter.renders, 2, "a changed frame is formatted once, then cached for the next pass")
+    }
     #endif
 
     // MARK: - Nothing runs or grows when the diagnostics are off

@@ -1943,8 +1943,8 @@ extension View {
                 .onGeometryChange(for: [CGRect].self) { proxy in
                     let frames = anchors.map { atticControlGrid(proxy[$0]) }
                     #if DEBUG
-                    AtticHangProbe.note("row.controls.transform", key: probeID?.uuidString ?? "other",
-                                        value: "\(frames)", detail: "anchors=\(anchors.count)")
+                    AtticHangProbe.noteRaw("row.controls.transform", key: probeID?.uuidString ?? "other",
+                                           value: frames, detail: "anchors=\(anchors.count)")
                     #endif
                     return frames
                 } action: { frames in

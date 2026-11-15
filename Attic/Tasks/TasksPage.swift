@@ -1724,7 +1724,7 @@ struct TasksPage: View {
                                 .onGeometryChange(for: CGRect.self) { proxy in
                                     let frame = proxy.frame(in: Self.slotSpace(tab))
                                     #if DEBUG
-                                    AtticHangProbe.note("group.frame.transform", key: "\(tab):\(dateGroup.key)", value: "\(frame)")
+                                    AtticHangProbe.noteRaw("group.frame.transform", key: "\(tab):\(dateGroup.key)", value: frame)
                                     #endif
                                     return frame
                                 } action: { [pointer, tab, key = dateGroup.key] frame in
@@ -1783,7 +1783,7 @@ struct TasksPage: View {
                         .onGeometryChange(for: CGRect.self) { proxy in
                             let frame = proxy.frame(in: Self.slotSpace(tab))
                             #if DEBUG
-                            AtticHangProbe.note("completed.frame.transform", key: String(describing: tab), value: "\(frame)")
+                            AtticHangProbe.noteRaw("completed.frame.transform", key: String(describing: tab), value: frame)
                             #endif
                             return frame
                         } action: { [pointer, tab] frame in
@@ -3566,7 +3566,7 @@ struct TasksPage: View {
         .onGeometryChange(for: CGFloat.self) { proxy in
             let height = proxy.size.height
             #if DEBUG
-            AtticHangProbe.note("bottomStack.height.transform", key: "tasks", value: "\(height)")
+            AtticHangProbe.noteRaw("bottomStack.height.transform", key: "tasks", value: height)
             #endif
             return height
         } action: { height in
@@ -4597,7 +4597,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         .onGeometryChange(for: CGRect.self) { proxy in
             let frame = proxy.frame(in: TasksPage.slotSpace(tab))
             #if DEBUG
-            AtticHangProbe.note("row.slotFrame.transform", key: "\(tab):\(id)", value: "\(frame)")
+            AtticHangProbe.noteRaw("row.slotFrame.transform", key: "\(tab):\(id)", value: frame)
             #endif
             return frame
         } action: { [pointer, tab, id, reports] frame in

@@ -699,9 +699,10 @@ struct TasksFoldLayout: Layout {
         let size = row.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
         #if DEBUG
         TasksFoldLayoutProbe.shared.measure(size.height)
-        AtticHangProbe.note("fold.size", key: probeKey,
-                            value: "proposal=\(proposal) child=\(size) visible=\(String(describing: visible))",
-                            detail: "result-height=\(visible.map { min(size.height, max(0, $0)) } ?? size.height)")
+        AtticHangProbe.noteRaw("fold.size", key: probeKey,
+                               value: FoldSizeProbeValue(width: proposal.width, height: proposal.height,
+                                                         child: size, visible: visible),
+                               detail: "result-height=\(visible.map { min(size.height, max(0, $0)) } ?? size.height)")
         #endif
         guard let visible else { return size }
         return CGSize(width: size.width, height: min(size.height, max(0, visible)))
@@ -714,14 +715,31 @@ struct TasksFoldLayout: Layout {
         #endif
         let size = row.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
         #if DEBUG
-        AtticHangProbe.note("fold.place", key: probeKey,
-                            value: "bounds=\(bounds) proposal=\(proposal) child=\(size)")
+        AtticHangProbe.noteRaw("fold.place", key: probeKey,
+                               value: FoldPlaceProbeValue(bounds: bounds, proposalWidth: proposal.width,
+                                                          proposalHeight: proposal.height, child: size))
         #endif
         row.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: size.height))
     }
 }
 
 #if DEBUG
+private struct FoldSizeProbeValue: Equatable, CustomStringConvertible {
+    let width: CGFloat?
+    let height: CGFloat?
+    let child: CGSize
+    let visible: CGFloat?
+    var description: String { "proposal=(\(String(describing: width)), \(String(describing: height))) child=\(child) visible=\(String(describing: visible))" }
+}
+
+private struct FoldPlaceProbeValue: Equatable, CustomStringConvertible {
+    let bounds: CGRect
+    let proposalWidth: CGFloat?
+    let proposalHeight: CGFloat?
+    let child: CGSize
+    var description: String { "bounds=\(bounds) proposal=(\(String(describing: proposalWidth)), \(String(describing: proposalHeight))) child=\(child)" }
+}
+
 /// Opt-in counter for a live lazy list. The lock also covers SwiftUI's
 /// off-main Layout calls. Unless a hosted hang regression enables it, a layout
 /// pass costs one atomic read and never reaches the lock.
