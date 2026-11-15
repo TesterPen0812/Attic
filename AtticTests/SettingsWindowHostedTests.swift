@@ -1,7 +1,28 @@
 import AppKit
+import ObjectiveC
 import SwiftUI
 import XCTest
 @testable import Attic
+
+/// Override only the preference getter for isolated Settings fixtures. An
+/// existing scroll view must still be styled explicitly when the preference
+/// changes: posting the notification alone does not restyle mounted views.
+@MainActor
+private enum SettingsScrollerPreference {
+    private static let readings: (overlay: IMP, legacy: IMP) = {
+        func getter(_ style: NSScroller.Style) -> IMP {
+            let read: @convention(block) (AnyObject) -> Int = { _ in style.rawValue }
+            return imp_implementationWithBlock(read)
+        }
+        return (getter(.overlay), getter(.legacy))
+    }()
+
+    static func install(_ style: NSScroller.Style) throws -> @MainActor () -> Void {
+        let method = try XCTUnwrap(class_getClassMethod(NSScroller.self, #selector(getter: NSScroller.preferredScrollerStyle)))
+        let previous = method_setImplementation(method, style == .legacy ? readings.legacy : readings.overlay)
+        return { method_setImplementation(method, previous) }
+    }
+}
 
 /// Signals when SwiftUI has evaluated the next Appearance state. The test
 /// then forces the hosted layout/display candidate; no onscreen frame is used.
@@ -37,6 +58,24 @@ final class SettingsWindowHostedTests: XCTestCase {
         window?.close()
         window = nil
         try await super.tearDown()
+    }
+
+    private func withScrollerPreference(_ style: NSScroller.Style, check: () throws -> Void) throws {
+        let previous = NSScroller.preferredScrollerStyle
+        let restore = try SettingsScrollerPreference.install(style)
+        defer {
+            // Let outstanding TasksScrollKeeper restyles from a previously
+            // mounted test host drain before replacing the global getter.
+            spin(0.32)
+            restore()
+            XCTAssertEqual(NSScroller.preferredScrollerStyle, previous)
+        }
+        XCTAssertEqual(NSScroller.preferredScrollerStyle, style)
+        try check()
+    }
+
+    private func nativeScrollViews(in view: NSView) -> [NSScrollView] {
+        ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(nativeScrollViews(in:))
     }
 
     private func spin(_ seconds: TimeInterval = 0.15) {
@@ -453,6 +492,12 @@ final class SettingsWindowHostedTests: XCTestCase {
     }
 
     func testR24ScrollContentFillsWideShortAndNarrowTallHost() throws {
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withScrollerPreference(style) { try checkR24ScrollContentFillsWideShortAndNarrowTallHost() }
+        }
+    }
+
+    private func checkR24ScrollContentFillsWideShortAndNarrowTallHost() throws {
         let suite = "SettingsR24.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -501,10 +546,79 @@ final class SettingsWindowHostedTests: XCTestCase {
             let scroll = try XCTUnwrap(candidate,
                                        "The undersized Settings host must offer scrolling")
             let content = try XCTUnwrap(scroll.documentView)
-            XCTAssertGreaterThanOrEqual(content.frame.width, max(640, size.width) - 2,
-                                        "Sidebar background and page card must fill the wide host")
+            XCTAssertEqual(scroll.frame.width, size.width, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(scroll.contentView.bounds.width, size.width + 0.5)
+            XCTAssertEqual(scroll.scrollerStyle, NSScroller.preferredScrollerStyle)
+            if size.width >= SettingsWindowLayout.minimumContentSize.width {
+                XCTAssertEqual(content.frame.width, scroll.contentView.bounds.width, accuracy: 1,
+                               "At a wide host the page must follow the native clip, including its gutter")
+            }
+            XCTAssertGreaterThanOrEqual(content.frame.width,
+                                        max(SettingsWindowLayout.minimumContentSize.width,
+                                            scroll.contentView.bounds.width) - 2,
+                                        "Sidebar background and page card must fill the available clip")
             XCTAssertGreaterThanOrEqual(content.frame.height, max(460, size.height) - 2,
                                         "Content must fill the tall host without leaving a bare strip")
+        }
+    }
+
+    func testR24ScrollerPreferenceChangesKeepBothAxesAvailable() throws {
+        let size = CGSize(width: 590, height: 390)
+        let restoreOverlay = try SettingsScrollerPreference.install(.overlay)
+        defer { spin(0.32); restoreOverlay() }
+        let host = NSHostingView(rootView: GeometryReader { available in
+            SettingsAdaptiveScroll(size: available.size) { Color.clear }
+        })
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+
+        func verify(_ size: CGSize, style: NSScroller.Style) throws {
+            window.setContentSize(size)
+            host.frame = CGRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            spin(0.12)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let scroll = try XCTUnwrap(nativeScrollViews(in: host).first { $0.frame.height > 200 },
+                                       "Settings retains the native outer scroll view")
+            // Simulate AppKit's real preference restyle on the mounted scroll
+            // view. A getter swizzle and notification by themselves do not.
+            scroll.scrollerStyle = style
+            scroll.layoutSubtreeIfNeeded()
+            spin(0.05)
+            let clip = scroll.contentView
+            let document = try XCTUnwrap(scroll.documentView)
+            let isHorizontallyClipped = document.frame.width > clip.bounds.width + 0.5
+            XCTAssertEqual(scroll.scrollerStyle, NSScroller.preferredScrollerStyle)
+            XCTAssertEqual(scroll.frame.width, size.width, accuracy: 0.5,
+                           "Native scroller gutters must not grow the SwiftUI host")
+            XCTAssertLessThanOrEqual(clip.bounds.width, window.contentView!.bounds.width + 0.5)
+            XCTAssertEqual(scroll.hasHorizontalScroller, isHorizontallyClipped,
+                           "Horizontal scrolling must match clipping at \(size), \(style): document \(document.frame), clip \(clip.bounds)")
+            XCTAssertTrue(scroll.hasVerticalScroller)
+            if isHorizontallyClipped {
+                clip.scroll(to: CGPoint(x: 0, y: clip.bounds.origin.y))
+                scroll.reflectScrolledClipView(clip)
+                let x = clip.bounds.origin.x
+                clip.scroll(to: CGPoint(x: min(15, document.frame.width - clip.bounds.width),
+                                        y: clip.bounds.origin.y))
+                scroll.reflectScrolledClipView(clip)
+                XCTAssertGreaterThan(clip.bounds.origin.x, x,
+                                     "A wheel-less mouse must be able to reach the right edge")
+            }
+        }
+
+        for currentStyle in [NSScroller.Style.overlay, .legacy, .overlay] {
+            let restore = try SettingsScrollerPreference.install(currentStyle)
+            defer { spin(0.32); restore() }
+            for size in [CGSize(width: 590, height: 390), CGSize(width: 650, height: 400),
+                         CGSize(width: 640, height: 400), CGSize(width: 630, height: 400)] {
+                try verify(size, style: currentStyle)
+            }
         }
     }
 

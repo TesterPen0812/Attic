@@ -152,13 +152,46 @@ struct SettingsAdaptiveScroll<Content: View>: View {
             ? [.horizontal, .vertical] : .vertical
         ScrollView(axes) {
             content()
-                // A minimum alone lets the unbounded horizontal scroll axis
-                // size the content past the window even when scrolling is off.
-                .frame(width: max(SettingsWindowLayout.minimumContentSize.width, size.width),
-                       height: max(SettingsWindowLayout.minimumContentSize.height, size.height))
+                // A vertical ScrollView proposes its *clip* width to the
+                // document, after a legacy scrollbar has claimed its gutter.
+                // Only an undersized window needs the fixed 640 pt document
+                // (and therefore the horizontal scrolling axis).
+                .frame(minWidth: size.width < SettingsWindowLayout.minimumContentSize.width
+                           ? SettingsWindowLayout.minimumContentSize.width : nil,
+                       maxWidth: .infinity)
+                .frame(height: max(SettingsWindowLayout.minimumContentSize.height, size.height))
+                .background(SettingsHorizontalScroller(enabled: axes.contains(.horizontal)))
         }
+        .frame(width: size.width, height: size.height)
         .scrollDisabled(!needsScroll)
         .scrollIndicators(needsScroll ? .visible : .hidden)
+    }
+}
+
+/// SwiftUI can retain the mounted NSScrollView's horizontal scroller when its
+/// axes change across 640 pt. Sync only that axis; AppKit owns the scroller
+/// style, including the system's Always-visible preference.
+private struct SettingsHorizontalScroller: NSViewRepresentable {
+    let enabled: Bool
+
+    func makeNSView(context: Context) -> BridgeView { BridgeView(frame: .zero) }
+    func updateNSView(_ view: BridgeView, context: Context) {
+        view.enabled = enabled
+        view.apply()
+    }
+
+    final class BridgeView: NSView {
+        var enabled = false
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
+        override func layout() { super.layout(); apply() }
+
+        func apply() {
+            guard window != nil, let scroll = enclosingScrollView,
+                  scroll.hasHorizontalScroller != enabled else { return }
+            scroll.hasHorizontalScroller = enabled
+        }
     }
 }
 
