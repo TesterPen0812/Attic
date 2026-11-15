@@ -2129,6 +2129,20 @@ final class Draw3PageTests: XCTestCase {
         model.undoAcknowledged()
         model.redoAcknowledged()
         model.flushAcknowledgedDraw()
+        // Round 4 rule 4: acknowledged Redo is part of the store projection,
+        // so this pair is live even while its writes wait for Retry.
+        XCTAssertNil(try durable.open(target).canvas.deletedAt)
+        model.open(target)
+        XCTAssertEqual(model.canvasID, target)
+        fail = false
+        model.retrySave()
+        model.open(target)
+
+        // Keep the original stale-row hop guard with a genuinely pending
+        // deletion: no Redo has acknowledged a restoration in this branch.
+        fail = true
+        model.undoAcknowledged()
+        model.flushAcknowledgedDraw()
         _ = try XCTUnwrap(try durable.open(target).canvas.deletedAt, "Undo of this restore projects a deletion")
         XCTAssertEqual(try durable.library().first?.id, target, "the failed Undo has not deleted the durable row")
 
@@ -2138,10 +2152,12 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertNil(try durable.open(destination).canvas.deletedAt)
         fail = false
         model.retrySave()
+        XCTAssertNotNil(try DrawPersistentStore(container: durable.container).open(target).canvas.deletedAt)
+        XCTAssertTrue(durable.redo(on: target).isSaved)
         let restored = try DrawPersistentStore(container: durable.container).open(target)
         XCTAssertNil(restored.canvas.deletedAt)
         XCTAssertEqual(restored.objects, [original],
-                       "navigation preserves the acknowledged Redo behind the failed Undo")
+                       "navigation and Retry preserve the original canvas's Redo")
         XCTAssertTrue(model.perform(.put([DrawObject(content: .text("editable draft"))])).isSaved)
     }
 
