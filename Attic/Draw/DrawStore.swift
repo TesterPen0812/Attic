@@ -737,40 +737,10 @@ class DrawStore: DrawStoreProtocol {
     /// another failed edit. First prove that an attempted head did not reach
     /// any physical replica; a held/ambiguous outcome must remain recoverable.
     func abandonPendingRename(on id: UUID, named name: String, restoring original: String) -> Bool {
-        guard recoveryIssue == nil, let edits = pending[id], let last = edits.last,
-              last.action == .edit, last.step.before.name == original, last.step.after.name == name,
-              last.step.change.objectsBefore.isEmpty, last.step.change.objectsAfter.isEmpty else { return false }
-        var renamed = last.step.before
-        renamed.name = name
-        renamed.updatedAt = last.step.after.updatedAt
-        guard renamed == last.step.after else { return false }
-
-        // Only the head can have been attempted. A queued tail is still a
-        // draft; an attempted head can be dropped only after read-back proof.
-        if edits.count == 1, recovery?.records[id]?.unattempted != true {
-            guard case .retry = repository.reconcile(last.step.change) else { return false }
-        }
-        let remaining = Array(edits.dropLast())
-        do {
-            try recovery?.update(id, edits: remaining.isEmpty ? nil : remaining,
-                                 proof: remaining.isEmpty ? nil : repository.recoveryProof(for: id),
-                                 unattempted: recovery?.records[id]?.unattempted ?? false)
-        } catch { return false }
-
-        states[id]?.canvas = last.step.before
-        states[id]?.persisted = last.step.beforePersisted
-        pending[id] = remaining.isEmpty ? nil : remaining
-        if let preceding = remaining.last, let outcome = pendingEdits[id]?.outcome {
-            pendingEdits[id] = DrawPendingEdit(canvas: preceding.step.after,
-                                               objects: states[id]?.snapshot.objects ?? [],
-                                               outcome: outcome, count: remaining.count, lastStepID: preceding.step.id)
-        } else {
-            pendingEdits[id] = nil
-            recoveredCanvasIDs.remove(id)
-            repository.discardAttempt(for: id)
-        }
-        revision &+= 1
-        return true
+        guard let edit = pending[id]?.last(where: {
+            $0.action == .edit && $0.step.before.name == original && $0.step.after.name == name
+        }) else { return false }
+        return abandonPendingRename(on: id, stepID: edit.step.id)
     }
 
     func pendingRename(on id: UUID, stepID: UUID) -> (before: String, after: String)? {
@@ -785,9 +755,71 @@ class DrawStore: DrawStoreProtocol {
     }
 
     func abandonPendingRename(on id: UUID, stepID: UUID) -> Bool {
-        guard pending[id]?.last?.step.id == stepID,
-              let rename = pendingRename(on: id, stepID: stepID) else { return false }
-        return abandonPendingRename(on: id, named: rename.after, restoring: rename.before)
+        guard recoveryIssue == nil, pendingRename(on: id, stepID: stepID) != nil,
+              let edits = pending[id], let index = edits.firstIndex(where: {
+                  $0.action == .edit && $0.step.id == stepID
+              }) else { return false }
+        let rename = edits[index].step
+        let removesHead = index == 0
+        if removesHead && !unsubmittedHeads.contains(id) {
+            guard case .retry = repository.reconcile(rename.change) else { return false }
+        }
+
+        // A history ID identifies the reversible command. Escape owns that
+        // title command and its exact Undo/Redo operations, wherever queued.
+        // A pure title edit changes no object, tag, or persistence identity.
+        // Later commands only carry its metadata: rebase their prestate and
+        // inherited name, preserving each command's own values and order.
+        var remaining = Array(edits.prefix(index))
+        var canvas = rename.before
+        var persisted = rename.beforePersisted
+        var rebased: [UUID: Step] = [:]
+        for var edit in edits.dropFirst(index) where edit.step.id != stepID {
+            if let reference = rebased[edit.step.id], edit.action != .edit {
+                edit.step = edit.action == .undo ? reference.reversed : reference
+            } else {
+                let changesName = edit.step.before.name != edit.step.after.name
+                edit.step.before = canvas
+                edit.step.beforePersisted = persisted
+                edit.step.change.before = persisted ? canvas : nil
+                if !changesName { edit.step.after.name = canvas.name }
+                edit.step.change.after = edit.step.afterPersisted ? edit.step.after : nil
+                if edit.action != .undo { rebased[edit.step.id] = edit.step }
+            }
+            canvas = edit.step.after
+            persisted = edit.step.afterPersisted
+            remaining.append(edit)
+        }
+        let unattempted = removesHead || unsubmittedHeads.contains(id)
+        var checkpointFailure: String?
+        do {
+            try recovery?.update(id, edits: remaining.isEmpty ? nil : remaining,
+                                 proof: removesHead ? nil : repository.recoveryProof(for: id),
+                                 unattempted: unattempted)
+        } catch {
+            checkpointFailure = "The cancelled name is not saved yet. Retry to save the drawing without it: \(error.localizedDescription)"
+        }
+        states[id]?.canvas = canvas
+        states[id]?.persisted = persisted
+        // An empty queue is a checkpoint-only cancellation when the disk is
+        // refusing writes. It keeps quit unsettled without inventing Undo.
+        pending[id] = remaining.isEmpty && checkpointFailure == nil ? nil : remaining
+        pendingAvailability[id] = nil
+        if removesHead { repository.discardAttempt(for: id) }
+        if unattempted && pending[id] != nil { unsubmittedHeads.insert(id) }
+        else if pending[id] == nil { unsubmittedHeads.remove(id) }
+        if let checkpointFailure {
+            pendingEdits[id] = DrawPendingEdit(canvas: canvas, objects: states[id]?.snapshot.objects ?? [],
+                outcome: .held(checkpointFailure), count: remaining.count, lastStepID: remaining.last?.step.id)
+        } else if let last = remaining.last, let outcome = pendingEdits[id]?.outcome {
+            pendingEdits[id] = DrawPendingEdit(canvas: last.step.after, objects: states[id]?.snapshot.objects ?? [],
+                outcome: outcome, count: remaining.count, lastStepID: last.step.id)
+        } else {
+            pendingEdits[id] = nil
+            recoveredCanvasIDs.remove(id)
+        }
+        revision &+= 1
+        return true
     }
 
     func canUndo(on id: UUID) -> Bool {
@@ -1092,6 +1124,15 @@ class DrawStore: DrawStoreProtocol {
     /// stopping at the first that still can't be saved (it and everything
     /// behind it stay, on show, for Retry or the next edit).
     private func flush(_ id: UUID, head: Head) -> DrawSaveResult {
+        if pending[id]?.isEmpty == true {
+            do { try recovery?.update(id, edits: nil, proof: nil) }
+            catch { return .held("The cancelled name is not saved yet. Retry to save the drawing without it: \(error.localizedDescription)") }
+            pending[id] = nil; pendingEdits[id] = nil
+            pendingAvailability[id] = nil; unsubmittedHeads.remove(id)
+            recoveredCanvasIDs.remove(id)
+            return .unchanged
+        }
+
         var saved: [DrawDelta] = []
         var first = true
         while var edit = pending[id]?.first {

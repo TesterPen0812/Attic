@@ -2424,3 +2424,111 @@ final class Draw3Gate: @unchecked Sendable {
         waiting.forEach { $0.resume() }
     }
 }
+// Round 5: Escape owns the exact title transition and its queued inverses.
+extension Draw3PageTests {
+    private func r5URL() throws -> URL {
+        try XCTUnwrap((store as? DrawPersistentStore)?.container.configurations.first).url
+    }
+
+    private func r5CrashReopen(_ url: URL, save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws -> DrawPersistentStore {
+        weak var abandonedPage = model
+        weak var abandonedStore = store
+        model?.pasteboard.releaseGlobally()
+        model = nil
+        store = nil // Deliberately no prepareToQuit, Retry, or orderly close.
+        XCTAssertNil(abandonedPage, "the crashed page must be deallocated")
+        XCTAssertNil(abandonedStore, "the crashed store must be deallocated")
+        return DrawPersistentStore(container: try ModelContainer(for: Schema(PersistenceController.appModelTypes),
+            configurations: ModelConfiguration(url: url, cloudKitDatabase: .none)), save: save)
+    }
+
+    func testR5EscapeAfterRenameUndoPreservesLaterStepsAcrossCrash() throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID), url = try r5URL()
+        XCTAssertTrue(model.perform(.saveCanvas).isSaved)
+        let original = try store.open(id).canvas.name
+        fail = true
+        model.library.perform(.rename); model.library.nameDraft = "Discard me"
+        model.library.commitRename()
+        model.undo(); model.flushAcknowledgedDraw()
+        let later = DrawObject(content: .shape(.ellipse))
+        _ = store.perform(.put([later]), on: id)
+        _ = store.perform(.tags(["survives"]), on: id)
+        model.library.cancelRename()
+        XCTAssertFalse(model.library.isRenaming)
+        XCTAssertEqual(try store.open(id).canvas.name, original)
+        var savedNames: [String] = []
+        let recovered = try r5CrashReopen(url, save: { context in
+            savedNames += try context.fetch(FetchDescriptor<DrawCanvasRecord>()).filter { $0.id == id }.map(\.name)
+            try context.save()
+        })
+        XCTAssertTrue(recovered.retry(on: id).isSaved)
+        XCTAssertEqual(try recovered.open(id).canvas.name, original)
+        XCTAssertFalse(savedNames.contains("Discard me"), "Retry must never submit the abandoned title, even transiently")
+        XCTAssertEqual(try recovered.open(id).objects, [later])
+        XCTAssertEqual(try recovered.open(id).canvas.tags, ["survives"])
+        XCTAssertTrue(recovered.undo(on: id).isSaved)
+        XCTAssertEqual(try recovered.open(id).objects, [later], "tags undo before the imported/queued object")
+        XCTAssertTrue(recovered.undo(on: id).isSaved)
+        XCTAssertTrue(try recovered.open(id).objects.isEmpty)
+        fail = false
+        use(recovered)
+    }
+
+    func testR5EscapeAfterEarlierImageImportPreservesTheImport() async throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID), url = try r5URL()
+        XCTAssertTrue(model.perform(.saveCanvas).isSaved)
+        let original = try store.open(id).canvas.name
+        let (stream, release) = AsyncStream<Void>.makeStream()
+        DrawPageModel.importLoadHook = { _ in for await _ in stream {} }
+        let (file, _) = try imageFile("r5-late.png")
+        let task = try XCTUnwrap(model.importImages(from: filePasteboard(file), at: nil))
+        fail = true
+        model.library.perform(.rename); model.library.nameDraft = "Discard before import"
+        model.library.commitRename()
+        release.finish(); await task.value
+        XCTAssertEqual(store.pendingEdits[id]?.count, 2)
+        model.library.cancelRename()
+        XCTAssertFalse(model.library.isRenaming)
+        XCTAssertEqual(try store.open(id).canvas.name, original)
+        let image = try XCTUnwrap(store.open(id).objects.first)
+        let recovered = try r5CrashReopen(url)
+        XCTAssertTrue(recovered.retry(on: id).isSaved)
+        XCTAssertEqual(try recovered.open(id).canvas.name, original)
+        XCTAssertEqual(try recovered.open(id).objects, [image])
+        fail = false
+        use(recovered)
+    }
+
+    func testR5ChangedRenameReturnAfterUndoReplacesOnlyItsTitle() throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID), url = try r5URL()
+        XCTAssertTrue(model.perform(.saveCanvas).isSaved)
+        fail = true
+        model.library.perform(.rename); model.library.nameDraft = "Old draft"
+        model.library.commitRename(); model.undo(); model.flushAcknowledgedDraw()
+        let later = DrawObject(content: .shape(.rectangle))
+        _ = store.perform(.put([later]), on: id)
+        model.library.nameDraft = "Return draft"; model.library.commitRename()
+        XCTAssertEqual(try store.open(id).canvas.name, "Return draft")
+        let recovered = try r5CrashReopen(url)
+        XCTAssertTrue(recovered.retry(on: id).isSaved)
+        XCTAssertEqual(try recovered.open(id).canvas.name, "Return draft")
+        XCTAssertEqual(try recovered.open(id).objects, [later])
+        XCTAssertTrue(recovered.undo(on: id).isSaved)
+        XCTAssertNotEqual(try recovered.open(id).canvas.name, "Old draft")
+        XCTAssertEqual(try recovered.open(id).objects, [later])
+        fail = false
+        use(recovered)
+    }
+}
