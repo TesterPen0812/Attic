@@ -677,7 +677,12 @@ final class PanelPullOutHostedTests: XCTestCase {
     /// onto its chrome. A floating page must close its own card, just as the
     /// docked page does, without changing the docked page or losing a draft.
     func testFloatingPanelEscapeFromChromeClosesItsComposer() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires real event routing")
         try withRig { rig in
+            rig.state.selectSection(.calendar)
+            spin(0.2)
+            rig.state.selectSection(.tasks)
+            spin(0.2)
             try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
             let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
             let host = floating.hostingViewForTesting
@@ -687,26 +692,30 @@ final class PanelPullOutHostedTests: XCTestCase {
             defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
             spin(0.4)
 
+            let dockedPageBeforeEscape = rig.state.selectedSection
+
             let plus = try XCTUnwrap(elements(host).first {
                 ($0.accessibilityIdentifier?() ?? "") == "tasks-new-task"
             })
             XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
             spin(0.4)
-            func cardOpen() -> Bool {
+            @MainActor func cardOpen() -> Bool {
                 elements(host).contains { ($0.accessibilityIdentifier?() ?? "") == "composer-card" }
             }
             XCTAssertTrue(cardOpen(), "the floating page owns an open composer")
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
             XCTAssertTrue(floating.panel.makeFirstResponder(host), "Escape comes from the panel chrome")
             let escape = try XCTUnwrap(NSEvent.keyEvent(
                 with: .keyDown, location: .zero, modifierFlags: [], timestamp: 1,
                 windowNumber: floating.panel.windowNumber, context: nil,
                 characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
                 isARepeat: false, keyCode: 53))
-            floating.panel.keyDown(with: escape)
+            NSApp.sendEvent(escape)
             spin(0.4)
             XCTAssertFalse(cardOpen(), "unhandled Escape folds the floating panel's composer")
             XCTAssertTrue(floating.isVisible, "the composer gets first refusal; the panel stays")
-            XCTAssertEqual(rig.state.selectedSection, .notes, "the docked page is unchanged")
+            XCTAssertEqual(rig.state.selectedSection, dockedPageBeforeEscape, "the previously shown docked page is unchanged")
         }
     }
 
