@@ -44,6 +44,14 @@ class RunLocalUITestsTest < Minitest::Test
     assert_includes stdout, "DEVELOPMENT_TEAM=ZGZWS73268"
   end
 
+  def test_explicit_signing_identity_without_team_preserves_project_team
+    stdout, stderr, status = dry_run("--signing-identity", "Apple Development: Test Identity")
+    assert status.success?, stderr
+    assert_includes stdout, "CODE_SIGN_IDENTITY=Apple\\ Development:"
+    refute_match(/(?:^|\s)DEVELOPMENT_TEAM=(?:\s|$)/, stdout,
+                 "real-identity signing must inherit the project's development team")
+  end
+
   def test_explicit_identities_and_selection_are_target_specific
     stdout, stderr, status = dry_run(
       "--app-bundle-id", "com.taha.Attic.ui.host",
