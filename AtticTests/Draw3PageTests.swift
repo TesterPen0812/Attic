@@ -2532,3 +2532,79 @@ extension Draw3PageTests {
         use(recovered)
     }
 }
+
+extension Draw3PageTests {
+    func testR5PendingJournalWritesOnlyEachNewStrokeAndRecoversTheWholeTail() throws {
+        let container = try persistentStore(fileBacked: true).container
+        let url = try XCTUnwrap(container.configurations.first).url
+        var fail = false, writes = 0, encoded = 0
+        let journal = DrawRecoveryJournal(fileURL: url.deletingLastPathComponent().appendingPathComponent("DrawRecovery-v1.json"), writeData: { data, destination in
+            writes += 1; encoded += data.count
+            try data.write(to: destination, options: .atomic)
+        })
+        use(DrawStore(repository: DrawSwiftDataRepository(container: container, metrics: DrawSaveMetrics(), save: { context in
+            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
+        }, recovery: journal), recovery: journal))
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(store.perform(.saveCanvas, on: id).isSaved)
+        fail = true
+        _ = store.perform(.tags(["head"]), on: id)
+        let image = DrawObject(content: .image(DrawImage(original: Data(repeating: 71, count: 10_000_000), pixelWidth: 1000, pixelHeight: 1000)))
+        _ = store.perform(.put([image]), on: id)
+        writes = 0; encoded = 0
+        var worstBytes = 0, worstWrites = 0
+        let start = CFAbsoluteTimeGetCurrent()
+        for i in 0..<200 {
+            let previousBytes = encoded, previousWrites = writes
+            let points = [DrawPoint(x: Double(i), y: 0), DrawPoint(x: Double(i + 1), y: 5)]
+            _ = store.perform(.put([DrawObject(frame: DrawGeometry.strokeFrame(points), zIndex: Int64(i + 1), content: .stroke(points))]), on: id)
+            worstBytes = max(worstBytes, encoded - previousBytes)
+            worstWrites = max(worstWrites, writes - previousWrites)
+        }
+        print("R5_JOURNAL strokes=200 writes=\(writes) encoded=\(encoded) worstWrites=\(worstWrites) worstBytes=\(worstBytes) elapsed_ms=\((CFAbsoluteTimeGetCurrent()-start)*1000)")
+        XCTAssertLessThanOrEqual(worstWrites, 1, "one durable record per acknowledged stroke")
+        XCTAssertLessThan(worstBytes, 16_384, "a tiny stroke must not re-encode the 10 MB image or growing tail")
+        XCTAssertEqual(store.pendingEdits[id]?.count, 202)
+        let recovered = try r5CrashReopen(url)
+        XCTAssertTrue(recovered.retry(on: id).isSaved)
+        XCTAssertEqual(try recovered.open(id).objects.count, 201)
+        XCTAssertEqual(try recovered.open(id).objects.first { $0.id == image.id }, image)
+        XCTAssertEqual(try recovered.open(id).canvas.tags, ["head"])
+        XCTAssertFalse(recovered.hasUnsettledEdits)
+        use(recovered)
+    }
+}
+extension Draw3PageTests {
+    func testR5CrashAfterHeadCommitBeforeCheckpointRetirementReplaysTailOnce() throws {
+        let container = try persistentStore(fileBacked: true).container
+        let url = try XCTUnwrap(container.configurations.first).url
+        var failSave = false, interruptAfterSave = false, failCheckpoint = false
+        let journal = DrawRecoveryJournal(fileURL: url.deletingLastPathComponent().appendingPathComponent("DrawRecovery-v1.json"), writeData: { data, destination in
+            if failCheckpoint { throw NSError(domain: "R5 retirement crash", code: 1) }
+            try data.write(to: destination, options: .atomic)
+        })
+        use(DrawStore(repository: DrawSwiftDataRepository(container: container, metrics: DrawSaveMetrics(), save: { context in
+            if failSave { throw NSError(domain: "R5 save", code: 1) }
+            try context.save()
+            if interruptAfterSave { failCheckpoint = true }
+        }, recovery: journal), recovery: journal))
+        let id = try XCTUnwrap(model.canvasID)
+        let first = DrawObject(content: .shape(.rectangle)), later = DrawObject(content: .shape(.ellipse))
+        XCTAssertTrue(store.perform(.put([first]), on: id).isSaved)
+        failSave = true
+        _ = store.undo(on: id)
+        _ = store.acknowledgeHistory(redo: true, on: id)
+        _ = store.perform(.put([later]), on: id)
+        failSave = false; interruptAfterSave = true
+        _ = store.retry(on: id)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 2, "only the failed Undo reached the repository")
+        let recovered = try r5CrashReopen(url)
+        XCTAssertEqual(recovered.pendingEdits[id]?.count, 2, "the committed head is reconciled once after the crash")
+        XCTAssertTrue(recovered.retry(on: id).isSaved)
+        XCTAssertEqual(recovered.metrics.saveAttempts, 2, "only Redo and the later edit are written")
+        XCTAssertEqual(Set(try recovered.open(id).objects.map(\.id)), Set([first.id, later.id]))
+        XCTAssertTrue(recovered.undo(on: id).isSaved)
+        XCTAssertEqual(try recovered.open(id).objects, [first])
+        use(recovered)
+    }
+}

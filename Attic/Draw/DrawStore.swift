@@ -48,6 +48,7 @@ class DrawStore: DrawStoreProtocol {
     /// A failed checkpoint can leave no journal record at all. Remember
     /// that this head has never entered the repository, independently of disk.
     @ObservationIgnored private var unsubmittedHeads = Set<UUID>()
+    @ObservationIgnored private var checkpointDirty = Set<UUID>()
     /// If a burst failed, Retry must publish the original per-key Undo chain.
     /// Crash recovery is session-scoped and reopens the merged durable draft.
     @ObservationIgnored private var typingStepsPending: [UUID: [UUID: [Step]]] = [:]
@@ -60,7 +61,7 @@ class DrawStore: DrawStoreProtocol {
             DrawSnapshot(canvas: canvas, objects: objects.values.filter { $0.deletedAt == nil }.sorted(by: DrawStore.objectOrder))
         }
     }
-    struct Step: Codable {
+    struct Step: Codable, Equatable {
         var id = UUID()
         var change: DrawChange
         var before: DrawCanvas
@@ -77,7 +78,18 @@ class DrawStore: DrawStoreProtocol {
         var redo: [Step] = []
     }
     enum Action: String, Codable { case edit, undo, redo }
-    struct Pending: Codable { var step: Step; var action: Action }
+    struct Pending: Codable, Equatable {
+        var id: UUID
+        var step: Step
+        var action: Action
+        init(id: UUID = UUID(), step: Step, action: Action) { self.id = id; self.step = step; self.action = action }
+        private enum CodingKeys: String, CodingKey { case id, step, action }
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(id: try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+                      step: try values.decode(Step.self, forKey: .step), action: try values.decode(Action.self, forKey: .action))
+        }
+    }
     /// How the first unsaved edit is settled: written again (Retry),
     /// reconciled with what the store holds, or whichever its outcome asks.
     private enum Head { case write, reconcile, auto }
@@ -585,7 +597,8 @@ class DrawStore: DrawStoreProtocol {
             let queued = stamped(step)
             show(queued)
             pending[id]?.append(Pending(step: queued, action: .edit))
-            publishPending(id, outcome: pendingEdits[id]?.outcome ?? .retry(""))
+            let published = publishPending(id, outcome: pendingEdits[id]?.outcome ?? .retry(""))
+            guard !checkpointDirty.contains(id) else { return published }
             return flush(id, head: .auto)
         } catch { return .held("Could not prepare the edit: \(error)") }
     }
@@ -795,7 +808,7 @@ class DrawStore: DrawStoreProtocol {
         do {
             try recovery?.update(id, edits: remaining.isEmpty ? nil : remaining,
                                  proof: removesHead ? nil : repository.recoveryProof(for: id),
-                                 unattempted: unattempted)
+                                 unattempted: unattempted, replacing: true)
         } catch {
             checkpointFailure = "The cancelled name is not saved yet. Retry to save the drawing without it: \(error.localizedDescription)"
         }
@@ -1128,7 +1141,7 @@ class DrawStore: DrawStoreProtocol {
             do { try recovery?.update(id, edits: nil, proof: nil) }
             catch { return .held("The cancelled name is not saved yet. Retry to save the drawing without it: \(error.localizedDescription)") }
             pending[id] = nil; pendingEdits[id] = nil
-            pendingAvailability[id] = nil; unsubmittedHeads.remove(id)
+            pendingAvailability[id] = nil; unsubmittedHeads.remove(id); checkpointDirty.remove(id)
             recoveredCanvasIDs.remove(id)
             return .unchanged
         }
@@ -1149,11 +1162,11 @@ class DrawStore: DrawStoreProtocol {
             } else {
                 edit.step = stamped(edit.step)
                 pending[id]?[0] = edit
-                if let recovery {
-                    unsubmittedHeads.insert(id)
+                if let recovery, unsubmittedHeads.contains(id) || checkpointDirty.contains(id) {
                     do {
                         try recovery.update(id, edits: pending[id], proof: repository.recoveryProof(for: id),
-                                            unattempted: true)
+                                            unattempted: unsubmittedHeads.contains(id))
+                        checkpointDirty.remove(id)
                     } catch {
                         return publishPending(id, outcome: .held(
                             "The Draw recovery checkpoint could not be written before saving: \(error.localizedDescription)"
@@ -1256,8 +1269,10 @@ class DrawStore: DrawStoreProtocol {
             do {
                 try recovery.update(id, edits: edits, proof: repository.recoveryProof(for: id),
                                     unattempted: unsubmittedHeads.contains(id))
+                checkpointDirty.remove(id)
             }
             catch {
+                checkpointDirty.insert(id)
                 published = .held("The drawing is held because its crash-recovery checkpoint could not be written: \(error.localizedDescription)")
             }
         }

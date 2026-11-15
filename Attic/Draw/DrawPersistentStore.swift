@@ -19,64 +19,171 @@ final class DrawSaveMetrics {
     }
 }
 
-/// One atomic sidecar next to the owning SwiftData store. Failed Draw edits
-/// and their exact attempted physical before/after evidence survive a crash.
-/// In-memory containers never use this file.
+/// An atomic recovery base and sparse records next to the SwiftData store.
+/// Failed edits and exact physical before/after evidence survive a crash.
+/// In-memory containers never use these files.
 @MainActor
 final class DrawRecoveryJournal {
     struct Record: Codable {
         var edits: [DrawStore.Pending]
         var proof: Data?
-        /// The previous head committed and this queued edit was not submitted.
         var unattempted = false
     }
-
     private struct Archive: Codable {
         var version = 1
+        var generation: UUID?
         var records: [UUID: Record] = [:]
     }
-
+    /// Immutable atomic deltas. The base's generation makes retirement safe
+    /// even if a crash interrupts removal of the old generation's files.
+    private struct Event: Codable {
+        var version = 2
+        var generation: UUID
+        var canvasID: UUID
+        var remove = false
+        var replacement: [DrawStore.Pending]?
+        var dropped = 0
+        var appended: [DrawStore.Pending] = []
+        var head: DrawStore.Pending?
+        var proofChanged = false
+        var proof: Data?
+        var unattempted = false
+    }
     enum Failure: LocalizedError {
         case damaged
         var errorDescription: String? {
             "The saved Draw recovery checkpoint could not be read. Its files have been preserved for review."
         }
     }
-
     private let fileURL: URL
     private let writeData: (Data, URL) throws -> Void
     private var archive = Archive()
+    private var sequence: UInt64 = 0
+    private var replacementRequired = Set<UUID>()
     private(set) var issue: String?
     var records: [UUID: Record] { archive.records }
+    private var eventsURL: URL { fileURL.appendingPathExtension("events") }
 
     init(fileURL: URL, writeData: @escaping (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) {
         self.fileURL = fileURL
         self.writeData = writeData
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
         do {
-            let decoded = try JSONDecoder().decode(Archive.self, from: Data(contentsOf: fileURL))
-            guard decoded.version == 1, decoded.records.values.allSatisfy({ !$0.edits.isEmpty }) else {
+            archive = try JSONDecoder().decode(Archive.self, from: Data(contentsOf: fileURL))
+            guard [1, 2].contains(archive.version), archive.records.values.allSatisfy({ !$0.edits.isEmpty }) else {
                 throw Failure.damaged
             }
-            archive = decoded
-        } catch {
-            // Never replace an unreadable checkpoint with an empty one.
-            issue = Failure.damaged.localizedDescription
-        }
+            if archive.version == 2 {
+                guard let generation = archive.generation else { throw Failure.damaged }
+                let prefix = generation.uuidString + "-"
+                if FileManager.default.fileExists(atPath: eventsURL.path) {
+                    let files = try FileManager.default.contentsOfDirectory(at: eventsURL, includingPropertiesForKeys: nil)
+                        .filter { $0.lastPathComponent.hasPrefix(prefix) && $0.pathExtension == "json" }
+                        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+                    for url in files {
+                        let number = url.deletingPathExtension().lastPathComponent.dropFirst(prefix.count)
+                        guard UInt64(number) == sequence + 1 else { throw Failure.damaged }
+                        let event = try JSONDecoder().decode(Event.self, from: Data(contentsOf: url))
+                        guard event.version == 2, event.generation == generation else { throw Failure.damaged }
+                        try Self.apply(event, to: &archive)
+                        sequence += 1
+                    }
+                }
+            }
+        } catch { issue = Failure.damaged.localizedDescription }
     }
 
-    func update(_ id: UUID, edits: [DrawStore.Pending]?, proof: Data?, unattempted: Bool = false) throws {
-        guard issue == nil else { throw Failure.damaged }
-        var updated = archive
-        if let edits, !edits.isEmpty {
-            updated.records[id] = Record(edits: edits, proof: proof, unattempted: unattempted)
-        } else {
-            updated.records[id] = nil
+    private static func apply(_ event: Event, to archive: inout Archive) throws {
+        let id = event.canvasID
+        if event.remove { archive.records[id] = nil; return }
+        var record = archive.records[id] ?? Record(edits: [])
+        if let replacement = event.replacement { record.edits = replacement }
+        else {
+            guard event.dropped <= record.edits.count else { throw Failure.damaged }
+            record.edits.removeFirst(event.dropped)
+            record.edits += event.appended
+            if let head = event.head {
+                guard !record.edits.isEmpty, record.edits[0].id == head.id else { throw Failure.damaged }
+                record.edits[0] = head
+            }
         }
-        let data = try JSONEncoder().encode(updated)
+        guard !record.edits.isEmpty else { throw Failure.damaged }
+        if event.proofChanged { record.proof = event.proof }
+        record.unattempted = event.unattempted
+        archive.records[id] = record
+    }
+
+    func update(_ id: UUID, edits: [DrawStore.Pending]?, proof: Data?, unattempted: Bool = false,
+                replacing: Bool = false) throws {
+        guard issue == nil else { throw Failure.damaged }
+        if replacing { replacementRequired.insert(id) }
+        let previous = archive.records[id]
+        let next = edits.flatMap { $0.isEmpty ? nil : Record(edits: $0, proof: proof, unattempted: unattempted) }
+        guard previous != nil || next != nil else { replacementRequired.remove(id); return }
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try writeData(data, fileURL)
-        archive = updated
+
+        if next == nil && archive.records.count == 1 {
+            let oldGeneration = archive.generation
+            // An empty v1 checkpoint is also safe for an older app to open.
+            let empty = Archive(version: 1, generation: UUID())
+            try writeData(JSONEncoder().encode(empty), fileURL)
+            archive = empty; sequence = 0; replacementRequired.remove(id)
+            if let oldGeneration, let files = try? FileManager.default.contentsOfDirectory(at: eventsURL, includingPropertiesForKeys: nil) {
+                for url in files where url.lastPathComponent.hasPrefix(oldGeneration.uuidString + "-") {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+            return
+        }
+        if archive.version == 1 {
+            // Read old checkpoints without a migration of the model store.
+            // A nonempty v2 base stops old binaries from ignoring its tail.
+            var base = Archive(version: 2, generation: UUID(), records: archive.records)
+            base.records[id] = next
+            try writeData(JSONEncoder().encode(base), fileURL)
+            archive = base; sequence = 0; replacementRequired.remove(id)
+            return
+        }
+        guard let generation = archive.generation else { throw Failure.damaged }
+        var event = Event(generation: generation, canvasID: id, unattempted: unattempted)
+        if let next {
+            if let previous {
+                let old = previous.edits, fresh = next.edits
+                // Queues only append or retire a prefix. Cancellation is the
+                // explicit exception: every rebased metadata value is replaced.
+                if replacementRequired.contains(id) {
+                    event.replacement = fresh
+                } else if fresh.count >= old.count, fresh.first?.id == old.first?.id,
+                          fresh[old.count - 1].id == old.last?.id {
+                    event.appended = Array(fresh.dropFirst(old.count))
+                    if fresh.first != old.first { event.head = fresh.first }
+                    if fresh.count == old.count, fresh.count > 1, fresh.last != old.last {
+                        event.replacement = fresh; event.head = nil
+                    }
+                } else if fresh.count < old.count,
+                          old[old.count - fresh.count].id == fresh.first?.id, old.last?.id == fresh.last?.id {
+                    event.dropped = old.count - fresh.count
+                    if old[event.dropped] != fresh.first { event.head = fresh.first }
+                } else { event.replacement = fresh }
+                event.proofChanged = previous.proof != next.proof
+                if event.proofChanged { event.proof = next.proof }
+                if event.replacement == nil, event.appended.isEmpty, event.dropped == 0, event.head == nil,
+                   !event.proofChanged, previous.unattempted == unattempted { return }
+            } else {
+                event.appended = next.edits
+                event.proofChanged = true; event.proof = next.proof
+            }
+        } else { event.remove = true }
+        guard sequence < UInt64.max else { throw Failure.damaged }
+        let number = sequence + 1
+        let digits = String(repeating: "0", count: max(0, 20 - String(number).count)) + String(number)
+        let destination = eventsURL.appendingPathComponent(generation.uuidString + "-" + digits + ".json")
+        let data = try JSONEncoder().encode(event)
+        try FileManager.default.createDirectory(at: eventsURL, withIntermediateDirectories: true)
+        try writeData(data, destination)
+        archive.records[id] = next
+        sequence = number
+        replacementRequired.remove(id)
     }
 }
 
@@ -112,6 +219,7 @@ final class DrawSwiftDataRepository: DrawRepository {
     private let save: (ModelContext) throws -> Void
     private let recovery: DrawRecoveryJournal?
     private var attempts: [UUID: Attempt] = [:]
+    private var attemptBytes: [UUID: Data] = [:]
 
     private struct Scope {
         var canvases: [DrawCanvasRecord]
@@ -125,7 +233,7 @@ final class DrawSwiftDataRepository: DrawRepository {
         var payloads: [Data]
         var thumbnails: [Data]
     }
-    private struct Attempt: Codable { var change: DrawChange; var before: Physical; var after: Physical }
+    private struct Attempt: Codable, Equatable { var change: DrawChange; var before: Physical; var after: Physical }
 
     init(container: ModelContainer, metrics: DrawSaveMetrics, save: @escaping (ModelContext) throws -> Void,
          recovery: DrawRecoveryJournal? = nil) {
@@ -136,6 +244,7 @@ final class DrawSwiftDataRepository: DrawRepository {
                       let attempt = try? JSONDecoder().decode(Attempt.self, from: bytes),
                       attempt.change.canvasID == id else { continue }
                 attempts[id] = attempt
+                attemptBytes[id] = bytes
             }
         }
     }
@@ -205,17 +314,21 @@ final class DrawSwiftDataRepository: DrawRepository {
             // is made from the staging context, before its single model save.
             let after = try physical(self.scope(change, in: context, countRows: false), countBytes: false)
             let attempt = Attempt(change: change, before: before, after: after)
+            let changedProof = attempts[change.canvasID] != attempt
             attempts[change.canvasID] = attempt
             // The intended edit, exact physical before and expected after
             // must all be on disk before SwiftData is allowed to commit.
             if let recovery, let queued = recovery.records[change.canvasID]?.edits {
-                try recovery.update(change.canvasID, edits: queued,
-                                    proof: try JSONEncoder().encode(attempt))
+                if changedProof || attemptBytes[change.canvasID] == nil {
+                    attemptBytes[change.canvasID] = try JSONEncoder().encode(attempt)
+                }
+                try recovery.update(change.canvasID, edits: queued, proof: attemptBytes[change.canvasID])
             }
             metrics.saveAttempts += 1
             do {
                 try save(context)
                 attempts[change.canvasID] = nil
+                attemptBytes[change.canvasID] = nil
                 return .committed
             } catch {
                 context.rollback()
@@ -227,10 +340,10 @@ final class DrawSwiftDataRepository: DrawRepository {
         }
     }
 
-    func discardAttempt(for id: UUID) { attempts[id] = nil }
+    func discardAttempt(for id: UUID) { attempts[id] = nil; attemptBytes[id] = nil }
 
     func recoveryProof(for id: UUID) -> Data? {
-        attempts[id].flatMap { try? JSONEncoder().encode($0) }
+        attemptBytes[id]
     }
 
     /// Deleted object rows only, decoded from their headers (never their
@@ -356,6 +469,7 @@ final class DrawSwiftDataRepository: DrawRepository {
             let fresh = try physical(scope(change, in: context()), countBytes: true)
             if fresh == attempt.after {
                 attempts[change.canvasID] = nil
+                attemptBytes[change.canvasID] = nil
                 return .committed
             }
             if fresh == attempt.before { return .retry("The edit was not saved. Retry when ready.") }
