@@ -723,7 +723,9 @@ final class TaskPerformanceGateTests: XCTestCase {
         fail = true
         var result: CommandOutcome?
         page.completeAcknowledged(ticking.id) { result = $0 }
-        XCTAssertTrue(page.undo().isApplied)
+        let undoOutcome = page.undo()
+        XCTAssertNotNil(undoOutcome.failure, "The failed pending save must be reported as an unsuccessful Undo")
+        XCTAssertEqual(undoOutcome.failure?.canRetry, false, "Retry must not reach the older history step")
         XCTAssertFalse(result?.isApplied ?? true)
         XCTAssertEqual(store.task(withID: old.id)?.priority, .high)
         XCTAssertEqual(store.task(withID: ticking.id)?.status, .todo)
