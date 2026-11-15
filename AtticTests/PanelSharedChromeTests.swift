@@ -12,6 +12,7 @@ final class PanelSharedChromeTests: XCTestCase {
     override func record(_ issue: XCTIssue) {
         if issue.type == .assertionFailure {
             for shell in RealShell.live.allObjects {
+                shell.requestFinalDiagnostics()
                 let attachment = XCTAttachment(string: shell.focusDiagnostics())
                 attachment.name = "BG-67 native focus and Tab history"
                 attachment.lifetime = .keepAlways
@@ -449,13 +450,18 @@ final class PanelSharedChromeTests: XCTestCase {
 private final class RealShell {
     static let live = NSHashTable<RealShell>.weakObjects()
     private var tabHistory: [String] = []
+    private var finalDiagnosticsRequested = false
+    // Keep diagnostic readers separate from native-test gate discovery.
+    private var fullKeyboardAccessDescription: String { String(NSApp.isFullKeyboardAccessEnabled) }
+
+    func requestFinalDiagnostics() { finalDiagnosticsRequested = true }
 
     func focusDiagnostics() -> String {
         let axFocus = focusedAXDescription()
         let tree = elements(host).map { node in
             "node=\(node) type=\(type(of: node)) id=\(node.accessibilityIdentifier?() ?? nil ?? "nil") role=\(String(describing: node.accessibilityRole?())) frame=\(String(describing: node.accessibilityFrame?())) settable=\((node as? NSObject)?.accessibilityIsAttributeSettable(NSAccessibility.Attribute(rawValue: "AXFocused"))) focused=\((node as? NSObject)?.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocused")))"
         }.joined(separator: "\n")
-        return "panelFrame=\(panel.frame) visible=\(panel.isVisible) screenVisibleFrame=\(String(describing: panel.screen?.visibleFrame)) page=\(state.selectedSection) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) summaryOwns=\(sharedChrome.tagBar.summaryHasKeyboard) focusableInputs=\(PanelKeyStopSeam.plus) FKA=\(NSApp.isFullKeyboardAccessEnabled) active=\(NSApp.isActive) key=\(String(describing: NSApp.keyWindow)) panelKey=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder)) AXFocusedUIElement=\(axFocus)\nTab stops actually visited:\n\(tabHistory.joined(separator: "\n"))\nAX tree:\n\(tree)\nNative key loop:\n\(nativeKeyLoop())"
+        return "panelFrame=\(panel.frame) visible=\(panel.isVisible) screenVisibleFrame=\(String(describing: panel.screen?.visibleFrame)) page=\(state.selectedSection) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) summaryOwns=\(sharedChrome.tagBar.summaryHasKeyboard) summaryStop=\(String(describing: sharedChrome.tagBar.summaryFocus)) composer=\(ComposerOverlay.isPresented) focusableInputs=\(PanelKeyStopSeam.plus) FKA=\(fullKeyboardAccessDescription) active=\(NSApp.isActive) key=\(String(describing: NSApp.keyWindow)) panelKey=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder)) AXFocusedUIElement=\(axFocus)\nTab stops actually visited:\n\(tabHistory.joined(separator: "\n"))\nAX tree:\n\(tree)\nNative key loop:\n\(nativeKeyLoop())"
     }
 
     private func focusedAXDescription() -> String {
@@ -560,6 +566,13 @@ private final class RealShell {
     }
 
     func close() {
+        if finalDiagnosticsRequested {
+            let attachment = XCTAttachment(string: focusDiagnostics())
+            attachment.name = "BG-67 focus after native navigation"
+            attachment.lifetime = .keepAlways
+            XCTContext.runActivity(named: "Completed native Tab trace before closing") { $0.add(attachment) }
+            finalDiagnosticsRequested = false
+        }
         host.cancelActiveInteraction(reason: .lostWindow)
         state.releasePageContent()
         spin(0.3)
@@ -587,7 +600,7 @@ private final class RealShell {
             NSApp.sendEvent(event)
         }
         spin(0.12)
-        tabHistory.append("shift=\(shift) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) summaryOwns=\(sharedChrome.tagBar.summaryHasKeyboard) focused=\(focusedIdentifiers()) responder=\(responder) key=\(panel.isKeyWindow) AXFocus=\(focusedAXDescription())")
+        tabHistory.append("shift=\(shift) plusOwns=\(sharedChrome.plusHasKeyboard) hashOwns=\(sharedChrome.tagBar.keyFocused) summaryOwns=\(sharedChrome.tagBar.summaryHasKeyboard) summaryStop=\(String(describing: sharedChrome.tagBar.summaryFocus)) focused=\(focusedIdentifiers()) responder=\(responder) key=\(panel.isKeyWindow) AXFocus=\(focusedAXDescription())")
     }
 
     func tabTo(_ identifier: String, file: StaticString = #filePath, line: UInt = #line) {
@@ -963,8 +976,13 @@ extension PanelSharedChromeTests {
             }
             XCTAssertTrue(shell.panel.isKeyWindow, "\(page): the hosted shell must own keyboard input")
             XCTAssertEqual(PanelKeyStopSeam.plus[page], true, "\(page): the shared plus is a keyboard stop")
-            let node = try XCTUnwrap(shell.element(plus.identifier), "\(page): the shared plus must be an accessible control")
-            XCTAssertTrue(node.accessibilityIsAttributeSettable(focused), "\(page): the shared plus must accept keyboard focus")
+            let node = shell.element(plus.identifier)
+            // Keep the AX contract, while a failed lookup still lets the
+            // native walk record the actual stops instead of aborting here.
+            XCTAssertNotNil(node, "\(page): the shared plus must be an accessible control")
+            if let node {
+                XCTAssertTrue(node.accessibilityIsAttributeSettable(focused), "\(page): the shared plus must accept keyboard focus")
+            }
             XCTAssertFalse(shell.focusedIdentifiers().contains(plus.identifier), "\(page): a reveal never lands on the plus")
             guard NSApp.isFullKeyboardAccessEnabled else { continue }
             // Full Keyboard Access (CI): AppKit's own Tab walk.
@@ -1495,6 +1513,8 @@ extension PanelSharedChromeTests {
         defer { shell.close() }
         XCTAssertTrue(shell.state.keyboardFocus.isTracking)
         XCTAssertFalse(shell.state.keyboardFocus.isKeyboardDriving)
+        // Exercise the final failure-attachment path with a real native Tab.
+        shell.requestFinalDiagnostics()
         shell.tab()
         XCTAssertTrue(shell.state.keyboardFocus.isKeyboardDriving, "real Tab must traverse application monitors before the native key loop")
     }
