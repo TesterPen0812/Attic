@@ -390,6 +390,12 @@ final class SettingsWindowHostedTests: XCTestCase {
     /// Accessibility of each Settings page's hosted controls; the earlier
     /// appearance/defaults audit did not exercise VoiceOver's control tree.
     func testA11yEverySettingsSectionNamesItsInteractiveControls() throws {
+        // The full AX control-name audit is expensive; legacy specifically
+        // exercises the native scroll-part guard that failed in CI.
+        try withScrollerPreference(.legacy) { try checkA11yEverySettingsSectionNamesItsInteractiveControls() }
+    }
+
+    private func checkA11yEverySettingsSectionNamesItsInteractiveControls() throws {
         // Navigation follows the isolated AppSettings suite, so visiting
         // About cannot change another test's starting page.
         let suite = "SettingsAX.\(UUID().uuidString)"
@@ -433,8 +439,11 @@ final class SettingsWindowHostedTests: XCTestCase {
                    rawRole as? String == kAXScrollBarRole as String {
                     found = true
                     var hidden: CFTypeRef?
-                    if AXUIElementCopyAttributeValue(element, kAXHiddenAttribute as CFString, &hidden) != .success ||
-                       hidden as? Bool != true { allHidden = false }
+                    let result = AXUIElementCopyAttributeValue(element, kAXHiddenAttribute as CFString, &hidden)
+                    // With a native legacy NSScroller, AXHidden is often
+                    // attributeUnsupported (-25205): that means *visible*,
+                    // not hidden. Preserve the hidden assertion for overlays.
+                    if result != .success || hidden as? Bool != true { allHidden = false }
                 }
                 var children: CFTypeRef?
                 let childrenResult = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
@@ -464,18 +473,32 @@ final class SettingsWindowHostedTests: XCTestCase {
             // client before excluding only those system-created parts.
             let hiddenParts = after.filter { String(describing: type(of: $0)) == "NSAccessibilityScrollerPart" }
             if !hiddenParts.isEmpty {
+                // Native AppKit scrollbar parts have no app-owned labels.
+                // Legacy bars are intended to stay visible and draggable;
+                // they must never be forced through the overlay hidden guard.
+                let visibleLegacyBar = nativeScrollViews(in: host).contains { scroll in
+                    scroll.scrollerStyle == .legacy && (
+                        (scroll.hasVerticalScroller && scroll.verticalScroller?.isHidden == false) ||
+                        (scroll.hasHorizontalScroller && scroll.horizontalScroller?.isHidden == false)
+                    )
+                }
                 // AppKit can publish its private scroller parts before the
                 // external AX client sees the containing scrollbar's hidden
                 // state. Require that actual state, not a fixed paint delay.
-                let deadline = Date().addingTimeInterval(2)
                 var scrollbarsHidden = externalScrollbarsAreHidden()
-                while !scrollbarsHidden && Date() < deadline {
-                    RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
-                    host.layoutSubtreeIfNeeded()
-                    scrollbarsHidden = externalScrollbarsAreHidden()
+                if visibleLegacyBar {
+                    XCTAssertFalse(scrollbarsHidden,
+                                   "Visible system legacy scrollbars must not be classified as hidden")
+                } else {
+                    let deadline = Date().addingTimeInterval(2)
+                    while !scrollbarsHidden && Date() < deadline {
+                        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+                        host.layoutSubtreeIfNeeded()
+                        scrollbarsHidden = externalScrollbarsAreHidden()
+                    }
+                    XCTAssertTrue(scrollbarsHidden,
+                                  "native scrollbar buttons may be excluded only while the AX scrollbar is hidden")
                 }
-                XCTAssertTrue(scrollbarsHidden,
-                              "native scrollbar buttons may be excluded only while the AX scrollbar is hidden")
                 print("CI6_SETTINGS_AX section=\(section.rawValue) \(axDiagnostic)")
             }
             let interactive = after.filter {
