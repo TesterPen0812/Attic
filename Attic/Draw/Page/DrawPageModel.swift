@@ -157,6 +157,9 @@ final class DrawPageModel: ObservableObject {
     // MARK: Board state (not published)
 
     private(set) var canvasID: UUID?
+    /// A failed recovery load has no board yet. Retry can reopen its original
+    /// request, unless a later successful open has superseded that navigation.
+    private var failedOpenCanvasID: UUID?
     /// The open canvas's live objects, in drawing order.
     private(set) var objects: [DrawObject] = []
     /// Advances with every change the board must redraw.
@@ -338,7 +341,8 @@ final class DrawPageModel: ObservableObject {
     /// `.held`), with Retry: the open canvas's first, else any canvas's.
     var saveNotice: PanelNoticeContent? {
         if let issue = store.recoveryIssue {
-            return PanelNoticeContent(message: issue, canRetry: false)
+            return PanelNoticeContent(message: issue,
+                canRetry: (store as? DrawStore)?.recoveryLoadFailures.isEmpty == false)
         }
         if let problem = saveProblem, problem.message != dismissedSaveProblem {
             return PanelNoticeContent(message: problem.message, canRetry: true)
@@ -376,7 +380,17 @@ final class DrawPageModel: ObservableObject {
         // A settled write that deletes the open canvas must not navigate
         // before the Undo/Redo that waited behind it has run.
         deletedCanvasHopDeferrals += 1
-        for (id, edit) in store.pendingEdits {
+        // A failed complete recovery load deliberately has no pending object
+        // projection. Retry its original record rather than inventing one.
+        let recoveryLoads = (store as? DrawStore).map { Set($0.recoveryLoadFailures.keys) } ?? []
+        for id in recoveryLoads.sorted(by: { $0.uuidString < $1.uuidString }) {
+            let result = store.retry(on: id)
+            if id == canvasID { apply(result) }
+            library.renameSavedByRetry(on: id)
+        }
+        // A load Retry may leave a write pending. Do not attempt that same
+        // operation twice in one press if storage still refuses it.
+        for (id, edit) in store.pendingEdits where !recoveryLoads.contains(id) {
             let result: DrawSaveResult
             if case .held = edit.outcome { result = store.reconcile(on: id) } else { result = store.retry(on: id) }
             if id == canvasID { apply(result) }
@@ -385,6 +399,10 @@ final class DrawPageModel: ObservableObject {
         flushAcknowledgedDraw()
         deletedCanvasHopDeferrals -= 1
         if externalSyncDeferred { syncExternalChanges() }
+        if canvasID == nil, let id = failedOpenCanvasID, recoveryLoads.contains(id),
+           (store as? DrawStore)?.recoveryLoadFailures[id] == nil {
+            open(id)
+        }
         objectWillChange.send()
     }
 
@@ -629,7 +647,14 @@ final class DrawPageModel: ObservableObject {
         flushThumbnail()
         if let canvasID { viewports[canvasID] = viewport }
         flushViewportMemory()
-        guard let snapshot = try? IdleLatencyTrace.span("draw_board_open", { try store.open(id) }) else { return }
+        let snapshot: DrawSnapshot
+        do {
+            snapshot = try IdleLatencyTrace.span("draw_board_open", { try store.open(id) })
+        } catch {
+            failedOpenCanvasID = id
+            return
+        }
+        failedOpenCanvasID = nil
         if snapshot.canvas.deletedAt != nil {
             // A canvas in Recently Deleted is never opened, whatever led here:
             // a resume id from the last launch, a search result clicked after
@@ -797,7 +822,6 @@ final class DrawPageModel: ObservableObject {
         strip = nil
         restyleEditing { $0.colour = next }
     }
-
     /// D2's widths: Pen's stroke (shapes share it) or Text's size.
     func pickSize(_ size: DrawSize, for widths: DrawStrip) {
         if widths == .text {
