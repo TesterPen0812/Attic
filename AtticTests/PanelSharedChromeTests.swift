@@ -680,11 +680,17 @@ private final class RealShell {
     /// The accessibility identifiers of every element reporting keyboard focus.
     func focusedIdentifiers() -> [String] {
         let focused = NSAccessibility.Attribute(rawValue: "AXFocused")
+        let systemFocused: AnyObject?
+        if let value = NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocusedUIElement")) {
+            systemFocused = value as AnyObject
+        } else { systemFocused = nil }
         return elements(host).compactMap { node -> String? in
-            guard let object = node as? NSObject,
-                  (object.accessibilityAttributeValue(focused) as? Bool) == true else { return nil }
+            // SwiftUI can expose the actual focused node without implementing
+            // the legacy per-node AXFocused attribute. Match that exact node.
+            let reportsFocus = ((node as? NSObject)?.accessibilityAttributeValue(focused) as? Bool) == true
+            guard node === systemFocused || reportsFocus else { return nil }
             let identifier: String? = node.accessibilityIdentifier?()
-            return identifier ?? "(no id: \(type(of: object)))"
+            return identifier ?? "(no id: \(type(of: node)))"
         }
     }
 
@@ -1517,6 +1523,12 @@ extension PanelSharedChromeTests {
         shell.requestFinalDiagnostics()
         shell.tab()
         XCTAssertTrue(shell.state.keyboardFocus.isKeyboardDriving, "real Tab must traverse application monitors before the native key loop")
+        let focusedValue = try XCTUnwrap(NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocusedUIElement")))
+        let systemFocused = focusedValue as AnyObject
+        XCTAssertTrue(elements(shell.host).contains { $0 === systemFocused }, "the system's focused element is inside the real shell")
+        let identifier: String? = systemFocused.accessibilityIdentifier?()
+        let expected = identifier ?? "(no id: \(type(of: systemFocused)))"
+        XCTAssertTrue(shell.focusedIdentifiers().contains(expected), "the focus reader must report the system's actually focused native element")
     }
 }
 
