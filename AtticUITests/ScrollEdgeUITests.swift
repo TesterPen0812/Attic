@@ -849,7 +849,9 @@ enum HangStackRecovery {
                                     beforeTermination: (String) -> Void,
                                     terminate: (Int32) -> Void = { _ = Darwin.kill($0, SIGTERM) }) {
         guard pid > 0, identityMatches() else { return }
-        let result = run("/usr/bin/sample", [String(pid), "3", "-file", output.path], 10)
+        // -mayDie samples even a target that cannot respond; the bounded
+        // interval leaves time for symbolication and retains a partial file.
+        let result = run("/usr/bin/sample", [String(pid), "3", "-mayDie", "-file", output.path], 25)
         beforeTermination(result)
         if identityMatches() { terminate(pid) }
     }
@@ -886,8 +888,9 @@ final class HangRecoverySupportTests: XCTestCase {
         let output = URL(fileURLWithPath: "/tmp/fake-hang-stack.txt")
         HangStackRecovery.sampleThenTerminate(pid: 42, output: output, run: { tool, arguments, timeout in
             XCTAssertEqual(tool, "/usr/bin/sample")
-            XCTAssertEqual(arguments, ["42", "3", "-file", output.path])
-            XCTAssertEqual(timeout, 10)
+            XCTAssertEqual(arguments, ["42", "3", "-mayDie", "-file", output.path],
+                           "a wedged target must still produce a sampled stack")
+            XCTAssertEqual(timeout, 25, "allow sampling plus symbolication without an unbounded recovery")
             actions.append("sample")
             return "exited 0"
         }, beforeTermination: { result in
