@@ -1515,20 +1515,44 @@ extension PanelSharedChromeTests {
 extension PanelSharedChromeTests {
     func testR3TheTabDriverUsesTheApplicationsKeyboardPath() throws {
         try requireKeyWindowTests()
+        // Tasks has its own tracker and can consume Tab before the shell's
+        // tracker sees it. Its native focus still exercises the AX reader.
+        do {
+            let shell = try RealShell(attachments: makeTestAttachmentFileStore())
+            defer { shell.close() }
+            shell.requestFinalDiagnostics()
+            shell.tab()
+            let focusedValue = try XCTUnwrap(NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocusedUIElement")))
+            let systemFocused = focusedValue as AnyObject
+            XCTAssertTrue(elements(shell.host).contains { $0 === systemFocused }, "the system's focused element is inside the real shell")
+            let identifier: String? = systemFocused.accessibilityIdentifier?()
+            let expected = identifier ?? "(no id: \(type(of: systemFocused)))"
+            XCTAssertTrue(shell.focusedIdentifiers().contains(expected), "the focus reader must report the system's actually focused native element")
+        }
+
         let shell = try RealShell(attachments: makeTestAttachmentFileStore())
         defer { shell.close() }
+        shell.go(to: .calendar)
         XCTAssertTrue(shell.state.keyboardFocus.isTracking)
         XCTAssertFalse(shell.state.keyboardFocus.isKeyboardDriving)
-        // Exercise the final failure-attachment path with a real native Tab.
         shell.requestFinalDiagnostics()
+        var applicationEvents: [NSEvent.EventType] = []
+        let monitor = try XCTUnwrap(NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
+            if event.window === shell.panel, event.keyCode == 48 { applicationEvents.append(event.type) }
+            return event
+        })
+        defer { NSEvent.removeMonitor(monitor) }
+        // Negative control: direct window dispatch bypasses the application.
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: shell.panel.windowNumber,
+                context: nil, characters: "\t", charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48))
+            shell.panel.sendEvent(event)
+        }
+        XCTAssertTrue(applicationEvents.isEmpty, "the probe distinguishes direct window dispatch")
         shell.tab()
+        XCTAssertEqual(applicationEvents, [.keyDown, .keyUp], "the driver sends both native events through the application")
         XCTAssertTrue(shell.state.keyboardFocus.isKeyboardDriving, "real Tab must traverse application monitors before the native key loop")
-        let focusedValue = try XCTUnwrap(NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXFocusedUIElement")))
-        let systemFocused = focusedValue as AnyObject
-        XCTAssertTrue(elements(shell.host).contains { $0 === systemFocused }, "the system's focused element is inside the real shell")
-        let identifier: String? = systemFocused.accessibilityIdentifier?()
-        let expected = identifier ?? "(no id: \(type(of: systemFocused)))"
-        XCTAssertTrue(shell.focusedIdentifiers().contains(expected), "the focus reader must report the system's actually focused native element")
     }
 }
 
