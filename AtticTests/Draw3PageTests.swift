@@ -2608,3 +2608,79 @@ extension Draw3PageTests {
         use(recovered)
     }
 }
+extension Draw3PageTests {
+    private func r5DrainObservation() async {
+        for _ in 0..<6 { await withCheckedContinuation { next in DispatchQueue.main.async { next.resume() } } }
+    }
+
+    func testR5PendingDeletionLeavesTheBoardWithRenameAndWithoutAnotherCanvas() async throws {
+        for hasOther in [false, true] {
+            var fail = false
+            use(try persistentStore(fileBacked: true, save: { context in
+                if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
+            }))
+            let id = try XCTUnwrap(model.canvasID), url = try r5URL()
+            XCTAssertTrue(model.perform(.saveCanvas).isSaved)
+            if hasOther {
+                let other = store.create(name: "Other")
+                XCTAssertTrue(store.perform(.saveCanvas, on: other.id).isSaved)
+            }
+            XCTAssertTrue(store.perform(.deleteCanvas, on: id).isSaved)
+            XCTAssertTrue(store.perform(.restoreCanvas, on: id).isSaved)
+            model.open(id)
+            model.library.perform(.rename); model.library.nameDraft = "Recovery draft"
+            fail = true
+            let revision = store.revision
+            _ = store.undo(on: id)
+            XCTAssertEqual(store.revision, revision)
+            await r5DrainObservation()
+            XCTAssertNotEqual(model.canvasID, id, "a pending-only projected deletion must leave the board")
+            XCTAssertFalse(model.library.isRenaming)
+            XCTAssertTrue(model.saveNotice != nil)
+            let recovered = try r5CrashReopen(url)
+            XCTAssertTrue(recovered.retry(on: id).isSaved)
+            XCTAssertNotNil(try recovered.open(id).canvas.deletedAt)
+            XCTAssertTrue(recovered.redo(on: id).isSaved)
+            XCTAssertNil(try recovered.open(id).canvas.deletedAt)
+            XCTAssertNotEqual(try recovered.open(id).canvas.name, "Recovery draft")
+            fail = false; use(recovered)
+        }
+    }
+
+    func testR5PendingRecentlyDeletedImageRestoreUpdatesTheOpenBoardWithoutRevision() async throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R5", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID), url = try r5URL()
+        let image = DrawObject(content: .image(DrawImage(original: Draw3Images.encoded(width: 2, height: 2), pixelWidth: 2, pixelHeight: 2)))
+        XCTAssertTrue(model.perform(.put([image])).isSaved)
+        XCTAssertTrue(model.perform(.remove([image.id])).isSaved)
+        XCTAssertTrue(model.perform(.tags(["undo me"])).isSaved)
+        var deleted: RecentlyDeletedModel? = RecentlyDeletedModel(library: nil, draw: { [weak store] in store })
+        deleted?.start()
+        let entry = try XCTUnwrap(deleted?.listedEntries.first)
+        fail = true
+        _ = store.undo(on: id)
+        let revision = store.revision
+        deleted?.restore(entry)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 2)
+        XCTAssertEqual(store.revision, revision)
+        await r5DrainObservation()
+        XCTAssertEqual(model.objects, try store.open(id).objects)
+        XCTAssertEqual(model.objects, [image])
+        deleted?.stop(); deleted = nil
+        let recovered = try r5CrashReopen(url)
+        XCTAssertTrue(recovered.retry(on: id).isSaved)
+        XCTAssertEqual(try recovered.open(id).objects, [image])
+        XCTAssertTrue(recovered.undo(on: id).isSaved)
+        XCTAssertTrue(try recovered.open(id).objects.isEmpty, "restore is the newest Undo")
+        // The restore is a new branch after the pending Undo. Prior session
+        // history is not persisted; its discarded tags Redo must not return.
+        XCTAssertFalse(recovered.canUndo(on: id))
+        XCTAssertEqual(try recovered.open(id).canvas.tags, [])
+        XCTAssertTrue(recovered.redo(on: id).isSaved)
+        XCTAssertEqual(try recovered.open(id).objects, [image])
+        fail = false; use(recovered)
+    }
+}

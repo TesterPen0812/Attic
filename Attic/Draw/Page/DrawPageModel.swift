@@ -238,6 +238,10 @@ final class DrawPageModel: ObservableObject {
     }
     private var userMovedView = false
     private var appliedRevision: UInt64 = 0
+    private var appliedPendingGeneration: UInt64 = 0
+    private var projectionIsCurrent: Bool {
+        appliedRevision == store.revision && appliedPendingGeneration == store.pendingGeneration
+    }
     var externalSyncDeferred = false
     /// While a canvas switch or an acknowledged flush is settling queued
     /// input, a canvas that input just deleted must not navigate from inside
@@ -549,10 +553,13 @@ final class DrawPageModel: ObservableObject {
     }
 
     private func writeThumbnail(_ data: Data?, dark: Bool, on id: UUID) {
-        let synced = appliedRevision == store.revision
+        let synced = projectionIsCurrent
         switch store.perform(.thumbnail(data, dark: dark), on: id) {
         case .saved:
-            if synced { appliedRevision = store.revision }
+            if synced {
+                appliedRevision = store.revision
+                appliedPendingGeneration = store.pendingGeneration
+            }
             if !thumbnailDirty.contains(id), unrenderedThumbnails.remove(id) != nil { persistUnrenderedThumbnails() }
         case .unchanged:
             // An unsettled edit comes first; the thumbnail follows it.
@@ -633,6 +640,7 @@ final class DrawPageModel: ObservableObject {
             if id != canvasID, let current, current.canvas.deletedAt == nil { return }
             externalSyncDeferred = false
             appliedRevision = store.revision
+            appliedPendingGeneration = store.pendingGeneration
             leaveDeletedCanvas(id)
             return
         }
@@ -653,6 +661,7 @@ final class DrawPageModel: ObservableObject {
         isSelectionStyleOpen = false
         closeFilter()
         appliedRevision = store.revision
+        appliedPendingGeneration = store.pendingGeneration
         externalSyncDeferred = false
         initialFitPending = false
         if let kept = viewports[id] {
@@ -1535,12 +1544,18 @@ final class DrawPageModel: ObservableObject {
         case .retry(let message), .held(let message):
             // The store keeps the visible after-draft.
             if let canvasID, let pending = store.pendingEdits[canvasID] {
+                if pending.canvas.deletedAt != nil {
+                    externalSyncDeferred = true
+                    syncExternalChanges()
+                    return
+                }
                 objects = pending.objects.filter { $0.deletedAt == nil }.sorted(by: Self.order)
             }
             lastError = message
             dismissedSaveProblem = nil
         }
         appliedRevision = store.revision
+        appliedPendingGeneration = store.pendingGeneration
         afterContentChange(replacingEditorText: replacingEditorText)
     }
 
@@ -1595,7 +1610,7 @@ final class DrawPageModel: ObservableObject {
     /// Changes made by someone else (the library's Rename, Delete or a
     /// restore): the open canvas is read again, outside any input handler.
     private func observeStore() {
-        withObservationTracking { _ = store.revision; _ = store.pendingEdits } onChange: { [weak self] in
+        withObservationTracking { _ = store.revision; _ = store.pendingEdits; _ = store.pendingGeneration } onChange: { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
@@ -1610,18 +1625,18 @@ final class DrawPageModel: ObservableObject {
     func syncExternalChanges() {
         guard let canvasID else { return }
         if !acknowledgedDraw.isEmpty {
-            if store.revision != appliedRevision { externalSyncDeferred = true }
+            if !projectionIsCurrent { externalSyncDeferred = true }
             return
         }
         if !typingCommands.isEmpty {
-            if store.revision != appliedRevision { externalSyncDeferred = true }
+            if !projectionIsCurrent { externalSyncDeferred = true }
             return
         }
         if live != nil {
-            if store.revision != appliedRevision { externalSyncDeferred = true }
+            if !projectionIsCurrent { externalSyncDeferred = true }
             return
         }
-        guard externalSyncDeferred || store.revision != appliedRevision else { return }
+        guard externalSyncDeferred || !projectionIsCurrent else { return }
         guard let snapshot = try? store.open(canvasID) else { return }
         if snapshot.canvas.deletedAt != nil, deletedCanvasHopDeferrals > 0 {
             externalSyncDeferred = true
@@ -1629,6 +1644,7 @@ final class DrawPageModel: ObservableObject {
         }
         externalSyncDeferred = false
         appliedRevision = store.revision
+        appliedPendingGeneration = store.pendingGeneration
         if snapshot.canvas.deletedAt != nil {
             leaveDeletedCanvas(canvasID)
             return

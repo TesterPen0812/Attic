@@ -10,6 +10,7 @@ class DrawStore: DrawStoreProtocol {
     /// steps (image bytes, stroke points, thumbnails), together.
     static let maxEvictedHistoryBytes = 32 * 1024 * 1024
     private(set) var revision: UInt64 = 0
+    private(set) var pendingGeneration: UInt64 = 0
     private(set) var lastDelta: DrawDelta?
     private(set) var pendingEdits: [UUID: DrawPendingEdit] = [:]
     private(set) var recoveryIssue: String?
@@ -831,7 +832,7 @@ class DrawStore: DrawStoreProtocol {
             pendingEdits[id] = nil
             recoveredCanvasIDs.remove(id)
         }
-        revision &+= 1
+        pendingGeneration &+= 1
         return true
     }
 
@@ -1094,6 +1095,7 @@ class DrawStore: DrawStoreProtocol {
     }
     /// The visible after-draft, saved or not.
     private func show(_ step: Step) {
+        pendingGeneration &+= 1
         let id = step.change.canvasID
         states[id]?.canvas = step.after
         states[id]?.persisted = step.afterPersisted

@@ -205,6 +205,8 @@ enum DrawStoreError: Error { case missingCanvas, invalidClipboard, invalidObject
 @MainActor
 protocol DrawStoreProtocol: AnyObject {
     var revision: UInt64 { get }
+    /// Advances when the visible projection changes, including unsaved edits.
+    var pendingGeneration: UInt64 { get }
     var lastDelta: DrawDelta? { get }
     var pendingEdits: [UUID: DrawPendingEdit] { get }
     var hasUnsettledEdits: Bool { get }
@@ -265,6 +267,7 @@ protocol DrawStoreProtocol: AnyObject {
 }
 
 extension DrawStoreProtocol {
+    var pendingGeneration: UInt64 { 0 }
     func pendingRename(on id: UUID, stepID: UUID) -> (before: String, after: String)? { nil }
     func abandonPendingRename(on id: UUID, stepID: UUID) -> Bool { false }
     func pinHistoryStep(_ stepID: UUID) -> AnyObject? { nil }
