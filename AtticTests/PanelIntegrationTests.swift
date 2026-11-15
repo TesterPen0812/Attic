@@ -534,11 +534,40 @@ final class PanelIntegrationTests: XCTestCase {
                 host.mouseUp(with: try event(.leftMouseUp, delta: last))
             },
             finish: {
+                // A throw before release() must not leave a captured grip or
+                // its active performance signpost in the next XCTest method.
+                if panel.uiState.interactionLockReasons.contains(.windowResize) {
+                    host.cancelActiveInteraction(reason: .interruptedEventDelivery)
+                }
                 host.suppressCaptureWatchdogForSyntheticTests = false
             }
         )
     }
     #endif
+
+    /// R-6 round 2: an XCTest throw midway through a held grip must leave
+    /// the next test with no active resize signpost or captured interaction.
+    func testHeldGripDeferCleansUpAfterThrownAssertion() throws {
+        #if ATTIC_LOCAL_ONLY
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        enum Expected: Error { case abort }
+        func interruptedTest() throws {
+            let held = try holdResizeGrip(building: [.notes])
+            defer { held.finish() }
+            XCTAssertTrue(PerformanceSignposts.isPanelLiveResizeActive)
+            throw Expected.abort
+        }
+        XCTAssertThrowsError(try interruptedTest())
+        XCTAssertFalse(PerformanceSignposts.isPanelLiveResizeActive,
+                       "a thrown test must not leave the resize signpost active for the next setUp")
+        let next = try holdResizeGrip(building: [.notes])
+        defer { next.finish() }
+        XCTAssertTrue(PerformanceSignposts.isPanelLiveResizeActive)
+        try next.release()
+        XCTAssertFalse(PerformanceSignposts.isPanelLiveResizeActive)
+        #endif
+    }
 
     /// R-2 round 2: taking the resize grip after the switch has started must
     /// preserve the leaving page's live proposal, on either docking edge.
