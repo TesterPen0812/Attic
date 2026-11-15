@@ -707,37 +707,6 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
-    /// Closing a pulled-out window to dock it must save its separate + draft.
-    /// Pulling the same page out again recreates the window and composer.
-    func testDockingFloatingPagePreservesUnsubmittedDraftAcrossNewWindow() throws {
-        try withRig { rig in
-            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
-            let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
-            let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-            let previous = NSApp.accessibilityAttributeValue(enhanced)
-            NSApp.accessibilitySetValue(true, forAttribute: enhanced)
-            defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
-            spin(0.4)
-            let plus = try XCTUnwrap(elements(floating.hostingViewForTesting).first {
-                ($0.accessibilityIdentifier?() ?? "") == "tasks-new-task"
-            })
-            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
-            spin(0.4)
-            let draft = try XCTUnwrap(floating.composerStateForTesting.model)
-            draft.tasks.addBar = TaskAddBarText(text: "Unsubmitted floating title")
-            draft.writing = "Writing that must not vanish"
-
-            XCTAssertTrue(rig.pullOut.dockIn(.tasks))
-            spin(until: { rig.pullOut.panel(for: .tasks) == nil })
-            XCTAssertNil(rig.pullOut.panel(for: .tasks))
-            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
-            let reopened = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
-            spin(until: { reopened.composerStateForTesting.model != nil })
-            XCTAssertEqual(reopened.composerStateForTesting.model?.tasks.addBar.text, "Unsubmitted floating title")
-            XCTAssertEqual(reopened.composerStateForTesting.model?.writing, "Writing that must not vanish")
-        }
-    }
-
     // MARK: Helpers
 
     /// Pulls `page` off the island and drops it at `point`.

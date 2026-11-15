@@ -198,7 +198,6 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     func close() {
         fadeGeneration += 1
         isHiding = false
-        composerState.model?.saveKeptDraft()
         hostingView.cancelActiveInteraction(reason: .explicitHide)
         toasts.dismiss()
         panel.orderOut(nil)

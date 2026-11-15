@@ -462,8 +462,7 @@ struct AtticPanelView: View {
             eventFailure: { [toasts] message in
                 toasts.showFailure(message)
             },
-            drafts: ComposerDraftStore.forPanel(defaults: settings.userDefaults,
-                floatingPage: uiState.isFloating ? currentPage : nil))
+            drafts: ComposerDraftStore(defaults: settings.userDefaults))
     }
 
     /// Open Task Note and a row's file drop (Phase 3).
