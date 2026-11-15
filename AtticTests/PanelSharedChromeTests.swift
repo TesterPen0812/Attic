@@ -1540,6 +1540,20 @@ extension PanelSharedChromeTests {
         XCTAssertEqual(PanelKeyStopSeam.tagKey["notes-tag-bar"], true, "without picks # is the one stop")
     }
 
+    /// The focused picked button can disappear when its last tag is cleared.
+    /// Its recorded activation must be released with that real control.
+    func testR4RemovingThePickedSummaryReleasesItsKeyboardFocus() throws {
+        let chrome = PanelSharedChrome()
+        chrome.setBar(tagLook(.notes, picks: TagPicks(["launch"])), actions: PanelBottomBarActions(), for: .notes)
+        let window = mountBar(chrome, SharedBarModel(page: .notes))
+        defer { close(window) }
+        chrome.tagBar.noteSummaryFocus(.picked)
+        XCTAssertTrue(chrome.tagBar.summaryHasKeyboard)
+        chrome.setBar(tagLook(.notes), actions: PanelBottomBarActions(), for: .notes)
+        spin(0.6)
+        XCTAssertNil(chrome.tagBar.summaryFocus, "the disappearing summary cannot retain keyboard ownership")
+    }
+
     /// The stops across the summary (Full Keyboard Access, CI): its two
     /// buttons, and nothing around them.
     func testTabbingAcrossThePickedTagsSummaryVisitsOnlyItsTwoButtonsWithFullKeyboardAccess() throws {

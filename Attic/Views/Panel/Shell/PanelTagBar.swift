@@ -371,7 +371,10 @@ struct NotesTagBar: View {
 
     private func releaseSummary() {
         summaryFocus = nil
-        if state.summaryFocus == summaryFocus { state.noteSummaryFocus(nil) }
+        // A removed summary has no remaining focused button. Clear the
+        // published reflection even if a host without FKA never delivered
+        // the local FocusState callback before the summary disappeared.
+        state.noteSummaryFocus(nil)
     }
 
     // MARK: Open: All and the tags
