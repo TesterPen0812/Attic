@@ -169,7 +169,12 @@ final class DrawLibraryMenuModel: ObservableObject {
     /// the library yet) is read from the store's session.
     private func currentCanvas(in library: [DrawCanvas]) -> DrawCanvas? {
         guard let currentCanvasID else { return nil }
-        if let listed = library.first(where: { $0.id == currentCanvasID }) { return listed }
+        if var listed = library.first(where: { $0.id == currentCanvasID }) {
+            // Rename keeps its confirmed name until saved. Tag toggles read
+            // their latest acknowledged projection, including earlier toggles.
+            if let pending = store.pendingEdits[currentCanvasID] { listed.tags = pending.canvas.tags }
+            return listed
+        }
         guard let canvas = try? store.open(currentCanvasID).canvas, canvas.deletedAt == nil else { return nil }
         return canvas
     }
@@ -473,11 +478,21 @@ final class DrawLibraryMenuModel: ObservableObject {
     /// Every tag in the library with how many canvases carry it, plus the
     /// open canvas's own.
     var tagCounts: [String: Int] {
+        let library = (try? store.library()) ?? []
+        let current = currentCanvas(in: library)
         var counts: [String: Int] = [:]
-        for canvas in (try? store.library()) ?? [] {
-            for tag in canvas.tags { counts[tag, default: 0] += 1 }
+        var includesCurrent = false
+        for canvas in library {
+            let tags: [String]
+            if let current, canvas.id == current.id {
+                tags = current.tags
+                includesCurrent = true
+            } else { tags = canvas.tags }
+            for tag in tags { counts[tag, default: 0] += 1 }
         }
-        for tag in currentCanvas?.tags ?? [] where counts[tag] == nil { counts[tag] = 1 }
+        if let current, !includesCurrent {
+            for tag in current.tags { counts[tag, default: 0] += 1 }
+        }
         return counts
     }
 

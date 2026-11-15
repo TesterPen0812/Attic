@@ -40,13 +40,11 @@ class DrawStore: DrawStoreProtocol {
     /// The steps live offers are bound to; a history holding one is never
     /// dropped for the budget.
     @ObservationIgnored private let pins = DrawStepPins()
-    /// A page has already acknowledged history behind a failed write. Fresh
-    /// native writes must not run ahead of that continuation and clear Redo.
-    @ObservationIgnored private let historyContinuations = DrawStepPins()
     var cachedCanvasIDs: Set<UUID> { Set(states.keys) }
     /// Per canvas, the edits not yet saved, oldest first. Only the first
     /// has been tried; the rest wait behind it and are already on show.
     @ObservationIgnored private var pending: [UUID: [Pending]] = [:]
+    @ObservationIgnored private var pendingAvailability: [UUID: (count: Int, last: UUID?, undo: Bool, redo: Bool)] = [:]
     /// A failed checkpoint can leave no journal record at all. Remember
     /// that this head has never entered the repository, independently of disk.
     @ObservationIgnored private var unsubmittedHeads = Set<UUID>()
@@ -576,7 +574,9 @@ class DrawStore: DrawStoreProtocol {
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
         if let recoveryIssue { return .held(recoveryIssue) }
         if case .thumbnail(let bytes, let dark) = command { return writeThumbnail(bytes, dark: dark, on: id) }
-        if historyContinuations.isPinned(id) { return historyMustResume() }
+        if case .rename = command, pending[id]?.contains(where: { $0.action != .edit }) == true {
+            return historyMustResume()
+        }
         do {
             guard let step = try prepare(command, on: id) else { return .unchanged }
             guard pending[id] != nil else { return execute(step, action: .edit) }
@@ -597,7 +597,6 @@ class DrawStore: DrawStoreProtocol {
     func performTypingBurst(_ commands: [DrawCommand], on id: UUID) -> DrawSaveResult {
         guard !commands.isEmpty else { return .unchanged }
         guard recoveryIssue == nil else { return .held(recoveryIssue!) }
-        if historyContinuations.isPinned(id) { return historyMustResume() }
         if pending[id] != nil {
             var result: DrawSaveResult = .unchanged
             for command in commands { result = perform(command, on: id) }
@@ -787,8 +786,6 @@ class DrawStore: DrawStoreProtocol {
     /// Restore's Undo) in the bounded history for as long as the offer lives.
     func pinHistoryStep(_ stepID: UUID) -> AnyObject? { pins.pin(stepID) }
 
-    func reserveHistoryContinuation(on id: UUID) -> DrawStepPins.Pin { historyContinuations.pin(id) }
-
     private func historyMustResume() -> DrawSaveResult {
         .held(String(localized: "Undo and Redo are waiting for this drawing to finish saving."))
     }
@@ -863,12 +860,67 @@ class DrawStore: DrawStoreProtocol {
         return execute(step, action: .redo)
     }
 
-    /// Read-only copies of the sparse history used to preview several rapid
-    /// Undo/Redo actions. The page cannot change these store-owned stacks;
-    /// every action still executes through the durable engine in FIFO order.
+    /// Sparse history after all checkpointed steps, including a failed head.
+    private func projectedHistory(on id: UUID) -> History {
+        var history = histories[id] ?? History()
+        for edit in pending[id] ?? [] {
+            switch edit.action {
+            case .edit:
+                for step in typingStepsPending[id]?[edit.step.id] ?? [edit.step] {
+                    history.undo.append(step)
+                    let excess = max(0, history.undo.count - Self.maxHistorySteps)
+                    let discard = history.undo.prefix(excess).prefix { !pins.isPinned($0.id) }.count
+                    history.undo.removeFirst(discard)
+                }
+                history.redo = []
+            case .undo:
+                _ = history.undo.popLast()
+                history.redo.append(edit.step.reversed)
+            case .redo:
+                _ = history.redo.popLast()
+                history.undo.append(edit.step)
+                let excess = max(0, history.undo.count - Self.maxHistorySteps)
+                let discard = history.undo.prefix(excess).prefix { !pins.isPinned($0.id) }.count
+                history.undo.removeFirst(discard)
+            }
+        }
+        return history
+    }
+
     func historyChanges(on id: UUID) -> (undo: [DrawChange], redo: [DrawChange])? {
-        guard pending[id] == nil, recoveryIssue == nil else { return nil }
-        return (histories[id]?.undo.map(\.change) ?? [], histories[id]?.redo.map(\.change) ?? [])
+        guard recoveryIssue == nil else { return nil }
+        let history = projectedHistory(on: id)
+        return (history.undo.map(\.change), history.redo.map(\.change))
+    }
+
+    /// Keystrokes with an unchanged pending tail only read cached booleans;
+    /// they never copy/project the history stacks to refresh toolbar state.
+    func acknowledgedHistoryAvailability(on id: UUID) -> (undo: Bool, redo: Bool) {
+        guard let edits = pending[id] else {
+            pendingAvailability[id] = nil
+            return (!(histories[id]?.undo.isEmpty ?? true), !(histories[id]?.redo.isEmpty ?? true))
+        }
+        if let cached = pendingAvailability[id], cached.count == edits.count, cached.last == edits.last?.step.id {
+            return (cached.undo, cached.redo)
+        }
+        let history = projectedHistory(on: id)
+        let value = (edits.count, edits.last?.step.id, !history.undo.isEmpty, !history.redo.isEmpty)
+        pendingAvailability[id] = value
+        return (value.2, value.3)
+    }
+
+    /// Only the page's acknowledged history route may append behind a failed
+    /// write. Resolve its inverse now against the pending projection, then
+    /// checkpoint it through exactly the ordinary pending path.
+    func acknowledgeHistory(redo: Bool, on id: UUID) -> DrawSaveResult {
+        guard recoveryIssue == nil else { return .held(recoveryIssue!) }
+        guard pending[id] != nil else { return redo ? self.redo(on: id) : undo(on: id) }
+        let history = projectedHistory(on: id)
+        guard let next = redo ? history.redo.last : history.undo.last else { return .unchanged }
+        let step = stamped(redo ? next : next.reversed)
+        show(step)
+        pending[id]?.append(Pending(step: step, action: redo ? .redo : .undo))
+        return publishPending(id, outcome: pendingEdits[id]?.outcome ?? .retry(""))
     }
 
     func duplicate(_ id: UUID, name: String? = nil) throws -> DrawCanvas? {
@@ -1060,6 +1112,7 @@ class DrawStore: DrawStoreProtocol {
                 if pending[id]?.isEmpty == false { unsubmittedHeads.insert(id) }
                 if pending[id]?.isEmpty == true {
                     pending[id] = nil
+                    pendingAvailability[id] = nil
                     pendingEdits[id] = nil
                     recoveredCanvasIDs.remove(id)
                 }
@@ -1105,7 +1158,10 @@ class DrawStore: DrawStoreProtocol {
         switch action {
         case .edit: appendUndo(step, on: id); histories[id]?.redo = []
         case .undo:
-            if let original = histories[id]?.undo.popLast() { histories[id, default: History()].redo.append(original) }
+            _ = histories[id]?.undo.popLast()
+            // Recovery may only know a merged typing head. The concrete
+            // inverse that was actually saved is authoritative for Redo.
+            histories[id, default: History()].redo.append(step.reversed)
         case .redo:
             _ = histories[id]?.redo.popLast()
             appendUndo(step, on: id)

@@ -1,6 +1,7 @@
 import AppKit
 import ImageIO
 import SwiftData
+import SwiftUI
 import UniformTypeIdentifiers
 import XCTest
 @testable import Attic
@@ -1509,6 +1510,316 @@ final class Draw3PageTests: XCTestCase {
     /// Redo is not consumed and dropped: it waits behind the pending Undo and
     /// runs once Retry has settled it, so Undo then Redo nets out to the
     /// restored canvas, as the person asked.
+    // Round 4: real file-backed writes; no quit/close in the crash fixture.
+    func testR4HeldTailSurvivesCrashAndRetriesExactlyOnce() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawR4Crash-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        func container() throws -> ModelContainer {
+            try ModelContainer(for: Schema(PersistenceController.appModelTypes), configurations:
+                ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+        }
+        var fail = false
+        var id: UUID!
+        weak var droppedPage: DrawPageModel?
+        weak var droppedStore: DrawPersistentStore?
+        let ink = DrawObject(content: .stroke([DrawPoint(x: 0, y: 0), DrawPoint(x: 10, y: 10)]))
+        let later = DrawObject(content: .stroke([DrawPoint(x: 20, y: 0), DrawPoint(x: 30, y: 10)]))
+        autoreleasepool {
+            let store = DrawPersistentStore(container: try! container(), save: { context in
+                if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
+            })
+            let page = DrawPageModel(store: store)
+            droppedPage = page; droppedStore = store
+            page.start(); id = page.canvasID!
+            XCTAssertTrue(page.perform(.put([ink])).isSaved)
+            fail = true
+            page.undoAcknowledged(); page.redoAcknowledged(); page.flushAcknowledgedDraw()
+            page.performAcknowledged(.put([later])); page.flushAcknowledgedDraw()
+            page.beginText(at: CGPoint(x: 180, y: 200)); page.typed("survives"); page.endEditing()
+            page.undoAcknowledged(); page.redoAcknowledged(); page.flushAcknowledgedDraw()
+            XCTAssertTrue(page.objects.contains(later))
+            // Drop the entire model/store/container without prepareToQuit or Retry.
+        }
+        // Cancelled frame/typing work items release their captures when their
+        // dispatch deadlines pass; no close, final flush or retry is called.
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertNil(droppedPage); XCTAssertNil(droppedStore)
+        fail = false
+        let recovered = DrawPersistentStore(container: try container())
+        let projected = try recovered.open(id).objects
+        XCTAssertTrue(projected.contains(ink))
+        XCTAssertTrue(projected.contains(later), "the acknowledged held stroke must be checkpointed")
+        XCTAssertEqual(projected.filter { $0.text == "survives" }.count, 1)
+        let outcome = recovered.pendingEdits[id]?.outcome
+        let result = if case .held = outcome { recovered.reconcile(on: id) } else { recovered.retry(on: id) }
+        XCTAssertTrue(result.isSaved)
+        XCTAssertNil(recovered.pendingEdits[id])
+        XCTAssertEqual(try recovered.open(id).objects, projected)
+        XCTAssertEqual(recovered.retry(on: id), .unchanged)
+        let reopened = DrawPersistentStore(container: try container())
+        let fresh = try? reopened.open(id)
+        XCTAssertNotNil(fresh, "the recovered canvas must remain on disk after another launch")
+        XCTAssertEqual(fresh?.objects, projected)
+        XCTAssertNil(reopened.pendingEdits[id])
+    }
+
+    func testR4HeldTypingUndoKeepsItsExactRedoAfterCrash() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawR4TypingCrash-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.trashItem(at: root, resultingItemURL: nil) }
+        func container() throws -> ModelContainer {
+            try ModelContainer(for: Schema(PersistenceController.appModelTypes), configurations:
+                ModelConfiguration(url: root.appendingPathComponent("draw.store"), cloudKitDatabase: .none))
+        }
+        var fail = false
+        var id: UUID!
+        let text = DrawObject(content: .text("start"))
+        weak var droppedPage: DrawPageModel?
+        weak var droppedStore: DrawPersistentStore?
+        autoreleasepool {
+            let store = DrawPersistentStore(container: try! container(), save: { context in
+                if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
+            })
+            let page = DrawPageModel(store: store)
+            droppedPage = page; droppedStore = store
+            page.start(); id = page.canvasID!
+            XCTAssertTrue(page.perform(.put([text])).isSaved)
+            page.edit(text.id); fail = true
+            page.typed("a"); page.typed("ab"); page.typed("abc"); page.flushLiveInput()
+            page.undo()
+            XCTAssertEqual(page.object(text.id)?.text, "ab", "held typing keeps each key's Undo")
+        }
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertNil(droppedPage); XCTAssertNil(droppedStore)
+        fail = false
+        let recovered = DrawPersistentStore(container: try container())
+        XCTAssertEqual(try recovered.open(id).objects.first?.text, "ab")
+        let result = if case .held = recovered.pendingEdits[id]?.outcome {
+            recovered.reconcile(on: id)
+        } else { recovered.retry(on: id) }
+        XCTAssertTrue(result.isSaved)
+        XCTAssertEqual(try recovered.open(id).objects.first?.text, "ab")
+        XCTAssertTrue(recovered.redo(on: id).isSaved, "Redo is the actual one-key inverse, not the merged burst")
+        XCTAssertEqual(try recovered.open(id).objects.first?.text, "abc")
+        XCTAssertTrue(recovered.undo(on: id).isSaved)
+        XCTAssertEqual(try DrawPersistentStore(container: try container()).open(id).objects.first?.text, "ab")
+    }
+
+    func testR4HeldProjectionSurvivesRevisionAndRefusedWrite() throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID)
+        XCTAssertTrue(model.perform(.put([DrawObject(content: .shape(.rectangle))])).isSaved)
+        fail = true
+        model.undoAcknowledged(); model.redoAcknowledged(); model.flushAcknowledgedDraw()
+        let later = DrawObject(content: .shape(.ellipse))
+        model.performAcknowledged(.put([later])); model.flushAcknowledgedDraw()
+        model.beginText(at: CGPoint(x: 180, y: 200)); model.typed("held text"); model.flushLiveInput()
+        let expected = model.objects
+        fail = false
+        let other = store.create(name: "Revision")
+        XCTAssertTrue(store.perform(.saveCanvas, on: other.id).isSaved)
+        model.syncExternalChanges()
+        XCTAssertEqual(model.objects, expected)
+        XCTAssertNotNil(model.editing)
+        fail = true
+        _ = model.perform(.tags(["held"]))
+        XCTAssertTrue(model.objects.contains(later))
+        XCTAssertNotNil(model.editing)
+        fail = false
+        model.retrySave()
+        XCTAssertTrue(try store.open(id).objects.contains(later))
+    }
+
+    func testR4HeldNonHistoryWritesQueueOnAnInactiveCanvas() throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID)
+        let original = DrawObject(frame: DrawFrame(x: 40, y: 100, width: 80, height: 60), content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([original])).isSaved)
+        let other = store.create(name: "Other")
+        XCTAssertTrue(store.perform(.put([DrawObject(content: .text("Other"))]), on: other.id).isSaved)
+        XCTAssertTrue(store.perform(.tags(["queued", "second"]), on: other.id).isSaved)
+        fail = true
+        model.undoAcknowledged(); model.redoAcknowledged(); model.flushAcknowledgedDraw()
+        model.open(other.id)
+        let image = DrawObject(frame: DrawFrame(x: 170, y: 180, width: 40, height: 40), content: .image(DrawImage(original: Draw3Images.encoded(width: 2, height: 2), pixelWidth: 2, pixelHeight: 2)))
+        _ = model.perform(.put([image]), on: id)
+        model.open(id)
+        model.library.perform(.tags)
+        model.library.setTag("queued", on: true)
+        model.library.setTag("second", on: true)
+        XCTAssertEqual(Set(model.library.currentCanvas?.tags ?? []), Set(["queued", "second"]),
+                       "the second toggle builds on, and displays, the first pending toggle")
+        XCTAssertEqual(model.library.tagCounts["queued"], 2)
+        XCTAssertEqual(model.library.tagCounts["second"], 2)
+        try captureR4HeldViewsIfRequested()
+        fail = false
+        model.retrySave()
+        let saved = try store.open(id)
+        XCTAssertTrue(saved.objects.contains(original))
+        XCTAssertTrue(saved.objects.contains(image))
+        XCTAssertEqual(Set(saved.canvas.tags), Set(["queued", "second"]))
+    }
+
+    /// Optional artifact capture uses the real views, without a window or focus.
+    private func captureR4HeldViewsIfRequested() throws {
+        guard let path = ProcessInfo.processInfo.environment["ATTIC_R4_RENDER_DIR"] else { return }
+        let root = URL(fileURLWithPath: path, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let oldTransparency = AtticTransparencySeam.systemOverride
+        let oldMotion = AtticMotionPreference.systemReduceMotionOverride
+        AtticTransparencySeam.systemOverride = true
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer {
+            AtticTransparencySeam.systemOverride = oldTransparency
+            AtticMotionPreference.systemReduceMotionOverride = oldMotion
+        }
+        func write(_ image: CGImage, _ name: String) throws {
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(
+                root.appendingPathComponent(name).appendingPathExtension("png") as CFURL,
+                "public.png" as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, image, nil)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+        }
+        let host = NSHostingView(rootView: DrawCanvasTagEditor(model: model.library)
+            .atticDesign(AtticDesignContext()).environment(\.colorScheme, .light))
+        host.appearance = NSAppearance(named: .aqua)
+        host.layout()
+        let size = host.fittingSize
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
+              size.width <= 1024, size.height <= 2048 else { return XCTFail("Invalid offscreen tag-editor size") }
+        host.setFrameSize(size)
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: Int(ceil(size.width * 2)), pixelsHigh: Int(ceil(size.height * 2)),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.size = size
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        try write(XCTUnwrap(bitmap.cgImage), "held-tags")
+
+        let board = DrawBoardView(model: model)
+        board.appearance = NSAppearance(named: .aqua)
+        board.setFrameSize(CGSize(width: 320, height: 460))
+        let wasShown = model.isShown
+        model.setShown(true)
+        defer { model.setShown(wasShown) }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        CATransaction.flush()
+        let context = try XCTUnwrap(CGContext(data: nil, width: 640, height: 920,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(NSColor.white.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 640, height: 920))
+        context.scaleBy(x: 2, y: 2)
+        board.layer?.render(in: context)
+        try write(XCTUnwrap(context.makeImage()), "held-board")
+
+        let tickStore = DrawInMemoryStore()
+        let tickPage = DrawPageModel(store: tickStore)
+        tickPage.pasteboard = NSPasteboard(name: NSPasteboard.Name("draw-r4-render-\(UUID())"))
+        defer { tickPage.pasteboard.releaseGlobally() }
+        let tickBoard = DrawBoardView(model: tickPage)
+        tickBoard.appearance = NSAppearance(named: .aqua)
+        tickBoard.setFrameSize(CGSize(width: 320, height: 460))
+        tickPage.start()
+        let points = [DrawPoint(x: 20, y: 80), DrawPoint(x: 20.002, y: 83)]
+        let tick = DrawObject(frame: DrawGeometry.strokeFrame(points), content: .stroke(points))
+        XCTAssertTrue(tickPage.perform(.put([tick])).isSaved)
+        tickPage.setTool(.select); tickPage.select([tick.id])
+        tickPage.setViewport(DrawViewport(zoom: DrawViewport.maxZoom), byUser: true)
+        let zoom = tickPage.viewport.zoom
+        tickPage.setViewport(DrawViewport(x: 80 - 20 * zoom, y: 100 - 80 * zoom, zoom: zoom), byUser: true)
+        tickPage.setShown(true)
+        defer { tickPage.setShown(false) }
+        let corner = try XCTUnwrap(tickPage.handleSpots.first { $0.handle == .bottomRight })
+        tickPage.pointerDown(at: corner.point, shift: true)
+        tickPage.pointerDragged(to: CGPoint(x: corner.point.x + zoom, y: corner.point.y), shift: true)
+        tickPage.pointerUp(); tickPage.flushAcknowledgedDraw()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        CATransaction.flush()
+        let tickContext = try XCTUnwrap(CGContext(data: nil, width: 640, height: 920,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        tickContext.setFillColor(NSColor.white.cgColor)
+        tickContext.fill(CGRect(x: 0, y: 0, width: 640, height: 920))
+        tickContext.scaleBy(x: 2, y: 2)
+        tickBoard.layer?.render(in: tickContext)
+        try write(XCTUnwrap(tickContext.makeImage()), "near-flat")
+        let frame = try XCTUnwrap(tickPage.object(tick.id)).frame
+        try "width=\(frame.width) height=\(frame.height) zoom=\(zoom)".write(
+            to: root.appendingPathComponent("near-flat.txt"), atomically: true, encoding: .utf8)
+    }
+
+    func testR4HeldContinuationKeepsSparseStepsInsteadOfBoardSnapshots() throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID)
+        let originals = (0..<500).map { DrawObject(zIndex: Int64($0), content: .shape(.rectangle)) }
+        XCTAssertTrue(model.perform(.put(originals)).isSaved)
+        XCTAssertTrue(model.perform(.put([DrawObject(zIndex: 500, content: .shape(.rectangle))])).isSaved)
+        fail = true
+        model.undoAcknowledged(); model.redoAcknowledged(); model.flushAcknowledgedDraw()
+        for i in 0..<200 {
+            model.performAcknowledged(.put([DrawObject(zIndex: Int64(501 + i), content: .shape(.ellipse))]))
+            model.flushAcknowledgedDraw()
+        }
+        XCTAssertEqual(store.pendingEdits[id]?.count, 202, "every later gesture belongs to the sparse durable queue")
+        let held = Mirror(reflecting: try XCTUnwrap(model)).children.first { $0.label == "heldHistory" }
+        var snapshots = 0, retainedReferences = 0
+        for pair in held.map({ Array(Mirror(reflecting: $0.value).children) }) ?? [] {
+            guard let value = Array(Mirror(reflecting: pair.value).children).last?.value,
+                  let entries = Mirror(reflecting: value).children.first(where: { $0.label == "entries" }) else { continue }
+            for entry in Mirror(reflecting: entries.value).children {
+                if let before = Mirror(reflecting: entry.value).children.first(where: { $0.label == "before" })?.value as? [DrawObject] {
+                    snapshots += 1; retainedReferences += before.count
+                }
+            }
+        }
+        print("R4_CONTINUATION_MEMORY beforeArrays=\(snapshots) objectReferences=\(retainedReferences)")
+        XCTAssertEqual(snapshots, 0, "continuations must retain sparse changes, never a full board per action")
+        let durable = try XCTUnwrap(store as? DrawPersistentStore)
+        let root = try XCTUnwrap(durable.container.configurations.first).url.deletingLastPathComponent()
+        let journal = DrawRecoveryJournal(fileURL: root.appendingPathComponent("DrawRecovery-v1.json"))
+        let edits = try XCTUnwrap(journal.records[id]?.edits)
+        XCTAssertEqual(edits.count, 202)
+        XCTAssertEqual(edits.reduce(0) { $0 + $1.step.change.objectsBefore.count + $1.step.change.objectsAfter.count }, 202,
+                       "the checkpoint holds two one-object history changes plus 200 one-object strokes")
+        fail = false; model.retrySave()
+        XCTAssertEqual(try store.open(id).objects.count, 701)
+    }
+
+    func testR4StoreRetryCannotLetUndoOvertakePageRedo() throws {
+        var fail = false
+        use(try persistentStore(fileBacked: true, save: { context in
+            if fail { throw NSError(domain: "R4", code: 1) }; try context.save()
+        }))
+        let id = try XCTUnwrap(model.canvasID)
+        let first = DrawObject(content: .shape(.rectangle)), second = DrawObject(content: .shape(.ellipse))
+        XCTAssertTrue(model.perform(.put([first])).isSaved)
+        XCTAssertTrue(model.perform(.put([second])).isSaved)
+        fail = true
+        model.undoAcknowledged(); model.redoAcknowledged(); model.flushAcknowledgedDraw()
+        let later = DrawObject(content: .shape(.arrow))
+        model.performAcknowledged(.put([later])); model.flushAcknowledgedDraw()
+        fail = false
+        XCTAssertTrue(store.retry(on: id).isSaved)
+        // An external toast/group route may now Undo, but must see the Redo
+        // already settled, or be refused until the page continuation resumes.
+        _ = store.undo(on: id)
+        model.flushAcknowledgedDraw()
+        XCTAssertNil(store.pendingEdits[id])
+        XCTAssertEqual(Set(try store.open(id).objects.map(\.id)), Set([first.id, second.id]))
+    }
+
     func testBG29ARedoQueuedBehindAFailedUndoRunsAfterRetry() throws {
         var fail = false
         let durable = try persistentStore(fileBacked: true, save: { context in
