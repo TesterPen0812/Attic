@@ -2786,3 +2786,43 @@ extension Draw3PageTests {
         XCTAssertTrue(CGImageDestinationFinalize(destination))
     }
 }
+extension Draw3PageTests {
+    func testR5FailedCheckpointExtensionStaysVisibleRefusesQuitAndLaterWritesWholeTail() async throws {
+        let container = try persistentStore(fileBacked: true).container
+        let url = try XCTUnwrap(container.configurations.first).url
+        var failSave = false, failCheckpoint = false
+        let journal = DrawRecoveryJournal(fileURL: url.deletingLastPathComponent().appendingPathComponent("DrawRecovery-v1.json"), writeData: { data, destination in
+            if failCheckpoint { throw NSError(domain: "R5 checkpoint full", code: 1) }
+            try data.write(to: destination, options: .atomic)
+        })
+        use(DrawStore(repository: DrawSwiftDataRepository(container: container, metrics: DrawSaveMetrics(), save: { context in
+            if failSave { throw NSError(domain: "R5 save full", code: 1) }; try context.save()
+        }, recovery: journal), recovery: journal))
+        let id = try XCTUnwrap(model.canvasID)
+        let first = DrawObject(content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([first])).isSaved)
+        failSave = true; model.undo(); model.flushAcknowledgedDraw()
+        failCheckpoint = true
+        model.redo(); model.flushAcknowledgedDraw()
+        let last = DrawObject(content: .shape(.ellipse))
+        model.performAcknowledged(.put([last])); model.flushAcknowledgedDraw()
+        XCTAssertEqual(Set(model.objects.map(\.id)), Set([first.id, last.id]))
+        try r5CaptureNotice("checkpoint-extension")
+        XCTAssertTrue(model.saveNotice?.message.localizedCaseInsensitiveContains("not saved yet") == true,
+                      "say the visible change is not saved now")
+        let ready = await model.prepareToQuit(); XCTAssertFalse(ready)
+        XCTAssertEqual(store.pendingEdits[id]?.count, 3)
+        failCheckpoint = false
+        // Recover the complete ordered tail at the next successful checkpoint,
+        // then crash before the repository can commit it.
+        _ = store.reconcile(on: id)
+        let recovered = try r5CrashReopen(url)
+        XCTAssertTrue(recovered.retry(on: id).isSaved)
+        XCTAssertEqual(Set(try recovered.open(id).objects.map(\.id)), Set([first.id, last.id]))
+        XCTAssertTrue(recovered.undo(on: id).isSaved)
+        XCTAssertEqual(try recovered.open(id).objects, [first])
+        XCTAssertTrue(recovered.undo(on: id).isSaved)
+        XCTAssertTrue(try recovered.open(id).objects.isEmpty)
+        failSave = false; use(recovered)
+    }
+}

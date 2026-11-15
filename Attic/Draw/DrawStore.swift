@@ -649,7 +649,7 @@ class DrawStore: DrawStoreProtocol {
                     try recovery.update(id, edits: [Pending(step: merged, action: .edit)], proof: nil, unattempted: true)
                 } catch {
                     pending[id] = [Pending(step: merged, action: .edit)]
-                    return publishPending(id, outcome: .held("The text cannot be saved until its recovery checkpoint is written: \(error.localizedDescription)"))
+                    return publishPending(id, outcome: .held("The text is not saved yet. Its recovery checkpoint could not be written: \(error.localizedDescription)"))
                 }
             }
             unsubmittedHeads.remove(id)
@@ -1115,7 +1115,7 @@ class DrawStore: DrawStoreProtocol {
                 show(step)
                 pending[step.change.canvasID] = [Pending(step: step, action: action)]
                 return publishPending(step.change.canvasID, outcome: .held(
-                    "The drawing cannot be saved until its crash-recovery checkpoint can be written: \(error.localizedDescription)"
+                    "The drawing is not saved yet. Its crash-recovery checkpoint could not be written: \(error.localizedDescription)"
                 ))
             }
         }
@@ -1171,7 +1171,7 @@ class DrawStore: DrawStoreProtocol {
                         checkpointDirty.remove(id)
                     } catch {
                         return publishPending(id, outcome: .held(
-                            "The Draw recovery checkpoint could not be written before saving: \(error.localizedDescription)"
+                            "The drawing is not saved yet. The recovery checkpoint could not be written before saving: \(error.localizedDescription)"
                         ))
                     }
                 }
@@ -1201,7 +1201,7 @@ class DrawStore: DrawStoreProtocol {
                     do { try recovery.update(id, edits: pending[id], proof: nil, unattempted: pending[id] != nil) }
                     catch {
                         if pending[id] != nil {
-                            return publishPending(id, outcome: .held("The Draw recovery checkpoint could not be updated: \(error.localizedDescription)"))
+                            return publishPending(id, outcome: .held("The remaining drawing changes are not saved yet. The recovery checkpoint could not be updated: \(error.localizedDescription)"))
                         }
                         // The last save is proven; a stale file remains safe
                         // to reconcile after relaunch if cleanup failed.
@@ -1275,7 +1275,7 @@ class DrawStore: DrawStoreProtocol {
             }
             catch {
                 checkpointDirty.insert(id)
-                published = .held("The drawing is held because its crash-recovery checkpoint could not be written: \(error.localizedDescription)")
+                published = .held("The drawing is not saved yet. Its crash-recovery checkpoint could not be written: \(error.localizedDescription)")
             }
         }
         pendingEdits[id] = DrawPendingEdit(canvas: last.step.after, objects: states[id]?.snapshot.objects ?? [],
