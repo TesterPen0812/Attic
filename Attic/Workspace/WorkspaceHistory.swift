@@ -507,21 +507,31 @@ final class WorkspaceHistory {
     @discardableResult
     func undo() -> Bool {
         closeGroup()
+        if requestedReplay != nil { return requestReplay(redo: false) }
         guard canUndo else { return false }
         if route.steps(in: historyID, redo: false).last?.replay != nil {
             return requestReplay(redo: false)
         }
-        return route.undo(in: historyID)
+        let outcome = route.undoStep(in: historyID)
+        if outcome == .obsolete && route.steps(in: historyID, redo: false).last?.replay != nil {
+            return requestReplay(redo: false)
+        }
+        return outcome == .applied
     }
 
     @discardableResult
     func redo() -> Bool {
         closeGroup()
+        if requestedReplay != nil { return requestReplay(redo: true) }
         guard canRedo else { return false }
         if route.steps(in: historyID, redo: true).last?.replay != nil {
             return requestReplay(redo: true)
         }
-        return route.redo(in: historyID)
+        let outcome = route.redoStep(in: historyID)
+        if outcome == .obsolete && route.steps(in: historyID, redo: true).last?.replay != nil {
+            return requestReplay(redo: true)
+        }
+        return outcome == .applied
     }
     func replay(redo: Bool) async -> UndoOutcome? {
         guard redo ? canRedo : canUndo else { return nil }

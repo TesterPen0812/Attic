@@ -43,6 +43,91 @@ final class WorkspaceHistoryTests: XCTestCase {
         adapter.willChange(ranges: [range], strings: [text]); adapter.storage.replaceCharacters(in: range, with: text); adapter.didChange()
     }
     private func title() throws -> String { try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<TaskItem>()).first).title }
+
+    func testDataR1RapidRedoQueuesBehindPendingJournalUndo() async throws {
+        var state = 1, undoCalls = 0, redoCalls = 0
+        var enteredUndo = false
+        var releaseUndo: CheckedContinuation<Void, Never>?
+        var step = UndoStep(name: "Journaled edit", undoOutcome: {
+            XCTFail("A journaled step must use asynchronous replay")
+            return .failed
+        }, redoOutcome: {
+            XCTFail("A journaled step must use asynchronous replay")
+            return .failed
+        })
+        step.replay = { redo, publish in
+            if !redo {
+                enteredUndo = true
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    releaseUndo = continuation
+                }
+            }
+            do { try publish() } catch { return .failed }
+            state = redo ? 1 : 0
+            if redo { redoCalls += 1 } else { undoCalls += 1 }
+            return .applied
+        }
+        route.record(step, in: workspace.historyID)
+        XCTAssertTrue(workspace.undo())
+        for _ in 0..<100 where !enteredUndo { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(enteredUndo)
+        XCTAssertTrue(workspace.redo(), "a fast opposite shortcut must queue behind the pending Undo")
+        releaseUndo?.resume()
+        for _ in 0..<100 where redoCalls == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(undoCalls, 1)
+        XCTAssertEqual(redoCalls, 1, "the queued Redo must execute after Undo commits its cursor")
+        XCTAssertEqual(state, 1)
+        XCTAssertEqual(route.undoCount(in: workspace.historyID), 1)
+        XCTAssertFalse(route.canRedo(in: workspace.historyID))
+    }
+
+    func testDataR1OneUndoSkipsObsoleteStepBeforeJournalReplay() async throws {
+        var replayCount = 0
+        var journal = UndoStep(name: "Saved workspace change", undoOutcome: {
+            XCTFail("The journal step must run its replay closure")
+            return .failed
+        }, redoOutcome: {
+            XCTFail("The journal step must run its replay closure")
+            return .failed
+        })
+        journal.replay = { _, publish in
+            do { try publish() } catch { return .failed }
+            replayCount += 1
+            return .applied
+        }
+        route.record(journal, in: workspace.historyID)
+        route.record(UndoStep(name: "Obsolete external edit", undoOutcome: { .obsolete },
+                              redoOutcome: { .obsolete }), in: workspace.historyID)
+
+        XCTAssertTrue(workspace.undo(), "one Undo must discard obsolete entries and reach the journaled step")
+        for _ in 0..<100 where replayCount == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(replayCount, 1)
+        XCTAssertFalse(route.canUndo(in: workspace.historyID))
+        XCTAssertTrue(route.canRedo(in: workspace.historyID))
+    }
+
+    func testDataR1OneRedoSkipsObsoleteStepBeforeJournalReplay() async throws {
+        var replayCount = 0
+        route.record(UndoStep(name: "Only the inverse is still valid", undoOutcome: { .applied },
+                              redoOutcome: { .obsolete }), in: workspace.historyID)
+        var journal = UndoStep(name: "Journaled operation", undoOutcome: { .failed }, redoOutcome: { .failed })
+        journal.replay = { _, publish in
+            do { try publish() } catch { return .failed }
+            replayCount += 1
+            return .applied
+        }
+        route.record(journal, in: workspace.historyID)
+        let undone = await workspace.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertEqual(replayCount, 1)
+        XCTAssertTrue(workspace.undo(), "ordinary inverse should run synchronously")
+
+        XCTAssertTrue(workspace.redo(), "one Redo must discard obsolete entries and reach the journaled step")
+        for _ in 0..<100 where replayCount == 1 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(replayCount, 2)
+        XCTAssertTrue(route.canUndo(in: workspace.historyID))
+        XCTAssertFalse(route.canRedo(in: workspace.historyID))
+    }
     private func savedDocument() throws -> NoteDocument {
         let id = noteID!
         let note = try XCTUnwrap(coordinator.freshContext().fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first)
