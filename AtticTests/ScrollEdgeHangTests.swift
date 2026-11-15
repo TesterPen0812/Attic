@@ -540,6 +540,19 @@ final class ScrollEdgeHangTests: XCTestCase {
     }
 
     #if DEBUG
+    /// Opus R-3: a hover from the pre-scroll settle must never satisfy the
+    /// assertion intended to prove a row received hover after scrolling.
+    func testPreScrollHoverHistoryIsEmptyBeforeTheFirstScroll() throws {
+        var cleared: Bool?
+        try check(reduceMotion: false, deltas: [], mode: .dark, surface: .glass,
+                  stationaryHover: true, beforePreScrollHistoryReset: {
+            AtticTaskRow.hoverHistory[UUID()] = [true]
+        }, afterPreScrollSettle: {
+            cleared = AtticTaskRow.hoverHistory.values.allSatisfy(\.isEmpty)
+        })
+        XCTAssertEqual(cleared, true, "pre-scroll hover must not be mistaken for post-scroll delivery")
+    }
+
     /// Opus R-6: a throwing first hover must leave no global diagnostics
     /// enabled for the later hosted tests in the same process.
     func testThrowingInitialHoverCleansGlobalDiagnostics() throws {
@@ -553,7 +566,9 @@ final class ScrollEdgeHangTests: XCTestCase {
     private func check(reduceMotion: Bool, deltas: [CGFloat] = [-170, 11, 11, 340],
                        extraRows: Int = 0, enablesAccessibility: Bool = true,
                        mode: AtticDesignContext.Mode = .light, surface: PanelSurfaceStyle = .solid,
-                       stationaryHover: Bool = false, failInitialHover: Bool = false) throws {
+                       stationaryHover: Bool = false, beforePreScrollHistoryReset: (() -> Void)? = nil,
+                       afterPreScrollSettle: (() -> Void)? = nil,
+                       failInitialHover: Bool = false) throws {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
         NSApp.accessibilitySetValue(enablesAccessibility, forAttribute: enhanced)
@@ -645,6 +660,9 @@ final class ScrollEdgeHangTests: XCTestCase {
             try Self.hover(window: window, at: CGPoint(x: size.width * 0.5, y: size.height * 0.55), tracked: &tracked)
             settle(0.7)
             print("ATTIC_SCROLL_HOVER before_scroll=\(AtticTaskRow.hoverHistory.values) open=\(AtticTaskRow.drawsOpen)")
+            beforePreScrollHistoryReset?()
+            AtticTaskRow.hoverHistory.removeAll()
+            afterPreScrollSettle?()
             TasksFoldLayoutProbe.shared.start()
         }
         for (index, delta) in deltas.enumerated() {
