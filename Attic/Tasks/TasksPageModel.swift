@@ -463,6 +463,9 @@ final class TasksPageModel: ObservableObject {
     private var acknowledgedRows: [UUID: TaskItem] = [:]
     private var acknowledgedDeleted: Set<UUID> = []
     private var acknowledgedCreated: [TaskItem] = []
+    /// Creations already saved durably but still missing from a confirmed list read.
+    /// Pending previews must survive unrelated successful reloads.
+    private var committedUnindexedCreatedIDs: Set<UUID> = []
     @Published private(set) var acknowledgementRevision: UInt64 = 0
     private var acknowledgedTaskCommand: (() -> Bool)?
     private var acknowledgedTaskHistory: UndoHistoryID?
@@ -704,11 +707,17 @@ final class TasksPageModel: ObservableObject {
             .sink { [weak self] _ in
                 guard let self else { return }
                 // A committed creation may predate its first successful list read.
-                // Retire its optimistic copy only once the real row is indexed.
+                // After a successful full reload, even a missing task is known
+                // to be gone (e.g. its writing was deleted in Notes).
                 if !self.acknowledgedCreated.isEmpty {
-                    let unindexed = self.acknowledgedCreated.filter { self.store.task(withID: $0.id) == nil }
-                    if unindexed.count != self.acknowledgedCreated.count {
-                        self.acknowledgedCreated = unindexed
+                    let confirmedReload = !self.store.hasUnresolvedTaskReload && self.store.revisionChangedTaskIDs == nil
+                    let remaining = self.acknowledgedCreated.filter { preview in
+                        self.store.task(withID: preview.id) == nil
+                            && !(confirmedReload && self.committedUnindexedCreatedIDs.contains(preview.id))
+                    }
+                    if remaining.count != self.acknowledgedCreated.count {
+                        self.acknowledgedCreated = remaining
+                        self.committedUnindexedCreatedIDs.formIntersection(Set(remaining.map(\.id)))
                         self.acknowledgementRevision &+= 1
                     }
                 }
@@ -2234,8 +2243,11 @@ final class TasksPageModel: ObservableObject {
             let created = save(id)
             // A saved task with writing can survive while every presentation
             // refresh fails. Keep its visible row until the store indexes it.
-            if created == nil || store.task(withID: id) != nil {
+            if created != nil && store.task(withID: id) == nil {
+                committedUnindexedCreatedIDs.insert(id)
+            } else {
                 acknowledgedCreated.removeAll { $0.id == id }
+                committedUnindexedCreatedIDs.remove(id)
             }
             acknowledgementRevision &+= 1
             if created == nil { acknowledgementFailures &+= 1 }

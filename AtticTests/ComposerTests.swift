@@ -984,6 +984,28 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(library.undo.canRedo(in: .tasks))
     }
 
+    func testRound2SuccessfulReloadRetiresDeletedUnindexedCreation() throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Committed unindexed task")
+        model.writing = "Delete this task through its writing"
+        tasks.listRefreshFailures = 20
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertFalse(model.isCreating)
+        let committed = try XCTUnwrap(try rows(TaskItem.self).first)
+        XCTAssertTrue(tasks.hasUnresolvedTaskReload)
+        XCTAssertTrue(page.rows(for: .now).contains { $0.id == committed.id })
+        notes.refresh()
+        let writing = try XCTUnwrap(notes.notes.first { $0.deletedAt == nil })
+        XCTAssertTrue(notes.delete(writing))
+        tasks.listRefreshFailures = 0
+        tasks.refresh()
+        XCTAssertFalse(tasks.hasUnresolvedTaskReload)
+        XCTAssertNil(tasks.task(withID: committed.id))
+        XCTAssertFalse(page.rows(for: .now).contains { $0.id == committed.id }, "a confirmed absent committed task must not keep its optimistic ghost")
+    }
+
     func testReviewR4EditMenuChromeUndoSettlesCreationBeforeHistory() throws {
         let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older history step")])?.first)
         page.services.acknowledgementDelay = .seconds(30)
