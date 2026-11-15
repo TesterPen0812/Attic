@@ -196,10 +196,10 @@ final class ScrollEdgeUITests: XCTestCase {
             recovered: pass.recovery?.hasRecovered == true,
             probeText: latest.flatMap { try? String(contentsOf: $0, encoding: .utf8) },
             probeFirstExists: first.map { fileManager.fileExists(atPath: $0.path) } ?? false,
-            probeFollowingExists: following.map { fileManager.fileExists(atPath: $0.path) } ?? false,
             screenshotExists: fileManager.fileExists(atPath: pass.screenshot.path),
             sampleExists: fileManager.fileExists(atPath: pass.sample.path),
-            recoveryLogExists: fileManager.fileExists(atPath: pass.recoveryLog.path))
+            recoveryLogExists: fileManager.fileExists(atPath: pass.recoveryLog.path),
+            probeFollowingExists: following.map { fileManager.fileExists(atPath: $0.path) } ?? false)
         func attach(_ url: URL, _ name: String) {
             let attachment = XCTAttachment(contentsOfFile: url)
             attachment.name = "\(pass.prefix)-\(name)"
