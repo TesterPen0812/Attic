@@ -10,6 +10,15 @@ import XCTest
 /// have it (on) and off; each step must return within 2 s.
 @MainActor
 final class ScrollEdgeHangTests: XCTestCase {
+    #if !DEBUG
+    /// Opus R-10: production SwiftUI fold values remain plain data with no
+    /// diagnostic String references or reference-counted payloads.
+    func testReleaseFoldValuesContainNoProbeReferenceFields() {
+        XCTAssertTrue(_isPOD(TasksFoldLayout.self))
+        XCTAssertTrue(_isPOD(TasksFoldBody.self))
+    }
+    #endif
+
     func testHangProbeDoesNotFormatKeysOrEventValuesWhenDisabled() {
         #if DEBUG
         XCTAssertFalse(AtticHangProbe.isEnabled, "the ordinary unit host must not arm the CI probe")

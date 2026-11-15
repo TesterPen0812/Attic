@@ -649,17 +649,14 @@ enum TasksFold {
 struct TasksFoldBody: ViewModifier, Animatable {
     var progress: CGFloat
     let place: TasksFoldPlace?
+    #if DEBUG
     /// DEBUG hang probe only: names the row in the probe's ring.
     let probeKey: String
 
     /// Diagnostic keys are created only when the DEBUG hang probe is armed.
     /// Release builds never format row IDs while constructing fold bodies.
     static func probeKey(for rowID: UUID) -> String {
-        #if DEBUG
         AtticHangProbe.key(rowID.uuidString)
-        #else
-        ""
-        #endif
     }
 
     init(progress: CGFloat, place: TasksFoldPlace?, probeKey: String = "") {
@@ -667,6 +664,12 @@ struct TasksFoldBody: ViewModifier, Animatable {
         self.place = place
         self.probeKey = probeKey
     }
+    #else
+    init(progress: CGFloat, place: TasksFoldPlace?) {
+        self.progress = progress
+        self.place = place
+    }
+    #endif
 
     var animatableData: CGFloat {
         get { progress }
@@ -681,7 +684,12 @@ struct TasksFoldBody: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         let visible: CGFloat? = place.flatMap { progress >= 1 ? nil : Self.visibleHeight(progress: progress, place: $0) }
-        TasksFoldLayout(visible: visible, probeKey: probeKey) { content }
+        #if DEBUG
+        let layout = TasksFoldLayout(visible: visible, probeKey: probeKey)
+        #else
+        let layout = TasksFoldLayout(visible: visible)
+        #endif
+        return layout { content }
             .clipShape(TasksFoldClip(visible: visible ?? TasksFoldClip.open))
             .opacity(visible == nil ? 1 : Double(min(1, max(0, progress))))
     }
@@ -691,8 +699,10 @@ struct TasksFoldBody: ViewModifier, Animatable {
 /// points of height (the list moves what follows by that).
 struct TasksFoldLayout: Layout {
     var visible: CGFloat?
+    #if DEBUG
     /// DEBUG hang probe only: names the row in the probe's ring.
     var probeKey: String = ""
+    #endif
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let row = subviews.first else { return .zero }

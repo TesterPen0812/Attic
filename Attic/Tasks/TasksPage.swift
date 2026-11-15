@@ -989,10 +989,17 @@ struct TasksPage: View {
     }
 
     /// A group row's fold modifier: open and unclipped unless its group turns.
+    #if DEBUG
     static func foldBody(_ turn: TasksFoldTurn?, place: TasksFoldPlace?, probeKey: String = "") -> TasksFoldBody {
         guard let turn else { return TasksFoldBody(progress: 1, place: nil, probeKey: probeKey) }
         return TasksFoldBody(progress: turn.progress, place: place, probeKey: probeKey)
     }
+    #else
+    static func foldBody(_ turn: TasksFoldTurn?, place: TasksFoldPlace?) -> TasksFoldBody {
+        guard let turn else { return TasksFoldBody(progress: 1, place: nil) }
+        return TasksFoldBody(progress: turn.progress, place: place)
+    }
+    #endif
 
     /// Each drawn row's place in its turning group (heights as measured,
     /// or as estimated before the row was ever drawn).
@@ -1700,6 +1707,11 @@ struct TasksPage: View {
                         let turning = turn?.matches(tab, dateGroup.key) ?? false
                         let folded = Self.shownFolded(turning ? turn : nil, folded: model.folded(on: tab).contains(dateGroup.key))
                         if let row = entry.row {
+                            #if DEBUG
+                            let fold = Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id], probeKey: TasksFoldBody.probeKey(for: row.id))
+                            #else
+                            let fold = Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id])
+                            #endif
                             cell(row, tab: tab, group: entry.reorderIDs, run: selectionRuns[row.id] ?? .single, drawn: drawn)
                                 .id(row.id)
                                 .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
@@ -1707,7 +1719,7 @@ struct TasksPage: View {
                                 .scaleEffect(reorderFade.contains(row.id) ? AtticMotionPreset.settle.hiddenScale(reduceMotion: design.reduceMotion) : 1)
                                 // A turning group's body closes or opens over
                                 // its rows (fix round 2).
-                                .modifier(Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id], probeKey: TasksFoldBody.probeKey(for: row.id)))
+                                .modifier(fold)
                                 // A row added drops into its place (round 9);
                                 // a row leaving fades and shrinks on the exit.
                                 .transition(AtticMotionScale.rowTransition(reduceMotion: design.reduceMotion))
