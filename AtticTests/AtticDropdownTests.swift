@@ -890,22 +890,38 @@ final class AtticDropdownTests: XCTestCase {
 
     /// A list scrolled so that its first row is half out of view, no highlight
     /// anywhere, and the origin the rows' hovers report to.
-    private func makeAFlickableList(viaParameter: Bool) throws
+    private func makeAFlickableList(viaParameter: Bool, beforeUnwrap: ((NSWindow) throws -> Void)? = nil) throws
         -> (window: NSWindow, host: NSHostingView<ViewportRows>, origin: AtticHighlightOrigin, list: NSScrollView, start: CGFloat, box: OriginBox) {
         let window = makeWindow()
+        var handedToCaller = false
+        defer { if !handedToCaller { window.close() } }
         let box = OriginBox()
         let host = NSHostingView(rootView: ViewportRows(highlighted: nil, viaParameter: viaParameter, box: box))
         host.frame = CGRect(x: 0, y: 0, width: 240, height: 265)
         window.contentView?.addSubview(host)
         host.layoutSubtreeIfNeeded()
-        spin(0.2)
+        wait(for: host) { box.origin != nil && !self.scrollViews(in: host).isEmpty }
+        try beforeUnwrap?(window)
         let origin = try XCTUnwrap(box.origin)
         let list = try XCTUnwrap(scrollViews(in: host).first)
         scroll(list, to: AtticDropdownMetrics.rowHeight / 2)
-        spin(0.3)
+        wait(for: host) { list.contentView.bounds.origin.y == AtticDropdownMetrics.rowHeight / 2 }
         let start = list.contentView.bounds.origin.y
         XCTAssertEqual(start, AtticDropdownMetrics.rowHeight / 2, accuracy: 0.5, "the first row is half scrolled out")
+        handedToCaller = true
         return (window, host, origin, list, start, box)
+    }
+
+    func testPF43AFailedFlickableListSetupClosesItsWindow() {
+        enum SetupFailure: Error { case forced }
+        var created: NSWindow?
+        defer { created?.close() }
+        XCTAssertThrowsError(try makeAFlickableList(viaParameter: false, beforeUnwrap: { window in
+            created = window
+            throw SetupFailure.forced
+        }))
+        XCTAssertNotNil(created, "the failure was after the hosted window was created")
+        XCTAssertFalse(created?.isVisible ?? true, "failed setup must close its window before returning the error")
     }
 
     /// The pointer crosses a row that is cut off at the top and is gone again
@@ -1027,7 +1043,7 @@ final class AtticDropdownTests: XCTestCase {
         origin.pointerEntered("row-3")
         XCTAssertFalse(origin.shouldScroll(toHighlight: "row-3"), "the list reported the pointer's highlight")
         origin.pointerEntered("row-3")
-        origin.pointerLeft("row-3")
+        origin.pointerLeft("row-3", retainsHighlight: true)
         XCTAssertNil(origin.pointerRow, "the same row is not a new highlight to report: its leave clears the origin at once")
     }
 
