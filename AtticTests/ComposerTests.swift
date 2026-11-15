@@ -1037,6 +1037,30 @@ final class ComposerTests: XCTestCase {
         page.settlePendingCompletionAcknowledgements()
     }
 
+    func testRound2ControllerEnablesPendingOnlyUndoWithoutPriorHistory() throws {
+        let suite = "ComposerTests.pendingMenu.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = PanelUIState()
+        let controller = AtticPanelController(store: tasks, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: container)),
+            noteDraft: NoteDraftController(noteStore: notes), settings: AppSettings(defaults: defaults), uiState: state)
+        let panel = controller.panelForTesting
+        defer { panel.contentView = nil; panel.close() }
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Only pending creation")
+        model.submit()
+        defer { page.settlePendingCompletionAcknowledgements() }
+        XCTAssertFalse(library.undo.canUndo(in: .tasks))
+        XCTAssertTrue(model.isCreating)
+        XCTAssertEqual(panel.canPerformUnhandledUndo?(false), true, "the actual mounted controller must expose pending-only Undo")
+        panel.onUnhandledUndo?(false)
+        XCTAssertFalse(model.isCreating)
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+    }
+
     func testReviewR4EditMenuChromeUndoSettlesCreationBeforeHistory() throws {
         let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older history step")])?.first)
         page.services.acknowledgementDelay = .seconds(30)
@@ -1116,9 +1140,13 @@ final class ComposerTests: XCTestCase {
                                                                tags: [], pinned: false, in: .calendar))
         page.services.acknowledgementDelay = .seconds(30)
         taskSaveFailure.successfulWritesBeforeFailure = 0
-        page.completeAcknowledged(task.id) { _ in }
+        var completionOutcome: CommandOutcome?
+        page.completeAcknowledged(task.id) { completionOutcome = $0 }
         model.open(on: .calendar(selected: today))
         model.undoPage()
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertNotNil(completionOutcome, "observe the injected completion failure, not just its optimistic state")
+        XCTAssertEqual(completionOutcome?.isApplied, false)
 
         try await waitForComposer {
             self.notes.notes.first { $0.id == calendarNote && $0.deletedAt == nil } == nil
