@@ -28,6 +28,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     let uiState = PanelUIState()
     let calendarPageState = CalendarPageState()
     let toasts = PanelToastCenter()
+    private let composerState = PanelComposerState()
     private let hostingView: AtticPanelHostingView
     private let chrome = PanelChromeInteractionState()
     private let store: TaskStore
@@ -64,7 +65,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
                 // Its own page state (its own Search and drafts), the
                 // remembered views shared with the docked panel's.
                 tasksPageState: TasksPageState(memory: deps.tasksMemory),
-                calendarPageState: calendarPageState),
+                calendarPageState: calendarPageState, composerState: composerState),
             panelCornerRadius: deps.settings.panelCornerSize,
             dockedCorner: deps.settings.corner,
             chromeInteractionState: chrome)
@@ -189,7 +190,17 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     }
 
     /// Gone for good (its page docked again): the window and its pages go.
+    func prepareComposerForClose() -> Bool {
+        guard let model = composerState.model else { return true }
+        guard model.tasks.addBarState.stagingFiles == 0 else {
+            toasts.showFailure(String(localized: "Files are preparing. Try docking again."))
+            return false
+        }
+        return model.saveKeptDraft()
+    }
+
     func close() {
+        guard prepareComposerForClose() else { return }
         fadeGeneration += 1
         isHiding = false
         hostingView.cancelActiveInteraction(reason: .explicitHide)
@@ -226,6 +237,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
 
     #if DEBUG
     var hostingViewForTesting: AtticPanelHostingView { hostingView }
+    var composerStateForTesting: PanelComposerState { composerState }
     var calendarEventRowsOverrideForTesting: CalendarEventRowState?
     #endif
 
@@ -520,7 +532,7 @@ final class PanelPullOutController {
     /// False when docking cannot begin.
     @discardableResult
     func dockIn(_ page: PanelPage) -> Bool {
-        guard let floating = panels[page], let home = dockedFrame() else { return false }
+        guard let floating = panels[page], let home = dockedFrame(), floating.prepareComposerForClose() else { return false }
         if page == .notes { guard deps.noteDraft.prepareToLeave(.pageSwitch) else { return false } }
         if page == .calendar {
             guard !calendarDockPending else { return true }
@@ -560,6 +572,7 @@ final class PanelPullOutController {
             guard let self else { return }
             guard self.panels[page] === floating else { return }
             if let calendarRequest, self.calendarDockGeneration != calendarRequest { return }
+            guard floating.prepareComposerForClose() else { return }
             panels[page] = nil
             floating.close()
             state.dockIn(page)

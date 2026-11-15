@@ -1,3 +1,10 @@
+## 2026-11-15 · Composer persistence notices
+
+Draft checkpoint, damaged-recovery and missing-file failures use the existing
+panel notice stack. Close/dock/quit preserves the draft on a failed checkpoint;
+missing owned files ask for reattachment and show no unavailable file chips.
+Card geometry, materials, typography and motion remain unchanged.
+
 ## 2026-11-14 · Restored Composer selection (Dot R-12)
 
 The token editor can apply a selection once its matching draft text arrives.

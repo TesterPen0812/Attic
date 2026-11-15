@@ -428,6 +428,11 @@ struct AtticPanelView: View {
 
     private var composerServices: ComposerServices {
         let library = tasksPageState.model(for: store, toasts: toasts).library
+        var drafts = ComposerDraftStore.forPanel(defaults: settings.userDefaults,
+            floatingPage: uiState.isFloating ? currentPage : nil)
+        drafts.taskRecoveryURL = store.container.configurations.first.flatMap {
+            $0.isStoredInMemoryOnly ? nil : $0.url.appendingPathExtension("composer-tasks.json")
+        }
         return ComposerServices(
             makeWriter: { try CalendarEventWriters.makeDefault(undoRoute: library.undo) },
             openTaskPage: { [uiState] id in
@@ -462,10 +467,7 @@ struct AtticPanelView: View {
             eventFailure: { [toasts] message in
                 toasts.showFailure(message)
             },
-            drafts: ComposerDraftStore(defaults: settings.userDefaults,
-                taskRecoveryURL: store.container.configurations.first.flatMap {
-                    $0.isStoredInMemoryOnly ? nil : $0.url.appendingPathExtension("composer-tasks.json")
-                }))
+            drafts: drafts)
     }
 
     /// Open Task Note and a row's file drop (Phase 3).
