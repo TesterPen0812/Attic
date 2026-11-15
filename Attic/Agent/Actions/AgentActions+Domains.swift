@@ -476,14 +476,13 @@ extension AgentActions {
                 // `resized` measures the box the object covers, and a line or
                 // arrow's stored frame keeps signed endpoint differences.
                 let covered = DrawGeometry.frame(existing.frame)
-                if covered.width < 0.001 || covered.height < 0.001 {
-                    throw AgentActionsError.invalid("Resizing a flat object to nonzero dimensions on both axes is not supported.")
-                }
                 let resized = DrawPageModel.resized([existing], handle: .bottomRight,
                     delta: CGPoint(x: width - covered.width, y: height - covered.height), shift: false,
                     minimum: 0)
                 guard let updated = resized.first, updated != existing else {
-                    throw AgentActionsError.invalid("The object already has that size.")
+                    throw AgentActionsError.invalid(covered.width == 0 && covered.height == 0
+                        ? "This point has no length to resize. Use draw_move_object to move it."
+                        : "The object already has that resulting size. Use draw_move_object to move it, or draw_resize_object with a different length.")
                 }
                 command = .put([updated]); kind = .update
             }
@@ -495,9 +494,13 @@ extension AgentActions {
                                  kind: kind, targets: [AgentTarget(page: .draw, itemID: objectID,
                                                                    title: snapshot.canvas.name, containerID: canvasID)],
                                  state: .done)
-            return (try Self.json(["canvas_id": canvasID.uuidString, "canvas_name": snapshot.canvas.name,
-                                   "object_id": objectID.uuidString, "deleted": name == "draw_delete_object"]),
-                    step, after)
+            var reply: [String: Any] = ["canvas_id": canvasID.uuidString, "canvas_name": snapshot.canvas.name,
+                                        "object_id": objectID.uuidString, "deleted": name == "draw_delete_object"]
+            if name == "draw_resize_object", let object = after.objects.first(where: { $0.id == objectID }) {
+                reply["frame"] = ["x": object.frame.x, "y": object.frame.y,
+                                  "width": object.frame.width, "height": object.frame.height]
+            }
+            return (try Self.json(reply), step, after)
         }
         if name == "draw_rename_canvas" || name == "draw_delete_canvas" {
             let command: DrawCommand

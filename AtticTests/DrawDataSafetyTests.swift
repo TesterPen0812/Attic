@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftData
 import XCTest
 @testable import Attic
@@ -483,19 +484,20 @@ final class DrawDataSafetyTests: XCTestCase {
                 let line = DrawObject(frame: frame, content: .shape(kind))
                 XCTAssertTrue(store.perform(.put([line]), on: c.id).isSaved)
                 let token = try XCTUnwrap(read(agent, canvas: c.id)["object_token"] as? String)
-                do {
-                    _ = try agent.drawAction("draw_resize_object", ["canvas_id": c.id.uuidString,
-                        "object_id": line.id.uuidString, "object_token": token, "width": 50, "height": 30], beforeMutation: {})
-                    let box = DrawGeometry.frame(try XCTUnwrap(store.open(c.id).objects.first).frame)
-                    XCTAssertEqual(box.width, 50, accuracy: 0.001); XCTAssertEqual(box.height, 30, accuracy: 0.001)
-                    XCTAssertTrue(store.undo(on: c.id).isSaved)
-                    XCTAssertEqual(try store.open(c.id).objects, [line])
-                    XCTAssertTrue(store.redo(on: c.id).isSaved)
-                    XCTAssertEqual(try DrawPersistentStore(container: store.container).open(c.id).objects, try store.open(c.id).objects)
-                } catch {
-                    XCTAssertTrue(error.localizedDescription.contains("flat"), "explicit refusal must explain the flat-axis limitation: \(error)")
-                    XCTAssertEqual(try store.open(c.id).objects, [line])
-                }
+                let reply = try agent.drawAction("draw_resize_object", ["canvas_id": c.id.uuidString,
+                    "object_id": line.id.uuidString, "object_token": token, "width": 50, "height": 30], beforeMutation: {}).0
+                let changed = try XCTUnwrap(store.open(c.id).objects.first)
+                let box = DrawGeometry.frame(changed.frame)
+                XCTAssertEqual(box.width, frame.width == 0 ? 0 : 50, accuracy: 0.001)
+                XCTAssertEqual(box.height, frame.height == 0 ? 0 : 30, accuracy: 0.001)
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(reply.utf8)) as? [String: Any])
+                let reported = try XCTUnwrap(json["frame"] as? [String: Any])
+                XCTAssertEqual(reported["width"] as? Double, changed.frame.width)
+                XCTAssertEqual(reported["height"] as? Double, changed.frame.height)
+                XCTAssertTrue(store.undo(on: c.id).isSaved)
+                XCTAssertEqual(try store.open(c.id).objects, [line])
+                XCTAssertTrue(store.redo(on: c.id).isSaved)
+                XCTAssertEqual(try DrawPersistentStore(container: store.container).open(c.id).objects, [changed])
             }
         }
     }
@@ -595,5 +597,59 @@ final class DrawDataSafetyTests: XCTestCase {
         let thin = try XCTUnwrap(store.open(canvas.id).objects.first { $0.id == stroke.id })
         XCTAssertEqual(thin.frame.height, stroke.frame.height / 2, accuracy: 0.01, "no 4 pt floor on an explicit size")
         XCTAssertEqual(thin.frame.width, stroke.frame.width / 2, accuracy: 0.01)
+    }
+}
+extension DrawDataSafetyTests {
+    private func r5CaptureFlatBoard(_ store: DrawStore, canvas: UUID, name: String) throws {
+        guard let path = ProcessInfo.processInfo.environment["ATTIC_R5_RENDER_DIR"] else { return }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DrawR5-" + URL(fileURLWithPath: path).lastPathComponent)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        print("R5_RENDER_ROOT=\(root.path)")
+        let page = DrawPageModel(store: store)
+        page.setBoard(size: CGSize(width: 320, height: 460), clearInsets: NSEdgeInsets(top: 48.5, left: 15.5, bottom: 48.5, right: 15.5))
+        page.start(); page.open(canvas)
+        let board = DrawBoardView(model: page)
+        board.setFrameSize(CGSize(width: 320, height: 460))
+        page.setViewport(DrawViewport(), byUser: true)
+        page.setShown(true)
+        defer { page.setShown(false) }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3)); CATransaction.flush()
+        let context = try XCTUnwrap(CGContext(data: nil, width: 640, height: 920, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(NSColor.white.cgColor); context.fill(CGRect(x: 0, y: 0, width: 640, height: 920))
+        context.scaleBy(x: 2, y: 2); board.layer?.render(in: context)
+        let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: root.appendingPathComponent(name + ".png"))
+    }
+
+    func testR5FlatLineLengthResizeSucceedsAndReportsItsActualFrame() throws {
+        for kind in [DrawShape.line, .arrow] {
+            let root = try directory()
+            var store: DrawPersistentStore! = try persistent(at: root)
+            var agent: AgentActions! = try actions(store)
+            let c = store.create(name: "Flat length")
+            let line = DrawObject(frame: DrawFrame(x: 20, y: 80, width: 100, height: 0), content: .shape(kind))
+            XCTAssertTrue(store.perform(.put([line]), on: c.id).isSaved)
+            let label = kind == .line ? "line" : "arrow"
+            try autoreleasepool { try r5CaptureFlatBoard(store, canvas: c.id, name: "flat-" + label + "-before") }
+            let token = try XCTUnwrap(read(agent, canvas: c.id)["object_token"] as? String)
+            let reply = try agent.drawAction("draw_resize_object", ["canvas_id": c.id.uuidString,
+                "object_id": line.id.uuidString, "object_token": token, "width": 200, "height": 1], beforeMutation: {}).0
+            let frame = try XCTUnwrap(store.open(c.id).objects.first).frame
+            XCTAssertEqual(frame.width, 200, accuracy: 0.001)
+            XCTAssertEqual(frame.height, 0, accuracy: 0.001)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(reply.utf8)) as? [String: Any])
+            let reported = try XCTUnwrap(json["frame"] as? [String: Any])
+            XCTAssertEqual(reported["width"] as? Double, 200)
+            XCTAssertEqual(reported["height"] as? Double, 0)
+            try autoreleasepool { try r5CaptureFlatBoard(store, canvas: c.id, name: "flat-" + label + "-after") }
+            XCTAssertTrue(store.undo(on: c.id).isSaved)
+            XCTAssertEqual(try store.open(c.id).objects, [line])
+            XCTAssertTrue(store.redo(on: c.id).isSaved)
+            weak var abandoned = store
+            agent = nil; store = nil // No clean close; reopen the file in a fresh container.
+            XCTAssertNil(abandoned)
+            XCTAssertEqual(try persistent(at: root).open(c.id).objects.first?.frame, frame)
+        }
     }
 }

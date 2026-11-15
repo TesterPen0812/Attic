@@ -115,7 +115,8 @@ extension DrawPageModel {
                              y: handle == .topLeft || handle == .topRight ? box.maxY : box.minY)
         let signX: CGFloat = handle == .topLeft || handle == .bottomLeft ? -1 : 1
         let signY: CGFloat = handle == .topLeft || handle == .topRight ? -1 : 1
-        let flatX = box.width < 0.001, flatY = box.height < 0.001
+        let flatX = box.width == 0 || (minimum > 0 && box.width < 0.001)
+        let flatY = box.height == 0 || (minimum > 0 && box.height < 0.001)
         // The minimum is a floor for the pointer, never a size to grow to: an
         // axis already shorter than it keeps its own length as the floor, so
         // dragging along the other axis cannot change it.
