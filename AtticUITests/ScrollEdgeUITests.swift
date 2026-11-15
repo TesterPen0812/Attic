@@ -135,16 +135,22 @@ final class ScrollEdgeUITests: XCTestCase {
             .appendingPathComponent("attic-hang-recovery-\(UUID().uuidString).txt")
         private(set) var probe: URL?
         private(set) var recovery: HoverScrollHangRecovery?
+        private(set) var launchedIdentity: HangProcessIdentity?
 
         init(prefix: String) { self.prefix = prefix }
 
         func arm(pid: Int32, probe: URL) -> HoverScrollHangRecovery {
             self.probe = probe
-            let recovery = HoverScrollHangRecovery(pid: pid, probe: probe, screenshot: screenshot, sample: sample, log: recoveryLog)
+            let recovery = HoverScrollHangRecovery(identity: launchedIdentity!, probe: probe,
+                                                   screenshot: screenshot, sample: sample, log: recoveryLog)
             self.recovery = recovery
             recovery.start()
             return recovery
         }
+
+        func rememberLaunch(pid: Int32) { launchedIdentity = HangProcessIdentity.capture(pid: pid) }
+
+        var isOriginalProcess: Bool { launchedIdentity?.matchesRunningProcess() == true }
 
         /// Remembered even when the guard refuses the pass, so evidence of
         /// the launch-time dump is attached too.
@@ -159,6 +165,7 @@ final class ScrollEdgeUITests: XCTestCase {
         app.launchEnvironment["ATTIC_HANG_PROBE_FILE"] = pass.location.leaf
         app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", surface]
         app.launch()
+        pass.rememberLaunch(pid: launchedPID(of: app))
         return app
     }
 
@@ -171,9 +178,11 @@ final class ScrollEdgeUITests: XCTestCase {
     /// slow first layout may already have replaced the ARMED line with a HANG
     /// dump, which is evidence but not a reason to doubt the probe.
     private func waitForProbe(of pass: HangPass, pid: Int32) -> URL? {
-        let bundle = pid > 0 ? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier : nil
+        guard pass.isOriginalProcess, pass.launchedIdentity?.pid == pid else { return nil }
+        let bundle = pass.launchedIdentity?.bundleID
         var found: URL?
         _ = waitFor(timeout: 5) {
+            guard pass.isOriginalProcess else { return false }
             found = pass.location.armedURL(bundleIdentifier: bundle)
             return found != nil
         }
@@ -496,7 +505,7 @@ final class ScrollEdgeUITests: XCTestCase {
 /// stack, and sends SIGTERM only to the PID captured from this particular
 /// launched instance.
 private final class HoverScrollHangRecovery {
-    private let pid: Int32
+    private let identity: HangProcessIdentity
     private let probe: URL
     private let screenshot: URL
     private let sample: URL
@@ -507,8 +516,8 @@ private final class HoverScrollHangRecovery {
     private var policy: HangRecoveryPolicy
     private var reason: String?
 
-    init(pid: Int32, probe: URL, screenshot: URL, sample: URL, log: URL) {
-        self.pid = pid
+    init(identity: HangProcessIdentity, probe: URL, screenshot: URL, sample: URL, log: URL) {
+        self.identity = identity
         self.log = log
         self.probe = probe
         self.screenshot = screenshot
@@ -534,7 +543,7 @@ private final class HoverScrollHangRecovery {
 
     func finish() -> (recovered: Bool, reason: String?) {
         timer.cancel()
-        _ = finished.wait(timeout: .now() + .seconds(20))
+        _ = finished.wait(timeout: .now() + .seconds(40))
         return lock.withLock { (reason != nil, reason) }
     }
 
@@ -554,23 +563,65 @@ private final class HoverScrollHangRecovery {
                 : "scroll/AX made no progress for 60 seconds"
         }
         // Only the app's own window, found without asking the (hung) app. No window: no picture.
+        let pid = identity.pid
         var steps = ["decision: \(decision), pid \(pid), probe \(probe.path)"]
+        guard identity.matchesRunningProcess() else {
+            steps.append("no capture, sample or SIGTERM: launched process identity changed")
+            try? Data((steps.joined(separator: "\n") + "\n").utf8).write(to: log, options: .atomic)
+            timer.cancel()
+            return
+        }
         let windows = HangWindowCapture.currentWindows()
         let windowID = HangWindowCapture.windowID(forPID: pid, in: windows)
         let own = windows.filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
         steps.append("window list: \(windows.count) windows, \(own.count) owned by the app, chosen id \(windowID.map(String.init) ?? "none")")
-        if let arguments = HangWindowCapture.arguments(windowID: windowID, path: screenshot.path) {
+        if let arguments = HangWindowCapture.arguments(windowID: windowID, path: screenshot.path),
+           identity.matchesRunningProcess() {
             steps.append("screencapture \(runHangTool("/usr/sbin/screencapture", arguments, timeout: 3)); file \(FileManager.default.fileExists(atPath: screenshot.path) ? "written" : "missing")")
         } else {
-            steps.append("screencapture not run: no window of the app")
+            steps.append("screencapture not run: no window or launched process identity changed")
         }
         // The stack the freeze is in, before the process is killed.
-        HangStackRecovery.sampleThenTerminate(pid: pid, output: sample, beforeTermination: { result in
+        HangStackRecovery.sampleThenTerminate(pid: pid, output: sample,
+                                              identityMatches: { [identity] in identity.matchesRunningProcess() },
+                                              beforeTermination: { result in
             steps.append("sample \(result); file \(FileManager.default.fileExists(atPath: sample.path) ? "written" : "missing")")
             try? Data((steps.joined(separator: "\n") + "\n").utf8).write(to: log, options: .atomic)
         })
+        if !FileManager.default.fileExists(atPath: log.path) {
+            steps.append("sample and termination skipped: launched process identity changed")
+            try? Data((steps.joined(separator: "\n") + "\n").utf8).write(to: log, options: .atomic)
+        }
         timer.cancel()
     }
+}
+
+/// The birth timestamp is a kernel property of this *specific* process.
+/// Matching the PID alone is insufficient after an app exits and macOS reuses
+/// the number. Keep the bundle and executable bound to that launch as well.
+private struct HangProcessIdentity: Equatable {
+    let pid: Int32
+    let startSec: UInt64
+    let startUsec: UInt64
+    let bundleID: String
+    let executable: String
+
+    static func capture(pid: Int32) -> Self? {
+        guard pid > 0 else { return nil }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        let read = withUnsafeMutablePointer(to: &info) { pointer in
+            proc_pidinfo(pid, Int32(PROC_PIDTBSDINFO), 0, pointer, size)
+        }
+        guard read == size, info.pbi_pid == UInt32(pid),
+              let running = NSRunningApplication(processIdentifier: pid),
+              let bundleID = running.bundleIdentifier, bundleID.hasPrefix("com.taha.Attic"),
+              let executable = running.executableURL?.standardizedFileURL.path else { return nil }
+        return Self(pid: pid, startSec: info.pbi_start_tvsec,
+                    startUsec: info.pbi_start_tvusec, bundleID: bundleID, executable: executable)
+    }
+
+    func matchesRunningProcess() -> Bool { Self.capture(pid: pid) == self }
 }
 
 // Pure decisions behind the CI hang recovery of ScrollEdgeUITests, kept apart
@@ -793,13 +844,14 @@ struct HangDiagnosticOptions {
 /// sampling or terminating any real process.
 enum HangStackRecovery {
     static func sampleThenTerminate(pid: Int32, output: URL,
+                                    identityMatches: () -> Bool = { true },
                                     run: (String, [String], TimeInterval) -> String = runHangTool,
                                     beforeTermination: (String) -> Void,
                                     terminate: (Int32) -> Void = { _ = Darwin.kill($0, SIGTERM) }) {
-        guard pid > 0 else { return }
+        guard pid > 0, identityMatches() else { return }
         let result = run("/usr/bin/sample", [String(pid), "3", "-file", output.path], 10)
         beforeTermination(result)
-        terminate(pid)
+        if identityMatches() { terminate(pid) }
     }
 }
 
@@ -846,6 +898,32 @@ final class HangRecoverySupportTests: XCTestCase {
             actions.append("terminate")
         })
         XCTAssertEqual(actions, ["sample", "evidence", "terminate"])
+    }
+
+    /// Dot R-2 / Opus R-8: the launched process may exit while the recovery
+    /// waits or samples; a reused PID must never be sampled or terminated.
+    func testReusedPIDIsRejectedBeforeSamplingAndAgainBeforeTermination() {
+        let output = URL(fileURLWithPath: "/tmp/unused-reused-pid-sample.txt")
+        var belongsToLaunch = false
+        var effects: [String] = []
+        func recover() {
+            HangStackRecovery.sampleThenTerminate(pid: 42, output: output,
+                identityMatches: { belongsToLaunch },
+                run: { _, _, _ in
+                    effects.append("sample")
+                    // The old process exits during sampling; PID 42 is reused.
+                    belongsToLaunch = false
+                    return "exited 0"
+                }, beforeTermination: { _ in effects.append("evidence") },
+                terminate: { _ in effects.append("terminate") })
+        }
+        recover()
+        XCTAssertTrue(effects.isEmpty, "an already reused PID must not be sampled or killed")
+
+        belongsToLaunch = true
+        recover()
+        XCTAssertEqual(effects, ["sample", "evidence"],
+                       "if identity changes during sampling, preserve evidence but never kill the replacement")
     }
 
     // MARK: Dot R-6: only a continuous stall is killed
