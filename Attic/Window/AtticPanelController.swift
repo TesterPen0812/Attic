@@ -1021,8 +1021,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.onUnhandledEscape = { [weak self] in
             guard let self, self.panel.isVisible else { return false }
             if self.composerState.closeForUnhandledEscape() { return true }
-            self.requestInteractiveHide()
-            return true
+            return self.requestInteractiveHide().isAccepted
         }
         // ⌘Z with the keyboard nowhere in a page (after clicking the pin,
         // say) reaches that page's history, including Notes and Draw.

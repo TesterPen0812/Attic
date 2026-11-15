@@ -57,7 +57,7 @@ final class PanelIntegrationTests: XCTestCase {
             charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
         XCTAssertFalse(try XCTUnwrap(keys?.handler)(escape), "the library must let Escape reach the open composer")
         XCTAssertTrue(panel.noteDraft.pages.isLibraryPresented, "Escape must not open a ghost Title editor")
-        window.onUnhandledEscape?()
+        _ = window.onUnhandledEscape?()
         spin(until: { element("composer-title") == nil })
         XCTAssertNil(element("composer-title"), "Escape folds the composer")
     }
@@ -630,6 +630,17 @@ final class PanelIntegrationTests: XCTestCase {
         followupSwitch(panel, to: .notes)
         XCTAssertEqual(panel.noteDraft.pages.active?.engine.plainText, "Imported writing")
         XCTAssertFalse(panel.noteDraft.pages.active?.engine === session.engine, "stale engine is replaced before showing")
+    }
+
+    func testUnhandledEscapeDeclinesWhenDirtyNoteRejectsHide() async throws {
+        let (panel, session, editor) = try await followupNotes()
+        editor.insertText("Unsaved Escape draft", replacementRange: NSRange(location: 0, length: 0))
+        panel.gate.shouldFail = true
+        defer { panel.gate.shouldFail = false }
+        XCTAssertEqual(panel.controller.panelForTesting.onUnhandledEscape?(), false,
+                       "rejected hide must not claim the key was consumed")
+        XCTAssertTrue(panel.controller.panelForTesting.isVisible)
+        XCTAssertEqual(session.engine.plainText, "Unsaved Escape draft")
     }
 
     func testFollowupKeptNotesFailedSaveRollsBackAndRefusesLeaving() async throws {
