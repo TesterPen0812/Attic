@@ -452,7 +452,7 @@ final class PanelIntegrationTests: XCTestCase {
 
     #if ATTIC_LOCAL_ONLY
     /// A real AppKit edge grip held on the panel, with `pages` built behind the
-    /// current Tasks page. `drag(_:)` moves the grip to `delta` points from where
+    /// current page. `drag(_:)` moves the grip to `delta` points from where
     /// it was taken and lays out; nothing is released until `release()`.
     private struct HeldResize {
         let panel: Panel
@@ -463,9 +463,10 @@ final class PanelIntegrationTests: XCTestCase {
         let finish: () -> Void
     }
 
-    private func holdResizeGrip(building pages: [PanelPage]) throws -> HeldResize {
-        let panel = try makePanel()
-        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+    private func holdResizeGrip(building pages: [PanelPage], current: PanelPage = .tasks,
+                                scaleSeed: Bool = false) throws -> HeldResize {
+        let panel = try makePanel(scaleSeed: scaleSeed)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: current.section, takesKeyboard: false), .shown)
         for page in pages { panel.uiState.prepareBuiltPage(page) }
         spin(0.6)
         let window = panel.controller.panelForTesting
@@ -620,14 +621,14 @@ final class PanelIntegrationTests: XCTestCase {
         var rows: [PanelPage: Int] = [:]
         PanelInvalidationProbe.topRow = { rows[$0, default: 0] += 1 }
         defer { PanelInvalidationProbe.topRow = nil }
-        let held = try holdResizeGrip(building: [.notes, .calendar, .canvas])
+        let held = try holdResizeGrip(building: [.tasks, .notes, .canvas], current: .calendar)
         defer { held.finish() }
         spin(0.3)
         rows = [:]
         for step in 1...42 { try held.drag(CGFloat(step)) }
         XCTAssertGreaterThan(held.liveWidth(), held.initialWidth + 30)
-        XCTAssertGreaterThan(rows[.tasks, default: 0], 0, "the visible page's top row follows the drag")
-        for page in [PanelPage.notes, .calendar, .canvas] {
+        XCTAssertGreaterThan(rows[.calendar, default: 0], 0, "the visible page's top row follows the drag")
+        for page in [PanelPage.tasks, .notes, .canvas] {
             XCTAssertEqual(rows[page, default: 0], 0, "the hidden \(page) top row re-ran during the drag")
         }
         try held.release()
