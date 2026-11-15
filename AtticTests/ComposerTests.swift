@@ -1006,6 +1006,22 @@ final class ComposerTests: XCTestCase {
         XCTAssertFalse(page.rows(for: .now).contains { $0.id == committed.id }, "a confirmed absent committed task must not keep its optimistic ghost")
     }
 
+    func testRound2CreationToastCannotUndoOlderStepAfterImmediateUndo() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Keep older task")])?.first)
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.done))
+        type("Immediately undone task")
+        model.submit()
+        model.undoPage()
+        XCTAssertFalse(model.isCreating)
+        XCTAssertEqual(liveTasks().map(\.id), [older.id])
+        XCTAssertTrue(toasts.isEmpty, "Undo must not post a toast for the creation it just removed")
+        let historyAfterUndo = library.undo.undoStepID(in: .tasks)
+        for action in toastUndos { _ = action() }
+        XCTAssertEqual(library.undo.undoStepID(in: .tasks), historyAfterUndo)
+        XCTAssertEqual(liveTasks().map(\.id), [older.id], "any toast emitted while settling must be harmless once its named creation has been undone")
+    }
+
     func testReviewR4EditMenuChromeUndoSettlesCreationBeforeHistory() throws {
         let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older history step")])?.first)
         page.services.acknowledgementDelay = .seconds(30)

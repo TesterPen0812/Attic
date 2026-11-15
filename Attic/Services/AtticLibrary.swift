@@ -39,6 +39,9 @@ final class AtticLibrary {
     /// The last task command that changed nothing, and why (Astra 6). Also
     /// set by `createTasks`, which returns the tasks instead of an outcome.
     private(set) var lastFailure: CommandFailure?
+    /// While Undo drains acknowledged commands, a Composer creation callback
+    /// must not offer a toast for the very step Undo is about to remove.
+    private(set) var settlingUndoHistory: UndoHistoryID?
     /// A main task's subtasks were reordered on purpose (moved, or a move
     /// undone or redone, from any history that reaches this library): the
     /// id is the main task's. A page holding the quick look's order lets go
@@ -519,6 +522,9 @@ final class AtticLibrary {
     /// a failed history step stays retryable and an obsolete one is dropped.
     @discardableResult
     func undo(in history: UndoHistoryID, matching expectedStepID: UUID? = nil) -> CommandOutcome {
+        let previousSettlement = settlingUndoHistory
+        settlingUndoHistory = history
+        defer { settlingUndoHistory = previousSettlement }
         // The library is shared by docked, floating, keyboard and Edit-menu
         // routes. A failed pending command cannot expose an older history step.
         if let failure = failedPendingSettlement(in: history) { return failure }
@@ -540,7 +546,11 @@ final class AtticLibrary {
     /// still use the same route and outcome mapping.
     @discardableResult
     func replay(in history: UndoHistoryID, redo: Bool) async -> CommandOutcome {
-        if let failure = failedPendingSettlement(in: history) { return failure }
+        let previousSettlement = settlingUndoHistory
+        if !redo { settlingUndoHistory = history }
+        let settlementFailure = failedPendingSettlement(in: history)
+        settlingUndoHistory = previousSettlement
+        if let settlementFailure { return settlementFailure }
         let serial = tasks.errorSerial
         return historyOutcome(await undo.replay(in: history, redo: redo), since: serial,
                               verb: redo ? String(localized: "redo") : String(localized: "undo"))

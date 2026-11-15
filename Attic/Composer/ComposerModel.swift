@@ -529,7 +529,12 @@ final class ComposerModel: ObservableObject {
                 self.services.openTaskPage(created.id)
             } else if case let .tasks(tab) = submittedPage {
                 if tab == .done || (tab == .backlog && status == .todo) {
-                    self.services.toast(String(localized: "Added to Now"), self.undoCreation())
+                    // An immediate Undo may have saved this creation only to
+                    // remove it in the same command. Do not offer its toast.
+                    if self.tasks.library.settlingUndoHistory != submittedPage.history {
+                        self.services.toast(String(localized: "Added to Now"),
+                                            self.undoCreation(in: submittedPage.history))
+                    }
                 } else {
                     self.tasks.addedRequest = TasksPageModel.ScrollRequest(id: created.id)
                 }
@@ -713,10 +718,14 @@ final class ComposerModel: ObservableObject {
 
     /// The Undo a creation's toast offers: the history the creation went
     /// into, fixed now (the card may be on another page by the click).
-    private func undoCreation() -> @MainActor () -> CommandOutcome {
+    private func undoCreation(in history: UndoHistoryID? = nil) -> @MainActor () -> CommandOutcome {
         let library = tasks.library
-        let history = page.history
-        return { library.undo(in: history) }
+        let history = history ?? page.history
+        let step = library.undo.undoStepID(in: history)
+        return {
+            guard let step else { return .obsolete }
+            return library.undo(in: history, matching: step)
+        }
     }
 
     func undoPage() {
