@@ -1690,7 +1690,8 @@ final class TaskStore: ObservableObject {
     @discardableResult
     func sweepUnreferencedAttachmentStorage(minimumAge: TimeInterval = 24 * 60 * 60,
                                             dropStagingRoot: URL = TaskAttachmentStaging.ownedRootURL) async -> Int? {
-        guard !hasSweptAttachmentStorage, !isSweepingAttachmentStorage, importingAttachmentTaskIDs.isEmpty else { return nil }
+        guard !hasSweptAttachmentStorage, !isSweepingAttachmentStorage,
+              importingAttachmentTaskIDs.isEmpty, pendingComposerAttachments.isEmpty else { return nil }
         isSweepingAttachmentStorage = true
         defer { isSweepingAttachmentStorage = false }
         let referencedIDs: Set<UUID>
