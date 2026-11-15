@@ -73,8 +73,18 @@ enum WorkspacePurge {
     /// may drift before Restore or destructive collection.
     static func matchesTaskCapture(_ fields: [String: Data], _ captured: [String: Data]) -> Bool {
         let tagFields: Set<String> = ["tagsRaw", "updatedAt"]
+        var comparableCapture = captured
+        if fields["listOrderVersion"] != captured["listOrderVersion"] {
+            // The one-time list-order migration marks even Recently Deleted
+            // rows. This is bookkeeping: it preserves the captured order and
+            // all user content, so it must not make Restore impossible.
+            guard let old = captured["listOrderVersion"].flatMap({ try? JSONDecoder().decode(Int.self, from: $0) }),
+                  let new = fields["listOrderVersion"].flatMap({ try? JSONDecoder().decode(Int.self, from: $0) }),
+                  old == 0, new == TaskItem.currentListOrderVersion else { return false }
+            comparableCapture["listOrderVersion"] = fields["listOrderVersion"]
+        }
         return fields.filter { !tagFields.contains($0.key) }
-            == captured.filter { !tagFields.contains($0.key) }
+            == comparableCapture.filter { !tagFields.contains($0.key) }
     }
 
     static func hasOwnNotesOrAssociations(_ taskIDs: Set<UUID>, in context: ModelContext) throws -> Bool {

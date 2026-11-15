@@ -554,6 +554,32 @@ final class TaskStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDeletedLegacyReplicasRestoreAfterRestartOrderMigration() throws {
+        let store = try makeTestStore()
+        let id = UUID()
+        let seed = ModelContext(store.container)
+        for _ in 0..<2 {
+            seed.insert(TaskItem(id: id, title: "Legacy deleted task", createdAt: .distantPast,
+                                 updatedAt: .distantPast))
+        }
+        try seed.save()
+        store.refresh()
+        XCTAssertEqual(try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>()).map(\.listOrderVersion), [0, 0])
+        XCTAssertTrue(store.delete(taskIDs: [id]))
+
+        let reopened = TaskStore(container: store.container)
+        let deleted = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(deleted.count, 2)
+        XCTAssertTrue(deleted.allSatisfy { $0.deletedAt != nil && $0.listOrderVersion == TaskItem.currentListOrderVersion })
+        XCTAssertTrue(reopened.restoreDeleted(taskID: id), reopened.lastErrorMessage ?? "restore refused")
+
+        let saved = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(saved.count, 2, "restore must retain both physical UUID replicas")
+        XCTAssertTrue(saved.allSatisfy { $0.deletedAt == nil && $0.title == "Legacy deleted task" })
+        XCTAssertEqual(reopened.tasks.map(\.id), [id])
+    }
+
+    @MainActor
     func testDataR1SeededEditRollbackReplicaAndFreshContextRoundTrips() throws {
         struct State {
             var title: String
@@ -605,7 +631,7 @@ final class TaskStoreTests: XCTestCase {
                     expected[id]?.deleted = true
                 case 4 where !removed.isEmpty:
                     let id = removed[draw(removed.count)]
-                    XCTAssertTrue(store.restoreDeleted(taskID: id), "seed=\(seed) step=\(step)")
+                    XCTAssertTrue(store.restoreDeleted(taskID: id), "seed=\(seed) step=\(step): \(store.lastErrorMessage ?? "restore refused")")
                     expected[id]?.deleted = false
                 case 5 where !active.isEmpty:
                     let id = active[draw(active.count)]
@@ -657,15 +683,18 @@ final class TaskStoreTests: XCTestCase {
                 return Int((random >> 33) % UInt64(count))
             }
             let gate = PersistenceGate()
-            let store = try makeTestStore(persist: gate.save)
+            let container = try PersistenceController.makeContainer(inMemory: true)
             let id = UUID()
-            let seedContext = ModelContext(store.container)
+            let seedContext = ModelContext(container)
             for _ in 0..<2 {
                 seedContext.insert(TaskItem(id: id, title: "Original", createdAt: .distantPast,
                                             updatedAt: .distantPast))
             }
             try seedContext.save()
-            store.refresh()
+            // A real startup migrates legacy rows before accepting edits.
+            // Seeding after startup makes the next reopen migrate the rows
+            // underneath the active store, correctly triggering a conflict.
+            let store = TaskStore(container: container, persist: gate.save)
             let library = AtticLibrary(tasks: store)
             var title = "Original", status: TaskStatus = .todo
 
@@ -694,7 +723,7 @@ final class TaskStoreTests: XCTestCase {
                 let nextTitle = "Journal \(seed) \(step) \(draw(10_000))"
                 let nextStatus: TaskStatus = draw(2) == 0 ? .done : .todo
                 XCTAssertTrue(library.updateTask(id, title: nextTitle, status: nextStatus).isApplied,
-                              "seed=\(seed) step=\(step): update")
+                              "seed=\(seed) step=\(step): update error=\(store.lastErrorMessage ?? "none")")
                 title = nextTitle; status = nextStatus
                 try check(title, status, step: step, phase: "update")
 
