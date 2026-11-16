@@ -4,9 +4,9 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
-/// Override only the preference getter for isolated Settings fixtures. An
-/// existing scroll view must still be styled explicitly when the preference
-/// changes: posting the notification alone does not restyle mounted views.
+/// Override only the preference getter for isolated Settings fixtures. Tests
+/// set the mounted style for geometry, or post the native notification for
+/// the separate live-preference path.
 @MainActor
 private enum SettingsScrollerPreference {
     private static let readings: (overlay: IMP, legacy: IMP) = {
@@ -742,8 +742,21 @@ final class SettingsWindowHostedTests: XCTestCase {
             // Simulate AppKit's real preference restyle on the mounted scroll
             // view. A getter swizzle and notification by themselves do not.
             scroll.scrollerStyle = style
-            scroll.layoutSubtreeIfNeeded()
-            spin(0.05)
+            let deadline = Date().addingTimeInterval(2)
+            repeat {
+                scroll.layoutSubtreeIfNeeded()
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                if let document = scroll.documentView {
+                    let clip = scroll.contentView
+                    let clipped = document.frame.width > clip.bounds.width + 0.5
+                    let fits = size.width < SettingsWindowLayout.minimumContentSize.width ||
+                        abs(document.frame.width - clip.bounds.width) <= 1
+                    if scroll.hasHorizontalScroller == clipped && fits &&
+                        abs(scroll.frame.width - size.width) <= 0.5 { break }
+                }
+                spin(0.01)
+            } while Date() < deadline
             let clip = scroll.contentView
             let document = try XCTUnwrap(scroll.documentView)
             let isHorizontallyClipped = document.frame.width > clip.bounds.width + 0.5
@@ -774,6 +787,119 @@ final class SettingsWindowHostedTests: XCTestCase {
                 try verify(size, style: currentStyle)
             }
         }
+    }
+
+    /// The explicit setter above checks geometry. This path changes the
+    /// preferred style while a real SettingsView and a Tasks keeper are both
+    /// mounted, and never assigns the requested style to Settings itself.
+    private func runLiveScrollerPreferenceChange(injectReverter: Bool) throws -> (settings: Bool, tasks: Bool) {
+        let original = NSScroller.preferredScrollerStyle
+        let restoreOverlay = try SettingsScrollerPreference.install(.overlay)
+        defer {
+            spin(0.35) // Drain the keeper's deferred 0.25-second restyle.
+            restoreOverlay()
+            XCTAssertEqual(NSScroller.preferredScrollerStyle, original)
+        }
+        let suite = "SettingsLiveScroller.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(SettingsSection.appearance.rawValue, forKey: SettingsSection.selectionStorageKey)
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let host = NSHostingView(rootView: SettingsView(
+            settings: AppSettings(defaults: defaults),
+            loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+            agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+            globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+        let settingsWindow = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 640, height: 400),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+        settingsWindow.isReleasedWhenClosed = false
+        settingsWindow.contentView = host
+        settingsWindow.orderFront(nil)
+        defer { settingsWindow.orderOut(nil); settingsWindow.contentView = nil; settingsWindow.close() }
+        let settingsDeadline = Date().addingTimeInterval(2)
+        var settingsScrolls = nativeScrollViews(in: host)
+        while settingsScrolls.count < 2 && Date() < settingsDeadline {
+            host.layoutSubtreeIfNeeded()
+            settingsWindow.displayIfNeeded()
+            spin(0.02)
+            settingsScrolls = nativeScrollViews(in: host)
+        }
+        XCTAssertGreaterThanOrEqual(settingsScrolls.count, 2, "Appearance must have inner and outer scrollers")
+        XCTAssertTrue(settingsScrolls.allSatisfy { $0.scrollerStyle == .overlay })
+
+        let tasksScroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 260, height: 200))
+        tasksScroll.hasVerticalScroller = true
+        let tasksDocument = NSView(frame: CGRect(x: 0, y: 0, width: 260, height: 800))
+        let keeper = TasksScrollKeeper.KeeperView(frame: .zero)
+        tasksDocument.addSubview(keeper)
+        tasksScroll.documentView = tasksDocument
+        let tasksWindow = NSWindow(contentRect: CGRect(x: -5700, y: -6000, width: 260, height: 200),
+                                   styleMask: .borderless, backing: .buffered, defer: false)
+        tasksWindow.isReleasedWhenClosed = false
+        tasksWindow.contentView = tasksScroll
+        tasksWindow.orderFront(nil)
+        defer {
+            keeper.removeFromSuperview()
+            tasksWindow.orderOut(nil)
+            tasksWindow.contentView = nil
+            tasksWindow.close()
+        }
+        XCTAssertEqual(tasksScroll.scrollerStyle, .overlay, "Tasks keeper starts with overlay scrollers")
+
+        let restoreLegacy = try SettingsScrollerPreference.install(.legacy)
+        defer { spin(0.35); restoreLegacy() }
+        // Simulate AppKit's reset of Tasks to the new system preference.
+        // Do not set the desired Settings style anywhere in this test.
+        tasksScroll.scrollerStyle = .legacy
+        var reverted = false
+        var reverter: NSObjectProtocol?
+        if injectReverter {
+            reverter = NotificationCenter.default.addObserver(
+                forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: .main
+            ) { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak host] in
+                    guard let host else { return }
+                    for scroll in self.nativeScrollViews(in: host) { scroll.scrollerStyle = .overlay }
+                    reverted = true
+                }
+            }
+        }
+        defer { if let reverter { NotificationCenter.default.removeObserver(reverter) } }
+        NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            settingsWindow.displayIfNeeded()
+            let settingsReached = nativeScrollViews(in: host).allSatisfy { $0.scrollerStyle == .legacy }
+            if settingsReached && tasksScroll.scrollerStyle == .overlay && (!injectReverter || reverted) { break }
+            spin(0.02)
+        }
+        // The Tasks keeper schedules another restyle at 0.25 s. Its callback
+        // must settle before independently checking the two mounted views.
+        if injectReverter {
+            let revertDeadline = Date().addingTimeInterval(1)
+            while !reverted && Date() < revertDeadline { spin(0.02) }
+            XCTAssertTrue(reverted, "The injected observer must actually revert Settings")
+        }
+        spin(0.35)
+        let mountedSettingsScrolls = nativeScrollViews(in: host)
+        return (mountedSettingsScrolls.count >= 2 &&
+                    mountedSettingsScrolls.allSatisfy { $0.scrollerStyle == .legacy },
+                tasksScroll.scrollerStyle == .overlay)
+    }
+
+    func testCIStandingLiveScrollerPreferenceNotification() throws {
+        let result = try runLiveScrollerPreferenceChange(injectReverter: false)
+        XCTAssertTrue(result.settings, "Mounted Settings must adopt the live system preference")
+        XCTAssertTrue(result.tasks, "Tasks must independently restore its owner-selected overlay policy")
+    }
+
+    func testCIStandingLivePreferenceDetectsRevertingSettingsObserver() throws {
+        let result = try runLiveScrollerPreferenceChange(injectReverter: true)
+        XCTAssertFalse(result.settings, "A reverting Settings observer must make the live check fail")
+        XCTAssertTrue(result.tasks, "A Settings regression must not hide Tasks' independent state")
     }
 
     /// R-1: Appearance mode tiles fit the real inner clip under legacy scrollbars.

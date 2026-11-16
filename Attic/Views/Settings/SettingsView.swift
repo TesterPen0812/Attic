@@ -199,10 +199,41 @@ private struct SettingsHorizontalScroller: NSViewRepresentable {
         var expectedSize = CGSize.zero
         var viewportDidChange: (SettingsScrollViewport) -> Void = { _ in }
         private var lastQueuedViewport: SettingsScrollViewport?
+        private var preferenceObserver: NSObjectProtocol?
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil, preferenceObserver == nil {
+                preferenceObserver = NotificationCenter.default.addObserver(
+                    forName: NSScroller.preferredScrollerStyleDidChangeNotification,
+                    object: nil, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.followPreferredScrollerStyle() }
+                }
+            } else if window == nil, let preferenceObserver {
+                NotificationCenter.default.removeObserver(preferenceObserver)
+                self.preferenceObserver = nil
+            }
+            followPreferredScrollerStyle()
+            apply()
+        }
         override func layout() { super.layout(); apply() }
+
+        private func followPreferredScrollerStyle() {
+            guard window != nil, let scroll = enclosingScrollView else { return }
+            // SwiftUI's inner page and the outer viewport both follow the
+            // system preference, including live changes while Settings is open.
+            let preferredStyle = NSScroller.preferredScrollerStyle
+            func update(_ view: NSView) {
+                if let nested = view as? NSScrollView, nested.scrollerStyle != preferredStyle {
+                    nested.scrollerStyle = preferredStyle
+                }
+                for child in view.subviews { update(child) }
+            }
+            update(scroll)
+            apply()
+        }
 
         func apply() {
             guard window != nil, let scroll = enclosingScrollView else { return }
