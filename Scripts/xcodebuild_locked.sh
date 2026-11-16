@@ -11,6 +11,18 @@ if [ "${GITHUB_ACTIONS:-}" = true ]; then
     esac
   done
 fi
+# The owner's Air, outside CI: the Air wrapper takes this same lock itself for
+# the whole run (never under lockf here, or it would wait for itself).
+if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${ATTIC_AIR_INPUT_MODES:-}" = 1 ]; then
+  for argument in "$@"; do
+    case "$argument" in
+      test|test-without-building)
+        script_dir=$(cd "$(dirname "$0")" && pwd)
+        exec "$script_dir/with_air_input_modes.sh" "${ATTIC_CI_KEYBOARD_MODE:-normal}" /usr/bin/xcodebuild "$@"
+        ;;
+    esac
+  done
+fi
 # Informational only: old/prebuilt hosts and UI runners may lack the unit-host
 # boundary. Explicit visible runs remain the caller's choice. Keep the CI
 # dispatch above this local-only note so its lock boundary stays unambiguous.
