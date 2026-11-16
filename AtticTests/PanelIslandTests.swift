@@ -1072,9 +1072,12 @@ final class PanelIslandTests: XCTestCase {
     /// another window takes the keyboard, even if SwiftUI retains focus.
     func testKeyFocusDoesNotHoldIslandAwakeAfterWindowResignsKey() throws {
         try requireIslandKeyboard()
+        var focus: FocusState<PanelIslandItem?>.Binding?
+        PanelIslandView.focusProbe = { focus = $0 }
+        defer { PanelIslandView.focusProbe = nil }
         try withController { controller, state, panel in
             let windows = controller.islandWindowsForTesting
-            try focusIslandButton(windows, keyboard: state.keyboardFocus)
+            try focusIslandButton(windows, keyboard: state.keyboardFocus, focus: { focus?.wrappedValue })
             panel.makeKey()
             spin(until: { panel.isKeyWindow && !windows.island.isKeyWindow })
             XCTAssertFalse(windows.island.isKeyWindow)
@@ -1110,9 +1113,12 @@ final class PanelIslandTests: XCTestCase {
     /// Button still reached by Tab in the key island window.
     func testTabFocusedIslandButtonStaysAwakeWithPointerAway() throws {
         try requireIslandKeyboard()
+        var focus: FocusState<PanelIslandItem?>.Binding?
+        PanelIslandView.focusProbe = { focus = $0 }
+        defer { PanelIslandView.focusProbe = nil }
         try withController { controller, state, _ in
             let windows = controller.islandWindowsForTesting
-            try focusIslandButton(windows, keyboard: state.keyboardFocus)
+            try focusIslandButton(windows, keyboard: state.keyboardFocus, focus: { focus?.wrappedValue })
             trackAway(windows)
             spin(0.35)
             XCTAssertTrue(windows.island.isKeyWindow)
@@ -1124,17 +1130,24 @@ final class PanelIslandTests: XCTestCase {
     /// must wake the island's real Buttons from their resting dots.
     func testHiddenFocusedIslandCanWakeWithNextTabOnReveal() throws {
         try requireIslandKeyboard()
+        var focus: FocusState<PanelIslandItem?>.Binding?
+        PanelIslandView.focusProbe = { focus = $0 }
+        defer { PanelIslandView.focusProbe = nil }
         try withController { controller, state, panel in
             let windows = controller.islandWindowsForTesting
-            try focusIslandButton(windows, keyboard: state.keyboardFocus)
+            try focusIslandButton(windows, keyboard: state.keyboardFocus, focus: { focus?.wrappedValue })
             windows.hide()
             XCTAssertFalse(windows.model.isAwake)
             windows.show(attachedTo: panel)
             windows.island.makeKey()
             spin(until: { windows.island.isKeyWindow })
+            spin(0.1)
+            let beforeTab = focus?.wrappedValue
             state.keyboardFocus.noteKeyboardNavigation()
             sendIslandTab(to: windows.island)
-            spin(0.1)
+            spin(until: { focus?.wrappedValue != beforeTab })
+            XCTAssertNotEqual(focus?.wrappedValue, beforeTab, "the Tab after reveal reaches SwiftUI focus")
+            XCTAssertNotNil(focus?.wrappedValue, "and lands on an island control")
             XCTAssertTrue(windows.model.isAwake, "Tab after hide must reveal the focused control")
         }
     }
@@ -1146,7 +1159,7 @@ final class PanelIslandTests: XCTestCase {
         defer { PanelIslandView.focusProbe = nil }
         try withController { controller, state, panel in
             let windows = controller.islandWindowsForTesting
-            try focusIslandButton(windows, keyboard: state.keyboardFocus)
+            try focusIslandButton(windows, keyboard: state.keyboardFocus, focus: { focus?.wrappedValue })
             spin(until: { focus?.wrappedValue != nil })
             XCTAssertNotNil(focus?.wrappedValue, "native Tab must establish a real SwiftUI focus")
             XCTAssertTrue(windows.model.isAwake, "the initial keyboard focus must wake the island")
@@ -1269,6 +1282,49 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    /// Intended (PR 16 re-check, Opus R-5): the one rule is that the island
+    /// never collapses while something inside it has keyboard focus in its
+    /// key window, however the focus got there — a pointer click under Full
+    /// Keyboard Access included. It collapses when focus leaves. Do not
+    /// "fix" the first half by asking how the focus arrived.
+    func testAPointerRouteFocusHoldsTheKeyIslandUntilFocusLeaves() throws {
+        try requireIslandKeyboard()
+        var focus: FocusState<PanelIslandItem?>.Binding?
+        PanelIslandView.focusProbe = { focus = $0 }
+        defer { PanelIslandView.focusProbe = nil }
+        try withController { controller, state, _ in
+            let windows = controller.islandWindowsForTesting
+            defer {
+                focus?.wrappedValue = nil
+                windows.model.settle()
+                spin(0.05)
+            }
+            // The pointer's route: it rests on the island, presses, and the
+            // island takes the keyboard; no Tab, no keyboard driving.
+            windows.model.track(pointer: CGPoint(x: windows.islandFrame.midX, y: windows.islandFrame.midY),
+                                rest: windows.restFrame, awake: windows.islandFrame)
+            state.keyboardFocus.observe(.leftMouseDown, keyCode: nil)
+            NSApp.activate(ignoringOtherApps: true)
+            windows.island.makeKey()
+            spin(until: { windows.island.isKeyWindow && focus != nil })
+            windows.model.wake()
+            spin(0.15)
+            focus?.wrappedValue = .page(.notes) // As FKA or a click would leave it.
+            spin(until: { focus?.wrappedValue == .page(.notes) })
+            XCTAssertEqual(focus?.wrappedValue, .page(.notes), "real mounted control must accept focus")
+            XCTAssertFalse(state.keyboardFocus.isKeyboardDriving, "the pointer, not the keyboard, got here")
+            trackAway(windows)
+            spin(0.35)
+            XCTAssertTrue(windows.island.isKeyWindow)
+            XCTAssertTrue(windows.model.isAwake, "focus inside the key island holds it, however it arrived")
+            focus?.wrappedValue = nil
+            spin(until: { focus?.wrappedValue == nil })
+            trackAway(windows)
+            spin(0.35)
+            XCTAssertFalse(windows.model.isAwake, "once focus leaves, the pointer away settles it")
+        }
+    }
+
     func testReduceMotionKeepsNativeFocusThroughIslandFade() throws {
         try requireIslandKeyboard()
         var focus: FocusState<PanelIslandItem?>.Binding?
@@ -1281,7 +1337,7 @@ final class PanelIslandTests: XCTestCase {
                 windows.model.settle()
                 spin(0.05)
             }
-            try focusIslandButton(windows, keyboard: state.keyboardFocus)
+            try focusIslandButton(windows, keyboard: state.keyboardFocus, focus: { focus?.wrappedValue })
             spin(until: { focus?.wrappedValue != nil })
             XCTAssertNotNil(focus?.wrappedValue, "native Tab must focus a real control")
             spin(0.4)
@@ -1303,7 +1359,10 @@ final class PanelIslandTests: XCTestCase {
         NSApp.sendEvent(event)
     }
 
-    private func focusIslandButton(_ windows: PanelIslandWindows, keyboard: AtticKeyboardFocusTracker) throws {
+    /// `focus` reads the live island's real `@FocusState` (installed through
+    /// `PanelIslandView.focusProbe` before the controller is built).
+    private func focusIslandButton(_ windows: PanelIslandWindows, keyboard: AtticKeyboardFocusTracker,
+                                   focus: () -> PanelIslandItem?) throws {
         try XCTSkipUnless(NSApp.isFullKeyboardAccessEnabled,
                           "native island Button Tab traversal requires Full Keyboard Access (CI only)")
         let window = windows.island
@@ -1316,9 +1375,13 @@ final class PanelIslandTests: XCTestCase {
         // that takes the keyboard shows the control Space would press.
         spin(until: { windows.model.isAwake })
         XCTAssertTrue(windows.model.isAwake, "the island taking the keyboard shows its focused control")
+        spin(until: { focus() != nil })
+        let first = try XCTUnwrap(focus(), "Full Keyboard Access focuses a real island control")
         keyboard.noteKeyboardNavigation()
         sendIslandTab(to: window)
-        spin(0.05)
+        spin(until: { focus() != first })
+        XCTAssertNotEqual(focus(), first, "a real Tab moves SwiftUI focus to the next control")
+        XCTAssertNotNil(focus(), "and keeps it inside the island")
         XCTAssertTrue(windows.model.isAwake, "a real Tab keeps the focused control shown")
     }
 
