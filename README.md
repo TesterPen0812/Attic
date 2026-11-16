@@ -18,7 +18,7 @@ switched off (see [What is not active](#what-is-not-active)).
 
 - Reveals from a chosen screen corner after a set delay, or from the global
   shortcut with a new task ready to type.
-- Three pages: **Tasks**, **Notes** and **Canvas**.
+- Four pages: **Tasks**, **Notes**, **Calendar** and **Draw**.
 - Content scrolls under the floating controls, with a slight blur at the top
   and each bottom control’s own glass.
 - Glass or solid surfaces, palettes and tint, Light and Dark, and Reduce
@@ -27,7 +27,7 @@ switched off (see [What is not active](#what-is-not-active)).
 
 ### Tasks
 
-- Three tabs: **Now**, **Later** and **Done**. A task in Now is To do or In
+- Three tabs: **Now**, **Backlog** and **Done**. A task in Now is To do or In
   Progress.
 - Priorities, due dates, tags, subtasks one level deep, and file and image
   attachments.
