@@ -459,6 +459,10 @@ struct AtticPanelView: View {
             toast: { [toasts] message, undo in
                 toasts.show(message, performing: undo)
             },
+            undoOffer: { [toasts, weak store] message, step, history in
+                guard let library = store?.commandLibrary else { return }
+                toasts.showUndo(message, of: step, in: history, library: library)
+            },
             eventFailure: { [toasts] message in
                 toasts.showFailure(message)
             },

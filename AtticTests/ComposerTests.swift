@@ -1560,6 +1560,53 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(liveTasks().map(\.title), ["Made just before quit"])
     }
 
+    /// Opus R-8: the card's toast is the panel's one kind of Undo offer, so
+    /// it goes when ⌘Z in the same frame removes the creation it names.
+    func testUndoPendingTheCardsToastGoesWhenItsCreationIsUndone() async throws {
+        let center = page.toasts
+        let card = ComposerModel(tasks: page, services: ComposerServices(undoOffer: { [library] message, step, history in
+            center.showUndo(message, of: step, in: history, library: library!)
+        }))
+        holdSaves()
+        card.open(on: .tasks(.done))
+        type("Undone at once")
+        card.submit()
+
+        XCTAssertEqual(page.undo(), .applied)
+
+        XCTAssertTrue(liveTasks().isEmpty)
+        try await waitForComposer { center.current == nil }
+    }
+
+    /// Opus R-5, Astra R-4: a toast names the step its write recorded, also
+    /// when a Calendar Undo in flight is holding that record back.
+    func testUndoPendingAnOfferNamesTheStepItsWriteRecordedDuringAReplay() async throws {
+        var release: CheckedContinuation<Void, Never>?
+        let started = expectation(description: "the Calendar Undo is running")
+        var held = UndoStep(name: "Held Calendar step", undo: { true }, redo: { true })
+        held.replay = { _, publish in
+            started.fulfill()
+            await withCheckedContinuation { release = $0 }
+            try? publish()
+            return .applied
+        }
+        library.undo.record(held, in: .calendar)
+        let replay = Task { @MainActor [library] in await library!.replay(in: .calendar, redo: false) }
+        await fulfillment(of: [started], timeout: 5)
+        let written = try XCTUnwrap(library.createNote(title: "Written during the Undo", body: "Body",
+                                                       tags: [], pinned: false, in: .calendar))
+        let named = library.undo.lastRecordedStepID(in: .calendar)
+        XCTAssertNotEqual(named, held.id)
+        XCTAssertTrue(library.undo.offersUndo(of: try XCTUnwrap(named), in: .calendar), "held back, but still on offer")
+        release?.resume()
+        _ = await replay.value
+
+        let outcome = await library.replayUndo(step: named, in: .calendar)
+
+        XCTAssertEqual(outcome, .applied)
+        XCTAssertNil(notes.notes.first { $0.id == written && $0.deletedAt == nil }, "the toast undoes its own write")
+    }
+
     // Guards: these hold on the trunk and must keep holding.
 
     /// A tick that fails to save stops Undo in Tasks only.

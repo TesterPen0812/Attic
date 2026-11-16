@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// The panel's one toast at a time: "Task deleted · Undo" after a delete or
@@ -51,6 +52,46 @@ final class PanelToastCenter: ObservableObject {
         AccessibilityNotification.Announcement(announcement).post()
         return toast
     }
+
+    /// "… · Undo" for one step, the same for every page (Tasks, the "+"
+    /// card, Calendar). The button undoes that step and only that step
+    /// (`AtticLibrary.undo(step:in:)`). The toast goes by itself once the
+    /// offer no longer stands: the step was undone, or something newer
+    /// happened in its history. A failed Undo's message stays until its
+    /// own button or a newer toast. `replaying`: the history's steps run
+    /// through a worker (Calendar's events).
+    @discardableResult
+    func showUndo(_ message: String, of step: UUID?, in history: UndoHistoryID, library: AtticLibrary,
+                  replaying: Bool = false,
+                  performed: @escaping @MainActor (CommandOutcome) -> Void = { _ in }) -> Toast {
+        let toast: Toast
+        if replaying {
+            toast = show(message, performingAsync: { [weak library] in
+                let outcome = await library?.replayUndo(step: step, in: history) ?? .applied
+                performed(outcome)
+                return outcome
+            })
+        } else {
+            toast = show(message, performing: { [weak library] in
+                let outcome = library?.undo(step: step, in: history) ?? .applied
+                performed(outcome)
+                return outcome
+            })
+        }
+        guard let step else { return toast }
+        // `$revision` publishes before the history changes: check after it.
+        offerWatch = library.undo.$revision.dropFirst().sink { [weak self, weak library] _ in
+            DispatchQueue.main.async {
+                guard let self, let library, self.current?.id == toast.id, self.current?.isFailure != true,
+                      !self.isPerforming, !library.undo.offersUndo(of: step, in: history) else { return }
+                self.dismiss()
+            }
+        }
+        return toast
+    }
+
+    /// Watches the history of the Undo offer on screen.
+    private var offerWatch: AnyCancellable?
 
     /// An already failed write: use the same persistent red toast that a
     /// failed Undo shows, without implying that an Undo step was created.
@@ -124,11 +165,15 @@ final class PanelToastCenter: ObservableObject {
             Task { await performActionAsync() }
             return .applied
         }
-        guard let action else {
+        guard let action, let pressed = current else {
             dismiss()
             return .applied
         }
         let outcome = action()
+        // The action can put up another toast (a change it saved first
+        // announcing itself): that one stays, as for an action that
+        // finishes later.
+        guard current?.id == pressed.id else { return outcome }
         switch outcome {
         case .applied, .obsolete:
             dismiss()
@@ -153,6 +198,7 @@ final class PanelToastCenter: ObservableObject {
         dismissWork = nil
         action = nil
         asyncAction = nil
+        offerWatch = nil
         holds = []
         current = nil
     }
@@ -178,6 +224,9 @@ final class PanelToastCenter: ObservableObject {
 
     private func present(_ toast: Toast, action: (@MainActor () -> CommandOutcome)?,
                          asyncAction: (@MainActor () async -> CommandOutcome)? = nil) {
+        // A new toast ends the watch of the offer it replaces; a failed
+        // offer's message (same id) no longer goes by itself either.
+        offerWatch = nil
         self.action = action
         self.asyncAction = asyncAction
         current = toast

@@ -178,6 +178,7 @@ final class UndoRoute: ObservableObject {
     func record(_ step: UndoStep, in history: UndoHistoryID) {
         if let capture = captures.last { capture(step); return }
         let history = resolved(history)
+        lastRecorded[history] = step.id
         if let recording = Self.actionRecording, recording.routeID == ownershipID {
             recording.append(history: history, id: step.id)
         }
@@ -210,6 +211,8 @@ final class UndoRoute: ObservableObject {
     /// action or Undo never saves, records or reverses the person's change.
     private var waitingChanges: [(id: UUID, history: UndoHistoryID, save: @MainActor () -> Bool)] = []
     private var isSettling = false
+    /// The step each history took last, also one a replay is holding back.
+    private var lastRecorded: [UndoHistoryID: UUID] = [:]
 
     /// What saving the waiting changes meant for one history.
     enum WaitingOutcome { case none, saved, failed }
@@ -259,6 +262,19 @@ final class UndoRoute: ObservableObject {
         case false?: .saved
         case true?: .failed
         }
+    }
+
+    /// The step this history took last (the one a write just recorded, read
+    /// in the same turn), also while a replay holds its record back. An
+    /// Undo offer names it.
+    func lastRecordedStepID(in history: UndoHistoryID) -> UUID? { lastRecorded[resolved(history)] }
+
+    /// Whether an Undo offer for `step` still stands: it is the newest step
+    /// of its history, or a replay is holding its record back for now.
+    func offersUndo(of step: UUID, in history: UndoHistoryID) -> Bool {
+        let history = resolved(history)
+        return histories[history]?.undo.last?.id == step
+            || pendingRecords[history]?.contains { $0.id == step } == true
     }
 
     /// Undoes the history's last step. Returns whether it applied; a step

@@ -683,10 +683,6 @@ final class TasksPageModel: ObservableObject {
         library.subtaskOrderChanges
             .sink { [weak self] parentID in self?.releaseQuickLookOrder(of: parentID) }
             .store(in: &cancellables)
-        // `$revision` publishes before the history changes: check after it.
-        library.undo.$revision
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.dismissToastIfSuperseded() } }
-            .store(in: &cancellables)
         // The page and the views it was left with (L7).
         if let memory {
             tab = memory.page ?? .now
@@ -2921,30 +2917,14 @@ final class TasksPageModel: ObservableObject {
     /// past the step it names.
     func showToast(_ message: String) {
         let step = library.undo.undoStepID(in: .tasks)
-        postedToastStep = step
-        postedToastID = toasts.show(message, performing: { [weak self] in
-            // Only the step the toast named: anything newer makes it stale.
-            guard let self else { return .applied }
-            let outcome = self.library.undo(step: step, in: .tasks)
+        postedToastID = toasts.showUndo(message, of: step, in: .tasks, library: library) { [weak self] outcome in
             // The toast says it where the Undo was pressed; the same
             // sentence is not repeated in the panel's notice.
-            if let failure = outcome.failure, self.store.lastErrorMessage == failure.message { self.store.dismissError() }
-            return outcome
-        }).id
+            if let self, let failure = outcome.failure, self.store.lastErrorMessage == failure.message {
+                self.store.dismissError()
+            }
+        }.id
     }
-
-    /// A change after the toast's step (or an undo of it) makes the toast
-    /// stale: it goes.
-    private func dismissToastIfSuperseded() {
-        guard postedToastID != nil, library.undo.undoStepID(in: .tasks) != postedToastStep else { return }
-        // A failed Undo's message stays until its own button (Retry, which
-        // then finds nothing to do, or OK) or a newer toast.
-        guard toasts.current?.isFailure != true else { return }
-        dismissToast()
-        postedToastID = nil
-    }
-
-    private var postedToastStep: UUID?
 
     /// Dismisses the toast only when it is this page's (another page's
     /// toast is not the Tasks history's to take away).
