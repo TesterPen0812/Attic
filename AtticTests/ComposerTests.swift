@@ -1607,6 +1607,42 @@ final class ComposerTests: XCTestCase {
         XCTAssertNil(notes.notes.first { $0.id == written && $0.deletedAt == nil }, "the toast undoes its own write")
     }
 
+    /// Dot R-3: the person's next input, in any window, saves what waits
+    /// before the command it becomes. A write from another surface (the
+    /// card's note here; a Calendar event from another panel) is then
+    /// recorded after the change made before it.
+    func testUndoPendingTheNextInputSavesWhatWaitsBeforeAnyCommand() throws {
+        let ticked = try XCTUnwrap(library.createTasks([TaskDraft(title: "Ticked first")])?.first)
+        holdSaves()
+        page.completeAcknowledged(ticked.id) { _ in }
+
+        library.undo.inputBegins()
+        let note = try XCTUnwrap(library.createNote(title: "Made next", body: "Body", tags: [], pinned: false, in: .tasks))
+
+        XCTAssertEqual(tasks.task(withID: ticked.id)?.status, .done, "the input saved the tick")
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertNil(notes.notes.first { $0.id == note && $0.deletedAt == nil }, "the newer write is undone first")
+        XCTAssertEqual(tasks.task(withID: ticked.id)?.status, .done)
+    }
+
+    /// An Undo in the input that saved a change which failed still stops
+    /// there; the next press reaches the older step.
+    func testUndoPendingAnUndoInTheInputThatSavedAFailedChangeStops() throws {
+        let made = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older change"), TaskDraft(title: "Tick fails")]))
+        XCTAssertTrue(library.updateTask(made[0].id, priority: .high).isApplied)
+        holdSaves()
+        taskSaveFailure.successfulWritesBeforeFailure = 0
+        page.completeAcknowledged(made[1].id) { _ in }
+
+        library.undo.inputBegins()
+        XCTAssertEqual(library.undo(in: .tasks), .applied, "the press was for the tick that failed")
+
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.priority, .high, "nothing older is undone")
+        library.undo.inputBegins()
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.priority, TaskPriority.none, "the next press reaches it")
+    }
+
     // Guards: these hold on the trunk and must keep holding.
 
     /// A tick that fails to save stops Undo in Tasks only.

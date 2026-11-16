@@ -418,6 +418,9 @@ final class AppCoordinator: ObservableObject {
     private let performanceRoot: URL?
     private let isPerformanceSeedOnly: Bool
     private var performanceSignalSource: (any DispatchSourceSignal)?
+    /// Every key and click, in any Attic window, first saves a change that
+    /// is still waiting for its save (`UndoRoute.inputBegins`).
+    private var waitingChangesInputMonitor: Any?
     #if DEBUG
     private var hideMotionBench: PanelHideMotionBench?
     private var pageSwitchBench: (any DispatchSourceSignal)?
@@ -886,6 +889,14 @@ final class AppCoordinator: ObservableObject {
         guard !hasStarted else { return }
         hasStarted = true
         guard shouldStartInteractiveShellServices else { return }
+        if waitingChangesInputMonitor == nil {
+            waitingChangesInputMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak library] event in
+                MainActor.assumeIsolated { library?.undo.inputBegins() }
+                return event
+            }
+        }
         if isPerformanceSeedOnly {
             return
         }
@@ -1290,6 +1301,8 @@ final class AppCoordinator: ObservableObject {
     func stop() {
         performanceSignalSource?.cancel()
         performanceSignalSource = nil
+        if let waitingChangesInputMonitor { NSEvent.removeMonitor(waitingChangesInputMonitor) }
+        waitingChangesInputMonitor = nil
         if isRunningTests && !isUITesting {
             hasStarted = false
             return

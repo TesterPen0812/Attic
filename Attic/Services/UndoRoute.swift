@@ -203,16 +203,20 @@ final class UndoRoute: ObservableObject {
     /// the click paints before the store's blocking save. It is in no
     /// history yet. The one rule: a command the person gives starts by
     /// saving every waiting change, oldest first, before it reads anything.
-    /// That happens where those commands enter (the page's own commands,
-    /// and `AtticLibrary`'s Undo and Redo, which every key, menu, toast and
-    /// panel use), never inside this route's own steps: `perform`,
-    /// `undoStep`, `redoStep` and `replay` leave waiting changes alone, so
-    /// nothing a caller has already read changes under it, and an agent's
-    /// action or Undo never saves, records or reverses the person's change.
+    /// That happens where the person's commands enter: when their next
+    /// input arrives (`inputBegins`, any window), and at the entry of the
+    /// page's own commands and of `AtticLibrary`'s Undo and Redo, which
+    /// every key, menu, toast and panel use. It never happens inside this
+    /// route's own steps: `perform`, `undoStep`, `redoStep` and `replay`
+    /// leave waiting changes alone, so nothing a caller has already read
+    /// changes under it, and an agent's action or Undo never saves, records
+    /// or reverses the person's change.
     private var waitingChanges: [(id: UUID, history: UndoHistoryID, save: @MainActor () -> Bool)] = []
     private var isSettling = false
     /// The step each history took last, also one a replay is holding back.
     private var lastRecorded: [UndoHistoryID: UUID] = [:]
+    /// What `inputBegins` saved, by history, until that input's command asks.
+    private var savedAtInput: [UndoHistoryID: Bool] = [:]
 
     /// What saving the waiting changes meant for one history.
     enum WaitingOutcome { case none, saved, failed }
@@ -252,15 +256,28 @@ final class UndoRoute: ObservableObject {
         return newestFailed
     }
 
+    /// The person's next input (a key or a click, in any window) is about
+    /// to be handled: what waits is saved first. Whatever command that
+    /// input becomes, on any surface (the card, Calendar, another panel),
+    /// it reads and records after the change made before it. The app calls
+    /// this once per input; the commands' own entries below cover the rest
+    /// (an action without an input event, such as VoiceOver's).
+    func inputBegins() {
+        savedAtInput = settleWaitingChanges()
+    }
+
     /// The start of an Undo or Redo the person asked for in `history`:
-    /// saves the waiting changes and says what that meant there. `.failed`:
-    /// the newest change waiting in this history did not save, so a press
-    /// meant for it stops. `.saved`: a new change landed, which ends Redo.
+    /// saves the waiting changes and says what that meant there, counting
+    /// what this same input already saved. `.failed`: the newest change
+    /// waiting in this history did not save, so a press meant for it
+    /// stops. `.saved`: a new change landed, which ends Redo.
     func settleWaitingChanges(in history: UndoHistoryID) -> WaitingOutcome {
-        switch settleWaitingChanges()[resolved(history)] {
-        case nil: .none
-        case false?: .saved
-        case true?: .failed
+        let history = resolved(history)
+        let atInput = savedAtInput.removeValue(forKey: history)
+        switch settleWaitingChanges()[history] ?? atInput {
+        case nil: return .none
+        case false?: return .saved
+        case true?: return .failed
         }
     }
 
