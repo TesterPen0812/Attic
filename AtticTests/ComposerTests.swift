@@ -1282,6 +1282,29 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(tasks.task(withID: older.id)?.priority, TaskPriority.none)
     }
 
+    /// Return with a file, then ⌘Z as soon as the page can take it: the
+    /// file is on the task before Undo removes it, so Redo brings both back.
+    func testUndoPendingATaskSubmittedWithFilesKeepsThemThroughUndoAndRedo() async throws {
+        let root = ownedTemporaryDirectory(prefix: "UndoPendingFiles")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("kept.pdf")
+        try Data("kept payload".utf8).write(to: file)
+        holdSaves()
+        model.open(on: .tasks(.now))
+        type("Task with a file")
+        page.addComposerFiles(urls: [file])
+        model.submit()
+        // The attach step Return started runs before the next key is read.
+        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
+
+        XCTAssertEqual(page.undo(), .applied)
+        XCTAssertTrue(liveTasks().isEmpty)
+        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
+        XCTAssertEqual(library.redo(in: .tasks), .applied)
+
+        XCTAssertEqual(liveTasks().first?.attachments.map(\.filename), ["kept.pdf"], "Redo brings the task back with its file")
+    }
+
     /// A Calendar-page creation waits in Calendar's history: ⌘Z in a Tasks
     /// field is still the field's.
     func testUndoPendingAWaitingCalendarCreationDoesNotClaimATasksFieldsUndo() throws {

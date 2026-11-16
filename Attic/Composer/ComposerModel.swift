@@ -474,7 +474,10 @@ final class ComposerModel: ObservableObject {
                 _ = await self.create(openingPage: openingPage)
             }
         }
-        else if kind == .task { submitTaskAcknowledged(openingPage: openingPage) }
+        // A task with files saves at once. Its attach step then starts
+        // before the next key is read, so no Undo finds a new task whose
+        // files are not on it yet, and no waiting change ever holds files.
+        else if kind == .task, tasks.addBarState.files.isEmpty { submitTaskAcknowledged(openingPage: openingPage) }
         else { _ = createImmediately(openingPage: openingPage) }
     }
 
@@ -492,9 +495,6 @@ final class ComposerModel: ObservableObject {
             : page.tasksTab.map(tasks.newOpenStatus(from:)) ?? .todo
         guard let draft = finished.draft(parser: tasks.parser, status: status) else { return }
         let submittedWriting = writing, submittedPage = page
-        // A file dropped into the next draft while the first saves belongs
-        // to the next draft, even if the first save finishes afterwards.
-        let submittedFiles = tasks.takeComposerFiles()
         isCreating = true
         tasks.createAcknowledged(draft, in: submittedPage.history, save: { [library = tasks.library] id in
             library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
@@ -504,7 +504,6 @@ final class ComposerModel: ObservableObject {
             guard let created else {
                 self.failed = true
                 AtticSounds.play(.failed)
-                self.tasks.restoreComposerFiles(submittedFiles)
                 // Another submission can have its own text already. Never
                 // overwrite it with a failed older draft.
                 if self.tasks.addBar.text.isEmpty && self.writing.isEmpty {
@@ -521,7 +520,6 @@ final class ComposerModel: ObservableObject {
             // Until then an earlier backup remains available after a crash.
             self.saveKeptDraft()
             AtticSounds.play(.created)
-            self.tasks.attachComposerFiles(submittedFiles, to: created.id)
             // A task "+" made while filtered stays in view (13 Nov), as
             // its first frame showed it.
             if let tab = submittedPage.tasksTab { self.tasks.keepInView(created.id, on: tab) }
