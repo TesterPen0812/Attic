@@ -579,6 +579,10 @@ final class ComposerModel: ObservableObject {
     }
 
     private func createTask(openingPage: Bool) -> Bool {
+        // Edits still waiting for their frame (a tick, a title) save first,
+        // as they do before the add bar's and the delayed creation's saves:
+        // the list and Undo keep the order of input.
+        tasks.settlePendingCompletionAcknowledgements()
         var finished = tasks.addBar
         finished.typedReplacesPicks(parser: tasks.parser, caret: nil)
         let day = finished.parts(parser: tasks.parser).dueDay
