@@ -210,6 +210,79 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(page.addBarState.files.isEmpty)
     }
 
+    /// The task and its writing saved, but the list could not be read
+    /// afterwards: the card is done, so the same draft can't be sent twice.
+    func testComposerFilesASavedTaskWhoseListReadFailsIsNotOfferedAgain() throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Saved once")
+        model.writing = "Its writing"
+        tasks.listRefreshFailures = 3
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+
+        XCTAssertFalse(model.failed, "the save committed")
+        XCTAssertTrue(page.addBar.text.isEmpty, "the draft is used up")
+        XCTAssertEqual(try rows(TaskItem.self).count, 1)
+        tasks.listRefreshFailures = 0
+        tasks.refresh()
+        XCTAssertEqual(liveTasks().map(\.title), ["Saved once"], "the list catches up on its next read")
+    }
+
+    /// The same, with a pasted image: the file is saved with the task
+    /// whether or not the list can be read (the staged copy is not dropped).
+    func testComposerFilesAFileIsSavedWithItsTaskWhenTheListReadFails() async throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Saved with a file")
+        model.writing = "Its writing"
+        _ = try await pasteAnImage()
+        tasks.listRefreshFailures = 3
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
+
+        let saved = try rows(TaskItem.self)
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(saved.first?.attachments.count, 1, "the file is in the task's own save")
+        XCTAssertTrue(page.addBarState.files.isEmpty)
+    }
+
+    func testConfirmedTaskWithWritingStillCreatesAndRecordsUndoAfterPresentationReadFailure() throws {
+        let id = UUID()
+        tasks.listRefreshFailures = 1
+        let created = library.createTask(TaskDraft(title: "Saved task"), writing: "Saved writing", in: .tasks, id: id)
+        let stored = try rows(TaskItem.self)
+        XCTAssertEqual(stored.map(\.id), [id], "the task+writing transaction committed durably")
+        XCTAssertTrue(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
+        XCTAssertEqual(tasks.listRefreshFailures, 0, "the injected failure reached the task-list refresh")
+        XCTAssertEqual(created?.id, id, "a failed presentation read cannot report a confirmed write as failed")
+        XCTAssertEqual(liveTasks().map(\.id), [id], "the committed task must become visible")
+        XCTAssertTrue(library.undo.canUndo(in: .tasks), "the confirmed write must retain its Undo step")
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertTrue(try rows(TaskItem.self).allSatisfy { $0.deletedAt != nil })
+        XCTAssertFalse(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
+    }
+
+    func testConfirmedTaskKeepsItsUndoWhenRepeatedPresentationReadsFail() throws {
+        let id = UUID()
+        tasks.listRefreshFailures = 3
+        let created = library.createTask(TaskDraft(title: "Repeated read failure"),
+                                         writing: "Durable writing", in: .tasks, id: id)
+        XCTAssertEqual(created?.id, id, "the committed task remains successful even when the list stays stale")
+        XCTAssertEqual(try rows(TaskItem.self).map(\.id), [id])
+        XCTAssertTrue(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
+        XCTAssertTrue(library.undo.canUndo(in: .tasks))
+
+        tasks.listRefreshFailures = 0
+        tasks.refresh()
+        XCTAssertEqual(liveTasks().map(\.id), [id], "the next successful refresh recovers the list")
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertFalse(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
+        XCTAssertEqual(library.redo(in: .tasks), .applied)
+        XCTAssertTrue(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
+    }
+
     private func waitForComposer(_ ready: () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
