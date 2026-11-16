@@ -469,6 +469,110 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(Set(liveTasks().map(\.title)), ["Task A with a pending file", "Task B"])
     }
 
+    // MARK: Pull request 17, round 2
+
+    /// M1 (files): Return with a file saves the task and its file in the
+    /// command itself. Nothing of it waits for a later frame, so there is
+    /// no moment in which the card is empty and the task not yet saved.
+    func testComposerFilesR2ATaskWithFilesSavesAtReturnInTheCommand() async throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Saved at Return")
+        _ = try await pasteAnImage()
+
+        model.submit()
+
+        // No settle and no main-actor turn since Return.
+        XCTAssertFalse(model.isCreating, "nothing is waiting to be saved")
+        let saved = try rows(TaskItem.self)
+        XCTAssertEqual(saved.map(\.title), ["Saved at Return"])
+        XCTAssertEqual(saved.first?.attachments.count, 1, "the file is in the same save")
+        XCTAssertTrue(page.addBar.text.isEmpty)
+        XCTAssertTrue(page.addBarState.files.isEmpty)
+    }
+
+    /// M1, M3, M8: a failed save leaves the draft exactly as it was (words,
+    /// picks, the same batches with the same copies), from the moment
+    /// Return returns. Nothing is taken out and put back.
+    func testComposerFilesR2AFailedSaveLeavesTheDraftAsItWas() async throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Kept as it was")
+        page.addBar.picked.tags = ["home"]
+        _ = try await pasteAnImage()
+        let draft = page.addBar
+        let batches = page.addBarState.files.map(\.id)
+        let copies = page.composerPrepared
+        taskSaveFailure.successfulWritesBeforeFailure = 0
+
+        model.submit()
+
+        XCTAssertTrue(model.failed)
+        XCTAssertTrue(try rows(TaskItem.self).isEmpty)
+        XCTAssertEqual(page.addBar, draft, "the words and picks are untouched")
+        XCTAssertEqual(page.addBarState.files.map(\.id), batches)
+        XCTAssertEqual(page.composerPrepared, copies, "the same copies, still this draft's")
+
+        model.submit()
+
+        let saved = try rows(TaskItem.self)
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(saved.first?.attachments.map(\.id), copies.values.flatMap { $0 }.map(\.id))
+        XCTAssertTrue(page.addBarState.files.isEmpty)
+        XCTAssertTrue(page.composerPrepared.isEmpty)
+    }
+
+    /// M9: a dropped batch keeps its place in the bar while it is staged
+    /// and copied: the files save in the order they were added.
+    func testComposerFilesR2ADroppedBatchJoinsTheBarAtOnceInItsPlace() async throws {
+        let root = ownedTemporaryDirectory(prefix: "ComposerDropOrder")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let droppedURL = root.appendingPathComponent("Dropped.pdf")
+        try Data("dropped first".utf8).write(to: droppedURL)
+        let started = expectation(description: "drop requested")
+        let dropped = HeldFileProvider(started: started, name: "Dropped.pdf")
+        type("Files in order")
+
+        page.addComposerFiles([dropped.provider])
+        await fulfillment(of: [started], timeout: 5)
+        page.addComposerFiles(urls: [try pickedFile("Picked.pdf")])
+        dropped.finish(droppedURL)
+        var made: UUID?
+        try await waitForComposer { made = made ?? self.page.submitAddBar(); return made != nil }
+        XCTAssertEqual(tasks.task(withID: try XCTUnwrap(made))?.attachments.map(\.filename), ["Dropped.pdf", "Picked.pdf"])
+    }
+
+    /// M7: a page model that goes away ends its draft's copies: the import
+    /// hold is let go and the bytes are removed, without waiting for a sweep.
+    func testComposerFilesR2ATornDownPageEndsItsDraftsCopies() async throws {
+        weak var released: TasksPageModel?
+        var reference: TaskImageReference?
+        do {
+            let other = TasksPageModel(library: library, services: TasksPageServices(now: { [now] in now }))
+            other.addComposerFiles(urls: [try pickedFile()])
+            try await waitForComposer { other.composerFilesArePrepared }
+            reference = other.composerPrepared.values.first?.first
+            released = other
+        }
+        let copy = try XCTUnwrap(reference)
+        XCTAssertNil(released, "the page model is gone")
+
+        var lease: WorkspaceOwnershipGate.Lease?
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while lease == nil, ContinuousClock.now < deadline {
+            lease = tasks.taskImageFiles.files.ownership.tryAcquire([copy.id], kind: .collection)
+            if lease == nil { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        XCTAssertNotNil(lease, "the import hold ended with the model")
+        lease?.release()
+        var stored = try? await tasks.taskImageFiles.verifiedURL(for: copy)
+        for _ in 0..<500 where stored != nil {
+            try await Task.sleep(for: .milliseconds(10))
+            stored = try? await tasks.taskImageFiles.verifiedURL(for: copy)
+        }
+        XCTAssertNil(stored, "the copy no task names is removed")
+    }
+
     private var container: ModelContainer!
     private var tasks: TaskStore!
     private var notes: NoteStore!
