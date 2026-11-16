@@ -225,6 +225,23 @@ final class NoteTableTextMergeTests: XCTestCase {
             ["op": "set_cell", "row_id": row, "column_id": id(table, column: 1), "text": "note"]
         ], to: table)
         XCTAssertEqual(removed.rows[1].cells.map(\.inlines), [[], []])
+        // Objects the text writes alike (two unreadable ones; two dates on one day with different
+        // details): all kept, or all removed; keeping some can't say which, so it is refused.
+        let other = NoteInline(id: UUID(), kind: .opaque(.string("other")))
+        let twin = NoteInline(id: UUID(), kind: .date(day), extras: ["hint": .string("other")])
+        var pairs = table
+        pairs.rows[1].cells[0] = NoteTable.Cell(object + " and " + object, inlines: [dated, twin])
+        pairs.rows[1].cells[1] = NoteTable.Cell(object + " and " + object, inlines: [unreadable, other])
+        for (column, token) in [(0, "[date:2026-12-01]"), (1, "[unsupported]")] {
+            let set = { (text: String) in try NoteTableAgentEdit.apply([["op": "set_cell", "row_id": row, "column_id": self.id(pairs, column: column), "text": text]], to: pairs) }
+            XCTAssertThrowsError(try set(token + " alone"), token) { XCTAssertTrue($0 is NoteAgentTextError, "\($0)") }
+            XCTAssertEqual(try set("\(token) and \(token)!").rows[1].cells[column].inlines, pairs.rows[1].cells[column].inlines, "\(token): both kept, in order")
+            XCTAssertEqual(try set("none").rows[1].cells[column].inlines, [], "\(token): both removed")
+        }
+        var alike = table
+        alike.rows[1].cells[0] = NoteTable.Cell(object + object, inlines: [NoteInline(id: UUID(), kind: .date(day)), NoteInline(id: UUID(), kind: .date(day))])
+        XCTAssertEqual(try NoteTableAgentEdit.apply([["op": "set_cell", "row_id": row, "column_id": id(alike, column: 0), "text": "[date:2026-12-01]"]],
+                                                   to: alike).rows[1].cells[0].inlines.count, 1, "plain same-day dates are alike: keeping one is fine")
         // Through text, the same edit is refused (the table carries what the text can't show).
         var truth = table
         edit(&truth, 1, 1, "x")

@@ -72,7 +72,7 @@ enum NoteAgentTableText {
         }
         var table = NoteTable(headerRow: !parsed.headerOff,
                               columns: parsed.alignments.map { NoteTable.Column(align: $0) },
-                              rows: parsed.rows.map { NoteTable.Row(cells: $0.map { cell($0, reusing: nil) }) })
+                              rows: try parsed.rows.map { NoteTable.Row(cells: try $0.map { try cell($0, reusing: nil) }) })
         table.makeRectangular()
         guard let match, let id = match.id else { return .table(table) }
         used.insert(id)
@@ -112,24 +112,31 @@ enum NoteAgentTableText {
     /// An agent's cell text. `[date:YYYY-MM-DD]` becomes a date and
     /// `[unsupported]` the next object this build can't read, each keeping
     /// the whole inline `reusing` had for it (a date by its day, others in
-    /// order); a token the text removes takes its object with it. Other text
-    /// is kept as typed, without marks.
-    static func cell(_ text: String, reusing: NoteTable.Cell?) -> NoteTable.Cell {
+    /// order); a token the text removes takes its object with it. Text can't
+    /// tell apart objects of one kind that differ (unreadable ones, or dates on
+    /// one day with different details), so keeping some of them is refused.
+    /// Other text is kept as typed, without marks.
+    static func cell(_ text: String, reusing: NoteTable.Cell?) throws -> NoteTable.Cell {
         var output = ""
         var inlines: [NoteInline] = []
         var dates = reusing?.inlines.filter { if case .date = $0.kind { true } else { false } } ?? []
         var unreadable = reusing?.inlines.filter { if case .opaque = $0.kind { true } else { false } } ?? []
+        var kept: [NoteInline] = []
         var remainder = Substring(text.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: ""))
         while let start = remainder.firstIndex(of: "[") {
             output += remainder[remainder.startIndex..<start]
             let token = remainder[start...]
             if token.hasPrefix("[unsupported]"), !unreadable.isEmpty {
-                inlines.append(unreadable.removeFirst())
+                let reused = unreadable.removeFirst()
+                kept.append(reused)
+                inlines.append(reused)
                 output.append(NoteDocument.objectCharacter)
                 remainder = token.dropFirst("[unsupported]".count)
             } else if token.hasPrefix("[date:"), let close = token.firstIndex(of: "]"),
                       let day = NoteDay(isoString: String(token[token.index(start, offsetBy: 6)..<close])) {
-                inlines.append(dates.firstIndex { $0.kind == .date(day) }.map { dates.remove(at: $0) } ?? NoteInline(id: UUID(), kind: .date(day)))
+                let reused = dates.firstIndex { $0.kind == .date(day) }.map { dates.remove(at: $0) }
+                if let reused { kept.append(reused) }
+                inlines.append(reused ?? NoteInline(id: UUID(), kind: .date(day)))
                 output.append(NoteDocument.objectCharacter)
                 remainder = token[token.index(after: close)...]
             } else {
@@ -138,7 +145,21 @@ enum NoteAgentTableText {
             }
         }
         output += remainder
+        for removed in dates + unreadable {
+            guard kept.allSatisfy({ !sameGroup($0, removed) || ($0.kind == removed.kind && $0.extras == removed.extras) }) else {
+                throw NoteAgentTextError.invalidTableEdit("This cell has several [unsupported] objects or dates on one day that differ in ways the text can't show; keep all of their tokens or remove all of them.")
+            }
+        }
         return NoteTable.Cell(output, inlines: inlines, extras: reusing?.extras ?? [:])
+    }
+
+    /// Two inlines the text writes alike: both unreadable, or dates on one day.
+    private static func sameGroup(_ a: NoteInline, _ b: NoteInline) -> Bool {
+        switch (a.kind, b.kind) {
+        case (.opaque, .opaque): true
+        case let (.date(x), .date(y)): x == y
+        default: false
+        }
     }
 }
 
@@ -212,7 +233,7 @@ enum NoteTableAgentEdit {
                 guard let text = operation["text"] as? String else { throw NoteAgentTextError.invalidTableEdit("set_cell needs text.") }
                 let original = table.rows[r].cells[c]
                 guard try inlineOnly(text) != NoteTextExport.agentInlineText(original.block) else { break }
-                table.rows[r].cells[c] = NoteAgentTableText.cell(text, reusing: original)
+                table.rows[r].cells[c] = try NoteAgentTableText.cell(text, reusing: original)
                 let kinds = NoteMark.Kind.allCases.filter { kind in original.marks.contains { $0.kind == kind } }.map(\.rawValue)
                 if let last = kinds.last {
                     let named = kinds.count > 1 ? kinds.dropLast().joined(separator: ", ") + " and " + last : last
@@ -223,14 +244,14 @@ enum NoteTableAgentEdit {
                 let at = try operation["after_row_id"].flatMap { $0 is NSNull ? nil : $0 }.map { try row($0) + 1 } ?? 0
                 let cells = try texts(operation["cells"], count: table.columnCount)
                 table.insertRow(at: at)
-                table.rows[at].cells = try cells.map { NoteAgentTableText.cell(try inlineOnly($0), reusing: nil) }
+                table.rows[at].cells = try cells.map { try NoteAgentTableText.cell(try inlineOnly($0), reusing: nil) }
             case "insert_column":
                 let at = try operation["after_column_id"].flatMap { $0 is NSNull ? nil : $0 }.map { try column($0) + 1 } ?? 0
                 let cells = try texts(operation["cells"], count: table.rowCount)
                 let align = (operation["align"] as? String).flatMap(NoteTable.Alignment.init(rawValue:)) ?? .left
                 table.insertColumn(at: at, align: align)
                 for (index, text) in cells.enumerated() {
-                    table.rows[index].cells[at] = NoteAgentTableText.cell(try inlineOnly(text), reusing: nil)
+                    table.rows[index].cells[at] = try NoteAgentTableText.cell(try inlineOnly(text), reusing: nil)
                 }
             case "move_row":
                 let source = try row(operation["row_id"])
@@ -245,11 +266,11 @@ enum NoteTableAgentEdit {
                 for index in table.rows.indices { table.rows[index].cells.insert(cells[index], at: at) }
             case "delete_row":
                 guard table.removeRow(at: try row(operation["row_id"])) else {
-                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one row; delete the table with update_note instead.")
+                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one row. To delete a plain table, remove it from the body with update_note; a table with formatting the text can't show is deleted in Attic.")
                 }
             case "delete_column":
                 guard table.removeColumn(at: try column(operation["column_id"])) else {
-                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one column; delete the table with update_note instead.")
+                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one column. To delete a plain table, remove it from the body with update_note; a table with formatting the text can't show is deleted in Attic.")
                 }
             case "set_header_row":
                 guard let value = operation["value"] as? Bool else { throw NoteAgentTextError.invalidTableEdit("set_header_row needs a boolean value.") }
