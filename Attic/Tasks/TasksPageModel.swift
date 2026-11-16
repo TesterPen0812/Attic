@@ -266,13 +266,11 @@ final class TasksPageModel: ObservableObject {
     /// Quit must drain the visible acknowledgement before approving exit,
     /// including models retained by a pulled-out page. Other stores are unrelated.
     static func prepareForTermination(in store: TaskStore) -> Bool {
-        var ready = true
-        for model in live.allObjects where model.store.container === store.container {
-            let failures = model.acknowledgementFailures
-            model.settlePendingCompletionAcknowledgements()
-            if model.acknowledgementFailures != failures { ready = false }
-        }
-        return ready
+        // Panels on one history route settle together: read every count first.
+        let models = live.allObjects.filter { $0.store.container === store.container }
+        let failures = models.map(\.acknowledgementFailures)
+        for model in models { model.settlePendingCompletionAcknowledgements() }
+        return zip(models, failures).allSatisfy { $0.acknowledgementFailures == $1 }
     }
 
     /// Await both the acknowledged creation and its submitted files. A new
@@ -407,9 +405,10 @@ final class TasksPageModel: ObservableObject {
     /// Finished rows held where they were for about a second, with the
     /// list and index they held (spec: "stays in place, then slides").
     @Published private(set) var held: [UUID: HeldPlace] = [:]
-    /// A row can acknowledge a press before its family transaction runs.
-    /// Retain the intent until that transaction has settled, including failure.
-    private var completingAfterAcknowledgement: [(id: UUID, settled: (CommandOutcome) -> Void)] = []
+    /// Ticks this page shows whose save still waits (the waiting changes
+    /// themselves, and their order, are the history route's: `UndoRoute`,
+    /// "Changes waiting for their save").
+    private var waitingTicks: Set<UUID> = []
     /// Transient value copies for a command awaiting its durable family
     /// transaction. The store's SwiftData instances are never modified by
     /// this preview, so rollback only removes the copies.
@@ -417,10 +416,8 @@ final class TasksPageModel: ObservableObject {
     private var acknowledgedDeleted: Set<UUID> = []
     private var acknowledgedCreated: [TaskItem] = []
     @Published private(set) var acknowledgementRevision: UInt64 = 0
-    private var acknowledgedTaskCommand: (() -> Bool)?
-    /// Includes failures from commands that reenter settlement to preserve Undo order.
+    /// Waiting changes of this page that failed to save (Quit reads it).
     private var acknowledgementFailures: UInt64 = 0
-    private var acknowledgedTaskToken: UUID?
 
     struct HeldPlace: Equatable {
         let tab: TasksTab
@@ -2005,9 +2002,7 @@ final class TasksPageModel: ObservableObject {
         if deleting { acknowledgedDeleted = Set(proposed.keys) }
         else { acknowledgedRows = proposed }
         acknowledgementRevision &+= 1
-        let token = UUID()
-        acknowledgedTaskToken = token
-        acknowledgedTaskCommand = { [self] in
+        saveNextFrame(in: .tasks) { [self] in
             let outcome = command()
             acknowledgedRows = [:]
             acknowledgedDeleted = []
@@ -2017,18 +2012,20 @@ final class TasksPageModel: ObservableObject {
             settled(outcome)
             return outcome.isApplied
         }
-        Task { @MainActor [self, delay = services.acknowledgementDelay] in
-            try? await Task.sleep(for: delay)
-            if acknowledgedTaskToken == token { _ = settlePendingTaskAcknowledgement() }
-        }
     }
 
-    @discardableResult
-    private func settlePendingTaskAcknowledgement() -> Bool {
-        guard let command = acknowledgedTaskCommand else { return false }
-        acknowledgedTaskCommand = nil
-        acknowledgedTaskToken = nil
-        return command()
+    /// The change is on screen now and saves a frame later, so the click
+    /// paints before the store's blocking save. The history route keeps it
+    /// in order with every other waiting change, from any panel, and saves
+    /// it sooner when something needs the history: Undo, Redo, the next
+    /// command, Quit.
+    private func saveNextFrame(in history: UndoHistoryID, _ save: @escaping @MainActor () -> Bool) {
+        let route = library.undo
+        let change = route.addWaitingChange(in: history, save: save)
+        Task { @MainActor [delay = services.acknowledgementDelay] in
+            try? await Task.sleep(for: delay)
+            route.settleWaitingChanges(through: change)
+        }
     }
 
     private func recordAcknowledgementFailure(_ outcome: CommandOutcome) {
@@ -2039,7 +2036,7 @@ final class TasksPageModel: ObservableObject {
 
     func setStatusAcknowledged(_ status: TaskStatus, for ids: [UUID],
                                settled: @escaping (CommandOutcome) -> Void) {
-        _ = settlePendingTaskAcknowledgement()
+        settlePendingCompletionAcknowledgements()
         if status == .done, tab != .done {
             let visible = rows(for: tab)
             for id in ids {
@@ -2051,7 +2048,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     func toggleDoneAcknowledged(_ ids: [UUID], settled: @escaping (CommandOutcome) -> Void) {
-        _ = settlePendingTaskAcknowledgement()
+        settlePendingCompletionAcknowledgements()
         let tasks = ids.compactMap { store.listedTask(withID: $0) }
         let reopening = !tasks.isEmpty && tasks.allSatisfy { $0.status == .done }
         if !reopening, tab != .done {
@@ -2109,7 +2106,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     func toggleWorkingAcknowledged(_ ids: [UUID], settled: @escaping (CommandOutcome) -> Void) {
-        _ = settlePendingTaskAcknowledgement()
+        settlePendingCompletionAcknowledgements()
         let tasks = ids.compactMap { store.task(withID: $0) }
         let target: TaskStatus = !tasks.isEmpty && tasks.allSatisfy { $0.status == .inProgress } ? .todo : .inProgress
         acknowledgeCommand(ids, preview: { $0.status = target },
@@ -2120,7 +2117,7 @@ final class TasksPageModel: ObservableObject {
     /// chips are restored before the transaction; a failed save reopens the
     /// editor with exactly what was submitted and its existing Retry line.
     func commitTitleAcknowledged(settled: @escaping (Bool) -> Void = { _ in }) -> Bool {
-        _ = settlePendingTaskAcknowledgement()
+        settlePendingCompletionAcknowledgements()
         guard let id = editingTitleID, let task = store.listedTask(withID: id),
               let patch = titlePatch(for: task) else { return commitTitle() }
         let input = titleEdit
@@ -2142,8 +2139,10 @@ final class TasksPageModel: ObservableObject {
     /// Composer creation has a stable logical UUID during the optimistic
     /// frame and its eventual all-or-nothing task+writing save. The preview
     /// never enters the physical store or Undo history.
+    /// `history` is where `save` records its step (the page the card is on).
     @discardableResult
-    func createAcknowledged(_ draft: TaskDraft, save: @escaping (UUID) -> TaskItem?,
+    func createAcknowledged(_ draft: TaskDraft, in history: UndoHistoryID = .tasks,
+                            save: @escaping (UUID) -> TaskItem?,
                             settled: @escaping (TaskItem?) -> Void) -> UUID {
         settlePendingCompletionAcknowledgements()
         let id = UUID()
@@ -2153,19 +2152,13 @@ final class TasksPageModel: ObservableObject {
         copy.dueTimeMinutes = draft.dueTimeMinutes
         acknowledgedCreated = [copy]
         acknowledgementRevision &+= 1
-        let token = UUID()
-        acknowledgedTaskToken = token
-        acknowledgedTaskCommand = { [self] in
+        saveNextFrame(in: history) { [self] in
             let created = save(id)
             acknowledgedCreated = []
             acknowledgementRevision &+= 1
             if created == nil { acknowledgementFailures &+= 1 }
             settled(created)
             return created != nil
-        }
-        Task { @MainActor [self, delay = services.acknowledgementDelay] in
-            try? await Task.sleep(for: delay)
-            if acknowledgedTaskToken == token { _ = settlePendingTaskAcknowledgement() }
         }
         return id
     }
@@ -2238,42 +2231,34 @@ final class TasksPageModel: ObservableObject {
     /// the synchronous, duplicate-safe family transaction. Other callers keep
     /// complete(_:) and its immediate CommandOutcome/Undo semantics.
     func completionAcknowledgementPending(for id: UUID) -> Bool {
-        completingAfterAcknowledgement.contains(where: { $0.id == id })
+        waitingTicks.contains(id)
     }
 
     func completeAcknowledged(_ id: UUID, settled: @escaping (CommandOutcome) -> Void) {
         guard let task = store.task(withID: id) else { settled(.failed(.taskGone)); return }
         guard task.status != .done else { settled(.applied); return }
-        guard !completingAfterAcknowledgement.contains(where: { $0.id == id }) else { return }
+        guard !waitingTicks.contains(id) else { return }
         let holdTab: TasksTab? = tab == .done ? nil : tab
         let index = holdTab.flatMap { rows(for: $0).firstIndex { $0.id == id } }
         if let holdTab, let index { hold(id, tab: holdTab, at: index) }
-        completingAfterAcknowledgement.append((id, settled))
-        Task { @MainActor [self, delay = services.acknowledgementDelay] in
-            // The next main-queue callback is not necessarily a drawn frame.
-            // Allow at least one display interval before the blocking save.
-            try? await Task.sleep(for: delay)
-            guard completingAfterAcknowledgement.contains(where: { $0.id == id }) else { return }
-            settlePendingCompletionAcknowledgements(through: id)
+        waitingTicks.insert(id)
+        // The next main-queue callback is not necessarily a drawn frame.
+        // Allow at least one display interval before the blocking save.
+        saveNextFrame(in: .tasks) { [self] in
+            waitingTicks.remove(id)
+            let outcome = finishCompletion(id)
+            recordAcknowledgementFailure(outcome)
+            settled(outcome)
+            return outcome.isApplied
         }
     }
 
-    /// Serialize acknowledged clicks with the next command's Undo history.
-    /// An immediate Undo or a following edit must not jump past a tick whose
-    /// durable completion has not yet entered the history. A scheduled task
-    /// for an already-settled click has no remaining work to do.
-    @discardableResult
-    func settlePendingCompletionAcknowledgements(through id: UUID? = nil) -> Bool {
-        var savedAny = settlePendingTaskAcknowledgement()
-        while !completingAfterAcknowledgement.isEmpty {
-            let next = completingAfterAcknowledgement.removeFirst()
-            let outcome = finishCompletion(next.id)
-            savedAny = savedAny || outcome.isApplied
-            recordAcknowledgementFailure(outcome)
-            next.settled(outcome)
-            if next.id == id { break }
-        }
-        return savedAny
+    /// Saves every change still waiting for its save, oldest first (this
+    /// page's and any other panel's on the same history route). Each
+    /// command starts with it, so a following edit never reads or records
+    /// ahead of a change the page already shows.
+    func settlePendingCompletionAcknowledgements() {
+        library.undo.settleWaitingChanges()
     }
 
     private func finishCompletion(_ id: UUID) -> CommandOutcome {
@@ -2866,11 +2851,10 @@ final class TasksPageModel: ObservableObject {
     /// notice (Astra 23).
     @discardableResult
     func undo() -> CommandOutcome {
-        let hadPending = acknowledgedTaskCommand != nil || !completingAfterAcknowledgement.isEmpty
-        let savedPending = settlePendingCompletionAcknowledgements()
-        // A failed acknowledged click never acquired an Undo step. Do not
-        // let ⌘Z reach back into an unrelated earlier saved task edit.
-        if hadPending && !savedPending { return .applied }
+        // A waiting change that fails to save never acquired an Undo step.
+        // This ⌘Z was meant for it: nothing older is undone, and the page
+        // keeps its toast and its Redo bookkeeping as they were.
+        guard library.undo.settleWaitingChanges(for: .tasks) else { return .applied }
         let outcome = library.undo(in: .tasks)
         if outcome.isApplied {
             // Undo may restore a still-held completed row. Show its genuine
@@ -2889,7 +2873,7 @@ final class TasksPageModel: ObservableObject {
 
     @discardableResult
     func redo() -> CommandOutcome {
-        settlePendingCompletionAcknowledgements()
+        guard library.undo.settleWaitingChanges(for: .tasks) else { return .applied }
         let outcome = library.redo(in: .tasks)
         if outcome.isApplied {
             reloadDoneLogAfterChange()
@@ -2920,14 +2904,14 @@ final class TasksPageModel: ObservableObject {
 
     /// A task change is newer than the draft's last edit: ⌘Z belongs to it.
     var taskChangeOwnsUndo: Bool {
-        if acknowledgedTaskCommand != nil || !completingAfterAcknowledgement.isEmpty { return true }
+        if library.undo.hasWaitingChange(in: .tasks) { return true }
         guard let top = library.undo.undoStepID(in: .tasks) else { return false }
         return top != stepAtLastTextEdit
     }
 
     /// The step a claimed ⌘Z just undid is waiting for ⇧⌘Z.
     var taskChangeOwnsRedo: Bool {
-        acknowledgedTaskCommand == nil && completingAfterAcknowledgement.isEmpty && taskRedoIsNext && library.undo.canRedo(in: .tasks)
+        !library.undo.hasWaitingChange(in: .tasks) && taskRedoIsNext && library.undo.canRedo(in: .tasks)
     }
 
     /// Posts "… · Undo" to the shell's toast host (6 s, held while the

@@ -142,6 +142,19 @@ final class ComposerTests: XCTestCase {
     private var windows: [NSWindow] = []
     private final class Switch { var on = false }
     private let saveFailure = Switch()
+    /// The task store's own saves: `successfulWritesBeforeFailure = 0` fails the next one.
+    private final class TaskSaveFailure {
+        var successfulWritesBeforeFailure: Int?
+        func persist(_ context: ModelContext) throws {
+            if let remaining = successfulWritesBeforeFailure {
+                successfulWritesBeforeFailure = nil
+                if remaining == 0 { throw CocoaError(.fileWriteUnknown) }
+                successfulWritesBeforeFailure = remaining - 1
+            }
+            try context.save()
+        }
+    }
+    private let taskSaveFailure = TaskSaveFailure()
     private let clock: Calendar = Calendar.autoupdatingCurrent
     private lazy var now: Date = clock.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 10))!
     private var today: DueDay { DueDay(date: now, calendar: clock) }
@@ -153,7 +166,8 @@ final class ComposerTests: XCTestCase {
         container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         _ = try WorkspaceLegacyBridge.coordinator(for: container)
         let fixed = now
-        tasks = TaskStore(container: container, now: { fixed },
+        let failingTasks = taskSaveFailure
+        tasks = TaskStore(container: container, now: { fixed }, persist: { try failingTasks.persist($0) },
             taskImageFiles: TaskImageFiles(rootURL: ownedTemporaryDirectory(prefix: "ComposerTaskFiles")))
         let failing = saveFailure
         notes = NoteStore(container: container, now: { fixed }, persist: { context in
@@ -180,6 +194,9 @@ final class ComposerTests: XCTestCase {
     }
 
     override func tearDown() {
+        // A change held with a 30 s delay saves now, while its fixture still
+        // exists, never into a later test's store.
+        page?.settlePendingCompletionAcknowledgements()
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
         windows.forEach { $0.contentView = nil; $0.close() }
@@ -1027,6 +1044,260 @@ final class ComposerTests: XCTestCase {
         model.close()
         XCTAssertEqual(undo(), .applied)
         XCTAssertNil(notes.notes.first { $0.id == note.id && $0.deletedAt == nil }, "the note went, not a Calendar step")
+    }
+
+    // MARK: Undo while a change waits for its save
+
+    /// A change the page already shows saves a frame later (20 ms). These
+    /// tests hold that frame open and press Undo or Redo inside it.
+    private func holdSaves() { page.services.acknowledgementDelay = .seconds(30) }
+
+    private func secondPanel() -> TasksPageModel {
+        let fixed = now
+        var services = TasksPageServices(now: { fixed })
+        services.acknowledgementDelay = .seconds(30)
+        return TasksPageModel(library: library, services: services)
+    }
+
+    /// ⌘Z in the card's title just after Return: the task just made goes,
+    /// not an older one.
+    func testUndoPendingComposerUndoReversesTheWaitingCreationNotAnOlderTask() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older task")])?.first)
+        holdSaves()
+        model.open(on: .tasks(.now))
+        type("Just submitted")
+        model.submit()
+        XCTAssertTrue(model.isCreating)
+
+        model.undoPage()
+
+        XCTAssertFalse(model.isCreating, "Undo saves the waiting creation first")
+        XCTAssertEqual(liveTasks().map(\.id), [older.id], "the creation is what Undo reverses")
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+        XCTAssertEqual(library.redo(in: .tasks), .applied)
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["Older task", "Just submitted"])
+    }
+
+    /// The creation's save fails: that ⌘Z was meant for it and stops there.
+    func testUndoPendingComposerUndoStopsAtACreationThatFailedToSave() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Keep this task")])?.first)
+        holdSaves()
+        model.open(on: .tasks(.now))
+        type("Will fail to save")
+        model.writing = "Keep this draft"
+        saveFailure.on = true
+        model.submit()
+        XCTAssertTrue(model.isCreating)
+
+        model.undoPage()
+
+        XCTAssertTrue(model.failed)
+        XCTAssertEqual(liveTasks().map(\.id), [older.id], "an older task is never undone in its place")
+        XCTAssertTrue(library.undo.canUndo(in: .tasks))
+        XCTAssertFalse(library.undo.canRedo(in: .tasks))
+        XCTAssertEqual(page.addBar.text, "Will fail to save")
+        XCTAssertEqual(model.writing, "Keep this draft")
+    }
+
+    /// A new change ends Redo. ⇧⌘Z inside the frame cannot bring back the
+    /// older step first.
+    func testUndoPendingComposerRedoCannotReachPastAWaitingCreation() throws {
+        _ = try XCTUnwrap(library.createTasks([TaskDraft(title: "Earlier task")])?.first)
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+        holdSaves()
+        model.open(on: .tasks(.now))
+        type("New task")
+        model.submit()
+
+        model.redoPage()
+
+        XCTAssertFalse(model.isCreating, "Redo saves the waiting creation first")
+        XCTAssertEqual(liveTasks().map(\.title), ["New task"], "the earlier task stays undone")
+        XCTAssertFalse(library.undo.canRedo(in: .tasks))
+    }
+
+    func testUndoPendingComposerRedoStopsAtACreationThatFailedToSave() throws {
+        _ = try XCTUnwrap(library.createTasks([TaskDraft(title: "Earlier task")])?.first)
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        holdSaves()
+        model.open(on: .tasks(.now))
+        type("Cannot be saved")
+        model.writing = "Keep the failed draft"
+        saveFailure.on = true
+        model.submit()
+
+        model.redoPage()
+
+        XCTAssertTrue(model.failed)
+        XCTAssertTrue(liveTasks().isEmpty, "the earlier task is not redone in its place")
+        XCTAssertTrue(library.undo.canRedo(in: .tasks), "its Redo is still there for a deliberate ⇧⌘Z")
+        XCTAssertEqual(model.writing, "Keep the failed draft")
+    }
+
+    /// Edit ▸ Undo, and ⌘Z with the keyboard in the panel's chrome, through
+    /// the real controller: enabled by the waiting change alone, and it
+    /// reverses that change. A waiting change never enables Redo.
+    func testUndoPendingEditMenuUndoIsEnabledByAndReversesAWaitingCreation() throws {
+        let suite = "ComposerTests.undoPendingMenu.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = AtticPanelController(store: tasks, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: container)),
+            noteDraft: NoteDraftController(noteStore: notes), settings: AppSettings(defaults: defaults),
+            uiState: PanelUIState())
+        let panel = controller.panelForTesting
+        defer { panel.contentView = nil; panel.close() }
+        holdSaves()
+        model.open(on: .tasks(.now))
+        type("Only a waiting creation")
+        model.submit()
+        XCTAssertNil(library.undo.undoStepID(in: .tasks), "no step exists yet")
+        XCTAssertTrue(model.isCreating)
+
+        XCTAssertEqual(panel.canPerformUnhandledUndo?(false), true, "Undo is offered for the change on screen")
+        XCTAssertEqual(panel.canPerformUnhandledUndo?(true), false, "nothing was undone: Redo stays off")
+        panel.onUnhandledUndo?(false)
+
+        XCTAssertFalse(model.isCreating)
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+    }
+
+    /// A pulled-out Tasks page has its own model on the same history.
+    func testUndoPendingAnotherPanelsUndoReversesThisPanelsWaitingCreation() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older task")])?.first)
+        holdSaves()
+        model.open(on: .tasks(.now))
+        type("Waiting in the first panel")
+        model.submit()
+        let other = secondPanel()
+
+        XCTAssertEqual(other.undo(), .applied)
+
+        XCTAssertFalse(model.isCreating)
+        XCTAssertEqual(liveTasks().map(\.id), [older.id])
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+    }
+
+    /// Two changes wait in one panel (a menu pick, then a tick): Undo
+    /// reverses the tick, the last thing done.
+    func testUndoPendingUndoReversesTheNewerOfTwoWaitingChanges() throws {
+        let made = try XCTUnwrap(library.createTasks([TaskDraft(title: "Gets a priority"), TaskDraft(title: "Gets ticked")]))
+        holdSaves()
+        page.setPriorityAcknowledged(.high, for: [made[0].id]) { _ in }
+        page.completeAcknowledged(made[1].id) { _ in }
+
+        XCTAssertEqual(page.undo(), .applied)
+
+        XCTAssertEqual(tasks.task(withID: made[1].id)?.status, .todo, "the tick was last, so it is undone")
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.priority, .high, "the older change stays")
+        XCTAssertEqual(page.undo(), .applied)
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.priority, TaskPriority.none)
+    }
+
+    /// Two ticks wait; the first saves and the newer one fails. Undo was
+    /// meant for the newer one and stops there.
+    func testUndoPendingUndoStopsWhenTheNewestWaitingChangeFailed() throws {
+        let made = try XCTUnwrap(library.createTasks([TaskDraft(title: "First completes"), TaskDraft(title: "Second fails")]))
+        holdSaves()
+        taskSaveFailure.successfulWritesBeforeFailure = 1
+        var outcomes: [CommandOutcome] = []
+        page.completeAcknowledged(made[0].id) { outcomes.append($0) }
+        page.completeAcknowledged(made[1].id) { outcomes.append($0) }
+
+        XCTAssertEqual(page.undo(), .applied, "handled: a field's typing is left alone")
+
+        XCTAssertEqual(outcomes.map(\.isApplied), [true, false])
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.status, .done, "the saved tick is not undone in the failed one's place")
+        XCTAssertEqual(tasks.task(withID: made[1].id)?.status, .todo)
+        XCTAssertFalse(page.taskChangeOwnsRedo, "nothing was undone, so ⇧⌘Z is not the page's")
+        XCTAssertEqual(page.undo(), .applied)
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.status, .todo, "a second, deliberate Undo reverses it")
+    }
+
+    /// A Calendar-page creation waits in Calendar's history: ⌘Z in a Tasks
+    /// field is still the field's.
+    func testUndoPendingAWaitingCalendarCreationDoesNotClaimATasksFieldsUndo() throws {
+        _ = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older Tasks step")])?.first)
+        page.noteTextEdit()
+        holdSaves()
+        model.open(on: .calendar(selected: today), as: .task)
+        type("Made on Calendar")
+        model.submit()
+        XCTAssertTrue(model.isCreating)
+
+        XCTAssertFalse(page.taskChangeOwnsUndo, "nothing newer waits in the Tasks history")
+    }
+
+    // Guards: these hold on the trunk and must keep holding.
+
+    /// A tick that fails to save stops Undo in Tasks only.
+    func testUndoPendingAFailedTickDoesNotStopCalendarsUndo() async throws {
+        let task = try XCTUnwrap(library.createTasks([TaskDraft(title: "Tick fails")])?.first)
+        let calendarNote = try XCTUnwrap(library.createNote(title: "Calendar-side step", body: "Body",
+                                                            tags: [], pinned: false, in: .calendar))
+        holdSaves()
+        taskSaveFailure.successfulWritesBeforeFailure = 0
+        var tick: CommandOutcome?
+        page.completeAcknowledged(task.id) { tick = $0 }
+        model.open(on: .calendar(selected: today))
+
+        model.undoPage()
+
+        try await waitForComposer { self.notes.notes.first { $0.id == calendarNote && $0.deletedAt == nil } == nil }
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(tick?.isApplied, false)
+        XCTAssertTrue(library.undo.canRedo(in: .calendar))
+        XCTAssertEqual(tasks.task(withID: task.id)?.status, .todo)
+    }
+
+    /// A Calendar-page creation that fails stops Undo in Calendar only.
+    func testUndoPendingAFailedCalendarCreationDoesNotStopTasksUndo() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older Tasks step")])?.first)
+        holdSaves()
+        model.open(on: .calendar(selected: today), as: .task)
+        type("Made on Calendar")
+        model.writing = "Fails in Calendar's history"
+        saveFailure.on = true
+        model.submit()
+
+        XCTAssertEqual(page.undo(), .applied)
+
+        XCTAssertNil(tasks.task(withID: older.id), "the Tasks step is undone")
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+    }
+
+    /// A toast names its step: an unrelated change failing to save in
+    /// another panel does not stop it.
+    func testUndoPendingToastStillUndoesItsStepWhenAnotherPanelsChangeFails() throws {
+        let made = try XCTUnwrap(library.createTasks([TaskDraft(title: "Named by the toast"), TaskDraft(title: "Tick fails")]))
+        XCTAssertTrue(library.updateTask(made[0].id, priority: .high).isApplied)
+        page.showToast("Priority changed")
+        let other = secondPanel()
+        taskSaveFailure.successfulWritesBeforeFailure = 0
+        other.completeAcknowledged(made[1].id) { _ in }
+
+        _ = page.toasts.performAction()
+
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.priority, TaskPriority.none, "the named step is undone")
+        XCTAssertEqual(tasks.task(withID: made[1].id)?.status, .todo)
+    }
+
+    /// Another Undo saving a waiting creation does not take away that
+    /// creation's own "Added to Now".
+    func testUndoPendingAStaleToastLeavesAWaitingCreationsOwnToast() throws {
+        _ = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older task")])?.first)
+        page.showToast("Added")
+        holdSaves()
+        model.open(on: .tasks(.done))
+        type("Made from Done")
+        model.submit()
+
+        _ = page.toasts.performAction()
+
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["Older task", "Made from Done"], "the stale toast undoes nothing")
+        XCTAssertEqual(toasts, ["Added to Now"])
     }
 
     func testCommandReturnOpensTheNoteInNotes() async throws {

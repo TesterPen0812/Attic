@@ -496,7 +496,7 @@ final class ComposerModel: ObservableObject {
         // to the next draft, even if the first save finishes afterwards.
         let submittedFiles = tasks.takeComposerFiles()
         isCreating = true
-        tasks.createAcknowledged(draft, save: { [library = tasks.library] id in
+        tasks.createAcknowledged(draft, in: submittedPage.history, save: { [library = tasks.library] id in
             library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
         }, settled: { [weak self] created in
             guard let self else { return }

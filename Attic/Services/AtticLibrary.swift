@@ -514,17 +514,25 @@ final class AtticLibrary {
 
     // MARK: - Undo and redo, with outcomes
 
-    /// Undoes the history's last step and says what happened (the toast's
-    /// Undo, ⌘Z): `.failed` keeps the step to try again; a step that can
-    /// never apply again is dropped and reported as not retryable.
+    /// Undoes the history's last step and says what happened (⌘Z, the Edit
+    /// menu): `.failed` keeps the step to try again; a step that can never
+    /// apply again is dropped and reported as not retryable.
+    ///
+    /// A change still waiting for its save is saved first, so it is the
+    /// step undone. When that save fails, the press was meant for a change
+    /// that never happened: it is done (`.applied`), with the failed
+    /// change's own notice, and no older step is touched. Redo and replay
+    /// follow the same rule (`UndoRoute`, "Changes waiting for their save").
     @discardableResult
     func undo(in history: UndoHistoryID) -> CommandOutcome {
+        guard undo.settleWaitingChanges(for: history) else { return .applied }
         let serial = tasks.errorSerial
         return historyOutcome(undo.undoStep(in: history), since: serial, verb: String(localized: "undo"))
     }
 
     @discardableResult
     func redo(in history: UndoHistoryID) -> CommandOutcome {
+        guard undo.settleWaitingChanges(for: history) else { return .applied }
         let serial = tasks.errorSerial
         return historyOutcome(undo.redoStep(in: history), since: serial, verb: String(localized: "redo"))
     }
@@ -533,6 +541,7 @@ final class AtticLibrary {
     /// still use the same route and outcome mapping.
     @discardableResult
     func replay(in history: UndoHistoryID, redo: Bool) async -> CommandOutcome {
+        guard undo.settleWaitingChanges(for: history) else { return .applied }
         let serial = tasks.errorSerial
         return historyOutcome(await undo.replay(in: history, redo: redo), since: serial,
                               verb: redo ? String(localized: "redo") : String(localized: "undo"))
