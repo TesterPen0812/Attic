@@ -183,6 +183,7 @@ enum NoteTableAgentEdit {
 
     static func apply(_ operations: [[String: Any]], to original: NoteTable, notices: inout [String]) throws -> NoteTable {
         var table = original
+        let readAgain = "Read the note again with list_notes for its current ids."
         func uuid(_ value: Any?, _ name: String) throws -> UUID {
             guard let text = value as? String, let id = UUID(uuidString: text) else {
                 throw NoteAgentTextError.invalidTableEdit("\(name) must be an id from list_notes.")
@@ -192,14 +193,14 @@ enum NoteTableAgentEdit {
         func row(_ value: Any?) throws -> Int {
             let id = try uuid(value, "row_id")
             guard let index = table.rows.firstIndex(where: { $0.id == id }) else {
-                throw NoteAgentTextError.invalidTableEdit("No row has id \(id.uuidString).")
+                throw NoteAgentTextError.invalidTableEdit("No row has id \(id.uuidString). \(readAgain)")
             }
             return index
         }
         func column(_ value: Any?) throws -> Int {
             let id = try uuid(value, "column_id")
             guard let index = table.columns.firstIndex(where: { $0.id == id }) else {
-                throw NoteAgentTextError.invalidTableEdit("No column has id \(id.uuidString).")
+                throw NoteAgentTextError.invalidTableEdit("No column has id \(id.uuidString). \(readAgain)")
             }
             return index
         }
@@ -210,12 +211,17 @@ enum NoteTableAgentEdit {
             }
             return list.compactMap { $0 as? String }
         }
-        /// The index after which a line goes: `after` (an id or null) in `ids`.
-        func position(_ after: Any?, _ name: String, in ids: [UUID]) throws -> Int {
-            guard let after, !(after is NSNull) else { return 0 }
+        /// Where a moved line goes: after the line `name` names in `ids`, or
+        /// first for null. The key is required: a typo must not move a row
+        /// above the header.
+        func position(_ operation: [String: Any], _ name: String, in ids: [UUID]) throws -> Int {
+            guard let after = operation[name] else {
+                throw NoteAgentTextError.invalidTableEdit("\(operation["op"] ?? "A move") needs \(name): an id, or null to move it first.")
+            }
+            guard !(after is NSNull) else { return 0 }
             let id = try uuid(after, name)
             guard let index = ids.firstIndex(of: id) else {
-                throw NoteAgentTextError.invalidTableEdit("No line has id \(id.uuidString), or a line can't move after itself.")
+                throw NoteAgentTextError.invalidTableEdit("No other line has id \(id.uuidString) (a line can't move after itself). \(readAgain)")
             }
             return index + 1
         }
@@ -256,12 +262,12 @@ enum NoteTableAgentEdit {
             case "move_row":
                 let source = try row(operation["row_id"])
                 let moving = table.rows.remove(at: source)
-                table.rows.insert(moving, at: try position(operation["after_row_id"], "after_row_id", in: table.rows.map(\.id)))
+                table.rows.insert(moving, at: try position(operation, "after_row_id", in: table.rows.map(\.id)))
             case "move_column":
                 let source = try column(operation["column_id"])
                 let moving = table.columns.remove(at: source)
                 let cells = table.rows.indices.map { table.rows[$0].cells.remove(at: source) }
-                let at = try position(operation["after_column_id"], "after_column_id", in: table.columns.map(\.id))
+                let at = try position(operation, "after_column_id", in: table.columns.map(\.id))
                 table.columns.insert(moving, at: at)
                 for index in table.rows.indices { table.rows[index].cells.insert(cells[index], at: at) }
             case "delete_row":

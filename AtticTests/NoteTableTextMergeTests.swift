@@ -40,7 +40,7 @@ final class NoteTableTextMergeTests: XCTestCase {
     private func assertRefused(_ old: NoteTable, _ truth: NoteTable, _ message: String = "",
                                file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertThrowsError(try rewrite(old, to: truth), message, file: file, line: line) {
-            XCTAssertEqual($0 as? NoteAgentTextError, .lossyFormatting, message, file: file, line: line)
+            XCTAssertEqual($0 as? NoteAgentTextError, .formattedTable(self.tableID.uuidString), message, file: file, line: line)
         }
     }
 
@@ -172,7 +172,7 @@ final class NoteTableTextMergeTests: XCTestCase {
         let tokenless: (NoteDocument) -> String = { NoteTextExport.agentBody($0).components(separatedBy: "\n").filter { !$0.hasPrefix("<!--") }.joined(separator: "\n") }
         let renamed: (NoteDocument) -> String = { tokenless($0).replacingOccurrences(of: "| Pillar |", with: "| Pillars |") }
         for body in [tokenless, renamed] {
-            XCTAssertThrowsError(try update(formatted, body: body)) { XCTAssertEqual($0 as? NoteAgentTextError, .lossyFormatting) }
+            XCTAssertThrowsError(try update(formatted, body: body)) { XCTAssertEqual($0 as? NoteAgentTextError, .formattedTable(self.tableID.uuidString)) }
         }
         let plain = NoteTable(texts: [["Pillar", "What"], ["Integrity", "Encrypted"]])
         XCTAssertEqual(try update(plain, body: tokenless).blocks.last, .table(plain, id: tableID), "a plain table without its token is kept")
@@ -185,12 +185,14 @@ final class NoteTableTextMergeTests: XCTestCase {
     func testEveryOtherTextChangeToAFormattedTableIsRefused() throws {
         var table = NoteTable(texts: [["A", "B"], ["a", "b"]])
         bold(&table, 1, 1)
-        XCTAssertThrowsError(try update(table, body: { _ in "" }), "the table removed")
+        XCTAssertThrowsError(try update(table, body: { _ in "" }), "the table removed") {
+            XCTAssertEqual($0 as? NoteAgentTextError, .formattedTable(self.tableID.uuidString))
+        }
         var realigned = table
         realigned.columns[1].align = .right
         assertRefused(table, realigned, "an alignment")
         let headerOff = { (base: NoteDocument) in NoteTextExport.agentBody(base).replacingOccurrences(of: " -->", with: " headerRow=false -->") }
-        XCTAssertThrowsError(try update(table, body: headerOff), "the header row") { XCTAssertEqual($0 as? NoteAgentTextError, .lossyFormatting) }
+        XCTAssertThrowsError(try update(table, body: headerOff), "the header row") { XCTAssertEqual($0 as? NoteAgentTextError, .formattedTable(self.tableID.uuidString)) }
         // By id, each is kept whole.
         let byID = try NoteTableAgentEdit.apply([
             ["op": "set_alignment", "column_id": id(table, column: 1), "align": "right"],
@@ -198,6 +200,34 @@ final class NoteTableTextMergeTests: XCTestCase {
         ], to: table)
         XCTAssertEqual(byID.rows, table.rows)
         XCTAssertEqual(byID.columns.map(\.align), [.left, .right])
+    }
+
+    /// Opus R-4 (round 2): a move names where it goes. A missing `after_…` key is an error (a typo
+    /// must not move a row above the header); null is first. An old or unknown id tells the agent
+    /// to read the note again.
+    func testAMoveNeedsItsAfterKeyAndAStaleIDSaysToReadAgain() throws {
+        let table = NoteTable(texts: [["H1", "H2"], ["a", "1"], ["b", "2"]])
+        let row = id(table, row: 2), column = id(table, column: 1)
+        for operation in [["op": "move_row", "row_id": row], ["op": "move_row", "row_id": row, "after_id": id(table, row: 0)],
+                          ["op": "move_column", "column_id": column]] {
+            XCTAssertThrowsError(try NoteTableAgentEdit.apply([operation], to: table), "\(operation)") {
+                guard case let .invalidTableEdit(reason) = $0 as? NoteAgentTextError else { return XCTFail("\($0)") }
+                XCTAssertTrue(reason.contains("after_"), reason)
+            }
+        }
+        XCTAssertEqual(try NoteTableAgentEdit.apply([["op": "move_row", "row_id": row, "after_row_id": NSNull()]], to: table).rows.first?.id,
+                       table.rows[2].id, "null moves it first")
+        XCTAssertEqual(try NoteTableAgentEdit.apply([["op": "move_column", "column_id": column, "after_column_id": NSNull()]], to: table).columns.first?.id,
+                       table.columns[1].id)
+        let stale = UUID().uuidString
+        for operation in [["op": "move_row", "row_id": row, "after_row_id": row], ["op": "move_row", "row_id": stale, "after_row_id": NSNull()],
+                          ["op": "set_cell", "row_id": row, "column_id": stale, "text": "x"],
+                          ["op": "move_column", "column_id": column, "after_column_id": stale]] as [[String: Any]] {
+            XCTAssertThrowsError(try NoteTableAgentEdit.apply([operation], to: table), "\(operation)") {
+                guard case let .invalidTableEdit(reason) = $0 as? NoteAgentTextError else { return XCTFail("\($0)") }
+                XCTAssertTrue(reason.contains("list_notes"), reason)
+            }
+        }
     }
 
     // MARK: Objects in cells
@@ -295,7 +325,7 @@ final class NoteTableTextMergeTests: XCTestCase {
         table.columns[0].width = 120
         let edited = { (base: NoteDocument) in NoteTextExport.agentBody(base).replacingOccurrences(of: "| s1 |", with: "| done |") }
         XCTAssertThrowsError(try update(table, body: edited, blocks: [.text("Plain intro")])) {
-            XCTAssertEqual($0 as? NoteAgentTextError, .lossyFormatting)
+            XCTAssertEqual($0 as? NoteAgentTextError, .formattedTable(self.tableID.uuidString))
         }
     }
 
@@ -319,12 +349,14 @@ final class NoteTableTextMergeTests: XCTestCase {
 
     // MARK: The refusal
 
-    /// The refusal is the body's own error and names the id route and its operations.
-    func testTheRefusalTellsTheAgentHowToMakeTheChange() {
-        let message = NoteAgentTextError.lossyFormatting.errorDescription ?? ""
-        for words in ["update_note_table", "unchanged", "move a row or column"] {
+    /// The refusal names the table, and the id route and its operations (Opus R-7, round 2);
+    /// the body's own refusal, for a note's other blocks, doesn't send the agent to tables.
+    func testTheRefusalNamesTheTableAndHowToMakeTheChange() {
+        let message = NoteAgentTextError.formattedTable(tableID.uuidString).errorDescription ?? ""
+        for words in [tableID.uuidString, "update_note_table", "unchanged", "move a row or column"] {
             XCTAssertTrue(message.contains(words), "\(words): \(message)")
         }
+        XCTAssertFalse(NoteAgentTextError.lossyFormatting.errorDescription?.contains("update_note_table") ?? true)
     }
 
     // MARK: Seeded rewrites
@@ -453,7 +485,7 @@ final class NoteTableTextMergeTests: XCTestCase {
     }
 
     /// One step through both routes: the text route refuses a changed table that
-    /// carries anything (with `.lossyFormatting`, nothing else), keeps an unchanged one
+    /// carries anything (with `.formattedTable`, nothing else), keeps an unchanged one
     /// whole, and rebuilds a plain one from its text; the id route ends exactly at the
     /// generator's record. Returns the id route's table.
     private func step(_ context: String, _ current: NoteTable, _ operations: [Operation],

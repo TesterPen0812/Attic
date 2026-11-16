@@ -947,7 +947,7 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         let formattedBase = NoteDocument(blocks: [.text("T"), .table(formatted, id: id), .text("End")])
         for body in [lines, NoteTextExport.agentBody(formattedBase).components(separatedBy: "\n").filter { !$0.hasPrefix("<!--") }] {
             XCTAssertThrowsError(try NoteAgentTextParser.document(title: "T", body: body.joined(separator: "\n"), base: formattedBase)) {
-                XCTAssertEqual($0 as? NoteAgentTextError, .lossyFormatting)
+                XCTAssertEqual($0 as? NoteAgentTextError, .formattedTable(id.uuidString))
             }
         }
         let untouched = try NoteAgentTextParser.document(title: "T", body: NoteTextExport.agentBody(formattedBase), base: formattedBase)

@@ -109,6 +109,8 @@ enum NoteAgentTextError: LocalizedError, Equatable {
     case unknownFile(String)
     case unknownBlock(String)
     case lossyFormatting
+    /// A text rewrite changed a table that carries formatting the text can't show.
+    case formattedTable(String)
     case unsafeChecklist
     case raggedTable
     case tableTooLarge
@@ -126,7 +128,9 @@ enum NoteAgentTextError: LocalizedError, Equatable {
         case .unsafeChecklist:
             "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
         case .lossyFormatting:
-            "This note contains paragraph structure, inline marks or table formatting that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic. A table with formatting the text can't show (marks, dragged widths, unsupported content) must keep its text unchanged in update_note: change it with update_note_table by id (set a cell, insert, delete or move a row or column)."
+            "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic."
+        case let .formattedTable(id):
+            "The table \(id) has formatting the text can't show (marks, dragged widths or extras). Leave its token line and pipe table unchanged in update_note, and change it with update_note_table by id (set a cell, insert, delete or move a row or column)."
         case .raggedTable:
             "Every row of a table must have as many cells as its header row."
         case .tableTooLarge:
@@ -148,7 +152,7 @@ enum NoteAgentTextSafety {
     /// back equal, under its own token; it changes by id (`update_note_table`).
     static func validateTables(base: NoteDocument, proposed: NoteDocument) throws {
         for table in base.blocks where NoteAgentTableText.carriesHidden(table) {
-            guard proposed.blocks.contains(table) else { throw NoteAgentTextError.lossyFormatting }
+            guard proposed.blocks.contains(table) else { throw NoteAgentTextError.formattedTable(table.id?.uuidString ?? "") }
         }
     }
 

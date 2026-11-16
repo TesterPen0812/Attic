@@ -565,7 +565,8 @@ final class MCPRequestHandlerTests: XCTestCase {
         let revision = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
         let message = try noteToolError(handler, ["id": id.uuidString, "base_revision": revision,
                                                   "body": NoteTextExport.agentBody(wire)])
-        XCTAssertTrue(message.contains("update_note_table"), message)
+        XCTAssertTrue(message.contains("update_note_table") && message.contains(secondID.uuidString), message)
+        XCTAssertFalse(message.contains(firstID.uuidString), "the refusal names the formatted table only")
         XCTAssertEqual(noteStore.note(withID: id)?.revisionToken, revision, "nothing was saved")
         XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, stored, "the body and both tables are untouched")
         // The positive control: the same update with the second table untouched is applied.
@@ -603,7 +604,7 @@ final class MCPRequestHandlerTests: XCTestCase {
         let revision = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
         let message = try noteToolError(handler, ["id": id.uuidString, "base_revision": revision,
             "body": NoteTextExport.agentBody(NoteDocument(blocks: [.text("Ranked"), .table(sorted, id: tableID)]))])
-        XCTAssertTrue(message.contains("update_note_table") && message.contains("move a row or column"), message)
+        XCTAssertTrue(message.contains("update_note_table") && message.contains("move a row or column") && message.contains(tableID.uuidString), message)
         XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, stored)
         // By id: the moves, the numbers, a new name for b (its marks cleared, and said) and c's own name (kept).
         let rows = table.rows.map(\.id.uuidString), columns = table.columns.map(\.id.uuidString)
