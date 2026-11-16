@@ -494,7 +494,7 @@ final class ComposerModel: ObservableObject {
         let submittedWriting = writing, submittedPage = page
         // A file dropped into the next draft while the first saves belongs
         // to the next draft, even if the first save finishes afterwards.
-        let submittedFiles = tasks.takeComposerFiles()
+        let submittedFiles = tasks.takeComposerFilesForSave()
         isCreating = true
         let settled: (TaskItem?) -> Void = { [weak self] created in
             guard let self else { return }
@@ -522,17 +522,13 @@ final class ComposerModel: ObservableObject {
                 }
             }
         }
-        // The files are saved with the task, in its own save. A chosen file
-        // still being copied holds the save (and the new row) until it exists.
-        tasks.whenComposerFilesAreReady(submittedFiles) { [tasks] references, _ in
-            guard let references else { settled(nil); return false }
-            var draft = draft
-            draft.attachments = references
-            tasks.createAcknowledged(draft, save: { [library = tasks.library] id in
-                library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
-            }, settled: settled)
-            return true
-        }
+        // The files are saved with the task, in its own save: they are all
+        // copied by now, or Return was refused above.
+        var saving = draft
+        saving.attachments = submittedFiles.references
+        tasks.createAcknowledged(saving, save: { [library = tasks.library] id in
+            library.createTask(saving, writing: submittedWriting, in: submittedPage.history, id: id)
+        }, settled: settled)
         clearDraft()
         // The next task starts with the picked tags too (13 Nov).
         if !openingPage, case .tasks = page { tasks.startDraftFromFilter() }
@@ -542,7 +538,7 @@ final class ComposerModel: ObservableObject {
 
     /// A submitted task was not saved: say so and give the card its draft
     /// back, words and files.
-    private func creationFailed(restoring text: TaskAddBarText, writing submittedWriting: String, files: [TasksComposerFiles]) {
+    private func creationFailed(restoring text: TaskAddBarText, writing submittedWriting: String, files: TasksComposerFilesForSave) {
         failed = true
         AtticSounds.play(.failed)
         tasks.restoreComposerFiles(files)
@@ -598,34 +594,27 @@ final class ComposerModel: ObservableObject {
         let status: TaskStatus = page == .tasks(.backlog) && day == nil ? .backlog
             : page.tasksTab.map(tasks.newOpenStatus(from:)) ?? .todo
         guard let draft = finished.draft(parser: tasks.parser, status: status) else { return false }
-        let submittedWriting = writing, submittedPage = page, files = tasks.takeComposerFiles()
-        // The files are saved with the task, in its own save. When a chosen
-        // file is still being copied the card is done now and the task is
-        // saved once the copy exists; a failure then gives the draft back.
-        let saved = tasks.whenComposerFilesAreReady(files) { [weak self] references, waited in
-            guard let self else { return false }
-            var draft = draft
-            draft.attachments = references ?? []
-            guard references != nil,
-                  let task = self.tasks.library.createTask(draft, writing: submittedWriting, in: submittedPage.history) else {
-                if waited { self.creationFailed(restoring: finished, writing: submittedWriting, files: files) }
-                else { self.tasks.restoreComposerFiles(files) }
-                return false
-            }
-            self.tasks.composerFilesSaved(files, on: task.title)
-            if let tab = submittedPage.tasksTab { self.tasks.keepInView(task.id, on: tab) }
-            if openingPage {
-                self.services.openTaskPage(task.id)
-            } else if case let .tasks(tab) = submittedPage {
-                if tab == .done || (tab == .backlog && status == .todo) {
-                    self.services.toast(String(localized: "Added to Now"), self.undoCreation())
-                } else {
-                    self.tasks.addedRequest = TasksPageModel.ScrollRequest(id: task.id)
-                }
-            }
-            return true
+        // The files are saved with the task, in its own save: they are all
+        // copied by now, or the create was refused (`createImmediately`).
+        let files = tasks.takeComposerFilesForSave()
+        var saving = draft
+        saving.attachments = files.references
+        guard let task = tasks.library.createTask(saving, writing: writing, in: page.history) else {
+            tasks.restoreComposerFiles(files)
+            return false
         }
-        return saved ?? true
+        tasks.composerFilesSaved(files, on: task.title)
+        if let tab = page.tasksTab { tasks.keepInView(task.id, on: tab) }
+        if openingPage {
+            services.openTaskPage(task.id)
+        } else if case let .tasks(tab) = page {
+            if tab == .done || (tab == .backlog && status == .todo) {
+                services.toast(String(localized: "Added to Now"), undoCreation())
+            } else {
+                tasks.addedRequest = TasksPageModel.ScrollRequest(id: task.id)
+            }
+        }
+        return true
     }
 
     private func createEvent(openingPage: Bool, generation: Int) async -> EventSubmission {

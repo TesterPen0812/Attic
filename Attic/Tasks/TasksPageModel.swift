@@ -275,29 +275,13 @@ final class TasksPageModel: ObservableObject {
         return ready
     }
 
-    /// Await both the acknowledged creation and its submitted files. A new
-    /// command admitted during an import must settle before quit approval too.
+    /// The same as `prepareForTermination`: a task is saved with its files
+    /// in one save, so nothing of a submission is left to await.
     static func prepareForTerminationDurably(in store: TaskStore) async -> Bool {
-        let models = live.allObjects.filter { $0.store.container === store.container }
-        let failures = models.map { ($0, $0.acknowledgementFailures) }
-        var ready = true
-        while true {
-            guard prepareForTermination(in: store) else { return false }
-            let pending = live.allObjects.filter { $0.store.container === store.container }
-                .flatMap { Array($0.composerAttachmentTasks.values) }
-            guard !pending.isEmpty else {
-                return ready && failures.allSatisfy { $0.0.acknowledgementFailures == $0.1 }
-            }
-            for task in pending {
-                if !(await task.value) { ready = false }
-            }
-        }
+        prepareForTermination(in: store)
     }
 
-    /// New tasks whose save waits for a chosen file that is still being
-    /// copied (`whenComposerFilesAreReady`). Quit waits for them.
-    var composerAttachmentTasks: [UUID: Task<Bool, Never>] = [:]
-    /// The add bar's file batches being copied into the attachment store,
+    /// This draft's file batches being copied into the attachment store,
     /// and the copies made (`TasksComposerFiles.swift`).
     var composerPreparations: [UUID: Task<[TaskImageReference]?, Never>] = [:]
     var composerPrepared: [UUID: [TaskImageReference]] = [:]
@@ -2787,48 +2771,42 @@ final class TasksPageModel: ObservableObject {
         finished.typedReplacesPicks(parser: parser, caret: nil)
         guard let draft = finished.draft(parser: parser, status: addStatus) else { return nil }
         // Files added while it was written are saved with it, in the task's
-        // own save (O17-06). The id is fixed now: when a chosen file is
-        // still being copied, the task is saved once the copy exists.
-        let id = UUID(), submitted = addBar, files = takeComposerFiles()
-        let saved = whenComposerFilesAreReady(files) { [self] references, waited in
-            var draft = draft
-            draft.attachments = references ?? []
-            guard references != nil, library.createTasks([draft], ids: [id]) != nil else {
-                restoreComposerFiles(files)
-                if waited, addBar.text.isEmpty { addBar = submitted }
-                return false
-            }
-            composerFilesSaved(files, on: draft.title)
-            if !waited { addBarState.clearDraft() }
-            keepInView(id, on: tab)
-            if !waited { startDraftFromFilter() }
-            AtticSounds.play(.created)
-            selectOnly(nil)
-            var revealed = false
-            if openingPage {
-                revealed = show(id) == .shown
-            }
-            addedRequest = ScrollRequest(id: id)
-            // A requested reveal can be blocked by another unsaved edit. Only
-            // suppress the out-of-view feedback once the task is actually shown.
-            if tab == .done, !revealed { showToast(String(localized: "Added to Now")) }
-            // Added where the view or a Find hides it (item 6): say so.
-            else if !revealed, narrows(tab), !rows(for: tab).contains(where: { $0.id == id }) {
-                showToast(String(localized: "Added · hidden by this view"))
-            }
-            return true
+        // own save (O17-06). They are all copied by now, or Return was
+        // refused above.
+        let files = takeComposerFilesForSave()
+        var saving = draft
+        saving.attachments = files.references
+        guard let task = library.createTasks([saving])?.first else {
+            restoreComposerFiles(files)
+            return nil
         }
-        if let saved { return saved ? id : nil }
-        // Waiting for a copy: the bar is free for the next task meanwhile.
+        composerFilesSaved(files, on: task.title)
         addBarState.clearDraft()
+        keepInView(task.id, on: tab)
         startDraftFromFilter()
-        return id
+        AtticSounds.play(.created)
+        selectOnly(nil)
+        var revealed = false
+        if openingPage {
+            revealed = show(task.id) == .shown
+        }
+        addedRequest = ScrollRequest(id: task.id)
+        // A requested reveal can be blocked by another unsaved edit. Only
+        // suppress the out-of-view feedback once the task is actually shown.
+        if tab == .done, !revealed { showToast(String(localized: "Added to Now")) }
+        // Added where the view or a Find hides it (item 6): say so.
+        else if !revealed, narrows(tab), !rows(for: tab).contains(where: { $0.id == task.id }) {
+            showToast(String(localized: "Added · hidden by this view"))
+        }
+        return task.id
     }
 
     /// Preparing a provider cannot consume this draft yet. Keep the choice
     /// explicit: a later file callback must never submit a changed draft.
     func composerFilesReadyForSubmission() -> Bool {
-        guard addBarState.stagingFiles > 0 else { return true }
+        // A file still being staged or copied: nothing is created and
+        // nothing is cleared until Attic has its copy.
+        guard !composerFilesArePrepared else { return true }
         toasts.show(String(localized: "Preparing files · try again in a moment"),
                     actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
         return false
@@ -2845,40 +2823,30 @@ final class TasksPageModel: ObservableObject {
         // A paste consumes the same draft as Return. For one-per-line, its
         // files belong to the first task, which the page reveals, and are
         // saved with it in the batch's own save.
-        let ids = drafts.map { _ in UUID() }, files = takeComposerFiles()
-        let saved = whenComposerFilesAreReady(files) { [self] references, waited in
-            var drafts = drafts
-            if !drafts.isEmpty { drafts[0].attachments = references ?? [] }
-            guard references != nil, let created = library.createTasks(drafts, ids: ids) else {
-                restoreComposerFiles(files)
-                if waited, pasteOffer == nil { pasteOffer = offer }
-                failedSave = .paste
-                lastPasteAsOne = asOne
-                return false
-            }
-            composerFilesSaved(files, on: created.first?.title ?? "")
-            clearFailure(.paste)
-            pasteOffer = nil
-            // The bar is empty once the tasks exist, as after a single add
-            // (round 12, CU: the draft stayed behind the batch).
-            if !waited { addBarState.clearDraft() }
-            // The same observable success as a single add (round 4): the
-            // first new row comes into view; from Done, a toast says where
-            // they went; VoiceOver hears how many were added.
-            if let first = created.first { addedRequest = ScrollRequest(id: first.id) }
-            let message = created.count == 1
-                ? (tab == .done ? String(localized: "Added to Now") : String(localized: "Added 1 task"))
-                : (tab == .done ? String(localized: "Added \(created.count) tasks to Now") : String(localized: "Added \(created.count) tasks"))
-            if tab == .done { showToast(message) }
-            AccessibilityNotification.Announcement(message).post()
-            return true
+        let files = takeComposerFilesForSave()
+        var saving = drafts
+        if !saving.isEmpty { saving[0].attachments = files.references }
+        guard let created = library.createTasks(saving) else {
+            restoreComposerFiles(files)
+            failedSave = .paste
+            lastPasteAsOne = asOne
+            return
         }
-        guard saved == nil else { return }
-        // Waiting for a chosen file's copy: the offer and the draft are
-        // used up now, and the first task is where the page will scroll.
+        composerFilesSaved(files, on: created.first?.title ?? "")
+        clearFailure(.paste)
         pasteOffer = nil
+        // The bar is empty once the tasks exist, as after a single add (round
+        // 12, CU: the draft stayed behind the batch).
         addBarState.clearDraft()
-        if let first = ids.first { addedRequest = ScrollRequest(id: first) }
+        // The same observable success as a single add (round 4): the first
+        // new row comes into view; from Done, a toast says where they went;
+        // VoiceOver hears how many were added.
+        if let first = created.first { addedRequest = ScrollRequest(id: first.id) }
+        let message = created.count == 1
+            ? (tab == .done ? String(localized: "Added to Now") : String(localized: "Added 1 task"))
+            : (tab == .done ? String(localized: "Added \(created.count) tasks to Now") : String(localized: "Added \(created.count) tasks"))
+        if tab == .done { showToast(message) }
+        AccessibilityNotification.Announcement(message).post()
     }
 
     /// A task (or the first of pasted tasks) just added: the list brings it

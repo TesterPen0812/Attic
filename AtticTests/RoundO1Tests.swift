@@ -457,6 +457,8 @@ final class RoundO1Tests: XCTestCase {
             let (store, model) = try makeModel()
             let file = try makeFile("Lease.pdf")
             model.addComposerFiles(urls: [file])
+            // A draft's files are copied before it can be submitted.
+            await waitForComposer { model.composerFilesArePrepared }
             model.pasteOffer = TaskPasteOffer("Sign\nlease")
             model.acceptPaste(asOne: asOne)
             let first = try XCTUnwrap(model.addedRequest?.id)

@@ -185,6 +185,9 @@ final class AppSettingsTests: XCTestCase {
             composer.open(on: .tasks(.now))
             page.addBar.text = name
             page.addBarState.files.append(TasksComposerFiles(staging: staging))
+            // A draft's files are copied before it can be submitted.
+            for _ in 0..<500 where !page.composerFilesArePrepared { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertTrue(page.composerFilesArePrepared, "the file is copied within five seconds")
             if acknowledged { composer.submit() }
             else { let created = await composer.create(); XCTAssertTrue(created) }
             let ready = await coordinator.prepareForTerminationDurably()

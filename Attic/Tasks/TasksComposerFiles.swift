@@ -23,10 +23,27 @@ extension TasksAddBarState {
     var fileNames: [String] { files.flatMap(\.names) }
 }
 
+/// A draft's files taken for the save of its task: each batch with its
+/// copies in the attachment store.
+struct TasksComposerFilesForSave {
+    var batches: [(files: TasksComposerFiles, copies: [TaskImageReference])] = []
+    var references: [TaskImageReference] { batches.flatMap(\.copies) }
+}
+
 extension TasksPageModel {
+    // One rule for a draft's files (O17-06): a task is only ever saved at
+    // once, with files that are already copied. While a file of this draft
+    // is still being staged or copied, Return creates nothing and clears
+    // nothing (`composerFilesReadyForSubmission`), so there is no state in
+    // which a task is "on its way". What the model holds is this draft's
+    // and nothing else's: the copies made (`composerPrepared`) and the
+    // copies running (`composerPreparations`). Taking the files for a save
+    // takes their entries with them; the strip's × ends all of it.
+
     /// Dropped or pasted content for the new task: staged now (a promised
-    /// file or pasted image is written once into Attic's own drop folder).
-    /// A batch that cannot be staged says why, as a drop on a row does.
+    /// file or pasted image is written once into Attic's own drop folder),
+    /// then copied into the attachment store. A batch that cannot be staged
+    /// or copied says why, as a drop on a row does.
     func addComposerFiles(_ providers: [NSItemProvider]) {
         guard !providers.isEmpty else { return }
         let generation = addBarState.filesGeneration
@@ -44,14 +61,10 @@ extension TasksPageModel {
                     self.addBarState.stagingFiles -= 1
                     return
                 }
-                // The draft keeps waiting ("Preparing files") until the
-                // copies exist, so Return saves the task with them at once.
                 let files = TasksComposerFiles(staging: staging)
                 let copied = await self.prepareComposerFiles(files).value
-                guard self.addBarState.filesGeneration == generation else {
-                    self.discardComposerFiles([files])
-                    return
-                }
+                // The strip was cleared meanwhile: the copy ended itself.
+                guard self.addBarState.filesGeneration == generation else { staging.discard(); return }
                 self.addBarState.stagingFiles -= 1
                 if copied != nil { self.appendComposerFiles(files) }
             } catch {
@@ -64,14 +77,12 @@ extension TasksPageModel {
     }
 
     /// Files chosen with the strip's Attach button (the picker's originals,
-    /// read only when the task is added, as a row's picker does).
+    /// never touched). They show at once and are copied in the background.
     func addComposerFiles(urls: [URL]) {
         guard !urls.isEmpty else { return }
-        // They show at once and copy in the background; a Return that
-        // comes before the copy has finished waits for it.
         let files = TasksComposerFiles(staging: TaskAttachmentStaging(urls: urls))
-        prepareComposerFiles(files)
         appendComposerFiles(files)
+        prepareComposerFiles(files)
     }
 
     private func appendComposerFiles(_ files: TasksComposerFiles) {
@@ -83,39 +94,57 @@ extension TasksPageModel {
         ).post()
     }
 
-    /// The strip's × on the files: none go onto the new task. Staged copies
-    /// Attic made are removed; originals are never touched.
+    /// The strip's × on the files: none go onto the new task. Everything of
+    /// this draft ends: copies still running are cancelled, staged copies
+    /// and copies in the attachment store are removed, and a copy that
+    /// fails afterwards says nothing. Originals are never touched.
     func clearComposerFiles() {
         addBarState.filesGeneration = UUID()
         addBarState.stagingFiles = 0
         let files = addBarState.files
         addBarState.files = []
-        discardComposerFiles(files)
+        files.forEach { $0.staging.discard() }
+        // A copy already inside one large file can't be interrupted; it
+        // ends on its own and removes what it made. Nothing waits for it.
+        composerPreparations.values.forEach { $0.cancel() }
+        composerPreparations = [:]
+        composerPreparationTail = nil
+        let copies = composerPrepared.values.flatMap { $0 }
+        composerPrepared = [:]
+        if !copies.isEmpty {
+            let images = store.taskImageFiles
+            Task { await images.remove(copies) }
+        }
     }
 
-    /// The files leave the bar with the draft being submitted.
-    func takeComposerFiles() -> [TasksComposerFiles] {
+    /// Whether every file of the draft is staged and copied. Starts the
+    /// copy of a batch that has none yet.
+    var composerFilesArePrepared: Bool {
+        for files in addBarState.files where composerPrepared[files.id] == nil { prepareComposerFiles(files) }
+        return addBarState.stagingFiles == 0 && addBarState.files.allSatisfy { composerPrepared[$0.id] != nil }
+    }
+
+    /// The draft's files leave the bar for the save of its task, with
+    /// their copies. Call only when `composerFilesReadyForSubmission()`.
+    func takeComposerFilesForSave() -> TasksComposerFilesForSave {
         let files = addBarState.files
         addBarState.files = []
-        return files
+        return TasksComposerFilesForSave(batches: files.map { ($0, composerPrepared.removeValue(forKey: $0.id) ?? []) })
     }
 
-    /// The task was not saved: its files are the draft's again. (A batch
-    /// whose copy failed was dropped with its own notice.)
-    func restoreComposerFiles(_ files: [TasksComposerFiles]) {
-        addBarState.files.insert(contentsOf: files.filter { composerPreparations[$0.id] != nil }, at: 0)
+    /// The task was not saved: its files, with their copies, are the
+    /// draft's again.
+    func restoreComposerFiles(_ taken: TasksComposerFilesForSave) {
+        for batch in taken.batches { composerPrepared[batch.files.id] = batch.copies }
+        addBarState.files.insert(contentsOf: taken.batches.map(\.files), at: 0)
     }
 
     /// The task was saved with these files: Attic's staged copies go, and
     /// the copies in the attachment store are the task's now. VoiceOver
     /// hears that they arrived, as it did when they were attached afterwards.
-    func composerFilesSaved(_ files: [TasksComposerFiles], on title: String) {
-        var added = 0
-        for batch in files {
-            batch.staging.discard()
-            composerPreparations[batch.id] = nil
-            added += composerPrepared.removeValue(forKey: batch.id)?.count ?? 0
-        }
+    func composerFilesSaved(_ taken: TasksComposerFilesForSave, on title: String) {
+        taken.batches.forEach { $0.files.staging.discard() }
+        let added = taken.references.count
         guard added > 0 else { return }
         AccessibilityNotification.Announcement(
             added == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(added) files to \(title)")
@@ -123,9 +152,10 @@ extension TasksPageModel {
     }
 
     /// Copies a batch into the task attachment store, once, one batch at a
-    /// time so the importer's per-task limits count every file of the
-    /// draft. Until a task is saved with them no task names the copies; an
-    /// abandoned draft's are removed by the launch sweep.
+    /// time so the importer's per-task limits count every file of this
+    /// draft (and no other task's). Until a task is saved with them no task
+    /// names the copies; an abandoned draft's are removed by the launch
+    /// sweep. A batch the strip's × removed meanwhile ends quietly.
     @discardableResult
     func prepareComposerFiles(_ files: TasksComposerFiles) -> Task<[TaskImageReference]?, Never> {
         if let running = composerPreparations[files.id] { return running }
@@ -133,67 +163,29 @@ extension TasksPageModel {
         let urls = files.staging.urls, id = files.id, images = store.taskImageFiles
         let copy = Task { @MainActor [weak self] () -> [TaskImageReference]? in
             _ = await previous?.value
-            let existing = self?.composerPrepared.values.flatMap { $0 } ?? []
+            guard let self, self.composerPreparations[id] != nil, !Task.isCancelled else { return nil }
             do {
-                let references = try await images.importAttachments(urls, existing: existing)
-                guard let self, self.composerPreparations[id] != nil else {
+                let references = try await images.importAttachments(
+                    urls, existing: self.composerPrepared.values.flatMap { $0 })
+                guard self.composerPreparations[id] != nil else {
                     await images.remove(references)
                     return nil
                 }
+                self.composerPreparations[id] = nil
                 self.composerPrepared[id] = references
                 return references
             } catch {
-                guard let self, self.composerPreparations[id] != nil else { return nil }
+                guard self.composerPreparations[id] != nil else { return nil }
+                self.composerPreparations[id] = nil
                 self.store.reportAttachmentImportFailure(error)
                 self.addBarState.files.removeAll { $0.id == id }
                 files.staging.discard()
-                self.composerPreparations[id] = nil
                 return nil
             }
         }
         composerPreparations[id] = copy
         composerPreparationTail = copy
         return copy
-    }
-
-    /// The strip's ×, or a draft thrown away: staged copies and the copies
-    /// in the attachment store both go. Originals are never touched.
-    private func discardComposerFiles(_ files: [TasksComposerFiles]) {
-        let images = store.taskImageFiles
-        for batch in files {
-            batch.staging.discard()
-            // A copy still running finds its batch gone and removes itself.
-            composerPreparations[batch.id] = nil
-            if let references = composerPrepared.removeValue(forKey: batch.id) {
-                Task { await images.remove(references) }
-            }
-        }
-    }
-
-    /// Runs `save` with the files' references: now, when every copy exists;
-    /// otherwise once the copies still running have finished (`waited`),
-    /// with nil when one failed. `save` says whether the task was saved.
-    /// Returns that answer, or nil while it waits; a waiting save holds
-    /// Quit, like any unsaved change.
-    @discardableResult
-    func whenComposerFilesAreReady(
-        _ files: [TasksComposerFiles],
-        _ save: @escaping @MainActor (_ references: [TaskImageReference]?, _ waited: Bool) -> Bool
-    ) -> Bool? {
-        if files.allSatisfy({ composerPrepared[$0.id] != nil }) {
-            return save(files.flatMap { composerPrepared[$0.id] ?? [] }, false)
-        }
-        let copies = files.map { prepareComposerFiles($0) }
-        let token = UUID()
-        composerAttachmentTasks[token] = Task { @MainActor [self] in
-            defer { composerAttachmentTasks[token] = nil }
-            var references: [TaskImageReference]? = []
-            for copy in copies {
-                if let copied = await copy.value { references?.append(contentsOf: copied) } else { references = nil }
-            }
-            return save(references, true)
-        }
-        return nil
     }
 
     /// What the strip's Attach button shows while files wait: the name of

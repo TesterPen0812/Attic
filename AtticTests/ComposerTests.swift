@@ -139,7 +139,6 @@ final class ComposerTests: XCTestCase {
 
         XCTAssertEqual(page.undo(), .applied)
         XCTAssertTrue(liveTasks().isEmpty)
-        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
         XCTAssertEqual(library.redo(in: .tasks), .applied)
 
         let task = try XCTUnwrap(liveTasks().first)
@@ -176,7 +175,6 @@ final class ComposerTests: XCTestCase {
         taskSaveFailure.successfulWritesBeforeFailure = 1
         model.submit()
         page.settlePendingCompletionAcknowledgements()
-        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
 
         let attached = try rows(TaskItem.self).first?.attachments.count ?? 0
         XCTAssertEqual(attached + page.addBarState.files.count, 1, "on the task, or back in the draft")
@@ -192,7 +190,6 @@ final class ComposerTests: XCTestCase {
         taskSaveFailure.successfulWritesBeforeFailure = 0
         model.submit()
         page.settlePendingCompletionAcknowledgements()
-        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
         XCTAssertTrue(model.failed)
         XCTAssertTrue(try rows(TaskItem.self).isEmpty)
         XCTAssertEqual(page.addBar.text, "Retried once")
@@ -200,7 +197,6 @@ final class ComposerTests: XCTestCase {
 
         model.submit()
         page.settlePendingCompletionAcknowledgements()
-        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
 
         let saved = try rows(TaskItem.self)
         XCTAssertEqual(saved.count, 1)
@@ -240,7 +236,6 @@ final class ComposerTests: XCTestCase {
         tasks.listRefreshFailures = 3
         model.submit()
         page.settlePendingCompletionAcknowledgements()
-        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
 
         let saved = try rows(TaskItem.self)
         XCTAssertEqual(saved.count, 1)
@@ -344,6 +339,15 @@ final class ComposerTests: XCTestCase {
 
         XCTAssertNotNil(lease, "the file is free to be collected when the task is purged")
         lease?.release()
+
+        // Without writing the task store's own save releases it.
+        type("With a file and no writing")
+        _ = try await pasteAnImage(named: "Second Image")
+        try await waitForComposer { self.model.submit(); return self.liveTasks().count == 2 }
+        let plain = try XCTUnwrap(liveTasks().first { $0.title == "With a file and no writing" }?.attachments.first)
+        let plainLease = tasks.taskImageFiles.files.ownership.tryAcquire([plain.id], kind: .collection)
+        XCTAssertNotNil(plainLease)
+        plainLease?.release()
     }
 
     /// Opus R-9, R-11: the strip's × ends the copies of what it removes, and
