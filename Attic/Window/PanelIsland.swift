@@ -716,17 +716,9 @@ struct PanelIslandView: View {
         let reduceMotion = design.reduceMotion
         Group {
             if reduceMotion {
-                // Reduce Motion: it fades between the two; the one showing
-                // takes the pointer and VoiceOver (at rest too, as without
-                // Reduce Motion).
-                ZStack(alignment: .topLeading) {
-                    drawing(awake: false, interactive: !isStandIn && !model.isAwake)
-                        .opacity(model.isAwake ? 0 : 1)
-                        .accessibilityHidden(model.isAwake)
-                    drawing(awake: true, interactive: !isStandIn && model.isAwake)
-                        .opacity(model.isAwake ? 1 : 0)
-                        .accessibilityHidden(!model.isAwake)
-                }
+                // Crossfade only the faces; a single mounted Button per item
+                // keeps native focus through the rest/awake transition.
+                drawing(awake: model.isAwake, interactive: !isStandIn)
                 .animation(AtticMotionScale.reducedFade, value: model.isAwake)
             } else {
                 drawing(awake: model.isAwake, interactive: !isStandIn)
@@ -787,9 +779,20 @@ struct PanelIslandView: View {
         let capsule = awake ? bounds : restRect
         let travels = L.chipTravels(reduceMotion: design.reduceMotion)
         return ZStack(alignment: .topLeading) {
-            PanelIslandSurface(cornerRadius: min(radius, min(capsule.width, capsule.height) / 2))
-                .frame(width: capsule.width, height: capsule.height)
-                .offset(x: capsule.minX, y: capsule.minY)
+            if design.reduceMotion {
+                PanelIslandSurface(cornerRadius: min(radius, min(restRect.width, restRect.height) / 2))
+                    .frame(width: restRect.width, height: restRect.height)
+                    .offset(x: restRect.minX, y: restRect.minY)
+                    .opacity(model.isAwake ? 0 : 1)
+                PanelIslandSurface(cornerRadius: min(radius, min(bounds.width, bounds.height) / 2))
+                    .frame(width: bounds.width, height: bounds.height)
+                    .offset(x: bounds.minX, y: bounds.minY)
+                    .opacity(model.isAwake ? 1 : 0)
+            } else {
+                PanelIslandSurface(cornerRadius: min(radius, min(capsule.width, capsule.height) / 2))
+                    .frame(width: capsule.width, height: capsule.height)
+                    .offset(x: capsule.minX, y: capsule.minY)
+            }
             // L5: one chip, travelling from the old item to the new one.
             if travels {
                 let chip = itemRect(current)
@@ -810,7 +813,7 @@ struct PanelIslandView: View {
                     if interactive {
                         item(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
                     } else {
-                        face(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
+                        visualFace(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
                     }
                 }
                 .frame(width: rect.width, height: rect.height)
@@ -819,7 +822,12 @@ struct PanelIslandView: View {
             }
             ForEach(Array(L.pages.enumerated()), id: \.element) { index, page in
                 if let agentPage = AgentPage(page), model.agentDots.contains(agentPage) {
-                    agentDot(index, awake: awake, dots: dots)
+                    if design.reduceMotion {
+                        agentDot(index, awake: false, dots: dots).opacity(model.isAwake ? 0 : 1)
+                        agentDot(index, awake: true, dots: dots).opacity(model.isAwake ? 1 : 0)
+                    } else {
+                        agentDot(index, awake: awake, dots: dots)
+                    }
                 }
             }
             let settings = itemRect(L.pages.count)
@@ -827,7 +835,7 @@ struct PanelIslandView: View {
                 if interactive {
                     settingsItem(awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
                 } else {
-                    settingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
+                    visualSettingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
                 }
             }
             .frame(width: settings.width, height: settings.height)
@@ -862,6 +870,20 @@ struct PanelIslandView: View {
 
     /// Settings as drawn: no dot of its own at rest. It folds into the last
     /// page's dot and grows back out of it, in the same motion as the pages.
+    @ViewBuilder
+    private func visualSettingsFace(awake: Bool, dots: [L.RestDot], chipRadius: CGFloat, chips: Bool) -> some View {
+        if design.reduceMotion {
+            ZStack {
+                settingsFace(awake: false, dots: dots, chipRadius: chipRadius, chips: chips)
+                    .opacity(model.isAwake ? 0 : 1)
+                settingsFace(awake: true, dots: dots, chipRadius: chipRadius, chips: chips)
+                    .opacity(model.isAwake ? 1 : 0)
+            }
+        } else {
+            settingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
+        }
+    }
+
     private func settingsFace(awake: Bool, dots: [L.RestDot], chipRadius: CGFloat, chips: Bool) -> some View {
         let rect = itemRect(L.pages.count)
         let centre = dotCentre(dots.count - 1, dots: dots)
@@ -883,7 +905,7 @@ struct PanelIslandView: View {
 
     private func settingsItem(awake: Bool, dots: [L.RestDot], chipRadius: CGFloat, chips: Bool) -> some View {
         Button { model.clickSettings() } label: {
-            settingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
+            visualSettingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
         }
         .buttonStyle(.plain)
         .focused($focused, equals: .settings)
@@ -900,6 +922,21 @@ struct PanelIslandView: View {
     /// An item as drawn: the hover fill (and under Reduce Motion its own
     /// chip), and its mark: a dot at rest that travels to the item's place
     /// and grows into the icon awake (D4), with the out dot.
+    @ViewBuilder
+    private func visualFace(_ page: PanelPage, index: Int, awake: Bool, dots: [L.RestDot],
+                            chipRadius: CGFloat, chips: Bool) -> some View {
+        if design.reduceMotion {
+            ZStack {
+                face(page, index: index, awake: false, dots: dots, chipRadius: chipRadius, chips: chips)
+                    .opacity(model.isAwake ? 0 : 1)
+                face(page, index: index, awake: true, dots: dots, chipRadius: chipRadius, chips: chips)
+                    .opacity(model.isAwake ? 1 : 0)
+            }
+        } else {
+            face(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
+        }
+    }
+
     private func face(_ page: PanelPage, index: Int, awake: Bool, dots: [L.RestDot], chipRadius: CGFloat,
                       chips: Bool) -> some View {
         let isSelected = page == model.page
@@ -950,7 +987,7 @@ struct PanelIslandView: View {
                       chips: Bool) -> some View {
         let isSelected = page == model.page
         return Button { model.click(page) } label: {
-            face(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
+            visualFace(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
         }
         .buttonStyle(.plain)
         .focused($focused, equals: .page(page))

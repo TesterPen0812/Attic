@@ -1191,6 +1191,27 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    func testReduceMotionKeepsNativeFocusThroughIslandFade() throws {
+        try requireIslandKeyboard()
+        var focus: FocusState<PanelIslandItem?>.Binding?
+        PanelIslandView.focusProbe = { focus = $0 }
+        defer { PanelIslandView.focusProbe = nil }
+        try withController(reduceMotion: true) { controller, state, _ in
+            let windows = controller.islandWindowsForTesting
+            defer {
+                focus?.wrappedValue = nil
+                windows.model.settle()
+                spin(0.05)
+            }
+            try focusIslandButton(windows, keyboard: state.keyboardFocus)
+            spin(until: { focus?.wrappedValue != nil })
+            XCTAssertNotNil(focus?.wrappedValue, "native Tab must focus a real control")
+            spin(0.4)
+            XCTAssertTrue(windows.model.isAwake, "reduced fade must not schedule a 300ms collapse")
+            XCTAssertNotNil(focus?.wrappedValue, "the focused button must survive reduced fade")
+        }
+    }
+
     private func requireIslandKeyboard() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
     }
