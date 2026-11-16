@@ -1311,13 +1311,15 @@ final class PanelIslandTests: XCTestCase {
         window.makeKey()
         spin(until: { window.isKeyWindow })
         XCTAssertTrue(window.isKeyWindow, "the island must own keyboard navigation")
-        XCTAssertFalse(windows.model.isAwake, "test starts on the resting dots")
+        // Full Keyboard Access focuses the key island's first control, and
+        // a focused control in the key island holds it awake: the island
+        // that takes the keyboard shows the control Space would press.
+        spin(until: { windows.model.isAwake })
+        XCTAssertTrue(windows.model.isAwake, "the island taking the keyboard shows its focused control")
         keyboard.noteKeyboardNavigation()
-        for _ in 0..<8 where !windows.model.isAwake {
-            sendIslandTab(to: window)
-            spin(0.05)
-        }
-        XCTAssertTrue(windows.model.isAwake, "a real Tab must reach the onChange focus binding")
+        sendIslandTab(to: window)
+        spin(0.05)
+        XCTAssertTrue(windows.model.isAwake, "a real Tab keeps the focused control shown")
     }
 
     private func trackAway(_ windows: PanelIslandWindows) {
