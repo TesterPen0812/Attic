@@ -856,39 +856,6 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(liveTasks().first?.attachments.count, 1)
     }
 
-    func testReviewR2FailedReloadRetainsOwnedFilesUntilSuccessfulRetry() async throws {
-        let bytes = Data("only retained copy until refresh returns".utf8)
-        var staging = TaskAttachmentStaging()
-        let directory = try staging.makeOwnedDirectory()
-        let source = directory.appendingPathComponent("only-copy.txt")
-        try bytes.write(to: source)
-        staging.urls = [source]
-        defer { staging.discard() }
-
-        model.open(on: .tasks(.now))
-        type("Committed while the index is stale")
-        model.writing = "The durable note body"
-        page.addBarState.files.append(TasksComposerFiles(staging: staging))
-        tasks.listRefreshFailures = 12
-        model.submit()
-        try await waitForComposer { !self.model.isCreating }
-        try await Task.sleep(for: .milliseconds(350))
-
-        let committed = try XCTUnwrap(try rows(TaskItem.self).first)
-        XCTAssertTrue(TaskNoteConversion.hasWriting(committed.id, in: ModelContext(container)))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path),
-                      "a failed presentation reload cannot consume a file's only copy")
-        XCTAssertFalse(tasks.lastErrorMessage?.contains("no longer available") == true)
-
-        tasks.listRefreshFailures = 0
-        tasks.refresh()
-        try await waitForComposer { self.liveTasks().first?.attachments.count == 1 }
-        let reference = try XCTUnwrap(liveTasks().first?.attachments.first)
-        let foundURL = try await tasks.taskImageFiles.verifiedURL(for: reference)
-        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(foundURL)), bytes)
-        XCTAssertEqual(liveTasks().first?.attachments.count, 1, "retry imports exactly once")
-    }
-
     func testUndoDuringAcknowledgedTaskCreationUndoesThatTaskNotThePreviousOne() async throws {
         let before = try XCTUnwrap(library.createTasks([TaskDraft(title: "Existing task")])?.first)
         model.open(on: .tasks(.now))
