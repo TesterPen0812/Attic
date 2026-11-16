@@ -1162,6 +1162,35 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    func testProgrammaticIslandFocusStaysAwakeWithoutTabNavigation() throws {
+        try requireIslandKeyboard()
+        var focus: FocusState<PanelIslandItem?>.Binding?
+        PanelIslandView.focusProbe = { focus = $0 }
+        defer { PanelIslandView.focusProbe = nil }
+        try withController { controller, state, _ in
+            let windows = controller.islandWindowsForTesting
+            defer {
+                focus?.wrappedValue = nil
+                windows.model.settle()
+                spin(0.05)
+            }
+            NSApp.activate(ignoringOtherApps: true)
+            windows.island.makeKey()
+            spin(until: { windows.island.isKeyWindow && focus != nil })
+            XCTAssertTrue(windows.island.isKeyWindow)
+            XCTAssertFalse(state.keyboardFocus.isKeyboardDriving)
+            windows.model.wake() // Mount an interactive control before requesting focus from code.
+            spin(0.15)
+            focus?.wrappedValue = .page(.notes)
+            spin(until: { focus?.wrappedValue == .page(.notes) })
+            XCTAssertEqual(focus?.wrappedValue, .page(.notes), "real mounted control must accept focus")
+            XCTAssertFalse(state.keyboardFocus.isKeyboardDriving)
+            trackAway(windows)
+            spin(0.35)
+            XCTAssertTrue(windows.model.isAwake, "focus from code holds the island open without Tab")
+        }
+    }
+
     private func requireIslandKeyboard() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
     }

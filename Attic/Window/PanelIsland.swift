@@ -752,7 +752,16 @@ struct PanelIslandView: View {
             if !isStandIn { Self.focusProbe?($focused) }
             #endif
         }
-        .onChange(of: focused) { _, _ in updateFocusHold() }
+        .onChange(of: focused) { _, now in
+            // Programmatic and accessibility focus can move to a button
+            // without a Tab event; unlike a mouse click, the pointer is away.
+            if now != nil, !focusTracker.isKeyboardDriving,
+               model.pointedItem == nil, isKeyIslandWindow() {
+                model.setKeyboardFocused(true)
+            } else {
+                updateFocusHold()
+            }
+        }
         .onChange(of: focusTracker.isKeyboardDriving) { _, _ in updateFocusHold() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
             guard !isStandIn, notification.object is PanelIslandWindow, isKeyIslandWindow() else { return }
