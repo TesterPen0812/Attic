@@ -283,6 +283,29 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(TaskNoteConversion.hasWriting(id, in: ModelContext(container)))
     }
 
+    func testFailedReloadKeepsCommittedTaskAtTopOfUndoHistory() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older task")])?.first)
+        tasks.listRefreshFailures = 3
+        let newerID = UUID()
+        XCTAssertEqual(library.createTask(TaskDraft(title: "Newer task"), writing: "Committed writing",
+                                          in: .tasks, id: newerID)?.id, newerID)
+        let latestStep = library.undo.undoStepID(in: .tasks)
+
+        let failedUndo = library.undo(in: .tasks)
+        guard case .failed = failedUndo else {
+            return XCTFail("unreadable committed tasks must retain their history step: \(failedUndo)")
+        }
+        XCTAssertEqual(library.undo.undoStepID(in: .tasks), latestStep)
+        XCTAssertTrue(try rows(TaskItem.self).contains { $0.id == older.id && $0.deletedAt == nil })
+        XCTAssertTrue(TaskNoteConversion.hasWriting(newerID, in: ModelContext(container)))
+
+        tasks.listRefreshFailures = 0
+        tasks.refresh()
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertTrue(try rows(TaskItem.self).contains { $0.id == older.id && $0.deletedAt == nil })
+        XCTAssertFalse(TaskNoteConversion.hasWriting(newerID, in: ModelContext(container)))
+    }
+
     private func waitForComposer(_ ready: () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }

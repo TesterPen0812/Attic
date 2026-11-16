@@ -402,6 +402,8 @@ final class TaskStore: ObservableObject {
     let container: ModelContainer
     private var context: ModelContext
     private var taskEditNeedsReload = false
+    /// The last list read failed, so the list may lack tasks that are saved.
+    var hasUnresolvedTaskReload: Bool { taskEditNeedsReload }
     private let now: () -> Date
     let taskImageFiles: TaskImageFiles
     @Published private(set) var importingAttachmentTaskIDs: Set<UUID> = []
