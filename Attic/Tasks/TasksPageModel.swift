@@ -683,6 +683,13 @@ final class TasksPageModel: ObservableObject {
         library.subtaskOrderChanges
             .sink { [weak self] parentID in self?.releaseQuickLookOrder(of: parentID) }
             .store(in: &cancellables)
+        // A tick undone from anywhere (another panel, the Edit menu, the
+        // "+" card, a toast) lets go of the row this page still holds as
+        // done. `$revision` publishes before the history changes: check
+        // after it.
+        library.undo.$revision
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.releaseHoldsOfUndoneTicks() } }
+            .store(in: &cancellables)
         // The page and the views it was left with (L7).
         if let memory {
             tab = memory.page ?? .now
@@ -2924,6 +2931,15 @@ final class TasksPageModel: ObservableObject {
                 self.store.dismissError()
             }
         }.id
+    }
+
+    /// A row held as done whose task is not done, and is not waiting for
+    /// its save either: the tick was undone, so the hold ends.
+    private func releaseHoldsOfUndoneTicks() {
+        for id in Array(held.keys) where !waitingTicks.contains(id) && acknowledgedRows[id] == nil
+            && store.task(withID: id)?.status != .done {
+            cancelHold(id)
+        }
     }
 
     /// Dismisses the toast only when it is this page's (another page's
