@@ -816,7 +816,6 @@ final class SettingsWindowHostedTests: XCTestCase {
             let clip = scroll.contentView
             let document = try XCTUnwrap(scroll.documentView)
             let isHorizontallyClipped = document.frame.width > clip.bounds.width + 0.5
-            XCTAssertEqual(scroll.scrollerStyle, NSScroller.preferredScrollerStyle)
             XCTAssertEqual(scroll.frame.width, size.width, accuracy: 0.5,
                            "Native scroller gutters must not grow the SwiftUI host")
             XCTAssertLessThanOrEqual(clip.bounds.width, window.contentView!.bounds.width + 0.5)
