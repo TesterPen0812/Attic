@@ -491,8 +491,14 @@ final class PanelIslandModel: ObservableObject {
     private var settleTurn = 0
     private var settleScheduled = false
     private var labelHiddenAt: Date?
-    /// Whether an island control currently owns keyboard focus.
-    private var hasKeyboardFocusedItem = false
+    /// The keyboard hold: one rule over two facts the live island reports,
+    /// its focused control and whether its window is key. A focused control
+    /// in the key island holds it awake, however the focus got there (Tab,
+    /// code, VoiceOver); the same retained focus holds again when the key
+    /// comes back. The stand-in has nothing to focus and reports nothing.
+    private var focusedItem: PanelIslandItem?
+    private var islandIsKey = false
+    private var holdsForKeyboard: Bool { focusedItem != nil && islandIsKey }
     /// Whether the pointer was within the wake zone at its last move.
     private var pointerNear = false
     /// A pull off the island is under way: it stays awake.
@@ -601,10 +607,22 @@ final class PanelIslandModel: ObservableObject {
         onOpenSettings()
     }
 
-    func setKeyboardFocused(_ focused: Bool) {
-        guard hasKeyboardFocusedItem != focused else { return }
-        hasKeyboardFocusedItem = focused
-        if focused { wake() } else { settleIfAway() }
+    /// The live island's focused control (nil: none).
+    func reportFocus(_ item: PanelIslandItem?) {
+        focusedItem = item
+        keyboardHoldChanged()
+    }
+
+    /// The island window took or gave up the keyboard.
+    func reportIslandKey(_ key: Bool) {
+        islandIsKey = key
+        keyboardHoldChanged()
+    }
+
+    /// A focus or key change: held, it wakes (a focus that moves while the
+    /// island rests shows it again); released, the pointer rule decides.
+    private func keyboardHoldChanged() {
+        if holdsForKeyboard { wake() } else { settleIfAway() }
     }
 
     // MARK: Resting and waking (D4)
@@ -634,7 +652,7 @@ final class PanelIslandModel: ObservableObject {
     /// Settles in 300 ms unless something holds it awake by then.
     private func settleIfAway() {
         guard isAwake, !pointerNear, !isSnapTarget, !isPulling,
-              !hasKeyboardFocusedItem, !settleScheduled else { return }
+              !holdsForKeyboard, !settleScheduled else { return }
         settleScheduled = true
         settleTurn &+= 1
         let turn = settleTurn
@@ -642,7 +660,7 @@ final class PanelIslandModel: ObservableObject {
             guard let self, self.settleTurn == turn else { return }
             self.settleScheduled = false
             guard !self.pointerNear, !self.isSnapTarget, !self.isPulling,
-                  !self.hasKeyboardFocusedItem else { return }
+                  !self.holdsForKeyboard else { return }
             self.settle()
         }
     }
@@ -652,7 +670,6 @@ final class PanelIslandModel: ObservableObject {
         settleTurn &+= 1
         settleScheduled = false
         pointerNear = false
-        hasKeyboardFocusedItem = false
         if pointedItem != nil { point(atItem: nil) }
         if isAwake { isAwake = false }
     }
@@ -679,8 +696,6 @@ struct PanelIslandView: View {
     /// The stand-in that flies with the panel's hide and reveal: the same
     /// drawing, but nothing to press, point at, focus or hear.
     var isStandIn = false
-    /// The exact island window's key state, including nonactivating panels.
-    var isKeyIslandWindow: () -> Bool = { false }
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
@@ -744,30 +759,13 @@ struct PanelIslandView: View {
             if !isStandIn { Self.focusProbe?($focused) }
             #endif
         }
-        .onChange(of: focused) { _, now in
-            // Programmatic and accessibility focus can move to a button
-            // without a Tab event; unlike a mouse click, the pointer is away.
-            if now != nil, !focusTracker.isKeyboardDriving,
-               model.pointedItem == nil, isKeyIslandWindow() {
-                model.setKeyboardFocused(true)
-            } else {
-                updateFocusHold()
-            }
-        }
-        .onChange(of: focusTracker.isKeyboardDriving) { _, _ in updateFocusHold() }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
-            guard !isStandIn, notification.object is PanelIslandWindow, isKeyIslandWindow() else { return }
-            updateFocusHold()
-        }
+        // The live island reports its focus; the model owns the hold.
+        .onChange(of: focused) { _, now in if !isStandIn { model.reportFocus(now) } }
         .accessibilityElement(children: isStandIn ? .ignore : .contain)
         .accessibilityLabel(String(localized: "Pages"))
         .accessibilityIdentifier(isStandIn ? "" : "panel-section-picker")
         .accessibilityHidden(isStandIn)
         .allowsHitTesting(!isStandIn)
-    }
-
-    private func updateFocusHold() {
-        model.setKeyboardFocused(focused != nil && focusTracker.isKeyboardDriving && isKeyIslandWindow())
     }
 
     /// The island awake (its items) or at rest (its dots).
@@ -1193,7 +1191,8 @@ final class PanelIslandWindow: NSPanel {
     /// The island can take the keyboard (Full Keyboard Access, VoiceOver);
     /// the label window never can.
     var allowsKey = false
-    var onResignKey: (() -> Void)?
+    /// It took (true) or gave up (false) the keyboard.
+    var onKeyChange: ((Bool) -> Void)?
     /// The left button's presses, drags and releases, in screen points,
     /// before SwiftUI sees them (pulling a page off the island).
     var onPointer: ((PanelIslandPointer) -> Void)?
@@ -1203,9 +1202,14 @@ final class PanelIslandWindow: NSPanel {
     private var trackedRelease = false
     private var tracingIdlePress = false
 
+    override func becomeKey() {
+        super.becomeKey()
+        onKeyChange?(true)
+    }
+
     override func resignKey() {
         super.resignKey()
-        onResignKey?()
+        onKeyChange?(false)
     }
 
     override func nextEvent(matching mask: NSEvent.EventTypeMask) -> NSEvent? {
@@ -1425,16 +1429,12 @@ final class PanelIslandWindows {
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
             return window
         }
-        let interactiveWindow = window(interactive: true)
-        island = interactiveWindow
+        island = window(interactive: true)
         label = window(interactive: false)
         island.setAccessibilityLabel(String(localized: "Pages"))
         island.contentView = PanelIslandHostingView(rootView: PanelIslandKeyed(
             settings: settings, model: model, uiState: uiState,
-            content: PanelIslandView(model: model, focusTracker: uiState.keyboardFocus,
-                                     isKeyIslandWindow: { [weak interactiveWindow] in
-                                         interactiveWindow?.isKeyWindow == true
-                                     })))
+            content: PanelIslandView(model: model, focusTracker: uiState.keyboardFocus)))
         label.contentView = PanelIslandHostingView(rootView: PanelIslandKeyed(
             settings: settings, model: model, uiState: uiState, content: PanelIslandLabels(model: model)))
         label.setAccessibilityElement(false)
@@ -1445,9 +1445,9 @@ final class PanelIslandWindows {
         self.standIn = standIn
         island.onIdleTraceContext = { [weak self] in self?.onIdleTraceContext?() }
         island.onPointer = { [weak self] pointer in self?.handlePointer(pointer) }
-        // SwiftUI may retain @FocusState after another window becomes key.
-        // That old focus must not keep the island awake away from the pointer.
-        island.onResignKey = { [weak model] in model?.setKeyboardFocused(false) }
+        // SwiftUI may retain @FocusState after another window becomes key:
+        // the window's own key state, not the focus, ends and renews the hold.
+        island.onKeyChange = { [weak model] in model?.reportIslandKey($0) }
     }
 
     /// The panel starts to move: the stand-in in its motion layer takes

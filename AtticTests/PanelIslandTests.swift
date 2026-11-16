@@ -1095,8 +1095,7 @@ final class PanelIslandTests: XCTestCase {
             windows.island.makeKey()
             spin(until: { windows.island.isKeyWindow })
             XCTAssertTrue(windows.island.isKeyWindow)
-            state.keyboardFocus.noteKeyboardNavigation()
-            windows.model.setKeyboardFocused(true)
+            windows.model.reportFocus(.page(.tasks))
             XCTAssertTrue(windows.model.isAwake)
             panel.makeKey()
             spin(until: { panel.isKeyWindow && !windows.island.isKeyWindow })
@@ -1188,6 +1187,85 @@ final class PanelIslandTests: XCTestCase {
             trackAway(windows)
             spin(0.35)
             XCTAssertTrue(windows.model.isAwake, "focus from code holds the island open without Tab")
+        }
+    }
+
+    /// Focus that arrived without Tab (code, VoiceOver, ⌃F6 after a click)
+    /// holds again when the island gets the keyboard back, in both motion
+    /// modes (PR 16 review: Opus R-2, Astra R-2).
+    func testProgrammaticIslandFocusHoldsAgainAfterAKeyRoundTrip() throws {
+        try requireIslandKeyboard()
+        for reduceMotion in [false, true] {
+            var focus: FocusState<PanelIslandItem?>.Binding?
+            PanelIslandView.focusProbe = { focus = $0 }
+            defer { PanelIslandView.focusProbe = nil }
+            try withController(reduceMotion: reduceMotion) { controller, state, panel in
+                let windows = controller.islandWindowsForTesting
+                defer {
+                    focus?.wrappedValue = nil
+                    windows.model.settle()
+                    spin(0.05)
+                }
+                NSApp.activate(ignoringOtherApps: true)
+                windows.island.makeKey()
+                spin(until: { windows.island.isKeyWindow && focus != nil })
+                windows.model.wake() // Mount an interactive control before requesting focus from code.
+                spin(0.15)
+                focus?.wrappedValue = .page(.notes)
+                spin(until: { focus?.wrappedValue == .page(.notes) })
+                XCTAssertEqual(focus?.wrappedValue, .page(.notes), "real mounted control must accept focus")
+                XCTAssertFalse(state.keyboardFocus.isKeyboardDriving)
+
+                panel.makeKey()
+                spin(until: { panel.isKeyWindow && !windows.island.isKeyWindow })
+                trackAway(windows)
+                spin(0.35)
+                XCTAssertFalse(windows.model.isAwake, "reduceMotion=\(reduceMotion): away from the keyboard, it rests")
+                windows.island.makeKey()
+                spin(until: { windows.island.isKeyWindow })
+                trackAway(windows)
+                spin(0.35)
+                XCTAssertEqual(focus?.wrappedValue, .page(.notes), "reduceMotion=\(reduceMotion): focus is retained")
+                XCTAssertFalse(state.keyboardFocus.isKeyboardDriving)
+                XCTAssertTrue(windows.model.isAwake,
+                              "reduceMotion=\(reduceMotion): the retained focus holds again with the keyboard back")
+            }
+        }
+    }
+
+    /// Hiding a key island with a focused control releases the hold: the
+    /// window leaves the screen and gives up the keyboard, so after the
+    /// next reveal the pointer settles it as usual.
+    func testHidingAKeyFocusedIslandReleasesItsHold() throws {
+        try requireIslandKeyboard()
+        var focus: FocusState<PanelIslandItem?>.Binding?
+        PanelIslandView.focusProbe = { focus = $0 }
+        defer { PanelIslandView.focusProbe = nil }
+        try withController { controller, _, panel in
+            let windows = controller.islandWindowsForTesting
+            defer {
+                focus?.wrappedValue = nil
+                windows.model.settle()
+                spin(0.05)
+            }
+            NSApp.activate(ignoringOtherApps: true)
+            windows.island.makeKey()
+            spin(until: { windows.island.isKeyWindow && focus != nil })
+            windows.model.wake()
+            spin(0.15)
+            focus?.wrappedValue = .page(.notes)
+            spin(until: { focus?.wrappedValue == .page(.notes) })
+            XCTAssertEqual(focus?.wrappedValue, .page(.notes))
+            windows.hide()
+            XCTAssertFalse(windows.island.isKeyWindow, "a hidden island cannot keep the keyboard")
+            windows.show(attachedTo: panel)
+            spin(0.1)
+            windows.model.track(pointer: CGPoint(x: windows.restFrame.midX, y: windows.restFrame.midY),
+                                rest: windows.restFrame, awake: windows.islandFrame)
+            XCTAssertTrue(windows.model.isAwake, "the pointer on the resting dots wakes it")
+            trackAway(windows)
+            spin(0.35)
+            XCTAssertFalse(windows.model.isAwake, "a hidden focus must not hold a pointer wake")
         }
     }
 
