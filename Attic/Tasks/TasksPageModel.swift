@@ -2772,14 +2772,11 @@ final class TasksPageModel: ObservableObject {
         guard let draft = finished.draft(parser: parser, status: addStatus) else { return nil }
         // Files added while it was written are saved with it, in the task's
         // own save (O17-06). They are all copied by now, or Return was
-        // refused above.
-        let files = takeComposerFilesForSave()
+        // refused above, and they leave the draft only once it is saved.
+        let files = composerFilesForSave()
         var saving = draft
         saving.attachments = files.references
-        guard let task = library.createTasks([saving])?.first else {
-            restoreComposerFiles(files)
-            return nil
-        }
+        guard let task = library.createTasks([saving])?.first else { return nil }
         composerFilesSaved(files, on: task.title)
         addBarState.clearDraft()
         keepInView(task.id, on: tab)
@@ -2823,11 +2820,10 @@ final class TasksPageModel: ObservableObject {
         // A paste consumes the same draft as Return. For one-per-line, its
         // files belong to the first task, which the page reveals, and are
         // saved with it in the batch's own save.
-        let files = takeComposerFilesForSave()
+        let files = composerFilesForSave()
         var saving = drafts
         if !saving.isEmpty { saving[0].attachments = files.references }
         guard let created = library.createTasks(saving) else {
-            restoreComposerFiles(files)
             failedSave = .paste
             lastPasteAsOne = asOne
             return

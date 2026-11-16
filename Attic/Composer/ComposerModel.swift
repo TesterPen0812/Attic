@@ -474,15 +474,20 @@ final class ComposerModel: ObservableObject {
                 _ = await self.create(openingPage: openingPage)
             }
         }
-        else if kind == .task { submitTaskAcknowledged(openingPage: openingPage) }
+        // A task with files saves at Return, in the command (pull request
+        // 17): its files leave the draft only once that save is confirmed.
+        else if kind == .task, tasks.addBarState.files.isEmpty, tasks.addBarState.stagingFiles == 0 {
+            submitTaskAcknowledged(openingPage: openingPage)
+        }
         else { _ = createImmediately(openingPage: openingPage) }
     }
 
     /// Tasks draw their new row before the library's atomic task+writing
     /// transaction starts. Keep the exact draft until the write succeeds;
-    /// a failure removes the row and restores its text to this card.
+    /// a failure removes the row and restores its text to this card. Only
+    /// a draft without files comes here (`submit`).
     private func submitTaskAcknowledged(openingPage: Bool) {
-        guard isOpen, canCreate, tasks.composerFilesReadyForSubmission() else { return }
+        guard isOpen, canCreate else { return }
         var finished = tasks.addBar
         finished.typedReplacesPicks(parser: tasks.parser, caret: nil)
         let day = finished.parts(parser: tasks.parser).dueDay
@@ -492,15 +497,12 @@ final class ComposerModel: ObservableObject {
             : page.tasksTab.map(tasks.newOpenStatus(from:)) ?? .todo
         guard let draft = finished.draft(parser: tasks.parser, status: status) else { return }
         let submittedWriting = writing, submittedPage = page
-        // A file dropped into the next draft while the first saves belongs
-        // to the next draft, even if the first save finishes afterwards.
-        let submittedFiles = tasks.takeComposerFilesForSave()
         isCreating = true
         let settled: (TaskItem?) -> Void = { [weak self] created in
             guard let self else { return }
             self.isCreating = false
             guard let created else {
-                self.creationFailed(restoring: finished, writing: submittedWriting, files: submittedFiles)
+                self.creationFailed(restoring: finished, writing: submittedWriting)
                 return
             }
             self.failed = false
@@ -508,7 +510,6 @@ final class ComposerModel: ObservableObject {
             // Until then an earlier backup remains available after a crash.
             self.saveKeptDraft()
             AtticSounds.play(.created)
-            self.tasks.composerFilesSaved(submittedFiles, on: created.title)
             // A task "+" made while filtered stays in view (13 Nov), as
             // its first frame showed it.
             if let tab = submittedPage.tasksTab { self.tasks.keepInView(created.id, on: tab) }
@@ -522,12 +523,8 @@ final class ComposerModel: ObservableObject {
                 }
             }
         }
-        // The files are saved with the task, in its own save: they are all
-        // copied by now, or Return was refused above.
-        var saving = draft
-        saving.attachments = submittedFiles.references
-        tasks.createAcknowledged(saving, save: { [library = tasks.library] id in
-            library.createTask(saving, writing: submittedWriting, in: submittedPage.history, id: id)
+        tasks.createAcknowledged(draft, save: { [library = tasks.library] id in
+            library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
         }, settled: settled)
         clearDraft()
         // The next task starts with the picked tags too (13 Nov).
@@ -536,12 +533,11 @@ final class ComposerModel: ObservableObject {
         else { fillCalendarDay(); focusRequest &+= 1 }
     }
 
-    /// A submitted task was not saved: say so and give the card its draft
-    /// back, words and files.
-    private func creationFailed(restoring text: TaskAddBarText, writing submittedWriting: String, files: TasksComposerFilesForSave) {
+    /// A submitted task was not saved: say so and give the card its words
+    /// back (a draft with files never left the card, `submit`).
+    private func creationFailed(restoring text: TaskAddBarText, writing submittedWriting: String) {
         failed = true
         AtticSounds.play(.failed)
-        tasks.restoreComposerFiles(files)
         // Another submission can have its own text already. Never
         // overwrite it with a failed older draft.
         if tasks.addBar.text.isEmpty && writing.isEmpty {
@@ -585,7 +581,6 @@ final class ComposerModel: ObservableObject {
     private func createTask(openingPage: Bool) -> Bool {
         var finished = tasks.addBar
         finished.typedReplacesPicks(parser: tasks.parser, caret: nil)
-        tasks.addBar = finished
         let day = finished.parts(parser: tasks.parser).dueDay
         // Later makes an undated put-off task; Done (and a dated task from
         // Later) creates in Now.
@@ -596,13 +591,12 @@ final class ComposerModel: ObservableObject {
         guard let draft = finished.draft(parser: tasks.parser, status: status) else { return false }
         // The files are saved with the task, in its own save: they are all
         // copied by now, or the create was refused (`createImmediately`).
-        let files = tasks.takeComposerFilesForSave()
+        // Until that save is confirmed the draft stays exactly as it was.
+        let files = tasks.composerFilesForSave()
         var saving = draft
         saving.attachments = files.references
-        guard let task = tasks.library.createTask(saving, writing: writing, in: page.history) else {
-            tasks.restoreComposerFiles(files)
-            return false
-        }
+        guard let task = tasks.library.createTask(saving, writing: writing, in: page.history) else { return false }
+        tasks.addBar = finished
         tasks.composerFilesSaved(files, on: task.title)
         if let tab = page.tasksTab { tasks.keepInView(task.id, on: tab) }
         if openingPage {

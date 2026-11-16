@@ -336,7 +336,9 @@ final class ComposerTests: XCTestCase {
         model.open(on: .tasks(.now))
         type("Task with twenty files")
         page.addComposerFiles(urls: try (0..<20).map { try pickedFile("File-\($0).pdf") })
-        try await waitForComposer { self.model.submit(); return self.model.isCreating }
+        // A task with files saves at Return (round 2), so the twenty are
+        // another task's by the time the next draft copies its file.
+        try await waitForComposer { self.model.submit(); return self.liveTasks().count == 1 }
 
         type("Next task with one file")
         page.addComposerFiles(urls: [try pickedFile("One.pdf")])

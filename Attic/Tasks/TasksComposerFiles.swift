@@ -124,25 +124,22 @@ extension TasksPageModel {
         return addBarState.stagingFiles == 0 && addBarState.files.allSatisfy { composerPrepared[$0.id] != nil }
     }
 
-    /// The draft's files leave the bar for the save of its task, with
-    /// their copies. Call only when `composerFilesReadyForSubmission()`.
-    func takeComposerFilesForSave() -> TasksComposerFilesForSave {
-        let files = addBarState.files
-        addBarState.files = []
-        return TasksComposerFilesForSave(batches: files.map { ($0, composerPrepared.removeValue(forKey: $0.id) ?? []) })
+    /// The draft's files, with their copies, for the save of its task. They
+    /// stay the draft's until that save is confirmed (`composerFilesSaved`):
+    /// a failed save leaves the draft as it was. Call only when
+    /// `composerFilesReadyForSubmission()`.
+    func composerFilesForSave() -> TasksComposerFilesForSave {
+        TasksComposerFilesForSave(batches: addBarState.files.map { ($0, composerPrepared[$0.id] ?? []) })
     }
 
-    /// The task was not saved: its files, with their copies, are the
-    /// draft's again.
-    func restoreComposerFiles(_ taken: TasksComposerFilesForSave) {
-        for batch in taken.batches { composerPrepared[batch.files.id] = batch.copies }
-        addBarState.files.insert(contentsOf: taken.batches.map(\.files), at: 0)
-    }
-
-    /// The task was saved with these files: Attic's staged copies go, and
-    /// the copies in the attachment store are the task's now. VoiceOver
-    /// hears that they arrived, as it did when they were attached afterwards.
+    /// The task was saved with these files: they leave the draft, Attic's
+    /// staged copies go, and the copies in the attachment store are the
+    /// task's now. VoiceOver hears that they arrived, as it did when they
+    /// were attached afterwards.
     func composerFilesSaved(_ taken: TasksComposerFilesForSave, on title: String) {
+        let saved = Set(taken.batches.map(\.files.id))
+        addBarState.files.removeAll { saved.contains($0.id) }
+        saved.forEach { composerPrepared[$0] = nil }
         taken.batches.forEach { $0.files.staging.discard() }
         let added = taken.references.count
         guard added > 0 else { return }
