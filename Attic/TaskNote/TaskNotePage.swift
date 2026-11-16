@@ -58,6 +58,13 @@ final class TaskNotePresenter: ObservableObject {
         return presenter
     }
 
+    /// Version History is open over this task's own note. A task with no
+    /// note has no History of its own, whatever else is open.
+    var showsOwnHistory: Bool {
+        guard let noteID = session?.noteID, let browser = notes?.historyBrowser else { return false }
+        return browser.noteID == noteID
+    }
+
     func refreshDeletedNote(_ id: UUID?) {
         deletedNoteID = id
         model.deletedNote = id != nil
@@ -402,9 +409,9 @@ struct TaskNotePage: View {
     private var bottomInset: CGFloat { layout.chromeInsets.bottom + buttonHeight + AtticSpacing.s12 }
     private var bottomControls: CGFloat { layout.chromeInsets.bottom + buttonHeight }
     private var showsHistory: Bool {
-        if controller.proposalReview?.sessionID == presenter.session?.id { return true }
-        guard let history = controller.historyBrowser else { return false }
-        return history.noteID == presenter.session?.noteID
+        // Bound first: a task with no note (`session == nil`) has neither layer.
+        if let review = controller.proposalReview, review.sessionID == presenter.session?.id { return true }
+        return presenter.showsOwnHistory
     }
     private var leaveTitle: String { placement == .window ? String(localized: "Move to Panel") : backTitle }
 
@@ -478,8 +485,9 @@ struct TaskNotePage: View {
         .onKeyPress(.escape) { [weak presenter] in
             guard let presenter, !presenter.model.isEditingTitle, presenter.model.renamingID == nil else { return .ignored }
             // History is a layer over this task's page; its own preview or
-            // controls must get Escape before the page's Back action.
-            if controller.historyBrowser?.noteID == presenter.session?.noteID { return .ignored }
+            // controls must get Escape before the page's Back action. Only
+            // the weak presenter is read here: the handler outlives the page.
+            if presenter.showsOwnHistory { return .ignored }
             presenter.menus.back()
             return .handled
         }

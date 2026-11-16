@@ -189,6 +189,23 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertNil(notes.workspaceSessionIfCached(draft.noteID), "the untouched draft is discarded")
     }
 
+    /// Escape on a task's page goes Back unless Version History is open over
+    /// this task's own note. A task without a note has no History of its
+    /// own, even while nothing at all is open (PR 16 review: Opus R-6).
+    func testOnlyThisTasksOwnHistoryHoldsEscapeOnItsPage() async throws {
+        let bare = try open(try seed(.nonote))
+        XCTAssertFalse(bare.showsOwnHistory, "no note and no History: Escape goes Back")
+        let presenter = try open(try seed(.boundary))
+        let session = try XCTUnwrap(presenter.session)
+        XCTAssertFalse(presenter.showsOwnHistory)
+        let opened = await notes.openHistoryDurably(workspace: session)
+        XCTAssertTrue(opened)
+        XCTAssertTrue(presenter.showsOwnHistory, "this task's History takes Escape first")
+        XCTAssertFalse(bare.showsOwnHistory, "another note's History leaves this page's Escape alone")
+        notes.closeHistory()
+        XCTAssertFalse(presenter.showsOwnHistory)
+    }
+
     /// A second own note is refused: the store keeps one note per task.
     func testTheStoreRefusesASecondOwnNoteForOneTask() throws {
         let id = try seed(.boundary)
