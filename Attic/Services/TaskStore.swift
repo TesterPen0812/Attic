@@ -407,10 +407,6 @@ final class TaskStore: ObservableObject {
     private let now: () -> Date
     let taskImageFiles: TaskImageFiles
     @Published private(set) var importingAttachmentTaskIDs: Set<UUID> = []
-    /// Pending composer imports belong to the shared store, so closing one
-    /// panel cannot orphan the only owned copy while another panel has Redo.
-    var pendingComposerAttachments: [UUID: [TaskAttachmentStaging]] = [:]
-    var composerAttachmentTasks: [UUID: Task<Bool, Never>] = [:]
     /// Phase 3 slice 2: which families' files are in their note, and their
     /// Earlier files (UX plan § 2.4, § 13).
     let fileMigration = TaskFilesState()

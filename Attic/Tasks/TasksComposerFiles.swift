@@ -95,52 +95,33 @@ extension TasksPageModel {
     func attachComposerFiles(_ files: [TasksComposerFiles], to id: UUID) {
         guard !files.isEmpty else { return }
         let staging = TaskAttachmentStaging(merging: files.map(\.staging))
-        store.pendingComposerAttachments[id, default: []].append(staging)
-        retryComposerAttachments()
-    }
-
-    func retryComposerAttachments() {
-        for (id, batches) in store.pendingComposerAttachments where store.composerAttachmentTasks[id] == nil {
-            guard let staging = batches.first else { continue }
-            store.composerAttachmentTasks[id] = Task { @MainActor [self] in
-                defer { store.composerAttachmentTasks[id] = nil }
-                var owner = store.attachmentOwnerID(for: id)
-                // Task+writing is saved by NoteStore. If its subsequent task-list
-                // refresh failed, the committed owner is temporarily absent from
-                // the index. Recover that presentation before importing files.
-                // Yield on a failed read instead of repeatedly blocking a frame.
-                if owner == nil {
-                    for attempt in 0..<3 {
-                        if store.prepareTaskEdit() {
-                            owner = store.attachmentOwnerID(for: id)
-                            break
-                        }
-                        if attempt < 2 { try? await Task.sleep(for: .milliseconds(30)) }
+        let token = UUID()
+        composerAttachmentTasks[token] = Task { @MainActor [self] in
+            defer { composerAttachmentTasks[token] = nil }
+            var owner = store.attachmentOwnerID(for: id)
+            // Task+writing is saved by NoteStore. If its subsequent task-list
+            // refresh failed, the committed owner is temporarily absent from
+            // the index. Recover that presentation before importing files.
+            // Yield on a failed read instead of repeatedly blocking a frame.
+            if owner == nil {
+                for attempt in 0..<3 {
+                    if store.prepareTaskEdit() {
+                        owner = store.attachmentOwnerID(for: id)
+                        break
                     }
+                    if attempt < 2 { try? await Task.sleep(for: .milliseconds(30)) }
                 }
-                // An undone task has no owner until Redo; a committed task may be
-                // temporarily hidden by a failed read. Neither case is evidence
-                // that the staged bytes are disposable or that the task vanished.
-                guard let target = owner else { return false }
-                // The store owns an import attempt, while this model keeps the
-                // original owned directories until that attempt actually commits.
-                let added = await store.attachStagedFiles(to: target) {
-                    TaskAttachmentStaging(urls: staging.urls)
-                }
-                guard let added, !added.isEmpty else { return false }
-                var remaining = store.pendingComposerAttachments[id] ?? []
-                if !remaining.isEmpty { remaining.removeFirst() }
-                store.pendingComposerAttachments[id] = remaining.isEmpty ? nil : remaining
-                staging.discard()
-                let title = self.store.task(withID: target)?.title ?? ""
-                AccessibilityNotification.Announcement(
-                    added.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(added.count) files to \(title)")
-                ).post()
-                if !remaining.isEmpty {
-                    Task { @MainActor [weak self] in self?.retryComposerAttachments() }
-                }
-                return true
             }
+            // On a persistent read failure, let the attachment transaction
+            // report the missing task; do not silently drop the submitted files.
+            let target = owner ?? id
+            let added = await store.attachStagedFiles(to: target) { staging }
+            guard let added, !added.isEmpty else { staging.discard(); return false }
+            let title = self.store.task(withID: target)?.title ?? ""
+            AccessibilityNotification.Announcement(
+                added.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(added.count) files to \(title)")
+            ).post()
+            return true
         }
     }
 
