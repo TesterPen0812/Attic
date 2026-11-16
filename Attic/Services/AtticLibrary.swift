@@ -530,6 +530,18 @@ final class AtticLibrary {
         return historyOutcome(undo.undoStep(in: history), since: serial, verb: String(localized: "undo"))
     }
 
+    /// The Undo a toast offers: the step it named and only that step. A
+    /// newer step, or the named one already undone, leaves it nothing to
+    /// do. A waiting change that fails to save does not stop it: the toast
+    /// never meant that change.
+    @discardableResult
+    func undo(step: UUID?, in history: UndoHistoryID) -> CommandOutcome {
+        undo.settleWaitingChanges()
+        guard let step, undo.undoStepID(in: history) == step else { return .applied }
+        let serial = tasks.errorSerial
+        return historyOutcome(undo.undoStep(in: history, only: step), since: serial, verb: String(localized: "undo"))
+    }
+
     @discardableResult
     func redo(in history: UndoHistoryID) -> CommandOutcome {
         guard undo.settleWaitingChanges(for: history) else { return .applied }

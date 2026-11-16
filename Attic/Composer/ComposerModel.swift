@@ -529,7 +529,7 @@ final class ComposerModel: ObservableObject {
                 self.services.openTaskPage(created.id)
             } else if case let .tasks(tab) = submittedPage {
                 if tab == .done || (tab == .backlog && status == .todo) {
-                    self.services.toast(String(localized: "Added to Now"), self.undoCreation())
+                    self.services.toast(String(localized: "Added to Now"), self.undoCreation(in: submittedPage.history))
                 } else {
                     self.tasks.addedRequest = TasksPageModel.ScrollRequest(id: created.id)
                 }
@@ -590,7 +590,7 @@ final class ComposerModel: ObservableObject {
             services.openTaskPage(task.id)
         } else if case let .tasks(tab) = page {
             if tab == .done || (tab == .backlog && status == .todo) {
-                services.toast(String(localized: "Added to Now"), undoCreation())
+                services.toast(String(localized: "Added to Now"), undoCreation(in: page.history))
             } else {
                 tasks.addedRequest = TasksPageModel.ScrollRequest(id: task.id)
             }
@@ -660,7 +660,7 @@ final class ComposerModel: ObservableObject {
         let title = values.title.isEmpty ? TaskDraftBuilder.collapsed(tasks.addBar.text) : values.title
         guard let id = tasks.library.createNote(title: title, body: writing, tags: values.tags,
                                                 pinned: pinned, in: page.history) else { return false }
-        if openingPage { services.openNote(id) } else { services.toast(String(localized: "Added to Notes"), undoCreation()) }
+        if openingPage { services.openNote(id) } else { services.toast(String(localized: "Added to Notes"), undoCreation(in: page.history)) }
         return true
     }
 
@@ -711,12 +711,13 @@ final class ComposerModel: ObservableObject {
         try? await loadWriter()?.openInCalendar(event.occurrenceID)
     }
 
-    /// The Undo a creation's toast offers: the history the creation went
-    /// into, fixed now (the card may be on another page by the click).
-    private func undoCreation() -> @MainActor () -> CommandOutcome {
+    /// The Undo a creation's toast offers: the step the creation just
+    /// recorded, in the history it went into, both fixed now (the card may
+    /// be on another page by the click, and a newer step is not its to undo).
+    private func undoCreation(in history: UndoHistoryID) -> @MainActor () -> CommandOutcome {
         let library = tasks.library
-        let history = page.history
-        return { library.undo(in: history) }
+        let step = library.undo.undoStepID(in: history)
+        return { library.undo(step: step, in: history) }
     }
 
     func undoPage() {

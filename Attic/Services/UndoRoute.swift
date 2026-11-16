@@ -261,11 +261,15 @@ final class UndoRoute: ObservableObject {
     }
 
     /// `undo(in:)` with what happened: nil when there was nothing to undo.
+    /// `only` is the one step an Undo offer named (a toast): nothing
+    /// happens unless it is still the newest, and when it turns out to be
+    /// obsolete it is dropped without going on to the step before it.
     @discardableResult
-    func undoStep(in history: UndoHistoryID) -> UndoOutcome? {
+    func undoStep(in history: UndoHistoryID, only named: UUID? = nil) -> UndoOutcome? {
         settleWaitingChanges()
         let history = resolved(history)
         guard !replaying.contains(history), var entry = histories[history] else { return nil }
+        guard named == nil || entry.undo.last?.id == named else { return nil }
         var discardedObsolete = false
         while let step = entry.undo.last, step.replay == nil {
             let outcome = step.undo()
@@ -278,6 +282,7 @@ final class UndoRoute: ObservableObject {
                 revision &+= 1
                 onOwnershipChanged?()
                 discardedObsolete = true
+                if named != nil { return .obsolete }
             case .applied:
                 entry.undo.removeLast()
                 entry.redo.append(step)

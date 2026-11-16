@@ -1216,6 +1216,72 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(tasks.task(withID: made[0].id)?.status, .todo, "a second, deliberate Undo reverses it")
     }
 
+    /// "Added to Now · Undo" undoes the creation it names, never a newer step.
+    func testUndoPendingCreationToastUndoesOnlyTheCreationItNames() throws {
+        let other = try XCTUnwrap(library.createTasks([TaskDraft(title: "Another task")])?.first)
+        model.open(on: .tasks(.done))
+        type("Made from Done")
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        let made = try XCTUnwrap(liveTasks().first { $0.title == "Made from Done" })
+        XCTAssertEqual(toasts, ["Added to Now"])
+        let toastUndo = try XCTUnwrap(toastUndos.last)
+        XCTAssertTrue(library.updateTask(other.id, priority: .high).isApplied)
+
+        _ = toastUndo()
+
+        XCTAssertEqual(tasks.task(withID: other.id)?.priority, .high, "a newer change is not the toast's to undo")
+        XCTAssertNotNil(tasks.task(withID: made.id))
+    }
+
+    func testUndoPendingNoteToastUndoesOnlyTheNoteItNames() async throws {
+        let other = try XCTUnwrap(library.createTasks([TaskDraft(title: "Another task")])?.first)
+        model.open(on: .tasks(.now), as: .note)
+        type("Quick idea")
+        await XCTAssertTrueAsync(await model.create())
+        let note = try XCTUnwrap(notes.notes.first { $0.deletedAt == nil })
+        let toastUndo = try XCTUnwrap(toastUndos.last)
+        XCTAssertTrue(library.updateTask(other.id, priority: .high).isApplied)
+
+        _ = toastUndo()
+
+        XCTAssertEqual(tasks.task(withID: other.id)?.priority, .high, "a newer change is not the toast's to undo")
+        XCTAssertNotNil(notes.notes.first { $0.id == note.id && $0.deletedAt == nil })
+    }
+
+    /// ⌘Z inside the frame undoes the creation; the toast its save posted
+    /// can then undo nothing older.
+    func testUndoPendingToastOfAnUndoneCreationUndoesNothingOlder() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Keep older task")])?.first)
+        holdSaves()
+        model.open(on: .tasks(.done))
+        type("Undone at once")
+        model.submit()
+        XCTAssertEqual(page.undo(), .applied)
+        XCTAssertEqual(liveTasks().map(\.id), [older.id])
+
+        for action in toastUndos { _ = action() }
+
+        XCTAssertEqual(liveTasks().map(\.id), [older.id], "the creation is already undone; its toast reaches no further")
+    }
+
+    /// The step a toast names was dropped as gone (its task deleted
+    /// elsewhere): the button undoes nothing instead of the step before it.
+    func testUndoPendingToastWhoseStepIsGoneUndoesNothingOlder() throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older task")])?.first)
+        XCTAssertTrue(library.updateTask(older.id, priority: .high).isApplied)
+        let named = try XCTUnwrap(library.createTasks([TaskDraft(title: "Named by the toast")])?.first)
+        page.showToast("Added")
+        XCTAssertTrue(tasks.delete(taskIDs: [named.id]), "deleted outside the Tasks history")
+
+        _ = page.toasts.performAction()
+
+        XCTAssertEqual(tasks.task(withID: older.id)?.priority, .high, "the older step is not the toast's to undo")
+        XCTAssertEqual(page.toasts.current?.isFailure, true, "it says the change can no longer be undone")
+        XCTAssertEqual(library.undo(in: .tasks), .applied, "⌘Z still reaches the older step")
+        XCTAssertEqual(tasks.task(withID: older.id)?.priority, TaskPriority.none)
+    }
+
     /// A Calendar-page creation waits in Calendar's history: ⌘Z in a Tasks
     /// field is still the field's.
     func testUndoPendingAWaitingCalendarCreationDoesNotClaimATasksFieldsUndo() throws {
