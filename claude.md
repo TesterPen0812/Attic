@@ -105,8 +105,9 @@ Which model does what. These are defaults, not limits: if a model's output doesn
 | Model | Use it for | Not for |
 | --- | --- | --- |
 | **Opus 5.5** (high; xhigh for the hardest problems) | Anything a person sees: UI, interaction, motion, copy and API design. Designing new screens and components, hard or unclear bugs, judgement calls about the owner's decisions, and reviewing Sol's work. | Routine fix lists. |
-| **GPT-6.1 Sol** (`gpt-6.1-sol`, through the Codex CLI; high to build, xhigh to review) | The engine and data safety, merges, CI and performance investigations, all computer use and on-screen checks, long multi-step jobs, and reviewing Opus's work. | Designing UI (its taste is weaker). |
-| **Sonnet 5.5** | Mechanical work only: a written fix list where each fix is already decided, or known CI failures back to green. | Root causes, design, reviews, anything visible. |
+| **GPT-6.1 Sol** (`gpt-6.1-sol`, through the Codex CLI; high to build, xhigh to review) | The engine and data safety, merges, CI and performance investigations, long multi-step jobs, and reviewing Opus's work. | Designing UI (its taste is weaker). |
+| **GPT-6.1 Terra** (through the Codex CLI and its computer-use skill) | All computer use and on-screen checks. | Writing or reviewing code. |
+| **Sonnet 5.5** | Thin wrapper agents that only pass a prompt to the Codex CLI and return its report (see below). | Any code, however mechanical. Root causes, design, reviews, anything visible. |
 | **Haiku 5.5** | Cheap, bounded lookups and searches where it saves cost. | Placeholder or no-op calls; anything that ships. |
 | **GPT-6 Pro** (ChatGPT, run by the owner) | Deep external reviews of a whole pull request or design. | Anything that needs the repo's tools. |
 | **Fable** | Never. | Everything. |
