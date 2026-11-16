@@ -198,7 +198,13 @@ struct AtticPanelView: View {
                         let frozenSize = page == currentPage ? nil : uiState.retainedPageSizeDuringLiveResize
                         let layout = frozenSize.map { PanelPageLayout(cornerSize: cornerRadius, panelSize: $0) }
                             ?? pageLayout
-                        pageHost(page, layout: layout)
+                        // SCRATCH (hidden pages, measurement only): each kept
+                        // page in its own hosting view, so the front page's
+                        // layout never walks a hidden one.
+                        PanelIsolatedPageHost(size: layout.panelSize, page: page,
+                                              hidden: page != currentPage && uiState.pageTransit.departingPage != page) {
+                            pageHost(page, layout: layout)
+                        }
                             // A fully invisible page has no reason to measure
                             // again at each intermediate window size. Its
                             // retained native editors and state stay mounted.
@@ -1256,5 +1262,56 @@ private struct PanelKeyStateLabel: View {
             .allowsHitTesting(false)
             .accessibilityIdentifier("panel-key-state")
             .accessibilityValue(state.isKey ? "key" : "not key")
+    }
+}
+
+
+// MARK: - SCRATCH: a kept page in its own hosting view (never merge)
+
+/// SCRATCH, measurement only (speed-scroll-r1, 16 Nov 2026): the form the
+/// hidden-pages design note measured as "(b) frozen". Each kept page gets
+/// its own SwiftUI graph and `NSHostingView`; the shell's environment is
+/// forwarded whole (the `TasksDragOut` host pattern). While the page is
+/// hidden its host keeps its last root view, so the shell's updates (a
+/// resize step, a theme change) reach it only when it is shown again.
+/// Known gaps, listed in the note: preferences no longer reach the shell,
+/// the named panel coordinate space does not exist inside the host, the
+/// root host's drag hooks do not see drags that start in a page, and the
+/// hidden host is still in AppKit's hit-testing, key-view and
+/// accessibility trees (only SwiftUI's modifiers hide it).
+private struct PanelIsolatedPageHost<Content: View>: NSViewRepresentable {
+    let size: CGSize
+    let page: PanelPage
+    let hidden: Bool
+    let content: Content
+
+    init(size: CGSize, page: PanelPage, hidden: Bool, @ViewBuilder content: () -> Content) {
+        self.size = size
+        self.page = page
+        self.hidden = hidden
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> NSHostingView<AnyView> {
+        let view = NSHostingView(rootView: root(context))
+        view.sizingOptions = []
+        return view
+    }
+
+    func updateNSView(_ view: NSHostingView<AnyView>, context: Context) {
+        // Frozen while hidden: no new root view, so no graph update and no
+        // layout in the hidden host.
+        guard !hidden else { return }
+        view.rootView = root(context)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSHostingView<AnyView>, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? size.width, height: proposal.height ?? size.height)
+    }
+
+    private func root(_ context: Context) -> AnyView {
+        AnyView(content
+            .environment(\.self, context.environment)
+            .frame(width: size.width, height: size.height, alignment: .topLeading))
     }
 }
