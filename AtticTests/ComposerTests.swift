@@ -248,6 +248,121 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(page.addBarState.files.isEmpty)
     }
 
+    // MARK: After the reviews of pull request 17
+
+    private func pickedFile(_ name: String = "Picked.pdf") throws -> URL {
+        let root = ownedTemporaryDirectory(prefix: "ComposerPicked").appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent(name)
+        try Data(repeating: 7, count: 64).write(to: url)
+        return url
+    }
+
+    /// Opus R-1, R-6, Astra R-1, R-4: Return while a chosen file is still
+    /// being copied creates nothing and clears nothing. The task is only
+    /// ever made at once, from files that are already copied.
+    func testComposerFilesReturnDuringACopyCreatesNothingAndKeepsTheDraft() async throws {
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older task")])?.first)
+        type("Task with a picked file")
+        page.addComposerFiles(urls: [try pickedFile()])
+
+        XCTAssertNil(page.submitAddBar(), "nothing is created while the copy runs")
+
+        XCTAssertEqual(page.toasts.current?.message, "Preparing files · try again in a moment")
+        XCTAssertEqual(liveTasks().map(\.id), [older.id])
+        XCTAssertEqual(page.addBar.text, "Task with a picked file")
+        XCTAssertEqual(page.addBarState.files.count, 1)
+        var made: UUID?
+        try await waitForComposer { made = made ?? self.page.submitAddBar(); return made != nil }
+        XCTAssertEqual(tasks.task(withID: try XCTUnwrap(made))?.attachments.count, 1, "saved with its file, in the task's own save")
+        XCTAssertTrue(page.addBarState.files.isEmpty)
+    }
+
+    /// Opus R-7, Astra R-2: a paste accepted during a copy keeps its offer
+    /// and the draft; nothing is used up until the tasks exist.
+    func testComposerFilesAPasteDuringACopyKeepsItsOfferAndTheDraft() async throws {
+        page.addComposerFiles(urls: [try pickedFile()])
+        page.pasteOffer = TaskPasteOffer("First line\nSecond line")
+
+        page.acceptPaste(asOne: false)
+
+        XCTAssertNotNil(page.pasteOffer, "the offer stays")
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertEqual(page.addBarState.files.count, 1)
+        try await waitForComposer { self.page.acceptPaste(asOne: false); return self.page.pasteOffer == nil }
+        XCTAssertEqual(liveTasks().count, 2)
+        XCTAssertEqual(liveTasks().map(\.attachments.count).sorted(), [0, 1], "the files went onto the first task, in the same save")
+    }
+
+    /// Opus R-2, R-4, R-5: the card does not clear, lock or retire its
+    /// kept draft while a file is still being copied.
+    func testComposerFilesTheCardWaitsForACopyWithoutClearingOrLocking() async throws {
+        model.open(on: .tasks(.now))
+        type("Card task with a picked file")
+        page.addComposerFiles(urls: [try pickedFile()])
+
+        model.submit()
+
+        XCTAssertFalse(model.isCreating, "nothing is being created yet")
+        XCTAssertEqual(page.addBar.text, "Card task with a picked file")
+        XCTAssertEqual(page.addBarState.files.count, 1)
+        XCTAssertTrue(liveTasks().isEmpty)
+        try await waitForComposer { self.model.submit(); return self.liveTasks().count == 1 }
+        XCTAssertEqual(liveTasks().first?.attachments.count, 1)
+        XCTAssertTrue(page.addBar.text.isEmpty)
+    }
+
+    /// Opus R-8, Astra R-7: the 20-file limit counts this draft's files,
+    /// not those of a task that was submitted a moment ago.
+    func testComposerFilesLimitsCountOnlyThisDraftsFiles() async throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Task with twenty files")
+        page.addComposerFiles(urls: try (0..<20).map { try pickedFile("File-\($0).pdf") })
+        try await waitForComposer { self.model.submit(); return self.model.isCreating }
+
+        type("Next task with one file")
+        page.addComposerFiles(urls: [try pickedFile("One.pdf")])
+        var next: UUID?
+        try await waitForComposer { next = next ?? self.page.submitAddBar(); return next != nil }
+
+        XCTAssertEqual(tasks.task(withID: try XCTUnwrap(next))?.attachments.count, 1, "its own file was not refused")
+        XCTAssertEqual(liveTasks().first { $0.title == "Task with twenty files" }?.attachments.count, 20)
+    }
+
+    /// Opus R-10, Astra R-6: a task saved with writing and a file lets go of
+    /// the file's import lease, so a later purge can take its bytes.
+    func testComposerFilesATaskWithWritingReleasesItsFilesImportLeases() async throws {
+        model.open(on: .tasks(.now))
+        type("With writing and a file")
+        model.writing = "Its writing"
+        _ = try await pasteAnImage()
+        try await waitForComposer { self.model.submit(); return self.liveTasks().count == 1 }
+        let reference = try XCTUnwrap(liveTasks().first?.attachments.first)
+
+        let lease = tasks.taskImageFiles.files.ownership.tryAcquire([reference.id], kind: .collection)
+
+        XCTAssertNotNil(lease, "the file is free to be collected when the task is purged")
+        lease?.release()
+    }
+
+    /// Opus R-9, R-11: the strip's × ends the copies of what it removes, and
+    /// a copy that fails afterwards says nothing. (Passes before and after
+    /// for a chosen file; the dropped-file case has no deterministic test.)
+    func testComposerFilesClearingTheStripEndsItsCopiesQuietly() async throws {
+        let gone = FileManager.default.temporaryDirectory.appendingPathComponent("attic-missing-\(UUID().uuidString).pdf")
+        page.addComposerFiles(urls: [gone])
+        page.clearComposerFiles()
+        type("After a cleared strip")
+        page.addComposerFiles(urls: [try pickedFile("Kept.pdf")])
+
+        var made: UUID?
+        try await waitForComposer { made = made ?? self.page.submitAddBar(); return made != nil }
+
+        XCTAssertEqual(tasks.task(withID: try XCTUnwrap(made))?.attachments.map(\.filename), ["Kept.pdf"])
+        XCTAssertNil(tasks.lastErrorMessage, "a cleared strip says nothing")
+    }
+
     func testConfirmedTaskWithWritingStillCreatesAndRecordsUndoAfterPresentationReadFailure() throws {
         let id = UUID()
         tasks.listRefreshFailures = 1
