@@ -24,15 +24,28 @@ private enum SettingsScrollerPreference {
     }
 }
 
-/// Match each excluded scrollbar part to a mounted native scroll view and bar.
-/// The local accessibility protocol is available in the invisible test host;
-/// the out-of-process AX application tree has no windows in that host.
+/// A mounted native scroller whose parts the audit may exclude. `frame` is
+/// in the AX API's screen space (top-left origin), so that it can be compared
+/// with what an assistive app reads out of process.
 private struct SettingsNativeScrollAXBar {
     let scroller: NSScroller
     let scrollView: NSScrollView
     let frame: CGRect
 }
 
+extension SettingsNativeScrollAXBar {
+    /// The scroller's own NSAccessibility frame (Cocoa screen space, bottom-left
+    /// origin) flipped against the primary screen into AX screen space.
+    init?(scroller: NSScroller, scrollView: NSScrollView) {
+        guard let cocoa = (scroller as AnyObject).accessibilityFrame?(),
+              let primary = NSScreen.screens.first else { return nil }
+        self.init(scroller: scroller, scrollView: scrollView,
+                  frame: CGRect(x: cocoa.minX, y: primary.frame.maxY - cocoa.maxY,
+                                width: cocoa.width, height: cocoa.height))
+    }
+}
+
+/// One AXScrollBar as the AX server reports it to another process.
 private struct SettingsExternalScrollAXBar {
     let frame: CGRect
     let hidden: Bool?
@@ -42,6 +55,47 @@ private struct SettingsExternalScrollAXBar {
 private struct SettingsScrollAXSnapshot {
     let scrollbars: [SettingsExternalScrollAXBar]
     let traversalSucceeded: Bool
+}
+
+/// Read every AXScrollBar the way VoiceOver does: from the application
+/// element, through the AX server, as the base audit did. Nothing here comes
+/// from the NSScroller objects the guard compares it with. The invisible
+/// test host has no windows in this tree, so callers run it only where the
+/// host presents windows (ATTIC_KEY_WINDOW_TESTS=1: CI and the Air).
+private enum SettingsExternalScrollAX {
+    static func read() -> SettingsScrollAXSnapshot {
+        var bars: [SettingsExternalScrollAXBar] = []
+        var applicationChildrenRead = false
+        func copy<T>(_ element: AXUIElement, _ attribute: String, _ type: AXValueType, _ initial: T) -> T? {
+            var raw: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
+                  let raw, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+            var value = initial
+            return AXValueGetValue(raw as! AXValue, type, &value) ? value : nil
+        }
+        func visit(_ element: AXUIElement, depth: Int) {
+            guard depth < 30 else { return }
+            var role: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) == .success,
+               role as? String == kAXScrollBarRole as String,
+               // A bar without a frame matches no native bar, so it exempts nothing.
+               let origin = copy(element, kAXPositionAttribute, .cgPoint, CGPoint.zero),
+               let size = copy(element, kAXSizeAttribute, .cgSize, CGSize.zero) {
+                var hidden: CFTypeRef?
+                let error = AXUIElementCopyAttributeValue(element, kAXHiddenAttribute as CFString, &hidden)
+                bars.append(SettingsExternalScrollAXBar(frame: CGRect(origin: origin, size: size),
+                                                        hidden: error == .success ? hidden as? Bool : nil,
+                                                        hiddenError: error))
+            }
+            var children: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success
+            else { return }
+            if depth == 0 { applicationChildrenRead = true }
+            for child in (children as? [AXUIElement]) ?? [] { visit(child, depth: depth + 1) }
+        }
+        visit(AXUIElementCreateApplication(getpid()), depth: 0)
+        return SettingsScrollAXSnapshot(scrollbars: bars, traversalSucceeded: applicationChildrenRead)
+    }
 }
 
 private enum SettingsScrollAXGuard {
@@ -441,6 +495,10 @@ final class SettingsWindowHostedTests: XCTestCase {
     /// Accessibility of each Settings page's hosted controls; the earlier
     /// appearance/defaults audit did not exercise VoiceOver's control tree.
     func testA11yEverySettingsSectionNamesItsInteractiveControls() throws {
+        // Excluding scroller parts needs the out-of-process AX tree, which
+        // has no windows in the invisible host.
+        try XCTSkipIf(TestPresentationPolicy.isInvisible,
+                      "Requires ATTIC_KEY_WINDOW_TESTS=1: the out-of-process AX tree needs a host with windows")
         for style in [NSScroller.Style.overlay, .legacy] {
             try withScrollerPreference(style) {
                 try checkA11yEverySettingsSectionNamesItsInteractiveControls()
@@ -481,31 +539,6 @@ final class SettingsWindowHostedTests: XCTestCase {
             }
             return result
         }
-        // NSAccessibility exposes the same AXHidden attribute names and
-        // values without requiring Accessibility permission for the invisible
-        // test host. Missing/invalid attribute lists remain hard failures.
-        func readNativeScrollbars(_ bars: [SettingsNativeScrollAXBar]) -> SettingsScrollAXSnapshot {
-            var scrollbars: [SettingsExternalScrollAXBar] = []
-            for native in bars {
-                guard let attributes = (native.scroller as NSObject)
-                    .perform(NSSelectorFromString("accessibilityAttributeNames"))?
-                    .takeUnretainedValue() as? [String], !attributes.isEmpty else {
-                    return SettingsScrollAXSnapshot(scrollbars: scrollbars, traversalSucceeded: false)
-                }
-                let hiddenName = NSAccessibility.Attribute(rawValue: "AXHidden")
-                if attributes.contains(hiddenName.rawValue) {
-                    guard let hidden = native.scroller.accessibilityAttributeValue(hiddenName) as? Bool else {
-                        return SettingsScrollAXSnapshot(scrollbars: scrollbars, traversalSucceeded: false)
-                    }
-                    scrollbars.append(SettingsExternalScrollAXBar(frame: native.frame, hidden: hidden,
-                                                                   hiddenError: .success))
-                } else {
-                    scrollbars.append(SettingsExternalScrollAXBar(frame: native.frame, hidden: nil,
-                                                                   hiddenError: .attributeUnsupported))
-                }
-            }
-            return SettingsScrollAXSnapshot(scrollbars: scrollbars, traversalSucceeded: true)
-        }
         for section in SettingsSection.allCases {
             host.layoutSubtreeIfNeeded()
             spin(0.12)
@@ -519,8 +552,9 @@ final class SettingsWindowHostedTests: XCTestCase {
             let after = descendants(host, visited: &visited)
             // AppKit reports four NSAccessibilityScrollerPart pseudo-buttons
             // even while their parent scrollbar has AXHidden=true. They are
-            // not reachable controls; verify each native scroller's AXHidden
-            // contract before excluding only those system-created parts.
+            // not reachable controls. Exclude them only when each part's
+            // mounted scroller appears, at its own frame, in the out-of-process
+            // AX tree with the AXHidden contract of its style.
             let hiddenParts = after.filter { String(describing: type(of: $0)) == "NSAccessibilityScrollerPart" }
             if !hiddenParts.isEmpty {
                 let nativeScrollbars: [(scroll: NSScrollView, bar: NSScroller)] = nativeScrollViews(in: host)
@@ -543,26 +577,24 @@ final class SettingsWindowHostedTests: XCTestCase {
                                "Every excluded native part must resolve to a mounted NSScroller")
                 let distinct = Dictionary(grouping: matched, by: ObjectIdentifier.init).values.compactMap(\.first)
                 let nativeBars = distinct.compactMap { bar -> SettingsNativeScrollAXBar? in
-                    guard let frame = (bar as AnyObject).accessibilityFrame?(),
-                          let scroll = nativeScrollbars.first(where: { $0.bar === bar })?.scroll else { return nil }
-                    return SettingsNativeScrollAXBar(scroller: bar, scrollView: scroll, frame: frame)
+                    guard let scroll = nativeScrollbars.first(where: { $0.bar === bar })?.scroll else { return nil }
+                    return SettingsNativeScrollAXBar(scroller: bar, scrollView: scroll)
                 }
                 XCTAssertEqual(nativeBars.count, distinct.count, "Every native scroller needs an AX frame")
                 // Native AppKit scroller parts have no app-owned labels.
-                // Require each part's mounted bar to expose the appropriate
-                // AXHidden contract for the selected style.
+                // AppKit can publish the parts before the AX server reports
+                // their bar; wait for that state, not a fixed delay.
                 let deadline = Date().addingTimeInterval(2)
                 var allowed = false
                 repeat {
                     allowed = matched.count == hiddenParts.count && nativeBars.count == distinct.count &&
-                        SettingsScrollAXGuard.permitsExclusion(nativeBars: nativeBars) {
-                            readNativeScrollbars(nativeBars)
-                        }
+                        SettingsScrollAXGuard.permitsExclusion(nativeBars: nativeBars,
+                                                               read: SettingsExternalScrollAX.read)
                     if allowed { break }
                     RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
                     host.layoutSubtreeIfNeeded()
                 } while Date() < deadline
-                XCTAssertTrue(allowed, "Excluded native parts require matched native AXHidden state")
+                XCTAssertTrue(allowed, "Excluded native parts require their bar, at its frame, in the out-of-process AX tree with its style's AXHidden state")
             }
             let interactive = after.filter {
                 roles.contains($0.accessibilityRole?()?.rawValue ?? "") &&
@@ -591,8 +623,32 @@ final class SettingsWindowHostedTests: XCTestCase {
         scroll.scrollerStyle = style
         scroll.tile()
         let bar = try XCTUnwrap(scroll.verticalScroller)
-        let frame = try XCTUnwrap((bar as AnyObject).accessibilityFrame?())
-        try check(SettingsNativeScrollAXBar(scroller: bar, scrollView: scroll, frame: frame))
+        try check(try XCTUnwrap(SettingsNativeScrollAXBar(scroller: bar, scrollView: scroll)))
+    }
+
+    /// CI-standing r3 R-2: the audit's reader is the out-of-process AX tree.
+    /// It must find a mounted bar at that bar's frame, and must not vouch for
+    /// a bar at a frame where AX reports none.
+    func testCIStandingAXGuardReadsTheOutOfProcessTree() throws {
+        try XCTSkipIf(TestPresentationPolicy.isInvisible,
+                      "Requires ATTIC_KEY_WINDOW_TESTS=1: the out-of-process AX tree needs a host with windows")
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withMountedAXScroller(style) { native in
+                let deadline = Date().addingTimeInterval(2)
+                var found = false
+                repeat {
+                    found = SettingsScrollAXGuard.permitsExclusion(nativeBars: [native],
+                                                                   read: SettingsExternalScrollAX.read)
+                    if !found { spin(0.02) }
+                } while !found && Date() < deadline
+                XCTAssertTrue(found, "AX reports the mounted \(style) bar at its frame with its AXHidden contract")
+                let elsewhere = SettingsNativeScrollAXBar(scroller: native.scroller, scrollView: native.scrollView,
+                                                          frame: native.frame.offsetBy(dx: 50, dy: 0))
+                XCTAssertFalse(SettingsScrollAXGuard.permitsExclusion(nativeBars: [elsewhere],
+                                                                      read: SettingsExternalScrollAX.read),
+                               "A frame where AX reports no \(style) bar must not exempt its parts")
+            }
+        }
     }
 
     func testCIStandingAXGuardRejectsUnavailableTree() throws {
