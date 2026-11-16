@@ -189,19 +189,25 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertNil(notes.workspaceSessionIfCached(draft.noteID), "the untouched draft is discarded")
     }
 
-    /// Escape on a task's page goes Back unless Version History is open over
-    /// this task's own note. A task without a note has no History of its
-    /// own, even while nothing at all is open (PR 16 review: Opus R-6).
+    /// The page's Escape holds only for Version History over this task's
+    /// own note: not for another task's History, not for a task with no
+    /// note (its never-saved draft has no History), on one controller.
+    /// (A task page with no note session cannot exist: the registry attaches
+    /// a draft or throws; PR 16 re-check, Opus R-4.)
     func testOnlyThisTasksOwnHistoryHoldsEscapeOnItsPage() async throws {
-        let bare = try open(try seed(.nonote))
-        XCTAssertFalse(bare.showsOwnHistory, "no note and no History: Escape goes Back")
-        let presenter = try open(try seed(.boundary))
+        let owned = try seed(.boundary)
+        let bareTask = try XCTUnwrap(tasks.create(title: "No note"))
+        let presenter = try open(owned)
+        let bare = try open(bareTask.id)
         let session = try XCTUnwrap(presenter.session)
+        XCTAssertEqual(bare.session?.isPersisted, false, "a task with no note opens a draft")
         XCTAssertFalse(presenter.showsOwnHistory)
+        XCTAssertFalse(bare.showsOwnHistory, "nothing open: Escape goes Back")
         let opened = await notes.openHistoryDurably(workspace: session)
         XCTAssertTrue(opened)
+        XCTAssertNotNil(notes.historyBrowser)
         XCTAssertTrue(presenter.showsOwnHistory, "this task's History takes Escape first")
-        XCTAssertFalse(bare.showsOwnHistory, "another note's History leaves this page's Escape alone")
+        XCTAssertFalse(bare.showsOwnHistory, "another task's History leaves this page's Escape alone")
         notes.closeHistory()
         XCTAssertFalse(presenter.showsOwnHistory)
     }
