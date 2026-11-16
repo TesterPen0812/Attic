@@ -154,6 +154,9 @@ final class UndoRoute: ObservableObject {
     /// the change happened.
     @discardableResult
     func perform(in history: UndoHistoryID, _ change: () -> UndoStep?) -> Bool {
+        // A change still waiting for its save was made before this one:
+        // it saves first, so this command reads and records after it.
+        settleWaitingChanges()
         guard let step = change() else { return false }
         record(step, in: history)
         return true
@@ -200,10 +203,11 @@ final class UndoRoute: ObservableObject {
 
     /// A change the page already shows whose save runs a frame later, so
     /// the click paints before the store's blocking save. It is in no
-    /// history yet. The one rule: nothing reads or replays a history while
-    /// a change waits. `undoStep`, `redoStep` and `replay` save every
-    /// waiting change first, oldest first, so a history is never behind
-    /// what the person did, whichever key, menu, toast or panel asks.
+    /// history yet. The one rule: nothing reads, replays or adds to a
+    /// history while a change waits. `undoStep`, `redoStep`, `replay` and
+    /// `perform` save every waiting change first, oldest first, so a
+    /// history is never behind what the person did, whichever key, menu,
+    /// toast, panel or agent asks.
     private var waitingChanges: [(id: UUID, history: UndoHistoryID, save: @MainActor () -> Bool)] = []
     private var isSettling = false
 
@@ -224,6 +228,8 @@ final class UndoRoute: ObservableObject {
     /// and including `id` (nothing when `id` already saved). Returns the
     /// histories whose newest waiting change failed to save. A save that
     /// asks again while this runs gets nothing to do, so the order holds.
+    /// The saves run outside any command's `actionRecording`: an agent's
+    /// command that makes them save early does not own their steps.
     @discardableResult
     func settleWaitingChanges(through id: UUID? = nil) -> Set<UndoHistoryID> {
         guard !isSettling, id == nil || waitingChanges.contains(where: { $0.id == id }) else { return [] }
@@ -232,7 +238,7 @@ final class UndoRoute: ObservableObject {
         var newestFailed: [UndoHistoryID: Bool] = [:]
         while !waitingChanges.isEmpty {
             let next = waitingChanges.removeFirst()
-            newestFailed[resolved(next.history)] = !next.save()
+            newestFailed[resolved(next.history)] = !Self.$actionRecording.withValue(nil) { next.save() }
             if next.id == id { break }
         }
         return Set(newestFailed.filter(\.value).keys)

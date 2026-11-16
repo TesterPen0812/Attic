@@ -1196,6 +1196,41 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(tasks.task(withID: made[0].id)?.priority, TaskPriority.none)
     }
 
+    /// Three changes wait across two panels: Undo takes them newest first.
+    func testUndoPendingChangesWaitingInTwoPanelsAreUndoneNewestFirst() throws {
+        let made = try XCTUnwrap(library.createTasks([TaskDraft(title: "Priority, first"),
+            TaskDraft(title: "Tick in the other panel, second"), TaskDraft(title: "Tick here, third")]))
+        holdSaves()
+        let other = secondPanel()
+        page.setPriorityAcknowledged(.high, for: [made[0].id]) { _ in }
+        other.completeAcknowledged(made[1].id) { _ in }
+        page.completeAcknowledged(made[2].id) { _ in }
+
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertEqual(made.map { tasks.task(withID: $0.id)?.status }, [.todo, .done, .todo], "the third change is undone first")
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertEqual(made.map { tasks.task(withID: $0.id)?.status }, [.todo, .todo, .todo], "then the second")
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.priority, .high, "the first is still there")
+    }
+
+    /// A write that comes from no page (an agent, Calendar) is recorded
+    /// after a change made before it, and does not own that change's step.
+    func testUndoPendingADirectWriteIsRecordedAfterAnEarlierWaitingChange() throws {
+        let made = try XCTUnwrap(library.createTasks([TaskDraft(title: "Ticked first"), TaskDraft(title: "Agent's write")]))
+        holdSaves()
+        page.completeAcknowledged(made[0].id) { _ in }
+        let agent = UndoRoute.ActionRecording(routeID: library.undo.ownershipID)
+        UndoRoute.$actionRecording.withValue(agent) {
+            XCTAssertTrue(library.updateTask(made[1].id, priority: .high).isApplied)
+        }
+
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.status, .done, "the tick was made first, so it saves first")
+        XCTAssertEqual(agent.steps.count, 1, "the tick's step is not the agent's")
+        XCTAssertEqual(secondPanel().undo(), .applied)
+        XCTAssertEqual(tasks.task(withID: made[1].id)?.priority, TaskPriority.none, "the newest change is undone first")
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.status, .done)
+    }
+
     /// Two ticks wait; the first saves and the newer one fails. Undo was
     /// meant for the newer one and stops there.
     func testUndoPendingUndoStopsWhenTheNewestWaitingChangeFailed() throws {
