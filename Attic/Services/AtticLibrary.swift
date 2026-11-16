@@ -518,14 +518,16 @@ final class AtticLibrary {
     /// menu): `.failed` keeps the step to try again; a step that can never
     /// apply again is dropped and reported as not retryable.
     ///
-    /// A change still waiting for its save is saved first, so it is the
-    /// step undone. When that save fails, the press was meant for a change
-    /// that never happened: it is done (`.applied`), with the failed
-    /// change's own notice, and no older step is touched. Redo and replay
-    /// follow the same rule (`UndoRoute`, "Changes waiting for their save").
+    /// This and the four below are where every Undo and Redo a person
+    /// asks for enters, so each starts by saving the changes still waiting
+    /// for their save (`UndoRoute`, "Changes waiting for their save"). A
+    /// waiting change is then the step undone. When its save fails, the
+    /// press was meant for a change that never happened: it is done
+    /// (`.applied`), with the failed change's own notice, and no older step
+    /// is touched.
     @discardableResult
     func undo(in history: UndoHistoryID) -> CommandOutcome {
-        guard undo.settleWaitingChanges(for: history) else { return .applied }
+        guard undo.settleWaitingChanges(in: history) != .failed else { return .applied }
         let serial = tasks.errorSerial
         return historyOutcome(undo.undoStep(in: history), since: serial, verb: String(localized: "undo"))
     }
@@ -553,9 +555,11 @@ final class AtticLibrary {
                               verb: String(localized: "undo"))
     }
 
+    /// A change that was waiting has ended Redo (or failed, and the press
+    /// was for it): either way there is nothing more to do.
     @discardableResult
     func redo(in history: UndoHistoryID) -> CommandOutcome {
-        guard undo.settleWaitingChanges(for: history) else { return .applied }
+        guard undo.settleWaitingChanges(in: history) == .none else { return .applied }
         let serial = tasks.errorSerial
         return historyOutcome(undo.redoStep(in: history), since: serial, verb: String(localized: "redo"))
     }
@@ -564,7 +568,8 @@ final class AtticLibrary {
     /// still use the same route and outcome mapping.
     @discardableResult
     func replay(in history: UndoHistoryID, redo: Bool) async -> CommandOutcome {
-        guard undo.settleWaitingChanges(for: history) else { return .applied }
+        let waiting = undo.settleWaitingChanges(in: history)
+        guard redo ? waiting == .none : waiting != .failed else { return .applied }
         let serial = tasks.errorSerial
         return historyOutcome(await undo.replay(in: history, redo: redo), since: serial,
                               verb: redo ? String(localized: "redo") : String(localized: "undo"))

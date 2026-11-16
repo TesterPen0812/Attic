@@ -2854,7 +2854,7 @@ final class TasksPageModel: ObservableObject {
         // A waiting change that fails to save never acquired an Undo step.
         // This ⌘Z was meant for it: nothing older is undone, and the page
         // keeps its toast and its Redo bookkeeping as they were.
-        guard library.undo.settleWaitingChanges(for: .tasks) else { return .applied }
+        guard library.undo.settleWaitingChanges(in: .tasks) != .failed else { return .applied }
         let outcome = library.undo(in: .tasks)
         if outcome.isApplied {
             // Undo may restore a still-held completed row. Show its genuine
@@ -2873,7 +2873,7 @@ final class TasksPageModel: ObservableObject {
 
     @discardableResult
     func redo() -> CommandOutcome {
-        guard library.undo.settleWaitingChanges(for: .tasks) else { return .applied }
+        guard library.undo.settleWaitingChanges(in: .tasks) == .none else { return .applied }
         let outcome = library.redo(in: .tasks)
         if outcome.isApplied {
             reloadDoneLogAfterChange()

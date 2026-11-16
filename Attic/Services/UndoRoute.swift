@@ -154,9 +154,6 @@ final class UndoRoute: ObservableObject {
     /// the change happened.
     @discardableResult
     func perform(in history: UndoHistoryID, _ change: () -> UndoStep?) -> Bool {
-        // A change still waiting for its save was made before this one:
-        // it saves first, so this command reads and records after it.
-        settleWaitingChanges()
         guard let step = change() else { return false }
         record(step, in: history)
         return true
@@ -203,13 +200,19 @@ final class UndoRoute: ObservableObject {
 
     /// A change the page already shows whose save runs a frame later, so
     /// the click paints before the store's blocking save. It is in no
-    /// history yet. The one rule: nothing reads, replays or adds to a
-    /// history while a change waits. `undoStep`, `redoStep`, `replay` and
-    /// `perform` save every waiting change first, oldest first, so a
-    /// history is never behind what the person did, whichever key, menu,
-    /// toast, panel or agent asks.
+    /// history yet. The one rule: a command the person gives starts by
+    /// saving every waiting change, oldest first, before it reads anything.
+    /// That happens where those commands enter (the page's own commands,
+    /// and `AtticLibrary`'s Undo and Redo, which every key, menu, toast and
+    /// panel use), never inside this route's own steps: `perform`,
+    /// `undoStep`, `redoStep` and `replay` leave waiting changes alone, so
+    /// nothing a caller has already read changes under it, and an agent's
+    /// action or Undo never saves, records or reverses the person's change.
     private var waitingChanges: [(id: UUID, history: UndoHistoryID, save: @MainActor () -> Bool)] = []
     private var isSettling = false
+
+    /// What saving the waiting changes meant for one history.
+    enum WaitingOutcome { case none, saved, failed }
 
     /// Adds a change that saves a frame later; `save` returns whether the
     /// store took it. The handle is for `settleWaitingChanges(through:)`.
@@ -225,32 +228,37 @@ final class UndoRoute: ObservableObject {
     }
 
     /// Saves the waiting changes now, oldest first: all of them, or up to
-    /// and including `id` (nothing when `id` already saved). Returns the
-    /// histories whose newest waiting change failed to save. A save that
-    /// asks again while this runs gets nothing to do, so the order holds.
-    /// The saves run outside any command's `actionRecording`: an agent's
-    /// command that makes them save early does not own their steps.
+    /// and including `id` (nothing when `id` already saved). Returns, for
+    /// each history that had one, whether its newest failed to save. A save
+    /// that asks again while this runs gets nothing to do, so the order
+    /// holds. Each step goes to its own history as the person's: the saves
+    /// run outside any command's capture and any agent's recording.
     @discardableResult
-    func settleWaitingChanges(through id: UUID? = nil) -> Set<UndoHistoryID> {
-        guard !isSettling, id == nil || waitingChanges.contains(where: { $0.id == id }) else { return [] }
+    func settleWaitingChanges(through id: UUID? = nil) -> [UndoHistoryID: Bool] {
+        guard !isSettling, id == nil || waitingChanges.contains(where: { $0.id == id }) else { return [:] }
         isSettling = true
-        defer { isSettling = false }
+        let heldCaptures = captures
+        captures = []
+        defer { captures = heldCaptures; isSettling = false }
         var newestFailed: [UndoHistoryID: Bool] = [:]
         while !waitingChanges.isEmpty {
             let next = waitingChanges.removeFirst()
             newestFailed[resolved(next.history)] = !Self.$actionRecording.withValue(nil) { next.save() }
             if next.id == id { break }
         }
-        return Set(newestFailed.filter(\.value).keys)
+        return newestFailed
     }
 
-    /// For Undo and Redo pressed for "the last thing done" (⌘Z, the Edit
-    /// menu): saves the waiting changes and says whether to go on. False
-    /// when the newest change waiting in this history failed to save: the
-    /// press was meant for a change that never happened, so it stops there
-    /// and reaches no older step.
-    func settleWaitingChanges(for history: UndoHistoryID) -> Bool {
-        !settleWaitingChanges().contains(resolved(history))
+    /// The start of an Undo or Redo the person asked for in `history`:
+    /// saves the waiting changes and says what that meant there. `.failed`:
+    /// the newest change waiting in this history did not save, so a press
+    /// meant for it stops. `.saved`: a new change landed, which ends Redo.
+    func settleWaitingChanges(in history: UndoHistoryID) -> WaitingOutcome {
+        switch settleWaitingChanges()[resolved(history)] {
+        case nil: .none
+        case false?: .saved
+        case true?: .failed
+        }
     }
 
     /// Undoes the history's last step. Returns whether it applied; a step
@@ -272,7 +280,6 @@ final class UndoRoute: ObservableObject {
     /// obsolete it is dropped without going on to the step before it.
     @discardableResult
     func undoStep(in history: UndoHistoryID, only named: UUID? = nil) -> UndoOutcome? {
-        settleWaitingChanges()
         let history = resolved(history)
         guard !replaying.contains(history), var entry = histories[history] else { return nil }
         guard named == nil || entry.undo.last?.id == named else { return nil }
@@ -305,7 +312,6 @@ final class UndoRoute: ObservableObject {
     /// `redo(in:)` with what happened: nil when there was nothing to redo.
     @discardableResult
     func redoStep(in history: UndoHistoryID) -> UndoOutcome? {
-        settleWaitingChanges()
         let history = resolved(history)
         guard !replaying.contains(history), var entry = histories[history] else { return nil }
         var discardedObsolete = false
@@ -333,8 +339,8 @@ final class UndoRoute: ObservableObject {
         return discardedObsolete ? .obsolete : nil
     }
 
-    /// A change still waiting for its save counts: Undo will reverse it.
-    /// It never enables Redo.
+    /// A change still waiting for its save counts as made: Undo will
+    /// reverse it, and it has ended Redo.
     func canUndo(in history: UndoHistoryID) -> Bool {
         let history = resolved(history)
         return histories[history]?.undo.isEmpty == false || hasWaitingChange(in: history)
@@ -342,7 +348,7 @@ final class UndoRoute: ObservableObject {
 
     func canRedo(in history: UndoHistoryID) -> Bool {
         let history = resolved(history)
-        return histories[history]?.redo.isEmpty == false
+        return histories[history]?.redo.isEmpty == false && !hasWaitingChange(in: history)
     }
 
     /// "Undo Delete Task" in menus reads this.
@@ -476,26 +482,25 @@ final class UndoRoute: ObservableObject {
         // A stale asynchronous step must not eat ⌘Z either. Snapshot the
         // eligible entries so a command recorded while replay awaits cannot
         // become the next action reversed by this same key press.
-        settleWaitingChanges()
         let key = resolved(history)
         let eligibleIDs = Set((redo ? histories[key]?.redo : histories[key]?.undo)?.map(\.id) ?? [])
         guard named == nil || (redo ? histories[key]?.redo : histories[key]?.undo)?.last?.id == named else { return nil }
         var discardedObsolete = false
         while let step = (redo ? histories[key]?.redo : histories[key]?.undo)?.last {
             guard eligibleIDs.contains(step.id) else { return discardedObsolete ? .obsolete : nil }
-            let outcome = await replayTop(in: key, redo: redo)
+            let outcome = await replayTop(in: key, redo: redo, only: named)
             guard outcome == .obsolete, named == nil else { return outcome }
             discardedObsolete = true
         }
         return discardedObsolete ? .obsolete : nil
     }
 
-    private func replayTop(in history: UndoHistoryID, redo: Bool) async -> UndoOutcome? {
+    private func replayTop(in history: UndoHistoryID, redo: Bool, only named: UUID? = nil) async -> UndoOutcome? {
         let key = resolved(history)
         guard !replaying.contains(key), let entry = histories[key],
               let step = (redo ? entry.redo : entry.undo).last else { return nil }
         guard let replay = step.replay else {
-            return redo ? redoStep(in: key) : undoStep(in: key)
+            return redo ? redoStep(in: key) : undoStep(in: key, only: named)
         }
         replaying.insert(key)
         defer {

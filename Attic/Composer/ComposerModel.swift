@@ -474,9 +474,10 @@ final class ComposerModel: ObservableObject {
                 _ = await self.create(openingPage: openingPage)
             }
         }
-        // A task with files saves at once. Its attach step then starts
-        // before the next key is read, so no Undo finds a new task whose
-        // files are not on it yet, and no waiting change ever holds files.
+        // A task with files saves at once, so no waiting change ever holds
+        // files and an Undo in the same turn can't run before the attach
+        // step has started. An Undo while a long import is still running
+        // can still lose the file (composer-persistence CP-5).
         else if kind == .task, tasks.addBarState.files.isEmpty { submitTaskAcknowledged(openingPage: openingPage) }
         else { _ = createImmediately(openingPage: openingPage) }
     }
