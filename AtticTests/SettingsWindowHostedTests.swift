@@ -647,6 +647,112 @@ final class SettingsWindowHostedTests: XCTestCase {
         }
     }
 
+    /// R-1: Appearance mode tiles fit the real inner clip under legacy scrollbars.
+    func testCIStandingAppearanceCardsFitLegacyInnerClip() throws {
+        try withScrollerPreference(.legacy) {
+            let suite = "SettingsLegacyCards.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            defaults.set(SettingsSection.appearance.rawValue, forKey: SettingsSection.selectionStorageKey)
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let store = TaskStore(container: container)
+            let host = NSHostingView(rootView: SettingsView(
+                settings: AppSettings(defaults: defaults),
+                loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+                agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+                globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+            let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 640, height: 460),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.orderOut(nil); window.contentView = nil; window.close() }
+            let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+            let previous = NSApp.accessibilityAttributeValue(enhanced)
+            NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+            defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+
+            for size in [CGSize(width: 640, height: 460), CGSize(width: 640, height: 400)] {
+                window.setContentSize(size)
+                host.frame = CGRect(origin: .zero, size: size)
+                let deadline = Date().addingTimeInterval(2)
+                repeat {
+                    host.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                    spin(0.05)
+                } while Date() < deadline
+                // This is a layout fixture, not the live preference test.
+                // Apply the style to mounted scroll views just as AppKit does.
+                for scroll in nativeScrollViews(in: host) {
+                    scroll.scrollerStyle = .legacy
+                    scroll.tile()
+                }
+                host.layoutSubtreeIfNeeded()
+                spin(0.32)
+                host.layoutSubtreeIfNeeded()
+                let elements = ci8Elements(host)
+                func frame(_ id: String) throws -> CGRect {
+                    let item = try XCTUnwrap(elements.first { $0.accessibilityIdentifier?() == id })
+                    return try XCTUnwrap((item as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+                }
+                let mode = try frame("setting-appearance")
+                let palette = try frame("setting-panel-theme")
+                let preview = try frame("setting-appearance-preview")
+                let dark = try frame("setting-appearance-dark")
+                let inner = try XCTUnwrap(nativeScrollViews(in: host).filter { $0.frame.height > 100 }
+                    .min { $0.frame.width < $1.frame.width })
+                let clip = window.convertToScreen(inner.contentView.convert(inner.contentView.bounds, to: nil))
+                let outer = try XCTUnwrap(nativeScrollViews(in: host).first)
+                XCTAssertLessThanOrEqual(inner.frame.width,
+                                         outer.contentView.bounds.width - AtticLayout.settingsSidebarWidth
+                                         - AtticSpacing.settingsCardInset + 0.5,
+                                         "The inner scroll view, including its gutter, must stay inside the card viewport")
+                XCTAssertEqual(inner.scrollerStyle, .legacy)
+                print("CI_R1 size=\(size) mode=\(mode) palette=\(palette) preview=\(preview) dark=\(dark) clip=\(clip) inner=\(inner.frame) hasV=\(inner.hasVerticalScroller) hidden=\(String(describing: inner.verticalScroller?.isHidden)) all=\(nativeScrollViews(in: host).map { ($0.frame, $0.contentView.bounds) })")
+                XCTAssertGreaterThan(mode.width, 0)
+                XCTAssertLessThanOrEqual(dark.maxX, clip.maxX - AtticSpacing.settingsGroupInset + 0.5,
+                                         "The final mode tile must remain inside the group inset")
+                XCTAssertLessThanOrEqual(mode.maxX, clip.maxX - AtticSpacing.settingsGroupInset + 0.5,
+                                         "Mode card keeps its trailing inset at \(size)")
+                XCTAssertLessThanOrEqual(palette.maxX, clip.maxX - AtticSpacing.settingsGroupInset + 0.5)
+                XCTAssertEqual(mode.width, preview.width, accuracy: 0.5,
+                               "Mode card must match the full-width preview, not overflow the column")
+            }
+        }
+    }
+
+    /// R-1: hidden outer legacy indicators do not reserve an idle track.
+    func testCIStandingHiddenLegacyIndicatorsLeaveTheOuterClipFullWidth() throws {
+        try withScrollerPreference(.legacy) {
+            let size = CGSize(width: 860, height: 650)
+            let host = NSHostingView(rootView: GeometryReader { available in
+                SettingsAdaptiveScroll(size: available.size) { Color.clear }
+            })
+            let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.orderOut(nil); window.contentView = nil; window.close() }
+            let deadline = Date().addingTimeInterval(2)
+            var outer: NSScrollView?
+            repeat {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                outer = nativeScrollViews(in: host).first { abs($0.frame.width - size.width) < 1 }
+                spin(0.02)
+            } while outer == nil && Date() < deadline
+            let scroll = try XCTUnwrap(outer)
+            // This is an explicit legacy-layout fixture. The getter override
+            // alone does not restyle a native view that AppKit already made.
+            scroll.scrollerStyle = .legacy
+            scroll.tile()
+            XCTAssertEqual(scroll.scrollerStyle, .legacy)
+            XCTAssertEqual(scroll.contentView.bounds.width, size.width, accuracy: 0.5,
+                           "A hidden, non-scrolling legacy indicator must not reserve a track")
+        }
+    }
+
     /// CI-standing R-4 (pre-existing): the horizontal legacy track must
     /// consume viewport height, not create an otherwise unnecessary vertical range.
     func testR24LegacyHorizontalTrackDoesNotCreateVerticalOverflow() throws {

@@ -63,7 +63,10 @@ struct AppearanceSettingsView: View {
             Color.clear.frame(height: AtticSpacing.s12)
 
             AtticGroupCard {
-                HStack(spacing: AtticModeTileMetrics.tileSpacing) {
+                // Keep the accepted three-across row when it fits. When a
+                // legacy scroller narrows the clip, wrap intact mode tiles
+                // rather than make the page wider than its viewport.
+                AtticTileFlow(spacing: AtticModeTileMetrics.tileSpacing) {
                     ForEach(AppearancePreference.allCases) { preference in
                         AtticModeTile(
                             choice: modeChoice(preference),
