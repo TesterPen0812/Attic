@@ -107,13 +107,19 @@ extension TasksPageModel {
     }
 
     /// The task was saved with these files: Attic's staged copies go, and
-    /// the copies in the attachment store are the task's now.
-    func composerFilesSaved(_ files: [TasksComposerFiles]) {
+    /// the copies in the attachment store are the task's now. VoiceOver
+    /// hears that they arrived, as it did when they were attached afterwards.
+    func composerFilesSaved(_ files: [TasksComposerFiles], on title: String) {
+        var added = 0
         for batch in files {
             batch.staging.discard()
             composerPreparations[batch.id] = nil
-            composerPrepared[batch.id] = nil
+            added += composerPrepared.removeValue(forKey: batch.id)?.count ?? 0
         }
+        guard added > 0 else { return }
+        AccessibilityNotification.Announcement(
+            added == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(added) files to \(title)")
+        ).post()
     }
 
     /// Copies a batch into the task attachment store, once, one batch at a

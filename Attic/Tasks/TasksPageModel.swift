@@ -2798,7 +2798,7 @@ final class TasksPageModel: ObservableObject {
                 if waited, addBar.text.isEmpty { addBar = submitted }
                 return false
             }
-            composerFilesSaved(files)
+            composerFilesSaved(files, on: draft.title)
             if !waited { addBarState.clearDraft() }
             keepInView(id, on: tab)
             if !waited { startDraftFromFilter() }
@@ -2856,7 +2856,7 @@ final class TasksPageModel: ObservableObject {
                 lastPasteAsOne = asOne
                 return false
             }
-            composerFilesSaved(files)
+            composerFilesSaved(files, on: created.first?.title ?? "")
             clearFailure(.paste)
             pasteOffer = nil
             // The bar is empty once the tasks exist, as after a single add

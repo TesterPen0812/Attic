@@ -508,7 +508,7 @@ final class ComposerModel: ObservableObject {
             // Until then an earlier backup remains available after a crash.
             self.saveKeptDraft()
             AtticSounds.play(.created)
-            self.tasks.composerFilesSaved(submittedFiles)
+            self.tasks.composerFilesSaved(submittedFiles, on: created.title)
             // A task "+" made while filtered stays in view (13 Nov), as
             // its first frame showed it.
             if let tab = submittedPage.tasksTab { self.tasks.keepInView(created.id, on: tab) }
@@ -612,7 +612,7 @@ final class ComposerModel: ObservableObject {
                 else { self.tasks.restoreComposerFiles(files) }
                 return false
             }
-            self.tasks.composerFilesSaved(files)
+            self.tasks.composerFilesSaved(files, on: task.title)
             if let tab = submittedPage.tasksTab { self.tasks.keepInView(task.id, on: tab) }
             if openingPage {
                 self.services.openTaskPage(task.id)
