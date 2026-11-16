@@ -126,7 +126,7 @@ enum NoteAgentTextError: LocalizedError, Equatable {
         case .unsafeChecklist:
             "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
         case .lossyFormatting:
-            "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic."
+            "This note contains paragraph structure, inline marks or table formatting that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic. In a table, move rows or columns in an update of their own, leaving their text unchanged, and change rows and columns in separate updates; edit, insert or delete cells, rows and columns by id with update_note_table."
         case .raggedTable:
             "Every row of a table must have as many cells as its header row."
         case .tableTooLarge:
@@ -204,7 +204,8 @@ enum NoteAgentTextSafety {
             guard dates(base) == dates(proposed) else { throw NoteAgentTextError.lossyFormatting }
             return
         }
-        // Tables are matched by their own token and may change, come or go.
+        // Tables are matched by their own token and may change, come or go;
+        // `NoteAgentTableText.merge` refuses a table edit that would lose formatting.
         let oldBlocks = base.blocks.filter { $0.kind != .checklist && $0.kind != .table }
         let newBlocks = proposed.blocks.filter { $0.kind != .checklist && $0.kind != .table }
         guard oldBlocks.count == newBlocks.count else { throw NoteAgentTextError.lossyFormatting }

@@ -4,10 +4,11 @@ import Foundation
 ///
 /// - `list_notes` shows each table as an `<!-- attic:table id=… -->` token
 ///   line and a GFM pipe table, and lists its row and column ids.
-/// - `update_note` keeps a table whose token it keeps: cell text edits and
-///   added or removed rows and columns are merged into it, so unchanged
-///   rows, columns and cells keep their ids and marks. A pipe table without
-///   a token is a new table, unless it is a table whose token alone was
+/// - `update_note` keeps a table whose token it keeps and merges the
+///   agent's text into it (`merge`): rows, columns and cells keep their ids,
+///   marks, dates, widths and extras where the text proves which is which,
+///   and an update that would lose them is refused. A pipe table without a
+///   token is a new table, unless it is a table whose token alone was
 ///   removed (the whole table must go for it to be deleted).
 /// - `update_note_table` edits cells and structure by id
 ///   (`NoteTableAgentEdit`).
@@ -71,7 +72,7 @@ enum NoteAgentTableText {
         }
         if let match, let id = match.id, let table = match.table {
             used.insert(id)
-            var merged = merge(table, rows: parsed.rows, alignments: parsed.alignments)
+            var merged = try merge(table, rows: parsed.rows, alignments: parsed.alignments)
             if parsed.hasToken { merged.headerRow = !parsed.headerOff }
             var block = NoteBlock.table(merged, id: id)
             block.extras = match.extras
@@ -89,79 +90,133 @@ enum NoteAgentTableText {
         table.rows.map { $0.cells.map { NoteTextExport.agentInlineText($0.block) } }
     }
 
-    /// Merges an agent's rows into `table`: rows and columns the agent kept
-    /// keep their ids (matched by their text, in order, then by position);
-    /// a cell whose text is unchanged keeps its marks and dates.
-    static func merge(_ table: NoteTable, rows: [[String]], alignments: [NoteTable.Alignment]) -> NoteTable {
+    /// Merges an agent's rows into `table` (design: `ops/design/notes-tables.md`).
+    /// The text proves only exact matches, so it keeps only what they prove:
+    /// - **Certain:** a row or column whose text is unique in both tables, as
+    ///   a whole line or at the other dimension's certain lines (found in
+    ///   rounds); a dimension with one line in both tables.
+    /// - **Carried:** a hidden thing (a mark, a date id, a width, extras)
+    ///   stays on a certain line, or on a gap of one line on each side between
+    ///   the same certain neighbours. Larger equal gaps pair in place only
+    ///   when they carry nothing hidden.
+    /// - **Dropped** only by a pure deletion; otherwise the update is refused
+    ///   (`lossyFormatting`), as is an edit to a cell with marks.
+    static func merge(_ table: NoteTable, rows: [[String]], alignments: [NoteTable.Alignment]) throws -> NoteTable {
         let old = texts(table)
         let width = rows.first?.count ?? 0
-        // Columns: by header text when the header names are unique, else by position.
-        let oldHeaders = old.first ?? []
-        let newHeaders = rows.first ?? []
-        let columnMap: [Int?] = Set(oldHeaders).count == oldHeaders.count && Set(newHeaders).count == newHeaders.count
-            ? match(old: oldHeaders, new: newHeaders) : (0..<width).map { $0 < table.columnCount ? $0 : nil }
-        let rowMap = match(old: old.map { $0.joined(separator: "\u{1}") }, new: rows.map { $0.joined(separator: "\u{1}") })
-        var columns: [NoteTable.Column] = []
-        for (index, source) in columnMap.enumerated() {
-            var column = source.map { table.columns[$0] } ?? NoteTable.Column()
-            if index < alignments.count { column.align = alignments[index] }
-            columns.append(column)
+        let hiddenCell = { (cell: NoteTable.Cell) in !cell.marks.isEmpty || !cell.inlines.isEmpty || !cell.extras.isEmpty }
+        let rowHidden = table.rows.map { !$0.extras.isEmpty || $0.cells.contains(where: hiddenCell) }
+        let columnHidden = table.columns.indices.map { column in
+            table.columns[column].width != nil || !table.columns[column].extras.isEmpty
+                || table.rows.contains { hiddenCell($0.cells[column]) }
         }
-        var result: [NoteTable.Row] = []
-        for (rowIndex, cells) in rows.enumerated() {
+        var (rowMap, columnMap) = certain(old: old, new: rows)
+        if !rowMap.contains(where: { $0 != nil }) && !columnMap.contains(where: { $0 != nil }) {
+            // Nothing to start from: plain tables get new ids, others are refused.
+            guard !rowHidden.contains(true) && !columnHidden.contains(true) else { throw NoteAgentTextError.lossyFormatting }
+        } else {
+            try pairGaps(&rowMap, oldCount: old.count, hidden: rowHidden)
+            try pairGaps(&columnMap, oldCount: table.columnCount, hidden: columnHidden)
+        }
+        var merged = table
+        merged.columns = (0..<width).map { index in
+            var column = columnMap[index].map { table.columns[$0] } ?? NoteTable.Column()
+            if index < alignments.count { column.align = alignments[index] }
+            return column
+        }
+        merged.rows = try rows.enumerated().map { rowIndex, cells in
             let sourceRow = rowMap[rowIndex]
             var row = sourceRow.map { NoteTable.Row(id: table.rows[$0].id, cells: [], extras: table.rows[$0].extras) }
                 ?? NoteTable.Row(cells: [])
-            for (columnIndex, text) in cells.enumerated() {
-                var reusing: NoteTable.Cell?
-                if let sourceRow, let sourceColumn = columnMap[columnIndex] {
-                    let original = table.rows[sourceRow].cells[sourceColumn]
-                    if old[sourceRow][sourceColumn] == text {
-                        row.cells.append(original)
-                        continue
-                    }
-                    reusing = original
-                }
-                row.cells.append(cell(text, reusing: reusing))
+            row.cells = try cells.enumerated().map { columnIndex, text in
+                guard let sourceRow, let sourceColumn = columnMap[columnIndex] else { return cell(text, reusing: nil) }
+                let original = table.rows[sourceRow].cells[sourceColumn]
+                if old[sourceRow][sourceColumn] == text { return original }
+                guard original.marks.isEmpty else { throw NoteAgentTextError.lossyFormatting }
+                return cell(text, reusing: original)
             }
-            result.append(row)
+            return row
         }
-        var merged = table
-        merged.columns = columns
-        merged.rows = result
         merged.makeRectangular()
         return merged
     }
 
-    /// New index → old index: equal keys in order first; then, between two
-    /// kept neighbours, the changed entries pair up in order (an edited row
-    /// keeps its id); the rest are new.
-    static func match(old: [String], new: [String]) -> [Int?] {
-        var result = [Int?](repeating: nil, count: new.count)
-        var cursor = 0
-        for (index, key) in new.enumerated() {
-            if cursor < old.count, let found = old[cursor...].firstIndex(of: key) {
-                result[index] = found
-                cursor = found + 1
-            }
+    /// Certain rows and columns (new index → old index), in rounds: first
+    /// whole lines unique in both tables; then each dimension keyed at the
+    /// other's certain lines as they stood at the end of the round before,
+    /// until a round adds nothing.
+    static func certain(old: [[String]], new: [[String]]) -> (rows: [Int?], columns: [Int?]) {
+        let oldWidth = old.first?.count ?? 0, newWidth = new.first?.count ?? 0
+        let oldColumns = (0..<oldWidth).map { column in old.map { $0[column] } }
+        let newColumns = (0..<newWidth).map { column in new.map { $0[column] } }
+        var rows = unique(old: old, new: new, into: [Int?](repeating: nil, count: new.count))
+        var columns = unique(old: oldColumns, new: newColumns, into: [Int?](repeating: nil, count: newWidth))
+        if old.count == 1 && new.count == 1 { rows[0] = 0 }
+        if oldWidth == 1 && newWidth == 1 { columns[0] = 0 }
+        while true {
+            let nextRows = unique(old: old, new: new, at: columns, into: rows)
+            let nextColumns = unique(old: oldColumns, new: newColumns, at: rows, into: columns)
+            guard nextRows != rows || nextColumns != columns else { return (rows, columns) }
+            (rows, columns) = (nextRows, nextColumns)
         }
-        // The gaps between anchors (and before the first, after the last).
-        var newStart = 0, oldStart = 0
-        func pairGap(newEnd: Int, oldEnd: Int) {
-            var oldIndex = oldStart
-            for newIndex in newStart..<newEnd where oldIndex < oldEnd {
-                result[newIndex] = oldIndex
-                oldIndex += 1
-            }
+    }
+
+    /// `map` plus each line not yet matched whose key is unique in both
+    /// tables. The key is the whole line, or, given the other dimension's
+    /// `certain` map, the line's cells at those lines in old order.
+    static func unique(old: [[String]], new: [[String]], at certain: [Int?]? = nil, into map: [Int?]) -> [Int?] {
+        var oldKeys: [[String]?] = old.map { $0 }, newKeys: [[String]?] = new.map { $0 }
+        if let certain {
+            let pairs = certain.enumerated().compactMap { newIndex, oldIndex in oldIndex.map { (new: newIndex, old: $0) } }.sorted { $0.old < $1.old }
+            guard !pairs.isEmpty else { return map }
+            oldKeys = old.map { line in pairs.map { line[$0.old] } }
+            newKeys = new.map { line in pairs.map { line[$0.new] } }
         }
-        for (index, value) in result.enumerated() {
-            guard let value else { continue }
-            pairGap(newEnd: index, oldEnd: value)
-            newStart = index + 1
-            oldStart = value + 1
+        var oldCount: [[String]: Int] = [:], newCount: [[String]: Int] = [:], oldIndex: [[String]: Int] = [:]
+        for (index, key) in oldKeys.enumerated() { if let key { oldCount[key, default: 0] += 1; oldIndex[key] = index } }
+        for key in newKeys { if let key { newCount[key, default: 0] += 1 } }
+        var result = map
+        let taken = Set(map.compactMap { $0 })
+        for (index, key) in newKeys.enumerated() where result[index] == nil {
+            guard let key, oldCount[key] == 1, newCount[key] == 1, let source = oldIndex[key], !taken.contains(source) else { continue }
+            result[index] = source
         }
-        pairGap(newEnd: new.count, oldEnd: old.count)
         return result
+    }
+
+    /// Left-over lines between the same two certain neighbours (or the
+    /// table's edges) in both tables: one line on each side pairs in place;
+    /// more pair in place only when none of the old ones carries anything
+    /// hidden. An unpaired old line with something hidden is a pure deletion
+    /// only when no new line is unpaired; otherwise the update is refused.
+    static func pairGaps(_ map: inout [Int?], oldCount: Int, hidden: [Bool]) throws {
+        struct Gap: Hashable { var before: Int, after: Int }
+        func gaps(_ anchors: [Int?], end: Int) -> [Gap: [Int]] {
+            var next = [Int](repeating: end, count: anchors.count)
+            var following = end
+            for index in anchors.indices.reversed() {
+                next[index] = following
+                if let anchor = anchors[index] { following = anchor }
+            }
+            var result: [Gap: [Int]] = [:], previous = -1
+            for index in anchors.indices {
+                if let anchor = anchors[index] { previous = anchor; continue }
+                result[Gap(before: previous, after: next[index]), default: []].append(index)
+            }
+            return result
+        }
+        let matched = Set(map.compactMap { $0 })
+        let oldAnchors = (0..<oldCount).map { matched.contains($0) ? $0 : nil }
+        let oldGaps = gaps(oldAnchors, end: oldCount)
+        for (gap, newLines) in gaps(map, end: oldCount) {
+            guard let oldLines = oldGaps[gap], oldLines.count == newLines.count,
+                  oldLines.count == 1 || !oldLines.contains(where: { hidden[$0] }) else { continue }
+            for (newLine, oldLine) in zip(newLines, oldLines) { map[newLine] = oldLine }
+        }
+        let kept = Set(map.compactMap { $0 })
+        if map.contains(nil) && (0..<oldCount).contains(where: { !kept.contains($0) && hidden[$0] }) {
+            throw NoteAgentTextError.lossyFormatting
+        }
     }
 
     /// An agent's cell text: `[date:YYYY-MM-DD]` becomes a date (reusing a

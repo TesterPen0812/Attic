@@ -540,6 +540,36 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(noteStore.note(withID: id)?.body, body2)
     }
 
+    /// Deep fix 4 (`ops/design/notes-tables.md`): a table rewrite that would
+    /// drop hidden formatting is refused for the whole update. With two tables,
+    /// a refusal on the second leaves the body and the first table untouched.
+    func testUpdateNoteRefusingOneTableLeavesTheWholeNoteUntouched() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let first = NoteTable(texts: [["Pillar", "What happened"], ["Integrity", "Systems encrypted"]])
+        var second = NoteTable(texts: [["K", "V"], ["a", "1"], ["b", "2"], ["c", "3"]])
+        for row in 1...3 { second.rows[row].extras = ["owner": .string("r\(row)")] }
+        let firstID = UUID(), secondID = UUID()
+        let base = NoteDocument(blocks: [.text("Two tables"), .text("Intro"), .table(first, id: firstID),
+                                         .text("Between"), .table(second, id: secondID)])
+        guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+        let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        // The body and the first table change; the second has its rows reordered
+        // and every V cell edited, which text can't tell from other rows.
+        var editedFirst = first
+        editedFirst.rows[1].cells[1] = NoteTable.Cell("Encrypted and held")
+        var reordered = second
+        reordered.rows.swapAt(1, 2)
+        for row in 1...3 { reordered.rows[row].cells[1] = NoteTable.Cell("v\(row) new") }
+        let wire = NoteDocument(blocks: [.text("Two tables"), .text("Intro, edited"), .table(editedFirst, id: firstID),
+                                         .text("Between"), .table(reordered, id: secondID)])
+        let revision = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        let message = try noteToolError(handler, ["id": id.uuidString, "base_revision": revision,
+                                                  "body": NoteTextExport.agentBody(wire)])
+        XCTAssertTrue(message.contains("update_note_table"), message)
+        XCTAssertEqual(noteStore.note(withID: id)?.revisionToken, revision, "nothing was saved")
+        XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, stored, "the body and both tables are untouched")
+    }
+
     func testUpdateNoteCanAddAndRemoveChecklistLinesInPlainAndRichNotes() throws {
         for rich in [false, true] {
             for removing in [false, true] {
