@@ -104,6 +104,112 @@ final class ComposerTests: XCTestCase {
         }
     }
 
+    // MARK: Files are saved with the task (composer-files)
+
+    private func pngBytes() throws -> Data {
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4, bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+    }
+
+    /// A pasted image: Attic's staged copy is the only one there is.
+    private func pasteAnImage(named name: String = "Pasted Image") async throws -> Data {
+        let bytes = try pngBytes()
+        let image = NSItemProvider(item: bytes as NSData, typeIdentifier: UTType.png.identifier)
+        image.suggestedName = name
+        page.addComposerFiles([image])
+        try await waitForComposer { self.page.addBarState.stagingFiles == 0 && self.page.addBarState.files.count == 1 }
+        return bytes
+    }
+
+    private func storedBytes(of task: TaskItem) async throws -> Data {
+        let reference = try XCTUnwrap(task.attachments.first)
+        let url = try await tasks.taskImageFiles.verifiedURL(for: reference)
+        return try Data(contentsOf: XCTUnwrap(url))
+    }
+
+    /// Return with a pasted image, then ⌘Z at once (CP-5): the file went
+    /// to Recently Deleted with its task, and Redo brings both back.
+    func testComposerFilesUndoRightAfterReturnKeepsAnOwnedFileForRedo() async throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Task with a pasted image")
+        let bytes = try await pasteAnImage()
+        model.submit()
+
+        XCTAssertEqual(page.undo(), .applied)
+        XCTAssertTrue(liveTasks().isEmpty)
+        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
+        XCTAssertEqual(library.redo(in: .tasks), .applied)
+
+        let task = try XCTUnwrap(liveTasks().first)
+        XCTAssertEqual(task.attachments.count, 1, "Redo brings the task back with its file")
+        let stored = try await storedBytes(of: task)
+        XCTAssertEqual(stored, bytes)
+    }
+
+    /// The app stops right after Return's save: a store opened afresh
+    /// already has the task with its file. Nothing waits in memory.
+    func testComposerFilesAFreshStoreRightAfterReturnHasTheTaskWithItsFile() async throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Saved with its file")
+        let bytes = try await pasteAnImage()
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+
+        // No main-actor turn has run since the save.
+        let reopened = TaskStore(container: container, taskImageFiles: tasks.taskImageFiles)
+        let task = try XCTUnwrap(reopened.tasks.first { $0.title == "Saved with its file" })
+        XCTAssertEqual(task.attachments.count, 1, "the file is the task's from the task's own save")
+        let stored = try await storedBytes(of: task)
+        XCTAssertEqual(stored, bytes)
+    }
+
+    /// One store write fails just after the task was made: the file is on
+    /// the task or still with the draft, never nowhere.
+    func testComposerFilesASaveFailureAfterTheTaskIsMadeNeverLosesTheFile() async throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("One save, then a failure")
+        _ = try await pasteAnImage()
+        taskSaveFailure.successfulWritesBeforeFailure = 1
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
+
+        let attached = try rows(TaskItem.self).first?.attachments.count ?? 0
+        XCTAssertEqual(attached + page.addBarState.files.count, 1, "on the task, or back in the draft")
+    }
+
+    /// The task's own save fails: no task, and the draft keeps its words and
+    /// its file; a second Return makes one task with that file.
+    func testComposerFilesAFailedSaveKeepsTheDraftAndItsFileForOneRetry() async throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        model.open(on: .tasks(.now))
+        type("Retried once")
+        let bytes = try await pasteAnImage()
+        taskSaveFailure.successfulWritesBeforeFailure = 0
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
+        XCTAssertTrue(model.failed)
+        XCTAssertTrue(try rows(TaskItem.self).isEmpty)
+        XCTAssertEqual(page.addBar.text, "Retried once")
+        XCTAssertEqual(page.addBarState.files.count, 1)
+
+        model.submit()
+        page.settlePendingCompletionAcknowledgements()
+        for attach in Array(page.composerAttachmentTasks.values) { _ = await attach.value }
+
+        let saved = try rows(TaskItem.self)
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(saved.first?.attachments.count, 1)
+        let stored = try await storedBytes(of: try XCTUnwrap(liveTasks().first))
+        XCTAssertEqual(stored, bytes)
+        XCTAssertTrue(page.addBarState.files.isEmpty)
+    }
+
     private func waitForComposer(_ ready: () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
@@ -142,6 +248,19 @@ final class ComposerTests: XCTestCase {
     private var windows: [NSWindow] = []
     private final class Switch { var on = false }
     private let saveFailure = Switch()
+    /// The task store's own saves: `successfulWritesBeforeFailure = 0` fails the next one.
+    private final class TaskSaveFailure {
+        var successfulWritesBeforeFailure: Int?
+        func persist(_ context: ModelContext) throws {
+            if let remaining = successfulWritesBeforeFailure {
+                successfulWritesBeforeFailure = nil
+                if remaining == 0 { throw CocoaError(.fileWriteUnknown) }
+                successfulWritesBeforeFailure = remaining - 1
+            }
+            try context.save()
+        }
+    }
+    private let taskSaveFailure = TaskSaveFailure()
     private let clock: Calendar = Calendar.autoupdatingCurrent
     private lazy var now: Date = clock.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 10))!
     private var today: DueDay { DueDay(date: now, calendar: clock) }
@@ -153,7 +272,8 @@ final class ComposerTests: XCTestCase {
         container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         _ = try WorkspaceLegacyBridge.coordinator(for: container)
         let fixed = now
-        tasks = TaskStore(container: container, now: { fixed },
+        let failingTasks = taskSaveFailure
+        tasks = TaskStore(container: container, now: { fixed }, persist: { try failingTasks.persist($0) },
             taskImageFiles: TaskImageFiles(rootURL: ownedTemporaryDirectory(prefix: "ComposerTaskFiles")))
         let failing = saveFailure
         notes = NoteStore(container: container, now: { fixed }, persist: { context in
@@ -180,6 +300,9 @@ final class ComposerTests: XCTestCase {
     }
 
     override func tearDown() {
+        // A change held with a 30 s delay saves now, while its fixture still
+        // exists, never into a later test's store.
+        page?.settlePendingCompletionAcknowledgements()
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
         windows.forEach { $0.contentView = nil; $0.close() }
