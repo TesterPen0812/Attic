@@ -544,6 +544,27 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(tasks.task(withID: try XCTUnwrap(made))?.attachments.map(\.filename), ["Dropped.pdf", "Picked.pdf"])
     }
 
+    /// M9: a dropped batch still being staged or copied holds the panel
+    /// (the shell's composer lock), even with no words in the bar.
+    func testComposerFilesR2ADropBeingStagedHoldsThePanel() async throws {
+        let root = ownedTemporaryDirectory(prefix: "ComposerDropHold")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("Held.pdf")
+        try Data("held".utf8).write(to: url)
+        let started = expectation(description: "drop requested")
+        let dropped = HeldFileProvider(started: started, name: "Held.pdf")
+
+        page.addComposerFiles([dropped.provider])
+
+        XCTAssertTrue(page.addBar.text.isEmpty)
+        XCTAssertTrue(page.addBarState.holdsPanel, "the draft holds the panel from the drop")
+        await fulfillment(of: [started], timeout: 5)
+        XCTAssertTrue(page.addBarState.holdsPanel)
+        page.clearComposerFiles()
+        XCTAssertFalse(page.addBarState.holdsPanel)
+        dropped.finish(url)
+    }
+
     /// M7: a page model that goes away ends its draft's copies: the import
     /// hold is let go and the bytes are removed, without waiting for a sweep.
     func testComposerFilesR2ATornDownPageEndsItsDraftsCopies() async throws {

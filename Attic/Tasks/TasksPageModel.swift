@@ -209,6 +209,8 @@ final class TasksAddBarState: ObservableObject {
     @Published var stagingFiles = 0
     /// Clear invalidates providers still staging for this draft.
     var filesGeneration = UUID()
+    /// The last place given to a batch of files (`nextFilesPlace`).
+    var filesPlaced = 0
 
     /// The owner's side of the token field's undo: text and pieces step
     /// back together; nil when the draft has nothing to undo.
@@ -286,6 +288,8 @@ final class TasksPageModel: ObservableObject {
     var composerPreparations: [UUID: Task<[TaskImageReference]?, Never>] = [:]
     var composerPrepared: [UUID: [TaskImageReference]] = [:]
     var composerPreparationTail: Task<[TaskImageReference]?, Never>?
+
+    isolated deinit { endComposerCopies() }
 
     let library: AtticLibrary
     var store: TaskStore { library.tasks }
