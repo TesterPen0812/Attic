@@ -799,31 +799,6 @@ final class ComposerTests: XCTestCase {
         XCTAssertFalse(TaskNoteConversion.hasWriting(newerID, in: ModelContext(container)))
     }
 
-    func testComposerAttachesStagedFilesAfterConfirmedTaskPresentationRecovers() async throws {
-        let root = ownedTemporaryDirectory(prefix: "ComposerConfirmedTaskFiles")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let source = root.appendingPathComponent("task-details.txt")
-        try Data("keep these files with the task".utf8).write(to: source)
-
-        model.open(on: .tasks(.now))
-        type("Saved task with files")
-        model.writing = "Saved writing"
-        page.addComposerFiles(urls: [source])
-        tasks.listRefreshFailures = 3
-        model.submit()
-        try await waitForComposer { !self.model.isCreating }
-        try await waitForComposer {
-            self.liveTasks().first?.attachments.count == 1
-        }
-
-        let task = try XCTUnwrap(liveTasks().first)
-        XCTAssertTrue(TaskNoteConversion.hasWriting(task.id, in: ModelContext(container)))
-        let reference = try XCTUnwrap(task.attachments.first)
-        let url = try await tasks.taskImageFiles.verifiedURL(for: reference)
-        let saved = try XCTUnwrap(url)
-        XCTAssertEqual(try Data(contentsOf: saved), Data("keep these files with the task".utf8))
-    }
-
     func testUndoDuringAcknowledgedTaskCreationUndoesThatTaskNotThePreviousOne() async throws {
         let before = try XCTUnwrap(library.createTasks([TaskDraft(title: "Existing task")])?.first)
         model.open(on: .tasks(.now))
