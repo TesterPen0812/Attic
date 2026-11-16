@@ -1,7 +1,37 @@
 import AppKit
 import Foundation
+import ObjectiveC
 import SwiftData
+import XCTest
 @testable import Attic
+
+/// A process-local system setting for hosted views. Attic's DEBUG seams
+/// control its policy; native SwiftUI/AppKit renderers also read NSWorkspace.
+@MainActor
+enum WorkspaceAccessibilityTestOverride {
+    // Keep the two blocks alive for the process, including native readers
+    // already in flight when a fixture restores the original implementation.
+    private static let readings: (off: IMP, on: IMP) = {
+        func getter(_ value: Bool) -> IMP {
+            let read: @convention(block) (AnyObject) -> Bool = { _ in value }
+            return imp_implementationWithBlock(read)
+        }
+        return (getter(false), getter(true))
+    }()
+
+    /// The caller must invoke the returned restoration in `defer`.
+    static func install(_ selector: Selector, value: Bool) throws -> @MainActor () -> Void {
+        let method = try XCTUnwrap(class_getInstanceMethod(NSWorkspace.self, selector))
+        let previous = method_setImplementation(method, value ? readings.on : readings.off)
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                                                   object: nil)
+        return {
+            method_setImplementation(method, previous)
+            NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                                                       object: nil)
+        }
+    }
+}
 
 /// An imported tombstone bypasses local Delete's input settlement and
 /// publication. Recovery tests need this external event (2026-10-23).
@@ -264,6 +294,47 @@ extension XCTestCase {
     func trackAttachmentReconciliation(of store: NoteStore) -> NoteStore {
         addTeardownBlock { [weak store] in await store?.waitForAttachmentReconciliation() }
         return store
+    }
+}
+
+/// A reveal (a vetoed quit, `revealProgrammatically`) makes AtticPanel key and
+/// the application active; that is the product's behaviour. A test that builds
+/// the coordinator or the panel must not leave the visible panel windows, the
+/// key window or the active application behind for every later test in the
+/// process (CI 43558047333: the Notes link menu test read the native menu
+/// through a stray key AtticPanel). Call it when the test ends.
+@MainActor
+func retireRevealedPanels() {
+    for window in NSApp.windows where window is AtticPanel || window is PanelIslandWindow {
+        window.orderOut(nil)
+    }
+    if NSApp.isActive { NSApp.deactivate() }
+}
+
+/// Per suite, the panel windows and the key window it started with, so a
+/// last-in-suite test can say whether the suite left a panel behind without
+/// blaming an earlier suite's leak.
+@MainActor
+enum PanelLeakGuard {
+    private static var baselines: [String: (windows: Set<ObjectIdentifier>, keyWasPanel: Bool)] = [:]
+
+    private static func visiblePanels() -> [NSWindow] {
+        NSApp.windows.filter { ($0 is AtticPanel || $0 is PanelIslandWindow) && $0.isVisible }
+    }
+
+    /// Call from `setUp`; only the first call of a suite records.
+    static func begin(_ suite: String) {
+        guard baselines[suite] == nil else { return }
+        baselines[suite] = (Set(visiblePanels().map(ObjectIdentifier.init)), NSApp.keyWindow is AtticPanel)
+    }
+
+    /// Panel windows still ordered in (and a key panel) that the suite added.
+    static func leaked(since suite: String) -> [String] {
+        guard let baseline = baselines[suite] else { return ["no baseline: begin() was not called"] }
+        var result = visiblePanels().filter { !baseline.windows.contains(ObjectIdentifier($0)) }
+            .map { "\(type(of: $0)) #\($0.windowNumber)" }
+        if NSApp.keyWindow is AtticPanel, !baseline.keyWasPanel { result.append("key AtticPanel") }
+        return result
     }
 }
 

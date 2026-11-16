@@ -8,11 +8,22 @@ import XCTest
 /// test driver catches its commands without ordering a window on the Air.
 @MainActor
 enum NotesGlassMenuTestSupport {
+    /// The native menu AppKit builds for the same right-click, validated in
+    /// the same turn the glass copy was: `rightClick` reads it right after the
+    /// press, before it waits for the glass menu to open.
+    private static var nativeAtTheClick: (view: WeakView, menu: NSMenu)?
+    private struct WeakView { weak var view: NSView? }
+
     /// The editor's system menu differs by OS and user services. Assert the
     /// actual menu returned by AppKit, including nested commands, instead
     /// of hard-coding only a subset of native spelling/text actions.
     static func assertNativeParity(_ commands: [AtticMenuCommand], in view: NSView,
                                    at point: NSPoint, file: StaticString = #filePath, line: UInt = #line) throws {
+        if let same = nativeAtTheClick, same.view.view === view {
+            nativeAtTheClick = nil
+            compare(commands, to: same.menu, revalidate: false, file: file, line: line)
+            return
+        }
         let window = try XCTUnwrap(view.window)
         let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown,
             location: view.convert(point, to: nil), modifierFlags: [], timestamp: 2,
@@ -22,9 +33,21 @@ enum NotesGlassMenuTestSupport {
         compare(commands, to: menu, file: file, line: line)
     }
 
-    private static func compare(_ commands: [AtticMenuCommand], to menu: NSMenu,
-                                file: StaticString, line: UInt) {
+    /// AppKit validates a menu's items when it is updated, through whichever
+    /// window is key at that moment. Do it for the menu and every submenu the
+    /// glass copy reads, now.
+    private static func validateNow(_ menu: NSMenu) {
         menu.update()
+        for item in menu.items {
+            if let submenu = item.submenu, item.view == nil, !(submenu.items.isEmpty && submenu.delegate != nil) {
+                validateNow(submenu)
+            }
+        }
+    }
+
+    private static func compare(_ commands: [AtticMenuCommand], to menu: NSMenu, revalidate: Bool = true,
+                                file: StaticString, line: UInt) {
+        if revalidate { menu.update() }
         let native = menu.items.filter { !$0.isSeparatorItem && !$0.isHidden && !$0.isAlternate && !$0.title.isEmpty }
         XCTAssertEqual(commands.map(\.title), native.map { item in
             item.state == .off ? item.title : (item.title.split(separator: "\t", maxSplits: 1).first.map(String.init) ?? item.title)
@@ -51,14 +74,16 @@ enum NotesGlassMenuTestSupport {
             }
             if let submenu = item.submenu, item.view == nil,
                !(submenu.items.isEmpty && submenu.delegate != nil) {
-                compare(command.children, to: submenu, file: file, line: line)
+                compare(command.children, to: submenu, revalidate: revalidate, file: file, line: line)
             } else {
                 XCTAssertTrue(command.children.isEmpty, "\(item.title) has no glass children", file: file, line: line)
             }
         }
     }
 
-    static func rightClick(_ view: NSView, at point: NSPoint) async throws -> [AtticMenuCommand] {
+    /// `nativeParity`: also read AppKit's own menu for the same click, in the same
+    /// turn as the glass copy, for `assertNativeParity` to compare against.
+    static func rightClick(_ view: NSView, at point: NSPoint, nativeParity: Bool = false) async throws -> [AtticMenuCommand] {
         let window = try XCTUnwrap(view.window)
         let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown,
             location: view.convert(point, to: nil), modifierFlags: [], timestamp: 1,
@@ -89,6 +114,17 @@ enum NotesGlassMenuTestSupport {
             AtticGlassMenu.ordersCardsFront = previousOrdering
         }
         view.rightMouseDown(with: event)
+        // The glass copy was validated inside that call. Read AppKit's own menu
+        // for the same click now, not after the awaits below: the key window
+        // and the active application can change in between.
+        nativeAtTheClick = nil
+        if nativeParity, let nativeEvent = NSEvent.mouseEvent(with: .rightMouseDown,
+            location: view.convert(point, to: nil), modifierFlags: [], timestamp: 2,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 2,
+            clickCount: 1, pressure: 1), let native = view.menu(for: nativeEvent) {
+            validateNow(native)
+            nativeAtTheClick = (WeakView(view: view), native)
+        }
         for _ in 0..<30 where captured == nil { try await Task.sleep(for: .milliseconds(20)) }
         return try XCTUnwrap(captured, "a right-click must open Attic's glass menu")
     }
@@ -202,7 +238,7 @@ final class NotesFormatControlsTests: XCTestCase {
         textView.setSelectedRange(selection)
         let rect = try XCTUnwrap(engine.rect(for: selection))
         let point = NSPoint(x: rect.midX, y: rect.midY)
-        let commands = try await NotesGlassMenuTestSupport.rightClick(textView, at: point)
+        let commands = try await NotesGlassMenuTestSupport.rightClick(textView, at: point, nativeParity: true)
         try NotesGlassMenuTestSupport.assertNativeParity(commands, in: textView, at: point)
         let titles = commands.map(\.title)
         XCTAssertTrue(titles.contains("Format"), "the note's own format commands")
@@ -219,7 +255,7 @@ final class NotesFormatControlsTests: XCTestCase {
         controls.router.run(.link("https://example.com"), from: .linkPopover, selection: selection)
         let rect = try XCTUnwrap(controls.engine.rect(for: selection))
         let point = NSPoint(x: rect.midX, y: rect.midY)
-        let commands = try await NotesGlassMenuTestSupport.rightClick(textView, at: point)
+        let commands = try await NotesGlassMenuTestSupport.rightClick(textView, at: point, nativeParity: true)
         try NotesGlassMenuTestSupport.assertNativeParity(commands, in: textView, at: point)
         XCTAssertEqual(Array(commands.map(\.title).prefix(4)),
                        ["Open Link", "Edit Link…", "Copy Link", "Remove Link"])

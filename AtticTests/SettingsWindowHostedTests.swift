@@ -165,7 +165,9 @@ final class SettingsWindowHostedTests: XCTestCase {
                             menu.choose(menu.commands.first { $0.title == style.title }!)
                         }
                         XCTAssertTrue(row.accessibilityPerformPress?() ?? false)
-                        spin(0.02)
+                        // The menu opens on the next turn of the run loop: wait for
+                        // that, not a fixed 20 ms a loaded runner can miss.
+                        waitForTestOperation("the glass menu opening after the press") { opened }
                         XCTAssertTrue(opened)
                         XCTAssertEqual(settings.panelSurfaceStyle, style)
                     }

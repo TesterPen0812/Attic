@@ -176,6 +176,66 @@ final class AgentChatTests: XCTestCase {
         XCTAssertTrue(model.entries.allSatisfy { model.wasShown($0.id) })
     }
 
+    func testRestoringLargeSavedChatPublishesEntriesOnce() {
+        // Opening old history should give SwiftUI one coherent snapshot instead
+        // of invalidating the entire chat for every archived row.
+        let exchanges = 600
+        runner.retainsThread = true
+        runner.snapshot = AgentThreadSnapshot(entries: (0..<exchanges).flatMap { index in
+            [AgentThreadEntry(id: UUID(), role: "user", text: "Question \(index)"),
+             AgentThreadEntry(id: UUID(), role: "assistant", text: "Answer **\(index)** with next steps")]
+        }, events: [], isRunning: false)
+
+        var entryPublishes = 0
+        let observation = model.$entries.dropFirst().sink { _ in entryPublishes += 1 }
+        let started = ProcessInfo.processInfo.systemUptime
+        model.connect(runner)
+        let milliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+        withExtendedLifetime(observation) {
+            print("AGENT_RESTORE rows=\(model.entries.count) entryPublishes=\(entryPublishes) elapsedMs=\(milliseconds)")
+            XCTAssertEqual(model.entries.count, exchanges * 2)
+            XCTAssertEqual(entryPublishes, 1,
+                "Restoring history must publish one complete snapshot: never one main-actor update per row, and never an empty thread first")
+        }
+        XCTAssertTrue(model.entries.allSatisfy { model.wasShown($0.id) })
+    }
+
+    func testSeededHistorySwitchesKeepSavedRepliesSettledAndReachable() {
+        let ids = (0..<6).map { _ in UUID() }
+        let archived: [[AgentThreadEntry]] = ids.indices.map { thread in
+            (0..<(12 + thread)).flatMap { index in
+                [AgentThreadEntry(id: UUID(), role: "user", text: "Saved question \(thread)-\(index)"),
+                 AgentThreadEntry(id: UUID(), role: "assistant", text: "**Reply \(thread)** for \(index) ✓")]
+            }
+        }
+        for (index, id) in ids.enumerated() { runner.savedEntries[id] = archived[index] }
+
+        for seed in [UInt64(0xA6E711), UInt64(0xB54D3C)] {
+            var state = seed
+            var selected = 0
+            model.reopen(ids[selected])
+            for _ in 0..<320 {
+                state = state &* 2_862_933_555_777_941_757 &+ 3_037_000_493
+                switch (state >> 32) % 4 {
+                case 0: model.open()
+                case 1: model.close()
+                default:
+                    selected = Int((state >> 16) % UInt64(ids.count))
+                    model.reopen(ids[selected])
+                }
+                XCTAssertEqual(model.entries.count, archived[selected].count,
+                               "Seed \(seed) should retain every saved row after switching")
+                XCTAssertTrue(model.entries.allSatisfy { model.wasShown($0.id) })
+                XCTAssertEqual(replies.count, 12 + selected)
+                XCTAssertTrue(replies.allSatisfy {
+                    $0.marksStart == .distantPast && $0.parsed == nil &&
+                    $0.wordTimes.allSatisfy { $0 == .distantPast }
+                }, "Saved replies must never replay writing animations")
+            }
+            print("AGENT_HISTORY_STRESS seed=\(seed) steps=320")
+        }
+    }
+
     func testR5OpenChatParsingMaterializesOnlyAppendedWords() {
         model.open()
         let count = 2_000

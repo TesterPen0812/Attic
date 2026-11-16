@@ -10,11 +10,15 @@ import XCTest
 final class Draw3SwitchTests: XCTestCase {
     override func setUp() {
         super.setUp()
+        PanelLeakGuard.begin("Draw3SwitchTests")
         AtticMotionPreference.systemReduceMotionOverride = true
         AtticTransparencySeam.systemOverride = false
     }
 
     override func tearDown() {
+        // The quit test's coordinator vetoes a quit, which reveals the panel
+        // and makes it key; it must not outlive the test.
+        retireRevealedPanels()
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
         AtticDraw.enabledOverride = nil
@@ -223,5 +227,13 @@ final class Draw3SwitchTests: XCTestCase {
         let ready = await coordinator.prepareForTerminationDurably()
         XCTAssertTrue(ready)
         coordinator.stop()
+    }
+
+    /// Runs last in the suite (alphabetical): the quit test above builds a
+    /// coordinator whose vetoed quit reveals the panel and makes it key. Left
+    /// in place it made the rest of the unit shard run beside a key AtticPanel
+    /// and an active application (CI 43558047333).
+    func testZZTheQuitTestsRevealedPanelDoesNotOutliveTheSuite() {
+        XCTAssertEqual(PanelLeakGuard.leaked(since: "Draw3SwitchTests"), [])
     }
 }

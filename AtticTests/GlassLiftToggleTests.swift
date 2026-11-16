@@ -120,6 +120,38 @@ final class GlassLiftToggleTests: XCTestCase {
     /// Offscreen native Glass has different ambient brightness in separate
     /// windows even with the switch off, so compare the change, not the totals.
     func testDockedGenieKeepsOneIslandLiftMatchingTheLiveIsland() throws {
+        try checkDockedIslandLift()
+    }
+
+    func testDockedFixtureOverridesAndRestoresNativeReductions() throws {
+        let restoreMotion = try WorkspaceAccessibilityTestOverride.install(
+            #selector(getter: NSWorkspace.accessibilityDisplayShouldReduceMotion), value: true)
+        defer { restoreMotion() }
+        let restoreTransparency = try WorkspaceAccessibilityTestOverride.install(
+            #selector(getter: NSWorkspace.accessibilityDisplayShouldReduceTransparency), value: true)
+        defer { restoreTransparency() }
+        try checkDockedIslandLift()
+        XCTAssertTrue(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        XCTAssertTrue(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)
+    }
+
+    private func checkDockedIslandLift() throws {
+        let savedMotion = AtticMotionPreference.systemReduceMotionOverride
+        let savedTransparency = AtticTransparencySeam.systemOverride
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = savedMotion
+            AtticTransparencySeam.systemOverride = savedTransparency
+        }
+        // The fixture exercises translucent surfaces and the non-reduced
+        // island. GitHub's image enables both system reductions.
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AtticTransparencySeam.systemOverride = false
+        let restoreNativeMotion = try WorkspaceAccessibilityTestOverride.install(
+            #selector(getter: NSWorkspace.accessibilityDisplayShouldReduceMotion), value: false)
+        defer { restoreNativeMotion() }
+        let restoreNativeTransparency = try WorkspaceAccessibilityTestOverride.install(
+            #selector(getter: NSWorkspace.accessibilityDisplayShouldReduceTransparency), value: false)
+        defer { restoreNativeTransparency() }
         for surface in [PanelSurfaceStyle.glass, .frosted] {
             let off = try dockedIslandSnapshot(surface: surface, brightenGlass: false)
             let on = try dockedIslandSnapshot(surface: surface, brightenGlass: true)

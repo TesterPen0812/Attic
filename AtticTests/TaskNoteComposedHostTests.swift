@@ -1501,7 +1501,8 @@ final class TaskNoteComposedHostTests: XCTestCase {
         // SwiftUI handing the keyboard back to its hosting view this turn
         // must not win.
         window.makeFirstResponder(host.blockView)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        // The repair is queued on the main queue: wait for it, not a fixed 50 ms.
+        waitForTestOperation("the writing taking the keyboard back") { window.firstResponder === host.textView }
         XCTAssertTrue(window.firstResponder === host.textView)
         XCTAssertEqual(host.textView.selectedRange(), NSRange(location: 0, length: 0))
         host.textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))

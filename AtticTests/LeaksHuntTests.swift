@@ -291,6 +291,36 @@ final class LeaksHuntTests: XCTestCase {
                       "headless presenter must not be owned by its completed close task")
     }
 
+    func testFiveHundredDiscardedTaskDraftsDoNotAccumulateLRUMetadata() throws {
+        try requireInvisibleSoak()
+        let rig = try makeRig()
+        defer { rig.dispose() }
+        let owner = try XCTUnwrap(rig.tasks.commit([TaskDraft(title: "Unwritten task page")])?.first?.id)
+        let initial = memoryMiB(task_flavor_t(TASK_VM_INFO))
+        var costs: [Double] = []
+        for cycle in 0..<500 {
+            let start = CACurrentMediaTime()
+            let session = try XCTUnwrap(rig.draft.pages.workspaceTaskDraft(taskID: owner, title: "Unwritten task page"))
+            rig.draft.pages.resumeWorkspaceDurability(session)
+            rig.draft.pages.releaseWorkspace(session)
+            rig.draft.pages.discardUntouchedTaskDraft(session)
+            costs.append((CACurrentMediaTime() - start) * 1_000)
+            if (cycle + 1).isMultiple(of: 100) {
+                let counts = rig.draft.pages.cachedSessionCountsForTesting
+                print("LEAKS_HUNT unwritten_task_cycles=\(cycle + 1) cached=\(counts.sessions) " +
+                      "recency=\(counts.recency) footprint_mib=\(memoryMiB(task_flavor_t(TASK_VM_INFO)))")
+            }
+        }
+        let counts = rig.draft.pages.cachedSessionCountsForTesting
+        let first20 = costs.prefix(20).reduce(0, +) / 20
+        let last20 = costs.suffix(20).reduce(0, +) / 20
+        print("LEAKS_HUNT unwritten_task_500 first20_mean_ms=\(first20) last20_mean_ms=\(last20) " +
+              "footprint_delta_mib=\(memoryMiB(task_flavor_t(TASK_VM_INFO)) - initial)")
+        XCTAssertEqual(counts.sessions, 0, "untouched task drafts must leave no cached sessions")
+        XCTAssertLessThanOrEqual(counts.recency, 8,
+                                 "discarded task-note drafts must not leave unbounded recency keys")
+    }
+
     func testOneClosedTaskNoteReleasesItsPresenterAndCallbacks() async throws {
         try requireInvisibleSoak()
         AtticMotionPreference.systemReduceMotionOverride = true

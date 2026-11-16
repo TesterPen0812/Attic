@@ -369,6 +369,19 @@ final class PanelIntegrationTests: XCTestCase {
 
     private var panels: [Panel] = []
 
+    override func setUp() async throws {
+        try await super.setUp()
+        PanelLeakGuard.begin("PanelIntegrationTests")
+    }
+
+    /// Runs last in the suite (alphabetical): every test reveals its own panel,
+    /// and hiding is animated, so the panels used to stay ordered in with the
+    /// first one key and the application active for the rest of the P-Z shard.
+    @MainActor
+    func testZZRevealedPanelsDoNotOutliveTheSuite() {
+        XCTAssertEqual(PanelLeakGuard.leaked(since: "PanelIntegrationTests"), [])
+    }
+
     override func tearDown() async throws {
         for panel in panels {
             _ = panel.controller.requestHide { _ in }
@@ -376,6 +389,9 @@ final class PanelIntegrationTests: XCTestCase {
         }
         panels.removeAll()
         spin(0.4)
+        // Hiding is animated and leaves the panel's windows ordered in (and
+        // the first one key, the app active) for every later test.
+        retireRevealedPanels()
     }
 
     private func makePanel() throws -> Panel {
