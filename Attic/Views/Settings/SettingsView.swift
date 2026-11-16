@@ -142,16 +142,25 @@ struct SettingsView: View {
 struct SettingsAdaptiveScroll<Content: View>: View {
     let size: CGSize
     @ViewBuilder let content: () -> Content
-    @State private var nativeViewport: SettingsScrollViewport?
+    /// The style AppKit gives the native scrollers. The bridge below applies
+    /// the same preference to the mounted views, on mount and on each change.
+    @State private var scrollerStyle = NSScroller.preferredScrollerStyle
 
     var body: some View {
         let needsScroll = SettingsWindowLayout.needsContentScroll(size)
-        let availableHeight = nativeViewport.flatMap { $0.frameSize == size ? $0.clipHeight : nil } ?? size.height
         // Only an unusually narrow work area needs horizontal scrolling.
         // Keeping that axis at normal widths lets a focused Appearance
         // control shift the whole sidebar sideways during a theme change.
         let axes: Axis.Set = size.width < SettingsWindowLayout.minimumContentSize.width
             ? [.horizontal, .vertical] : .vertical
+        // A legacy horizontal track takes its height from the clip. AppKit's
+        // own clip for this frame, worked out in this pass, keeps the page
+        // from gaining a spurious vertical range on every resize step.
+        let clipHeight = NSScrollView.contentSize(
+            forFrameSize: size,
+            horizontalScrollerClass: axes.contains(.horizontal) ? NSScroller.self : nil,
+            verticalScrollerClass: nil, borderType: .noBorder,
+            controlSize: .regular, scrollerStyle: scrollerStyle).height
         ScrollView(axes) {
             content()
                 // A vertical ScrollView proposes its *clip* width to the
@@ -161,44 +170,31 @@ struct SettingsAdaptiveScroll<Content: View>: View {
                 .frame(minWidth: size.width < SettingsWindowLayout.minimumContentSize.width
                            ? SettingsWindowLayout.minimumContentSize.width : nil,
                        maxWidth: .infinity)
-                .frame(height: max(SettingsWindowLayout.minimumContentSize.height,
-                                   availableHeight))
-                .background(SettingsHorizontalScroller(enabled: axes.contains(.horizontal), expectedSize: size) { viewport in
-                    if nativeViewport != viewport { nativeViewport = viewport }
-                })
+                .frame(height: max(SettingsWindowLayout.minimumContentSize.height, clipHeight))
+                .background(SettingsHorizontalScroller(enabled: axes.contains(.horizontal)))
         }
         .frame(width: size.width, height: size.height)
         .scrollDisabled(!needsScroll)
         .scrollIndicators(needsScroll ? .visible : .hidden)
+        .onReceive(NotificationCenter.default.publisher(for: NSScroller.preferredScrollerStyleDidChangeNotification)) { _ in
+            scrollerStyle = NSScroller.preferredScrollerStyle
+        }
     }
 }
 
-/// A clip measurement tagged with the outer frame that produced it.
-private struct SettingsScrollViewport: Equatable {
-    var frameSize: CGSize
-    var clipHeight: CGFloat
-}
-
-/// Sync the retained native horizontal axis and report the actual clip height.
-/// AppKit still owns the scroller style, including the Always-visible preference.
+/// Sync the retained native horizontal axis, and keep the mounted scrollers on
+/// the system's scroller style, including the Always-visible preference.
 private struct SettingsHorizontalScroller: NSViewRepresentable {
     let enabled: Bool
-    let expectedSize: CGSize
-    let viewportDidChange: (SettingsScrollViewport) -> Void
 
     func makeNSView(context: Context) -> BridgeView { BridgeView(frame: .zero) }
     func updateNSView(_ view: BridgeView, context: Context) {
         view.enabled = enabled
-        view.expectedSize = expectedSize
-        view.viewportDidChange = viewportDidChange
         view.apply()
     }
 
     final class BridgeView: NSView {
         var enabled = false
-        var expectedSize = CGSize.zero
-        var viewportDidChange: (SettingsScrollViewport) -> Void = { _ in }
-        private var lastQueuedViewport: SettingsScrollViewport?
         private var preferenceObserver: NSObjectProtocol?
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -232,26 +228,12 @@ private struct SettingsHorizontalScroller: NSViewRepresentable {
                 for child in view.subviews { update(child) }
             }
             update(scroll)
-            apply()
         }
 
         func apply() {
-            guard window != nil, let scroll = enclosingScrollView else { return }
-            if scroll.hasHorizontalScroller != enabled { scroll.hasHorizontalScroller = enabled }
-            // The horizontal legacy track consumes height. Use the actual
-            // native clip, not the window height or a hard-coded track width.
-            // Publish outside AppKit/SwiftUI layout and ignore stale resize callbacks.
-            guard scroll.frame.size == expectedSize else { return }
-            let viewport = SettingsScrollViewport(frameSize: expectedSize,
-                                                   clipHeight: scroll.contentView.bounds.height)
-            guard viewport.clipHeight > 0, viewport != lastQueuedViewport else { return }
-            lastQueuedViewport = viewport
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.window != nil,
-                      self.expectedSize == viewport.frameSize,
-                      self.lastQueuedViewport == viewport else { return }
-                self.viewportDidChange(viewport)
-            }
+            guard window != nil, let scroll = enclosingScrollView,
+                  scroll.hasHorizontalScroller != enabled else { return }
+            scroll.hasHorizontalScroller = enabled
         }
     }
 }

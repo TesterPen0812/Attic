@@ -1041,6 +1041,86 @@ final class SettingsWindowHostedTests: XCTestCase {
         }
     }
 
+    /// A bare SettingsAdaptiveScroll in an off-screen window, settled at `size`.
+    private func withAdaptiveScrollFixture(_ size: CGSize,
+                                           check: (NSWindow, NSView, NSScrollView) throws -> Void) throws {
+        let host = NSHostingView(rootView: GeometryReader { available in
+            SettingsAdaptiveScroll(size: available.size) { Color.clear }
+        })
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        let deadline = Date().addingTimeInterval(2)
+        var scroll: NSScrollView?
+        repeat {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            scroll = nativeScrollViews(in: host).first { $0.frame.height > 200 }
+            spin(0.05)
+        } while scroll == nil && Date() < deadline
+        spin(0.3)
+        host.layoutSubtreeIfNeeded()
+        try check(window, host, try XCTUnwrap(scroll, "Settings mounts its native outer scroll view"))
+    }
+
+    /// CI-standing r3 R-1: each resize step must lay the page out at the
+    /// clip height of that step's frame, in that same layout pass. A height
+    /// published back from AppKit after layout arrives a pass late, and
+    /// costs a second pass of the whole Settings tree on every resize step.
+    func testCIStandingLegacyTrackHeightFollowsEachResizeInTheSameLayoutPass() throws {
+        try withScrollerPreference(.legacy) {
+            try withAdaptiveScrollFixture(CGSize(width: 580, height: 650)) { window, host, scroll in
+                XCTAssertEqual(scroll.scrollerStyle, .legacy)
+                // 590 and back to 580 is Opus' stale-dedupe sequence; the
+                // others change the height alone, and cross no threshold.
+                for size in [CGSize(width: 590, height: 650), CGSize(width: 580, height: 650),
+                             CGSize(width: 580, height: 600), CGSize(width: 600, height: 620),
+                             CGSize(width: 580, height: 650)] {
+                    window.setContentSize(size)
+                    host.frame = CGRect(origin: .zero, size: size)
+                    // No run-loop turn: only work done inside layout counts.
+                    host.layoutSubtreeIfNeeded()
+                    let document = try XCTUnwrap(scroll.documentView)
+                    XCTAssertTrue(scroll.hasHorizontalScroller, "\(size) keeps the horizontal axis")
+                    XCTAssertLessThan(scroll.contentView.bounds.height, size.height,
+                                      "The legacy horizontal track takes height from the clip at \(size)")
+                    XCTAssertEqual(document.frame.height, scroll.contentView.bounds.height, accuracy: 0.5,
+                                   "The page fills the clip of this resize step, in the same pass, at \(size)")
+                }
+                spin(0.3)
+                host.layoutSubtreeIfNeeded()
+                let document = try XCTUnwrap(scroll.documentView)
+                XCTAssertEqual(document.frame.height, scroll.contentView.bounds.height, accuracy: 0.5,
+                               "No later correction may leave a vertical range after the sequence")
+            }
+        }
+    }
+
+    /// CI-standing r3 R-1: a live switch to "Always show scroll bars" while
+    /// Settings is open re-fits the page to the new, shorter clip.
+    func testCIStandingLivePreferenceChangeRefitsTheLegacyTrackHeight() throws {
+        let restoreOverlay = try SettingsScrollerPreference.install(.overlay)
+        defer { spin(0.32); restoreOverlay() }
+        try withAdaptiveScrollFixture(CGSize(width: 580, height: 650)) { _, host, scroll in
+            XCTAssertEqual(scroll.scrollerStyle, .overlay)
+            let restoreLegacy = try SettingsScrollerPreference.install(.legacy)
+            defer { spin(0.32); restoreLegacy() }
+            // Settings itself follows the notification; nothing here sets a style.
+            NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+            spin(0.3)
+            host.layoutSubtreeIfNeeded()
+            let document = try XCTUnwrap(scroll.documentView)
+            XCTAssertEqual(scroll.scrollerStyle, .legacy)
+            XCTAssertLessThan(scroll.contentView.bounds.height, 650,
+                              "The legacy horizontal track takes height from the clip")
+            XCTAssertEqual(document.frame.height, scroll.contentView.bounds.height, accuracy: 0.5,
+                           "After a live preference change the page fills the new clip, with no vertical range")
+        }
+    }
+
     func testR24ScrollThresholdDoesNotRemountPageLocalState() {
         var appearances = 0
         let host = NSHostingView(rootView: GeometryReader { available in
