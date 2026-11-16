@@ -1,8 +1,10 @@
 #!/bin/bash
-# Only disposable hosted CI runners may change the keyboard setting.
+# Only hosted CI runners or the owner's explicitly authorized Air test job
+# may change keyboard mode; the EXIT trap restores the previous setting.
 set -euo pipefail
-if [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_ENVIRONMENT:-} != github-hosted ]]; then
-  echo '::error::Input-mode changes require a GitHub-hosted CI runner.' >&2
+if ! { [[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted ]] ||
+       [[ ${ATTIC_AIR_INPUT_MODES:-} == 1 && $(hostname -s) == Tahas-MacBook-Air ]]; }; then
+  echo '::error::Input-mode changes require hosted CI or an authorized Air test.' >&2
   exit 2
 fi
 case ${1:-} in

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Same machine-wide lock as the local redesign-assets wrapper; CI also serializes hosts.
-if [ "${GITHUB_ACTIONS:-}" = true ]; then
+if [ "${GITHUB_ACTIONS:-}" = true ] || [ "${ATTIC_AIR_INPUT_MODES:-}" = 1 ]; then
   for argument in "$@"; do
     case "$argument" in
       test|test-without-building)

@@ -10,7 +10,8 @@ SCRIPT = Path(__file__).with_name('with_ci_input_modes.sh')
 
 
 class InputModesTests(unittest.TestCase):
-    def invoke(self, initial, mode='normal', child_status=0, hosted=True, ignore_write=False):
+    def invoke(self, initial, mode='normal', child_status=0, hosted=True, ignore_write=False,
+               air=False, host='Tahas-MacBook-Air'):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / 'defaults.json'
@@ -30,10 +31,14 @@ elif a[0]=='delete': p.write_text('null')
 else: sys.exit(2)
 ''')
             fake.chmod(0o755)
+            fake_hostname = root / 'hostname'
+            fake_hostname.write_text('#!/bin/sh\n' + 'printf "%s\\n" "$FAKE_HOSTNAME"\n')
+            fake_hostname.chmod(0o755)
             env = dict(os.environ, PATH=str(root)+os.pathsep+os.environ['PATH'],
                 RUNNER_TEMP=tmp, GITHUB_ACTIONS='true' if hosted else 'false',
                 RUNNER_ENVIRONMENT='github-hosted' if hosted else '', FAKE_DEFAULTS_STATE=str(state),
-                FAKE_IGNORE_WRITE='1' if ignore_write else '0')
+                FAKE_IGNORE_WRITE='1' if ignore_write else '0',
+                ATTIC_AIR_INPUT_MODES='1' if air else '0', FAKE_HOSTNAME=host)
             child = 'import os,sys; print("CHILD_MODE="+os.environ["TEST_RUNNER_ATTIC_CI_KEYBOARD_MODE"]); sys.exit('+str(child_status)+')'
             result = subprocess.run(['/bin/bash', str(SCRIPT), mode, sys.executable, '-c', child],
                 env=env, capture_output=True, text=True)
@@ -57,6 +62,17 @@ else: sys.exit(2)
         self.assertEqual(restored,2)
         self.assertNotIn('CHILD_MODE=',result.stdout)
 
+    def test_explicit_air_job_restores_keyboard_mode_and_other_macs_stay_blocked(self):
+        result, restored = self.invoke(2, mode='fka', hosted=False, air=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertEqual(restored,2)
+        self.assertIn('CHILD_MODE=3',result.stdout)
+        self.assertIn('restored keyboard=2',result.stdout)
+        result, restored = self.invoke(2, mode='fka', hosted=False, air=True, host='Another-Mac')
+        self.assertEqual(result.returncode,2)
+        self.assertEqual(restored,2)
+        self.assertNotIn('CHILD_MODE=',result.stdout)
+
     def test_a_setting_that_did_not_take_effect_fails_before_the_group(self):
         result, restored = self.invoke(2, ignore_write=True)
         self.assertEqual(result.returncode,1)
@@ -69,6 +85,11 @@ else: sys.exit(2)
         locked_modes = wrapper.split('test|test-without-building)', 1)[1].split(';;', 1)[0]
         self.assertLess(locked_modes.index('exec /usr/bin/lockf'), locked_modes.index('with_ci_input_modes.sh'))
         self.assertIn('${GITHUB_ACTIONS:-}', wrapper)
+
+    def test_air_input_mode_is_inside_the_shared_build_lock(self):
+        wrapper = SCRIPT.with_name('xcodebuild_locked.sh').read_text()
+        self.assertIn('${ATTIC_AIR_INPUT_MODES:-}', wrapper)
+        self.assertLess(wrapper.index('exec /usr/bin/lockf'), wrapper.index('with_ci_input_modes.sh'))
 
 
 if __name__ == '__main__':
