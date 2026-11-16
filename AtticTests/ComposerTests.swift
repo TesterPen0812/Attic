@@ -307,6 +307,28 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(page.addBar.text.isEmpty)
     }
 
+    /// Quit while a file of an unsent draft is still being copied: Quit is
+    /// not held up, no task is made, and the draft keeps its words and file.
+    /// (After this change nothing of a submission is left for Quit to wait
+    /// for; this is the guarantee that replaces "Quit waits for the attach".)
+    func testComposerFilesQuitDuringACopyKeepsTheUnsentDraftAndItsFile() async throws {
+        model.open(on: .tasks(.now))
+        type("Unsent, with a file still copying")
+        let file = try pickedFile()
+        page.addComposerFiles(urls: [file])
+        XCTAssertFalse(page.composerPrepared.keys.contains(try XCTUnwrap(page.addBarState.files.first?.id)), "its copy has not run yet")
+
+        let ready = await TasksPageModel.prepareForTerminationDurably(in: tasks)
+
+        XCTAssertTrue(ready, "an unsent draft does not refuse Quit")
+        XCTAssertTrue(try rows(TaskItem.self).isEmpty, "Quit makes no task out of a draft")
+        XCTAssertEqual(page.addBar.text, "Unsent, with a file still copying")
+        XCTAssertEqual(page.addBarState.files.first?.names, ["Picked.pdf"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "the original is untouched")
+        try await waitForComposer { self.model.submit(); return self.liveTasks().count == 1 }
+        XCTAssertEqual(liveTasks().first?.attachments.count, 1, "the same draft still saves with its file afterwards")
+    }
+
     /// Opus R-8, Astra R-7: the 20-file limit counts this draft's files,
     /// not those of a task that was submitted a moment ago.
     func testComposerFilesLimitsCountOnlyThisDraftsFiles() async throws {
