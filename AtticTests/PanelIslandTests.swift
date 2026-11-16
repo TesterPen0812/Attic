@@ -1176,6 +1176,7 @@ final class PanelIslandTests: XCTestCase {
 
     func testProgrammaticIslandFocusStaysAwakeWithoutTabNavigation() throws {
         try requireIslandKeyboard()
+        try requireFocusableIslandButtons()
         var focus: FocusState<PanelIslandItem?>.Binding?
         PanelIslandView.focusProbe = { focus = $0 }
         defer { PanelIslandView.focusProbe = nil }
@@ -1208,6 +1209,7 @@ final class PanelIslandTests: XCTestCase {
     /// modes (PR 16 review: Opus R-2, Astra R-2).
     func testProgrammaticIslandFocusHoldsAgainAfterAKeyRoundTrip() throws {
         try requireIslandKeyboard()
+        try requireFocusableIslandButtons()
         for reduceMotion in [false, true] {
             var focus: FocusState<PanelIslandItem?>.Binding?
             PanelIslandView.focusProbe = { focus = $0 }
@@ -1251,6 +1253,7 @@ final class PanelIslandTests: XCTestCase {
     /// next reveal the pointer settles it as usual.
     func testHidingAKeyFocusedIslandReleasesItsHold() throws {
         try requireIslandKeyboard()
+        try requireFocusableIslandButtons()
         var focus: FocusState<PanelIslandItem?>.Binding?
         PanelIslandView.focusProbe = { focus = $0 }
         defer { PanelIslandView.focusProbe = nil }
@@ -1289,6 +1292,7 @@ final class PanelIslandTests: XCTestCase {
     /// "fix" the first half by asking how the focus arrived.
     func testAPointerRouteFocusHoldsTheKeyIslandUntilFocusLeaves() throws {
         try requireIslandKeyboard()
+        try requireFocusableIslandButtons()
         var focus: FocusState<PanelIslandItem?>.Binding?
         PanelIslandView.focusProbe = { focus = $0 }
         defer { PanelIslandView.focusProbe = nil }
@@ -1350,6 +1354,16 @@ final class PanelIslandTests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
     }
 
+    /// The island's items are plain SwiftUI Buttons. macOS gives a Button
+    /// keyboard focus, from Tab or from code (`@FocusState`), only while Full
+    /// Keyboard Access is on; with it off the focus request is refused and
+    /// reads nil. GitHub's runners have it off, so these tests skip there and
+    /// are required on the Air's Full Keyboard Access runs instead.
+    private func requireFocusableIslandButtons() throws {
+        try XCTSkipUnless(NSApp.isFullKeyboardAccessEnabled,
+                          "island Buttons take keyboard focus (Tab or @FocusState) only with Full Keyboard Access on")
+    }
+
     private func sendIslandTab(to window: NSWindow) {
         let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
                                     timestamp: ProcessInfo.processInfo.systemUptime,
@@ -1363,8 +1377,7 @@ final class PanelIslandTests: XCTestCase {
     /// `PanelIslandView.focusProbe` before the controller is built).
     private func focusIslandButton(_ windows: PanelIslandWindows, keyboard: AtticKeyboardFocusTracker,
                                    focus: () -> PanelIslandItem?) throws {
-        try XCTSkipUnless(NSApp.isFullKeyboardAccessEnabled,
-                          "native island Button Tab traversal requires Full Keyboard Access (CI only)")
+        try requireFocusableIslandButtons()
         let window = windows.island
         NSApp.activate(ignoringOtherApps: true)
         window.makeKey()
