@@ -100,40 +100,46 @@ plan.
 
 ## Model Selection
 
-Which model does what. These are defaults, not limits: if a model's output doesn't meet the bar, redo the work with a stronger one without asking. Judge the output, not the price; escalating costs less than shipping mediocre work. When axes conflict for anything that ships: intelligence > taste > cost.
+Which model does what, as of 16 Nov 2026. The owner's rules page (private, `attic-redesign-assets/ops/RULES.md`) is the authority: where it disagrees with this section, it wins, and a session that can reach it reads it first.
 
 | Model | Use it for | Not for |
 | --- | --- | --- |
-| **Opus 5.5** (high; xhigh for the hardest problems) | Anything a person sees: UI, interaction, motion, copy and API design. Designing new screens and components, hard or unclear bugs, judgement calls about the owner's decisions, and reviewing Sol's work. | Routine fix lists. |
-| **GPT-6.1 Sol** (`gpt-6.1-sol`, through the Codex CLI; high to build, xhigh to review) | The engine and data safety, merges, CI and performance investigations, long multi-step jobs, and reviewing Opus's work. | Designing UI (its taste is weaker). |
-| **GPT-6.1 Terra** (through the Codex CLI and its computer-use skill) | All computer use and on-screen checks. | Writing or reviewing code. |
-| **Sonnet 5.5** | Thin wrapper agents that only pass a prompt to the Codex CLI and return its report (see below). | Any code, however mechanical. Root causes, design, reviews, anything visible. |
-| **Haiku 5.5** | Cheap, bounded lookups and searches where it saves cost. | Placeholder or no-op calls; anything that ships. |
-| **GPT-6 Pro** (ChatGPT, run by the owner) | Deep external reviews of a whole pull request or design. | Anything that needs the repo's tools. |
-| **Fable** | Never. | Everything. |
+| **Opus 5.5** (high; xhigh only with a stated reason) | The session the owner talks to: planning, briefs, reviews' gate, merges, recaps. Designing and building everything: UI, engine, data, tests. One code review per pull request (`/code-review`). | Reviewing its own work. |
+| **Fable 5.2** | On call only: design verdicts, the finish-or-restart decision on a branch that failed two rounds, reviewing GPT Pro's answers. Advisor to an Opus session. | Building, measuring, tracing, routine status. Never a standing session. |
+| **GPT Astra** (`gpt-6-astra`, through the Codex CLI, xhigh) | Blind pull-request reviews and read-only hunts. | Writing code. |
+| **Sol Web** (`chatgpt-web/gpt-6-sol`) | A small, fully specified test-only or CI-only change, reviewed by Opus. | Product code. A second try after a failed one (the job moves to Opus). |
+| **GPT-6.1 Terra** (through the Codex CLI and its computer-use skill) | All computer use and on-screen checks, on the Air; driving Aside. | Writing or reviewing code. |
+| **Dot** (the owner's ChatGPT agent) | The second blind review and first reads. It holds a merge only for a change to how data is saved. | Fix jobs, merges, the board. |
+| **GPT Pro** (ChatGPT, through Aside) | One deep review or design per deep-fix design note, every pending question batched into one message. | Any other message without the owner's OK. Anything that needs the repo's tools. |
+| **Haiku 5.5** | Cheap, bounded lookups and searches. | Placeholder or no-op calls; anything that ships. |
+| **Sonnet 5.5** | Thin wrapper agents that only pass a prompt to the Codex CLI and return its report. | Any code, however mechanical. |
 
 Rules:
 
-- **Never let a model review its own work.** Opus reviews Sol's work and Sol reviews Opus's.
-- Cost is a tie-breaker only. Use cheaper options to gather information and try things before moving the work to a stronger model; don't let cost keep the right model off the job.
+- **Never let a model review its own work.**
+- **Design only what needs a design:** a change to how data is saved, the panel shell or keyboard ownership; an area that failed two rounds; a cause nobody can name. Otherwise Opus builds directly, and the thread that wrote a design builds it.
+- **Measure before designing,** on an everyday-size store first.
+- **Fix the cause, not the effect.** A tiny fix first is allowed only for a small problem and is recorded so the deep fix deletes it.
+- **A pull request merges when it fixes its target and is no worse than the trunk.** Whatever else a review finds goes on the board with a score.
+- **One mechanism per pull request,** and no new build while more than two pull requests are open and unmerged.
 - Claude models run through the Agent/Workflow `model` parameter.
-- GPT-6.1 Sol is reachable only through the Codex CLI. Always pass the model and effort explicitly, and check the `model:` line at the top of the run log: `codex exec -m gpt-6.1-sol -c model_reasoning_effort=high` (or `xhigh` to review). Codex runs use the ChatGPT Codex usage limit, so they are not free.
+- Codex-side models are reachable only through the Codex CLI. Always pass the model and effort explicitly, and check the `model:` line at the top of the run log, for example `codex exec -m gpt-6-astra -c model_reasoning_effort=xhigh`. Codex runs use the ChatGPT Codex usage limit, so they are not free.
 - Stagger parallel Codex starts; concurrent runs share one login.
 - Write Codex briefs in plain quality-work wording. Words like "adversarial" or "attack" can trip the content filter and stop a run midway.
 
-Using GPT-6.1 Sol inside workflows and subagents (the `model` parameter only takes Claude models, so use a wrapper):
+Using a Codex-side model inside workflows and subagents (the `model` parameter only takes Claude models, so use a wrapper):
 
 - Spawn a thin Claude wrapper agent with `model: 'sonnet', effort: 'low'` whose prompt has it write a self-contained Codex prompt, run `codex exec` through Bash, and return the report (use `schema` on the wrapper to get structured output back).
-- Label these agents with a `gpt-6.1-sol:` prefix, for example `{label: 'gpt-6.1-sol:review-auth'}`. The workflow UI shows the wrapper's Claude model, so the label is the only sign that the real worker is Sol.
+- Label these agents with the real model as a prefix, for example `{label: 'gpt-6-astra:review-auth'}`. The workflow UI shows the wrapper's Claude model, so the label is the only sign of the real worker.
 - Codex runs can exceed Bash's 10-minute timeout: pass an explicit timeout, or run in the background and wait for the report file.
-- Parallel Sol implementation agents must use `isolation: 'worktree'` so their edits don't collide.
+- Parallel Codex agents that write files must use `isolation: 'worktree'` so their edits don't collide.
 - Workflow token budgets only count Claude tokens; Codex work is invisible to `budget.spent()`, but it still uses the Codex usage limit.
 
-## Long-running Codex Work
+## Briefing a Codex-side Model
 
-GPT-6.1 Sol is very capable on long-running tasks. Give it substantial, multi-step work when it is the right model for the job; don't split work up merely because it is large.
+The quality of a review or a small build depends on the brief.
 
-- The quality of the result depends on the prompt. Provide a detailed, self-contained brief: goal, relevant context, constraints, files or systems in scope, expected deliverables, and how to verify completion.
-- State important decisions and non-negotiable requirements explicitly. Don't assume the model will infer project-specific conventions or the desired tradeoffs from a short prompt.
-- For long tasks, ask it to inspect the current state first, execute the work end to end, and report the changes, verification and any remaining risks.
-- If the work can safely run in parallel, keep each task's ownership and worktree boundaries explicit so agents don't overlap.
+- Make it self-contained: goal, relevant context, constraints, files in scope, expected deliverables, and how to verify completion.
+- State important decisions and non-negotiable requirements explicitly. Don't assume the model will infer project conventions or the desired trade-offs from a short prompt.
+- Ask it to inspect the current state first, do the work end to end, and report the changes, the verification and any remaining risks.
+- If work can safely run in parallel, keep each task's ownership and worktree boundaries explicit so agents don't overlap.

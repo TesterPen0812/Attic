@@ -95,3 +95,11 @@ plan.
 - Record design-system changes in `Attic/DesignSystem/CHANGELOG.md`.
 - The Canvas page is the pre-redesign implementation, kept as it is until its
   rebuild. Do not extend it as part of other work.
+
+## Roles for Codex-side models
+
+- You are here to review, to hunt read-only, or to check something on screen. You write product code for nobody.
+- One exception: a small, fully specified test-only or CI-only change, when the brief you were given says so. Stay inside the files it names.
+- A review answers one question: did this change make anything worse than the trunk? Say for each finding whether the change introduced it or it was already there, and give a red test.
+- Never start a review, CI or a merge yourself, and never compile, probe or run scratch programs on the owner's Mac.
+- The owner's rules page (private, `attic-redesign-assets/ops/RULES.md`) is the authority where it disagrees with this file.
