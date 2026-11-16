@@ -2,16 +2,14 @@
 name: Attic CI
 
 on:
+  # Pull requests do not start CI on every push (16 Nov 2026). A branch still
+  # in a fix round pushed a full run each round, and those runs queued ahead of
+  # a pull request that was ready to merge. The orchestrator starts the lane it
+  # needs at gate time: gh workflow run "Attic CI" --ref <branch> -f lane=full.
   # Changes that touch only top-level Markdown, Docs/, Media/ or LICENSE don't
   # run CI: nothing they change is built or tested (owner, 2026-10-21). A file
   # a test reads, such as AtticTests/Fixtures/Compatibility/README.md, is not
   # covered by these patterns, so changing it still runs CI.
-  pull_request:
-    paths-ignore:
-      - '*.md'
-      - 'Docs/**'
-      - 'Media/**'
-      - 'LICENSE'
   push:
     branches:
       - main
