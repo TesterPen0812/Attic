@@ -119,7 +119,10 @@ struct CalendarPage: View {
             #endif
             model.eventRows.didWrite = { [weak library = model.store.commandLibrary, weak toasts = toasts] message in
                 guard let library else { return }
-                toasts?.show(message, performingAsync: { await library.replay(in: .calendar, redo: false) })
+                // The toast undoes the write it announces, never a newer
+                // Calendar step (a task made on this page since).
+                let step = library.undo.undoStepID(in: .calendar)
+                toasts?.show(message, performingAsync: { await library.replayUndo(step: step, in: .calendar) })
             }
         }
         .onChange(of: isReallyVisible) { _, current in

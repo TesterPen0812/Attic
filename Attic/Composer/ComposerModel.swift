@@ -496,8 +496,13 @@ final class ComposerModel: ObservableObject {
         guard let draft = finished.draft(parser: tasks.parser, status: status) else { return }
         let submittedWriting = writing, submittedPage = page
         isCreating = true
+        var step: UUID?
         tasks.createAcknowledged(draft, in: submittedPage.history, save: { [library = tasks.library] id in
-            library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
+            let creation = Self.recordingStep(in: library) {
+                library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
+            }
+            step = creation.step
+            return creation.made
         }, settled: { [weak self] created in
             guard let self else { return }
             self.isCreating = false
@@ -527,7 +532,7 @@ final class ComposerModel: ObservableObject {
                 self.services.openTaskPage(created.id)
             } else if case let .tasks(tab) = submittedPage {
                 if tab == .done || (tab == .backlog && status == .todo) {
-                    self.services.toast(String(localized: "Added to Now"), self.undoCreation(in: submittedPage.history))
+                    self.services.toast(String(localized: "Added to Now"), self.undoCreation(step, in: submittedPage.history))
                 } else {
                     self.tasks.addedRequest = TasksPageModel.ScrollRequest(id: created.id)
                 }
@@ -580,15 +585,16 @@ final class ComposerModel: ObservableObject {
         // doesn't vanish as you make it.
         let status: TaskStatus = page == .tasks(.backlog) && day == nil ? .backlog
             : page.tasksTab.map(tasks.newOpenStatus(from:)) ?? .todo
-        guard let draft = finished.draft(parser: tasks.parser, status: status),
-              let task = tasks.library.createTask(draft, writing: writing, in: page.history) else { return false }
+        guard let draft = finished.draft(parser: tasks.parser, status: status) else { return false }
+        let creation = Self.recordingStep(in: tasks.library) { tasks.library.createTask(draft, writing: writing, in: page.history) }
+        guard let task = creation.made else { return false }
         tasks.attachComposerFiles(to: task.id)
         if let tab = page.tasksTab { tasks.keepInView(task.id, on: tab) }
         if openingPage {
             services.openTaskPage(task.id)
         } else if case let .tasks(tab) = page {
             if tab == .done || (tab == .backlog && status == .todo) {
-                services.toast(String(localized: "Added to Now"), undoCreation(in: page.history))
+                services.toast(String(localized: "Added to Now"), undoCreation(creation.step, in: page.history))
             } else {
                 tasks.addedRequest = TasksPageModel.ScrollRequest(id: task.id)
             }
@@ -656,9 +662,12 @@ final class ComposerModel: ObservableObject {
     private func createNote(openingPage: Bool) -> Bool {
         let values = values
         let title = values.title.isEmpty ? TaskDraftBuilder.collapsed(tasks.addBar.text) : values.title
-        guard let id = tasks.library.createNote(title: title, body: writing, tags: values.tags,
-                                                pinned: pinned, in: page.history) else { return false }
-        if openingPage { services.openNote(id) } else { services.toast(String(localized: "Added to Notes"), undoCreation(in: page.history)) }
+        let creation = Self.recordingStep(in: tasks.library) {
+            tasks.library.createNote(title: title, body: writing, tags: values.tags, pinned: pinned, in: page.history)
+        }
+        guard let id = creation.made else { return false }
+        if openingPage { services.openNote(id) }
+        else { services.toast(String(localized: "Added to Notes"), undoCreation(creation.step, in: page.history)) }
         return true
     }
 
@@ -709,13 +718,20 @@ final class ComposerModel: ObservableObject {
         try? await loadWriter()?.openInCalendar(event.occurrenceID)
     }
 
-    /// The Undo a creation's toast offers: the step the creation just
+    /// The Undo a creation's toast offers: the step that creation
     /// recorded, in the history it went into, both fixed now (the card may
     /// be on another page by the click, and a newer step is not its to undo).
-    private func undoCreation(in history: UndoHistoryID) -> @MainActor () -> CommandOutcome {
+    private func undoCreation(_ step: UUID?, in history: UndoHistoryID) -> @MainActor () -> CommandOutcome {
         let library = tasks.library
-        let step = library.undo.undoStepID(in: history)
         return { library.undo(step: step, in: history) }
+    }
+
+    /// Runs a creation and returns it with the Undo step it recorded: the
+    /// exact one, also when a Calendar replay holds the record back for now.
+    private static func recordingStep<Made>(in library: AtticLibrary, _ create: () -> Made) -> (made: Made, step: UUID?) {
+        let recording = UndoRoute.ActionRecording(routeID: library.undo.ownershipID)
+        let made = UndoRoute.$actionRecording.withValue(recording, operation: create)
+        return (made, recording.steps.last?.id)
     }
 
     func undoPage() {

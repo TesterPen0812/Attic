@@ -470,19 +470,21 @@ final class UndoRoute: ObservableObject {
     /// The replay's receipt carries this cursor effect. Its first publication
     /// step commits the cursor, even when a later editor/index step fails. The
     /// pending gate refuses a second inverse; retry runs publication only.
+    /// `only` names the one step an Undo offer may replay, as for `undoStep`.
     @discardableResult
-    func replay(in history: UndoHistoryID, redo: Bool) async -> UndoOutcome? {
+    func replay(in history: UndoHistoryID, redo: Bool, only named: UUID? = nil) async -> UndoOutcome? {
         // A stale asynchronous step must not eat ⌘Z either. Snapshot the
         // eligible entries so a command recorded while replay awaits cannot
         // become the next action reversed by this same key press.
         settleWaitingChanges()
         let key = resolved(history)
         let eligibleIDs = Set((redo ? histories[key]?.redo : histories[key]?.undo)?.map(\.id) ?? [])
+        guard named == nil || (redo ? histories[key]?.redo : histories[key]?.undo)?.last?.id == named else { return nil }
         var discardedObsolete = false
         while let step = (redo ? histories[key]?.redo : histories[key]?.undo)?.last {
             guard eligibleIDs.contains(step.id) else { return discardedObsolete ? .obsolete : nil }
             let outcome = await replayTop(in: key, redo: redo)
-            guard outcome == .obsolete else { return outcome }
+            guard outcome == .obsolete, named == nil else { return outcome }
             discardedObsolete = true
         }
         return discardedObsolete ? .obsolete : nil

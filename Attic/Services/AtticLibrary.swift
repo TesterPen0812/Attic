@@ -542,6 +542,17 @@ final class AtticLibrary {
         return historyOutcome(undo.undoStep(in: history, only: step), since: serial, verb: String(localized: "undo"))
     }
 
+    /// `undo(step:in:)` where steps replay through a worker (Calendar's
+    /// event toast).
+    @discardableResult
+    func replayUndo(step: UUID?, in history: UndoHistoryID) async -> CommandOutcome {
+        undo.settleWaitingChanges()
+        guard let step, undo.undoStepID(in: history) == step else { return .applied }
+        let serial = tasks.errorSerial
+        return historyOutcome(await undo.replay(in: history, redo: false, only: step), since: serial,
+                              verb: String(localized: "undo"))
+    }
+
     @discardableResult
     func redo(in history: UndoHistoryID) -> CommandOutcome {
         guard undo.settleWaitingChanges(for: history) else { return .applied }

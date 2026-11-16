@@ -1340,6 +1340,58 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(liveTasks().first?.attachments.map(\.filename), ["kept.pdf"], "Redo brings the task back with its file")
     }
 
+    /// A note made while a Calendar Undo is still running is recorded when
+    /// that Undo finishes. Its toast names the note's own step all along.
+    func testUndoPendingToastOfANoteMadeDuringACalendarReplayUndoesThatNote() async throws {
+        var release: CheckedContinuation<Void, Never>?
+        let started = expectation(description: "the Calendar Undo is running")
+        var held = UndoStep(name: "Held Calendar step", undo: { true }, redo: { true })
+        held.replay = { _, publish in
+            started.fulfill()
+            await withCheckedContinuation { release = $0 }
+            try? publish()
+            return .applied
+        }
+        library.undo.record(held, in: .calendar)
+        let replay = Task { @MainActor [library] in await library!.replay(in: .calendar, redo: false) }
+        await fulfillment(of: [started], timeout: 5)
+        model.open(on: .calendar(selected: today), as: .note)
+        type("Made during the replay")
+        await XCTAssertTrueAsync(await model.create())
+        let note = try XCTUnwrap(notes.notes.first { $0.deletedAt == nil })
+        let toastUndo = try XCTUnwrap(toastUndos.last)
+        release?.resume()
+        _ = await replay.value
+
+        XCTAssertEqual(toastUndo(), .applied)
+
+        XCTAssertNil(notes.notes.first { $0.id == note.id && $0.deletedAt == nil }, "the toast undoes its own note")
+    }
+
+    /// Calendar's own toast, pressed while a task made on Calendar still
+    /// waits: the task lands above the toast's step and is not its to undo.
+    func testUndoPendingACalendarToastNeverUndoesANewerWaitingTask() async throws {
+        let calendarNote = try XCTUnwrap(library.createNote(title: "Calendar-side step", body: "Body",
+                                                            tags: [], pinned: false, in: .calendar))
+        let named = library.undo.undoStepID(in: .calendar)
+        holdSaves()
+        model.open(on: .calendar(selected: today), as: .task)
+        type("Made on Calendar")
+        model.submit()
+
+        let stale = await library.replayUndo(step: named, in: .calendar)
+
+        XCTAssertEqual(stale, .applied)
+        XCTAssertFalse(model.isCreating)
+        XCTAssertEqual(liveTasks().map(\.title), ["Made on Calendar"], "the new task stays")
+        XCTAssertNotNil(notes.notes.first { $0.id == calendarNote && $0.deletedAt == nil }, "a newer step above it: the toast does nothing")
+        XCTAssertEqual(library.undo(in: .calendar), .applied)
+        XCTAssertTrue(liveTasks().isEmpty, "⌘Z takes the task, the newest step")
+        let fresh = await library.replayUndo(step: named, in: .calendar)
+        XCTAssertEqual(fresh, .applied)
+        XCTAssertNil(notes.notes.first { $0.id == calendarNote && $0.deletedAt == nil }, "newest again, the named step is undone")
+    }
+
     /// A Calendar-page creation waits in Calendar's history: ⌘Z in a Tasks
     /// field is still the field's.
     func testUndoPendingAWaitingCalendarCreationDoesNotClaimATasksFieldsUndo() throws {
