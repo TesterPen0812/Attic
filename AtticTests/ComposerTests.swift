@@ -524,6 +524,27 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(page.composerPrepared.isEmpty)
     }
 
+    /// Return with a file saves the edits still waiting for their frame (a
+    /// tick) first, as the delayed creation did: the list and Undo keep the
+    /// order of input.
+    func testComposerFilesR2AFileTaskSavesAfterAWaitingTick() async throws {
+        page.services.acknowledgementDelay = .seconds(30)
+        let older = try XCTUnwrap(library.createTasks([TaskDraft(title: "Ticked first")])?.first)
+        _ = page.sections(for: .now)
+        var ticked: CommandOutcome?
+        page.completeAcknowledged(older.id) { ticked = $0 }
+        model.open(on: .tasks(.now))
+        type("Made second, with a file")
+        _ = try await pasteAnImage()
+
+        model.submit()
+
+        XCTAssertEqual(ticked?.isApplied, true, "the tick is saved before the new task")
+        XCTAssertEqual(page.undo(), .applied)
+        XCTAssertFalse(liveTasks().contains { $0.title == "Made second, with a file" }, "Undo takes back the newest step")
+        XCTAssertEqual(tasks.task(withID: older.id)?.status, .done, "the tick stays")
+    }
+
     /// M9: a dropped batch keeps its place in the bar while it is staged
     /// and copied: the files save in the order they were added.
     func testComposerFilesR2ADroppedBatchJoinsTheBarAtOnceInItsPlace() async throws {
