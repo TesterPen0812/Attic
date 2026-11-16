@@ -1406,6 +1406,178 @@ final class ComposerTests: XCTestCase {
         XCTAssertFalse(page.taskChangeOwnsUndo, "nothing newer waits in the Tasks history")
     }
 
+    // MARK: After the reviews of pull request 15
+
+    private func agent() -> AgentActions { AgentActions(tasks: AgentTaskTools(store: tasks, library: library)) }
+
+    /// Opus R-1, Astra R-1: a waiting tick's step goes to the Tasks
+    /// history, never into another command's capture (a task page's field
+    /// commit, a Recently Deleted restore).
+    func testUndoPendingAWaitingTickStaysOutOfAnotherCommandsCapture() throws {
+        let made = try XCTUnwrap(library.createTasks([TaskDraft(title: "Ticked"), TaskDraft(title: "Edited elsewhere")]))
+        holdSaves()
+        page.completeAcknowledged(made[0].id) { _ in }
+
+        let captured = library.undo.capturingSteps {
+            XCTAssertTrue(library.updateTask(made[1].id, priority: .high).isApplied)
+        }
+
+        XCTAssertEqual(captured.count, 1, "only the command's own step")
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.status, .done)
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.status, .todo, "the tick is the Tasks history's newest step")
+    }
+
+    /// Opus R-2, Astra R-3: an agent's Undo reverses the agent's own
+    /// change, and the person's waiting tick is not saved or reversed by it.
+    func testUndoPendingAnAgentsUndoLeavesThePersonsWaitingTickAlone() async throws {
+        let made = try XCTUnwrap(library.createTasks([TaskDraft(title: "Person ticks this"), TaskDraft(title: "Agent duplicates this")]))
+        let actions = agent()
+        let request = actions.beginRequest(title: "Agent duplicates a task")
+        guard case .performed = try await actions.call(name: "duplicate_task", arguments: ["id": made[1].id.uuidString],
+                                                       watching: false, requestID: request) else {
+            return XCTFail("the agent's duplicate runs")
+        }
+        actions.sealRequest(request)
+        XCTAssertEqual(liveTasks().count, 3)
+        holdSaves()
+        page.completeAcknowledged(made[0].id) { _ in }
+
+        let report = await actions.undo(changeSet: request)
+
+        XCTAssertEqual(report.failures, [])
+        XCTAssertEqual(liveTasks().count, 2, "the agent's duplicate is what its Undo removes")
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(tasks.task(withID: made[0].id)?.status, .done, "the person's tick stands")
+    }
+
+    /// Opus R-3, Astra R-2: an agent's edit of a task does not take the
+    /// person's waiting change of the same task into what its Undo restores.
+    func testUndoPendingAnAgentsEditDoesNotOwnThePersonsWaitingChange() async throws {
+        let task = try XCTUnwrap(library.createTasks([TaskDraft(title: "Shared task")])?.first)
+        holdSaves()
+        page.setPriorityAcknowledged(.high, for: [task.id]) { _ in }
+        let actions = agent()
+        let request = actions.beginRequest(title: "Agent renames")
+        guard case .performed = try await actions.call(name: "update_task",
+            arguments: ["id": task.id.uuidString, "title": "Renamed by the agent"], watching: false, requestID: request) else {
+            return XCTFail("the agent's rename runs")
+        }
+        actions.sealRequest(request)
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(tasks.task(withID: task.id)?.priority, .high)
+
+        _ = await actions.undo(changeSet: request)
+
+        XCTAssertEqual(tasks.task(withID: task.id)?.priority, .high, "the person's priority is not the agent's to undo")
+    }
+
+    /// Opus R-4: a change that starts waiting while a Calendar Undo is
+    /// running is not what that Undo goes on to reverse.
+    func testUndoPendingAReplayNeverReversesAChangeMadeWhileItRan() async throws {
+        let note = try XCTUnwrap(library.createNote(title: "Calendar-side step", body: "Body", tags: [], pinned: false, in: .calendar))
+        holdSaves()
+        var gone = UndoStep(name: "Event that is gone", undo: { true }, redo: { true })
+        gone.replay = { [unowned self] _, _ in
+            // While the worker runs, a task is made on the Calendar page.
+            self.model.open(on: .calendar(selected: self.today), as: .task)
+            self.type("Made while the Undo ran")
+            self.model.submit()
+            return .obsolete
+        }
+        library.undo.record(gone, in: .calendar)
+
+        _ = await library.undo.replay(in: .calendar, redo: false)
+
+        XCTAssertNil(notes.notes.first { $0.id == note && $0.deletedAt == nil }, "the Undo went on to the step it could see")
+        XCTAssertTrue(model.isCreating, "the new task is still on its way")
+        page.settlePendingCompletionAcknowledgements()
+        XCTAssertEqual(liveTasks().map(\.title), ["Made while the Undo ran"])
+    }
+
+    /// Opus R-6: a waiting change has ended Redo: the menu does not offer
+    /// it, and ⇧⌘Z has nothing to report.
+    func testUndoPendingAWaitingChangeEndsRedo() throws {
+        _ = try XCTUnwrap(library.createTasks([TaskDraft(title: "Earlier task")])?.first)
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+        holdSaves()
+        model.open(on: .tasks(.now))
+        type("New task")
+        model.submit()
+
+        XCTAssertFalse(library.undo.canRedo(in: .tasks), "Redo is not offered past a new change")
+        XCTAssertEqual(library.redo(in: .tasks), .applied, "nothing to redo is not a failure here")
+        XCTAssertEqual(liveTasks().map(\.title), ["New task"])
+    }
+
+    /// Opus R-7: a tick undone from the card (or the Edit menu, or another
+    /// panel) is not left drawn as done by the page that held its row.
+    func testUndoPendingATickUndoneFromTheCardIsNotLeftHeldAsDone() async throws {
+        let task = try XCTUnwrap(library.createTasks([TaskDraft(title: "Ticked, then undone")])?.first)
+        holdSaves()
+        page.services.doneHold = .seconds(30)
+        XCTAssertTrue(page.rows(for: .now).contains { $0.id == task.id })
+        page.completeAcknowledged(task.id) { _ in }
+        XCTAssertNotNil(page.held[task.id])
+        model.open(on: .tasks(.now))
+
+        model.undoPage()
+
+        XCTAssertEqual(tasks.task(withID: task.id)?.status, .todo)
+        try await waitForComposer { self.page.held[task.id] == nil }
+    }
+
+    /// Astra R-5: pressing an old toast saves a waiting creation first,
+    /// whose own "Added to Now" replaces it in the same toast centre. That
+    /// new toast stays.
+    func testUndoPendingPressingAnOldToastKeepsTheToastItsSaveBroughtUp() throws {
+        _ = try XCTUnwrap(library.createTasks([TaskDraft(title: "Older task")])?.first)
+        let center = page.toasts
+        page.showToast("Added")
+        let card = ComposerModel(tasks: page, services: ComposerServices(toast: { message, undo in
+            center.show(message, performing: undo)
+        }))
+        holdSaves()
+        card.open(on: .tasks(.done))
+        type("Made from Done")
+        card.submit()
+
+        _ = center.performAction()
+
+        XCTAssertEqual(center.current?.message, "Added to Now", "the new task's own offer is still there")
+        XCTAssertEqual(Set(liveTasks().map(\.title)), ["Older task", "Made from Done"])
+    }
+
+    /// Opus R-9: a named replay that meets a plain step that is gone drops
+    /// it and stops, as a named Undo does.
+    func testUndoPendingANamedReplayStopsAtAPlainStepThatIsGone() async throws {
+        let note = try XCTUnwrap(library.createNote(title: "Step before", body: "Body", tags: [], pinned: false, in: .calendar))
+        let gone = UndoStep(name: "Gone", undoOutcome: { .obsolete }, redoOutcome: { .obsolete })
+        library.undo.record(gone, in: .calendar)
+
+        let outcome = await library.undo.replay(in: .calendar, redo: false, only: gone.id)
+
+        XCTAssertEqual(outcome, .obsolete)
+        XCTAssertNotNil(notes.notes.first { $0.id == note && $0.deletedAt == nil }, "the step before it is untouched")
+    }
+
+    /// Opus R-10: Quit saves a creation from the card that is still waiting
+    /// (no files involved).
+    func testUndoPendingQuitSavesAWaitingCreationFromTheCard() {
+        holdSaves()
+        model.open(on: .tasks(.now))
+        type("Made just before quit")
+        model.submit()
+        XCTAssertTrue(model.isCreating)
+
+        XCTAssertTrue(TasksPageModel.prepareForTermination(in: tasks))
+
+        XCTAssertFalse(model.isCreating)
+        XCTAssertEqual(liveTasks().map(\.title), ["Made just before quit"])
+    }
+
     // Guards: these hold on the trunk and must keep holding.
 
     /// A tick that fails to save stops Undo in Tasks only.
