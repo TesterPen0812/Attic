@@ -1176,6 +1176,116 @@ final class SettingsWindowHostedTests: XCTestCase {
         }
     }
 
+    /// CI-standing r3 cause 4: the bridge sits beside the outer scroll view and
+    /// finds it by frame. Pin that lookup: through 590 → 650 → 640 → 630 on the
+    /// Appearance page, which has its own inner scroll view, only the outer
+    /// scroll view takes the horizontal axis, and only below 640 pt. A lookup
+    /// that finds nothing, or finds the inner page, fails here.
+    func testCIStandingBridgeDrivesOnlyTheOuterScrollView() throws {
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withScrollerPreference(style) {
+                let suite = "SettingsBridge.\(UUID().uuidString)"
+                let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+                defer { defaults.removePersistentDomain(forName: suite) }
+                defaults.set(SettingsSection.appearance.rawValue, forKey: SettingsSection.selectionStorageKey)
+                let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+                let store = TaskStore(container: container)
+                let host = NSHostingView(rootView: SettingsView(
+                    settings: AppSettings(defaults: defaults),
+                    loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+                    agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+                    globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+                let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 590, height: 460),
+                                      styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = host
+                window.orderFront(nil)
+                defer { window.orderOut(nil); window.contentView = nil; window.close() }
+                for size in [CGSize(width: 590, height: 460), CGSize(width: 650, height: 460),
+                             CGSize(width: 640, height: 460), CGSize(width: 630, height: 460)] {
+                    window.setContentSize(size)
+                    host.frame = CGRect(origin: .zero, size: size)
+                    let deadline = Date().addingTimeInterval(2)
+                    var scrolls: [NSScrollView] = []
+                    repeat {
+                        host.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                        spin(0.05)
+                        scrolls = nativeScrollViews(in: host)
+                    } while scrolls.count < 2 && Date() < deadline
+                    let outer = try XCTUnwrap(scrolls.first { abs($0.frame.width - size.width) <= 0.5 &&
+                                                              abs($0.frame.height - size.height) <= 0.5 },
+                                              "\(style) \(size): the outer scroll view")
+                    let inner = scrolls.filter { $0 !== outer }
+                    XCTAssertFalse(inner.isEmpty, "\(style) \(size): Appearance has its own inner scroll view")
+                    XCTAssertEqual(outer.hasHorizontalScroller, size.width < SettingsWindowLayout.minimumContentSize.width,
+                                   "\(style) \(size): the outer scroll view has the horizontal axis only below 640 pt")
+                    for scroll in inner {
+                        XCTAssertFalse(scroll.hasHorizontalScroller,
+                                       "\(style) \(size): the inner page's scroll view never gets the horizontal axis")
+                    }
+                }
+            }
+        }
+    }
+
+    /// CI 43876814715: six Settings UI tests found a sidebar section that
+    /// exists but is not hittable. XCUI's hittable check is the AX hit test at
+    /// the element's centre; each sidebar row and the page's own controls must
+    /// be what that hit test finds, at a normal and an undersized window.
+    func testSettingsSidebarRowsAreWhatTheAccessibilityHitTestFinds() throws {
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withScrollerPreference(style) {
+                let suite = "SettingsHit.\(UUID().uuidString)"
+                let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+                defer { defaults.removePersistentDomain(forName: suite) }
+                let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+                let store = TaskStore(container: container)
+                let host = NSHostingView(rootView: SettingsView(
+                    settings: AppSettings(defaults: defaults),
+                    loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+                    agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+                    globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+                let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 860, height: 650),
+                                      styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = host
+                window.orderFront(nil)
+                defer { window.orderOut(nil); window.contentView = nil; window.close() }
+                let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+                let previous = NSApp.accessibilityAttributeValue(enhanced)
+                NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+                defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+                for size in [CGSize(width: 860, height: 650), CGSize(width: 600, height: 420)] {
+                    window.setContentSize(size)
+                    host.frame = CGRect(origin: .zero, size: size)
+                    for _ in 0..<6 { host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); spin(0.05) }
+                    var report: [String] = []
+                    for section in SettingsSection.allCases {
+                        let row = try XCTUnwrap(ci8Elements(host).first {
+                            $0.accessibilityIdentifier?() == section.accessibilityIdentifier
+                        }, "\(section.rawValue) row exists")
+                        let frame = try XCTUnwrap(row.accessibilityFrame?())
+                        // A row scrolled out of an undersized window cannot be hit.
+                        guard window.frame.contains(frame) else { continue }
+                        let hit = host.accessibilityHitTest(NSPoint(x: frame.midX, y: frame.midY)) as AnyObject?
+                        var found = false
+                        var node = hit
+                        for _ in 0..<6 {
+                            if node === row { found = true }
+                            node = node?.accessibilityParent?() as AnyObject?
+                        }
+                        if !found {
+                            report.append("\(section.rawValue) \(frame) hit \(hit.map { String(describing: type(of: $0)) } ?? "nil") \((hit?.accessibilityRole?() ?? nil)?.rawValue ?? "") \(hit?.accessibilityFrame?() ?? .zero)")
+                        }
+                        XCTAssertTrue(found, "\(style) \(size): the AX hit test finds the \(section.rawValue) row")
+                    }
+                    if !report.isEmpty { print("SETTINGS_HITTEST \(style) \(size)\n" + report.joined(separator: "\n")) }
+                }
+            }
+        }
+    }
+
     func testR24ScrollThresholdDoesNotRemountPageLocalState() {
         var appearances = 0
         let host = NSHostingView(rootView: GeometryReader { available in

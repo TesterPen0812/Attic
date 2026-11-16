@@ -171,9 +171,12 @@ struct SettingsAdaptiveScroll<Content: View>: View {
                            ? SettingsWindowLayout.minimumContentSize.width : nil,
                        maxWidth: .infinity)
                 .frame(height: max(SettingsWindowLayout.minimumContentSize.height, clipHeight))
-                .background(SettingsHorizontalScroller(enabled: axes.contains(.horizontal)))
         }
         .frame(width: size.width, height: size.height)
+        // Beside the scroll view, never behind its document: a platform view
+        // there stops the accessibility hit test at the scroll view, so
+        // VoiceOver and UI tests cannot reach the sidebar (CI 43876814715).
+        .background(SettingsHorizontalScroller(enabled: axes.contains(.horizontal)))
         .scrollDisabled(!needsScroll)
         .scrollIndicators(needsScroll ? .visible : .hidden)
         .onReceive(NotificationCenter.default.publisher(for: NSScroller.preferredScrollerStyleDidChangeNotification)) { _ in
@@ -184,6 +187,8 @@ struct SettingsAdaptiveScroll<Content: View>: View {
 
 /// Sync the retained native horizontal axis, and keep the mounted scrollers on
 /// the system's scroller style, including the Always-visible preference.
+/// It sits behind the outer scroll view with the same frame, which is how it
+/// finds that scroll view.
 private struct SettingsHorizontalScroller: NSViewRepresentable {
     let enabled: Bool
 
@@ -196,6 +201,7 @@ private struct SettingsHorizontalScroller: NSViewRepresentable {
     final class BridgeView: NSView {
         var enabled = false
         private var preferenceObserver: NSObjectProtocol?
+        private weak var scroll: NSScrollView?
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() {
@@ -216,8 +222,39 @@ private struct SettingsHorizontalScroller: NSViewRepresentable {
         }
         override func layout() { super.layout(); apply() }
 
+        /// The scroll view this view backs: the nearest one, up this view's
+        /// own superview chain, that has exactly this view's frame.
+        private func resolveScrollView() -> NSScrollView? {
+            if let scroll, scroll.window === window { return scroll }
+            guard window != nil, bounds.width > 0, bounds.height > 0 else { return nil }
+            let target = convert(bounds, to: nil)
+            func sameFrame(_ view: NSView) -> Bool {
+                let frame = view.convert(view.bounds, to: nil)
+                return abs(frame.minX - target.minX) <= 0.5 && abs(frame.minY - target.minY) <= 0.5 &&
+                    abs(frame.width - target.width) <= 0.5 && abs(frame.height - target.height) <= 0.5
+            }
+            func find(in view: NSView) -> NSScrollView? {
+                if let candidate = view as? NSScrollView, sameFrame(candidate) { return candidate }
+                for child in view.subviews where child !== self {
+                    if let found = find(in: child) { return found }
+                }
+                return nil
+            }
+            var ancestor = superview
+            while let current = ancestor {
+                if let found = find(in: current) {
+                    scroll = found
+                    // First sight of this scroll view: give it the system style.
+                    followPreferredScrollerStyle()
+                    return found
+                }
+                ancestor = current.superview
+            }
+            return nil
+        }
+
         private func followPreferredScrollerStyle() {
-            guard window != nil, let scroll = enclosingScrollView else { return }
+            guard window != nil, let scroll = scroll ?? resolveScrollView() else { return }
             // SwiftUI's inner page and the outer viewport both follow the
             // system preference, including live changes while Settings is open.
             let preferredStyle = NSScroller.preferredScrollerStyle
@@ -231,7 +268,7 @@ private struct SettingsHorizontalScroller: NSViewRepresentable {
         }
 
         func apply() {
-            guard window != nil, let scroll = enclosingScrollView,
+            guard window != nil, let scroll = resolveScrollView(),
                   scroll.hasHorizontalScroller != enabled else { return }
             scroll.hasHorizontalScroller = enabled
         }
