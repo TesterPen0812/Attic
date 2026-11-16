@@ -23,6 +23,10 @@ extension AtticLibrary {
                     .taskSnapshot(title: draft.title),
                   case .success = notes.createDocumentNote(id: UUID(), document: document, taskOwner: taskID, creatingTask: draft)
             else { return nil }
+            // The files the task was saved with are the task's now: the
+            // importer's hold on them ends here, as it does when the task
+            // store saves (`TaskStore.save`), so a later purge can take them.
+            self.tasks.taskImageFiles.files.finishCandidates(Set(draft.attachments.map(\.id)))
             // The save committed: that is the answer. A list read that
             // fails afterwards can't turn it into a failed create (the card
             // would offer the same draft again, and a retry would make a
