@@ -1140,6 +1140,28 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    func testReturningKeyIslandRecomputesUnchangedFocusHold() throws {
+        try requireIslandKeyboard()
+        var focus: FocusState<PanelIslandItem?>.Binding?
+        PanelIslandView.focusProbe = { focus = $0 }
+        defer { PanelIslandView.focusProbe = nil }
+        try withController { controller, state, panel in
+            let windows = controller.islandWindowsForTesting
+            try focusIslandButton(windows, keyboard: state.keyboardFocus)
+            spin(until: { focus?.wrappedValue != nil })
+            XCTAssertNotNil(focus?.wrappedValue, "native Tab must establish a real SwiftUI focus")
+            XCTAssertTrue(windows.model.isAwake, "the initial keyboard focus must wake the island")
+            panel.makeKey()
+            spin(until: { panel.isKeyWindow && !windows.island.isKeyWindow })
+            windows.island.makeKey()
+            spin(until: { windows.island.isKeyWindow })
+            trackAway(windows)
+            spin(0.35)
+            XCTAssertNotNil(focus?.wrappedValue)
+            XCTAssertTrue(windows.model.isAwake, "returning to the same focused control renews its hold")
+        }
+    }
+
     private func requireIslandKeyboard() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
     }

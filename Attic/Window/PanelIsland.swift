@@ -670,11 +670,17 @@ final class PanelIslandModel: ObservableObject {
 /// VoiceOver reads "Pages" with a named button per page, the current one
 /// selected, then Settings.
 struct PanelIslandView: View {
+    #if DEBUG
+    /// Allows a hosted test to observe the real native Tab focus binding.
+    @MainActor static var focusProbe: ((FocusState<PanelIslandItem?>.Binding) -> Void)?
+    #endif
     @ObservedObject var model: PanelIslandModel
     @ObservedObject var focusTracker: AtticKeyboardFocusTracker
     /// The stand-in that flies with the panel's hide and reveal: the same
     /// drawing, but nothing to press, point at, focus or hear.
     var isStandIn = false
+    /// The exact island window's key state, including nonactivating panels.
+    var isKeyIslandWindow: () -> Bool = { false }
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
@@ -741,18 +747,26 @@ struct PanelIslandView: View {
                 .accessibilityHidden(true)
         }
         .padding(L.windowMargin)
-        .onChange(of: focused) { _, now in
-            model.setKeyboardFocused(now != nil && focusTracker.isKeyboardDriving
-                                     && NSApp.keyWindow is PanelIslandWindow)
+        .onAppear {
+            #if DEBUG
+            if !isStandIn { Self.focusProbe?($focused) }
+            #endif
         }
-        .onChange(of: focusTracker.isKeyboardDriving) { _, driving in
-            if !driving { model.setKeyboardFocused(false) }
+        .onChange(of: focused) { _, _ in updateFocusHold() }
+        .onChange(of: focusTracker.isKeyboardDriving) { _, _ in updateFocusHold() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+            guard !isStandIn, notification.object is PanelIslandWindow, isKeyIslandWindow() else { return }
+            updateFocusHold()
         }
         .accessibilityElement(children: isStandIn ? .ignore : .contain)
         .accessibilityLabel(String(localized: "Pages"))
         .accessibilityIdentifier(isStandIn ? "" : "panel-section-picker")
         .accessibilityHidden(isStandIn)
         .allowsHitTesting(!isStandIn)
+    }
+
+    private func updateFocusHold() {
+        model.setKeyboardFocused(focused != nil && focusTracker.isKeyboardDriving && isKeyIslandWindow())
     }
 
     /// The island awake (its items) or at rest (its dots).
@@ -1365,12 +1379,16 @@ final class PanelIslandWindows {
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
             return window
         }
-        island = window(interactive: true)
+        let interactiveWindow = window(interactive: true)
+        island = interactiveWindow
         label = window(interactive: false)
         island.setAccessibilityLabel(String(localized: "Pages"))
         island.contentView = PanelIslandHostingView(rootView: PanelIslandKeyed(
             settings: settings, model: model, uiState: uiState,
-            content: PanelIslandView(model: model, focusTracker: uiState.keyboardFocus)))
+            content: PanelIslandView(model: model, focusTracker: uiState.keyboardFocus,
+                                     isKeyIslandWindow: { [weak interactiveWindow] in
+                                         interactiveWindow?.isKeyWindow == true
+                                     })))
         label.contentView = PanelIslandHostingView(rootView: PanelIslandKeyed(
             settings: settings, model: model, uiState: uiState, content: PanelIslandLabels(model: model)))
         label.setAccessibilityElement(false)
