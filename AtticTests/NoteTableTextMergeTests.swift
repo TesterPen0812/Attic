@@ -314,6 +314,52 @@ final class NoteTableTextMergeTests: XCTestCase {
         check(row, rowTruth, expect: .kept)
     }
 
+    /// A table the agent didn't touch is kept exactly, whatever its duplicate or blank lines.
+    func testAnUntouchedTableIsKeptExactly() throws {
+        var twins = NoteTable(texts: [["Name", "Status"], ["a", "x"], ["a", "x"], ["b", "y"]])
+        bold(&twins, 1, 0)
+        var sparseHeader = NoteTable(texts: [["Title", "", ""], ["one", "", ""], ["two", "", ""]])
+        sparseHeader.columns[1].width = 90
+        sparseHeader.columns[2].width = 110
+        var fresh = NoteTable.blank()
+        fresh.columns[0].width = 140
+        for (name, table) in [("twins", twins), ("sparse header", sparseHeader), ("fresh with a width", fresh), ("fresh", NoteTable.blank())] {
+            let base = NoteDocument(blocks: [.text("T"), .text("Intro"), .table(table, id: tableID)])
+            let body = NoteTextExport.agentBody(base).replacingOccurrences(of: "Intro", with: "Intro, edited")
+            XCTAssertNoThrow(try {
+                let document = try NoteAgentTextParser.document(title: "T", body: body, base: base)
+                XCTAssertEqual(document.blocks.first { $0.kind == .table }?.table, table, "\(name): an untouched table keeps everything")
+            }(), name)
+        }
+    }
+
+    /// Unchanged text with a new alignment: the table is kept whole and takes the alignment (it is visible).
+    func testAnAlignmentOnlyChangeKeepsTheTable() {
+        var table = NoteTable(texts: [["", ""], ["", ""]])
+        table.columns[0].width = 140
+        var truth = table
+        truth.columns[1].align = .right
+        XCTAssertEqual(check(table, truth, expect: .kept), truth)
+    }
+
+    /// Finding B, the named exception: deleting a formatted row whose gap holds twin rows
+    /// is refused (the text can't show which line went); `delete_row` does it.
+    func testDeletingAFormattedRowBesideTwinRowsIsRefusedAndDoneByID() throws {
+        var table = NoteTable(texts: [["K", "V"], ["a", "1"], ["d", "d"], ["d", "d"], ["x", "9"], ["", ""], ["", ""], ["z", "8"]])
+        bold(&table, 4, 0)
+        var truth = table
+        truth.rows.remove(at: 4)
+        check(table, truth, expect: .refused)
+        let byID = try NoteTableAgentEdit.apply([["op": "delete_row", "row_id": table.rows[4].id.uuidString]], to: table)
+        XCTAssertEqual(byID, truth)
+        // Beside certain rows, the same deletion is a pure deletion.
+        var lone = NoteTable(texts: [["K", "V"], ["a", "1"], ["x", "9"], ["z", "8"]])
+        bold(&lone, 2, 0)
+        var loneTruth = lone
+        loneTruth.rows.remove(at: 2)
+        XCTAssertEqual(check(lone, loneTruth, expect: .kept), loneTruth)
+    }
+
     // MARK: The refusal
 
     /// The refusal is the body's own error and names the id route.
@@ -516,9 +562,65 @@ final class NoteTableTextMergeTests: XCTestCase {
         }
     }
 
+    /// Finding B (lead, 16 Nov): deleting a line when the text can't show which line went.
+    /// A gap (rows between the nearest rows whose text is unique in both tables) holds two
+    /// or more rows (so a row whose text repeats sits beside the deletion) and a row that
+    /// carries something hidden. For a row, that is the gap around the deleted row; for a
+    /// column, any gap of rows read on the columns that remain. Such a deletion is refused,
+    /// and `delete_row` / `delete_column` does it.
+    private func ambiguousDeletion(_ operation: Operation, in table: NoteTable) -> Bool {
+        let texts = NoteAgentTableText.texts(table)
+        let old: [[String]], new: [[String]], deleted: Int?
+        switch operation {
+        case let .deleteRow(at):
+            (old, new, deleted) = (texts, texts.enumerated().filter { $0.offset != at }.map(\.element), at)
+        case let .deleteColumn(at):
+            old = texts.map { row in row.enumerated().filter { $0.offset != at }.map(\.element) }
+            (new, deleted) = (old, nil)
+        default:
+            return false
+        }
+        var oldCount: [[String]: Int] = [:], newCount: [[String]: Int] = [:]
+        old.forEach { oldCount[$0, default: 0] += 1 }
+        new.forEach { newCount[$0, default: 0] += 1 }
+        let unique = { (row: Int) in oldCount[old[row]] == 1 && newCount[old[row]] == 1 }
+        var start = 0
+        while start < old.count {
+            guard !unique(start) else { start += 1; continue }
+            var end = start
+            while end < old.count && !unique(end) { end += 1 }
+            let gap = start..<end
+            if deleted.map(gap.contains) != false, gap.count > 1,
+               gap.contains(where: { Self.carries(table.rows[$0]) }) { return true }
+            start = end
+        }
+        return false
+    }
+
+    /// The same deletion through `update_note_table`.
+    private func deleteByID(_ operation: Operation, in table: NoteTable) throws -> NoteTable {
+        switch operation {
+        case let .deleteRow(at): return try NoteTableAgentEdit.apply([["op": "delete_row", "row_id": table.rows[at].id.uuidString]], to: table)
+        case let .deleteColumn(at): return try NoteTableAgentEdit.apply([["op": "delete_column", "column_id": table.columns[at].id.uuidString]], to: table)
+        default: throw NoteAgentTextError.invalidTableEdit("not a deletion")
+        }
+    }
+
+    /// One step's rewrite: a table whose text is unchanged comes back whole (P0);
+    /// any other accepted rewrite is judged against the generator's record.
+    private func accept(_ context: String, old: NoteTable, truth: NoteTable, actual: NoteTable) {
+        if NoteAgentTableText.texts(truth) == NoteAgentTableText.texts(old) {
+            XCTAssertEqual(actual, old, "\(context): unchanged text keeps the table whole")
+        } else {
+            judge(context, old: old, truth: truth, actual: actual)
+        }
+    }
+
     /// Seeded rewrites, two operations per step, with duplicate and blank rows:
-    /// every accepted rewrite is judged against the generator's record; a plain
-    /// table is never refused; one operation that edits no marked cell is never refused.
+    /// every accepted rewrite is judged against the generator's record; a table
+    /// whose text is unchanged is kept whole; a plain table is never refused; one
+    /// operation that edits no marked cell is never refused, except an ambiguous
+    /// deletion, which is refused and done by id instead.
     func testSeededRewritesKeepEveryHiddenThingOrAreRefused() throws {
         for seed: UInt64 in [20261116, 20261117, 20261118] {
             var g = Generator(state: seed)
@@ -526,19 +628,25 @@ final class NoteTableTextMergeTests: XCTestCase {
             current.rows[3].cells = current.rows[2].cells   // a duplicate row
             insertRow(&current, at: 5, ["", "", "", ""])     // a blank row
             insertRow(&current, at: 6, ["", "", "", ""])
-            var counts = (accepted: 0, refused: 0)
+            var counts = (accepted: 0, refused: 0, ambiguous: 0)
             for step in 0..<150 {
                 if g.pick(2) == 0 { decorate(&current, &g) }
                 let context = "seed \(seed), step \(step)"
+                // No operation: the table comes back exactly.
+                XCTAssertEqual(try? rewrite(current, to: current), current, "\(context): an untouched table changed or was refused")
                 let first = operation(on: current, &g)
                 var single = current
                 first.apply(to: &single)
                 var next = current
-                // One operation that edits no marked cell is never refused.
+                let ambiguous = ambiguousDeletion(first, in: current)
                 do {
                     let actual = try rewrite(current, to: single)
-                    judge(context + ", one operation \(first)", old: current, truth: single, actual: actual)
+                    XCTAssertFalse(ambiguous, "\(context): an ambiguous deletion was accepted: \(first); texts \(NoteAgentTableText.texts(current))")
+                    accept(context + ", one operation \(first)", old: current, truth: single, actual: actual)
                     next = actual
+                } catch where ambiguous {
+                    counts.ambiguous += 1
+                    XCTAssertEqual(try deleteByID(first, in: current), single, "\(context): the id route deletes it, keeping everything")
                 } catch {
                     let marked = first.edited.map { !current.rows[$0.0].cells[$0.1].marks.isEmpty } ?? false
                     XCTAssertTrue(marked, "\(context): one operation refused: \(first); texts \(NoteAgentTableText.texts(current)); "
@@ -550,10 +658,11 @@ final class NoteTableTextMergeTests: XCTestCase {
                 second.apply(to: &truth)
                 recordSlotEdits(old: current, truth: &truth)
                 if let actual = try? rewrite(current, to: truth) {
-                    judge(context + ", two operations \(first), \(second)", old: current, truth: truth, actual: actual)
+                    accept(context + ", two operations \(first), \(second)", old: current, truth: truth, actual: actual)
                     next = actual
                     counts.accepted += 1
                 } else {
+                    XCTAssertNotEqual(NoteAgentTableText.texts(truth), NoteAgentTableText.texts(current), "\(context): unchanged text was refused")
                     counts.refused += 1
                 }
                 // A plain table is never refused.
@@ -566,6 +675,7 @@ final class NoteTableTextMergeTests: XCTestCase {
             }
             XCTAssertGreaterThan(counts.accepted, 30, "seed \(seed): the test exercises accepted rewrites")
             XCTAssertGreaterThan(counts.refused, 0, "seed \(seed): and refusals")
+            print("seed \(seed): \(counts)")
         }
     }
 }

@@ -92,6 +92,8 @@ enum NoteAgentTableText {
 
     /// Merges an agent's rows into `table` (design: `ops/design/notes-tables.md`).
     /// The text proves only exact matches, so it keeps only what they prove:
+    /// - **Unchanged:** a table whose text is unchanged is kept whole; a gap
+    ///   whose old and new lines read the same, in order, keeps everything.
     /// - **Certain:** a row or column whose text is unique in both tables, as
     ///   a whole line or at the other dimension's certain lines (found in
     ///   rounds); a dimension with one line in both tables.
@@ -110,13 +112,21 @@ enum NoteAgentTableText {
             table.columns[column].width != nil || !table.columns[column].extras.isEmpty
                 || table.rows.contains { hiddenCell($0.cells[column]) }
         }
+        // P0: what the text doesn't change isn't matched at all.
+        if old == rows {
+            var kept = table
+            for index in kept.columns.indices where index < alignments.count { kept.columns[index].align = alignments[index] }
+            return kept
+        }
         var (rowMap, columnMap) = certain(old: old, new: rows)
         if !rowMap.contains(where: { $0 != nil }) && !columnMap.contains(where: { $0 != nil }) {
             // Nothing to start from: plain tables get new ids, others are refused.
             guard !rowHidden.contains(true) && !columnHidden.contains(true) else { throw NoteAgentTextError.lossyFormatting }
         } else {
-            try pairGaps(&rowMap, oldCount: old.count, hidden: rowHidden)
-            try pairGaps(&columnMap, oldCount: table.columnCount, hidden: columnHidden)
+            let oldColumns = table.columns.indices.map { column in old.map { $0[column] } }
+            let newColumns = (0..<width).map { column in rows.map { $0[column] } }
+            try pairGaps(&rowMap, oldCount: old.count, hidden: rowHidden) { old[$0] == rows[$1] }
+            try pairGaps(&columnMap, oldCount: table.columnCount, hidden: columnHidden) { oldColumns[$0] == newColumns[$1] }
         }
         var merged = table
         merged.columns = (0..<width).map { index in
@@ -185,11 +195,11 @@ enum NoteAgentTableText {
     }
 
     /// Left-over lines between the same two certain neighbours (or the
-    /// table's edges) in both tables: one line on each side pairs in place;
-    /// more pair in place only when none of the old ones carries anything
-    /// hidden. An unpaired old line with something hidden is a pure deletion
+    /// table's edges) in both tables: one line on each side, or lines that
+    /// read the `same` in order, pair in place; other equal gaps pair in
+    /// place only when none of the old ones carries anything hidden. An unpaired old line with something hidden is a pure deletion
     /// only when no new line is unpaired; otherwise the update is refused.
-    static func pairGaps(_ map: inout [Int?], oldCount: Int, hidden: [Bool]) throws {
+    static func pairGaps(_ map: inout [Int?], oldCount: Int, hidden: [Bool], same: (Int, Int) -> Bool) throws {
         struct Gap: Hashable { var before: Int, after: Int }
         func gaps(_ anchors: [Int?], end: Int) -> [Gap: [Int]] {
             var next = [Int](repeating: end, count: anchors.count)
@@ -210,7 +220,8 @@ enum NoteAgentTableText {
         let oldGaps = gaps(oldAnchors, end: oldCount)
         for (gap, newLines) in gaps(map, end: oldCount) {
             guard let oldLines = oldGaps[gap], oldLines.count == newLines.count,
-                  oldLines.count == 1 || !oldLines.contains(where: { hidden[$0] }) else { continue }
+                  oldLines.count == 1 || !oldLines.contains(where: { hidden[$0] })
+                    || zip(oldLines, newLines).allSatisfy(same) else { continue }
             for (newLine, oldLine) in zip(newLines, oldLines) { map[newLine] = oldLine }
         }
         let kept = Set(map.compactMap { $0 })
