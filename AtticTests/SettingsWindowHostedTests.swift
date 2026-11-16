@@ -580,8 +580,10 @@ final class SettingsWindowHostedTests: XCTestCase {
                                         max(SettingsWindowLayout.minimumContentSize.width,
                                             scroll.contentView.bounds.width) - 2,
                                         "Sidebar background and page card must fill the available clip")
-            XCTAssertGreaterThanOrEqual(content.frame.height, max(460, size.height) - 2,
-                                        "Content must fill the tall host without leaving a bare strip")
+            XCTAssertEqual(content.frame.height,
+                           max(SettingsWindowLayout.minimumContentSize.height, scroll.contentView.bounds.height),
+                           accuracy: 0.5,
+                           "Content must fill the native clip exactly, excluding the horizontal track")
         }
     }
 
@@ -642,6 +644,39 @@ final class SettingsWindowHostedTests: XCTestCase {
                          CGSize(width: 640, height: 400), CGSize(width: 630, height: 400)] {
                 try verify(size, style: currentStyle)
             }
+        }
+    }
+
+    /// CI-standing R-4 (pre-existing): the horizontal legacy track must
+    /// consume viewport height, not create an otherwise unnecessary vertical range.
+    func testR24LegacyHorizontalTrackDoesNotCreateVerticalOverflow() throws {
+        try withScrollerPreference(.legacy) {
+            let size = CGSize(width: 580, height: 650)
+            let host = NSHostingView(rootView: GeometryReader { available in
+                SettingsAdaptiveScroll(size: available.size) { Color.clear }
+            })
+            let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.orderOut(nil); window.contentView = nil; window.close() }
+
+            let deadline = Date().addingTimeInterval(2)
+            var scroll: NSScrollView?
+            repeat {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                scroll = nativeScrollViews(in: host).first { $0.frame.height > 200 }
+                spin(0.05)
+            } while Date() < deadline
+            let mounted = try XCTUnwrap(scroll)
+            let document = try XCTUnwrap(mounted.documentView)
+            XCTAssertEqual(mounted.scrollerStyle, .legacy)
+            XCTAssertTrue(mounted.hasHorizontalScroller)
+            XCTAssertGreaterThan(document.frame.width, mounted.contentView.bounds.width)
+            XCTAssertLessThanOrEqual(document.frame.height, mounted.contentView.bounds.height + 0.5,
+                                     "A horizontal legacy track must not create a spurious vertical scroll range")
         }
     }
 
