@@ -178,8 +178,10 @@ Scripts/run_local_ui_tests.zsh
   The main unit runner skips those complete suites; optimized cost tests keep
   their existing jobs. Both unit runners are required in `fast` and `full`.
 - **CI** is [`.github/workflows/macos-ci.yml`](.github/workflows/macos-ci.yml)
-  ("Attic CI"). It runs on pull requests and on pushes to `main`, using the
-  `full` lane. A manual run picks a lane:
+  ("Attic CI"). It runs on pushes to `main`, using the `full` lane. It does not
+  start on pull-request pushes: a pull request's CI is started by hand at gate
+  time (`gh workflow run "Attic CI" --ref <branch> -f lane=full`). A manual run
+  picks a lane:
   - `fast`: builds, runs the split unit suites, full-history Notes editor seeds
     and generated round trips in parallel, the static analyzer, and the
     project-generation checks. Timing gates report but don't block.
