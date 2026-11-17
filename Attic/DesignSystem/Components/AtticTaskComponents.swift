@@ -1528,6 +1528,9 @@ struct AtticTaskRow: View {
             tokens.rowHighlight(selected: isSelected, hovered: state == .hover, run: isSelected ? selectionRun : .single)
         }
         let disabled = state == .disabled
+        // 1A (owner, 17 Nov): the details' greys on a selected or pressed
+        // row's fill keep their floor there.
+        let onSelectedRow = isSelected || state == .pressed
         let showsOpen = Self.showsOpenButton(hovered: hovered || forced == .hover, selected: isSelected,
                                              renaming: titleEditing != nil, opens: onOpenPage != nil && !disabled)
         #if DEBUG
@@ -1604,7 +1607,7 @@ struct AtticTaskRow: View {
                         }
                     }
                     Spacer(minLength: m.trailingMinGap)
-                    trailing(disabled: disabled)
+                    trailing(disabled: disabled, onSelectedRow: onSelectedRow)
                     if let onActions, capture == nil, !disabled, titleEditing == nil,
                        AtticTaskRow.showsActionsButton(forced: forced, keyboardFocused: showsFocusRing) {
                         // Only for the row the keyboard is on (round 10).
@@ -1627,7 +1630,8 @@ struct AtticTaskRow: View {
                                      onTags: capture == nil ? meta?.onTags : nil,
                                      tagsPopover: meta.map { meta in
                                          AtticAnchoredPopover(isPresented: tagsPresented(twoLine: true), content: meta.tagPicker)
-                                     })
+                                     },
+                                     onSelectedRow: onSelectedRow)
                         .frame(height: d.line)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, d.metaTop)
@@ -1704,7 +1708,7 @@ struct AtticTaskRow: View {
     /// The right-hand meta: the due date, always here, on the title's
     /// baseline (or "Add to page" while a file hovers over the row).
     @ViewBuilder
-    private func trailing(disabled: Bool) -> some View {
+    private func trailing(disabled: Bool, onSelectedRow: Bool) -> some View {
         if let dropLabel {
             AtticText(verbatim: dropLabel, style: .dropLabel, ink: .accentText, allowsOverlap: true)
                 .fixedSize()
@@ -1713,7 +1717,7 @@ struct AtticTaskRow: View {
                 // A button (owner fix 5 C): hover shows its pill; a click
                 // opens the date picker, which may reach past the panel.
                 Button(action: meta.onDate) {
-                    AtticDueText(due: due, disabled: disabled, panelDesign: true)
+                    AtticDueText(due: due, disabled: disabled, panelDesign: true, onSelectedRow: onSelectedRow)
                         .fixedSize()
                         .background(AtticMetaPill(visible: dateHovered))
                         .contentShape(Rectangle())
@@ -1727,7 +1731,7 @@ struct AtticTaskRow: View {
                 .accessibilityHint(String(localized: "Changes the date"))
                 .atticDropdown(isPresented: meta.datePresented, label: String(localized: "Date")) { meta.datePicker() }
             } else {
-                AtticDueText(due: due, disabled: disabled, panelDesign: true)
+                AtticDueText(due: due, disabled: disabled, panelDesign: true, onSelectedRow: onSelectedRow)
                     .fixedSize()
             }
         } else if let meta, capture == nil {
@@ -1972,6 +1976,9 @@ struct AtticDueText: View {
     var disabled = false
     /// A Tasks panel row: the design's date grey (`AtticPanelTone.date`).
     var panelDesign = false
+    /// On a selected or pressed row's fill: the date grey that keeps its
+    /// floor there (1A, owner 17 Nov).
+    var onSelectedRow = false
 
     @Environment(\.atticDesign) private var design
 
@@ -1984,7 +1991,7 @@ struct AtticDueText: View {
                 .colour(panelDesign && !disabled ? AtticSurfaceInk.vivid(design.tokens.ink(.dueText), tokens: design.tokens) : nil)
         case .today, .quiet:
             AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .helper)
-                .colour(panelDesign && !disabled ? AtticSurfaceInk.toneInk(.date, tokens: design.tokens) : nil)
+                .colour(panelDesign && !disabled ? AtticSurfaceInk.toneInk(.date, tokens: design.tokens, onSelectedRow: onSelectedRow) : nil)
         }
     }
 }
@@ -2009,14 +2016,19 @@ struct AtticTaskDetails: View {
     /// The row's tag popover, anchored to the tags themselves so its arrow
     /// points at what was clicked (round 5, the owner's item 3).
     var tagsPopover: AtticAnchoredPopover? = nil
+    /// On a selected or pressed row's fill: every grey detail (the count
+    /// and its box, "In window", the note glyph, the links) takes the grey
+    /// that keeps its floor there (1A, owner 17 Nov).
+    var onSelectedRow = false
 
     @Environment(\.atticDesign) private var design
 
     var body: some View {
         let m = AtticTaskRowMetrics.self
         let text: AtticInk = disabled ? .disabledText : .helper
-        // The design's meta grey (`AtticPanelTone.meta`).
-        let tone = disabled ? nil : AtticSurfaceInk.toneInk(.meta, tokens: design.tokens)
+        // The design's meta grey (`AtticPanelTone.meta`); on a selected or
+        // pressed row, the grey that keeps its floor there (1A).
+        let tone = disabled ? nil : Self.greyInk(tokens: design.tokens, onSelectedRow: onSelectedRow)
         let icon: AtticInk = disabled ? .disabledIcon : .icon
         HStack(spacing: m.detailsItemSpacing) {
             if model.inWindow {
@@ -2037,6 +2049,7 @@ struct AtticTaskDetails: View {
                     help: (String(localized: "Hide subtasks"), String(localized: "Show subtasks")),
                     spokenLabel: String(localized: "\(subtasks.done) of \(subtasks.total) subtasks"),
                     hint: (String(localized: "Collapses the quick look"), String(localized: "Expands the quick look")),
+                    onSelectedRow: onSelectedRow,
                     action: onToggleExpanded
                 )
                 .fixedSize()
@@ -2058,6 +2071,13 @@ struct AtticTaskDetails: View {
             }
         }
         .lineLimit(1)
+    }
+
+    /// The grey of "In window", the note glyph and the links count (the
+    /// count and its box take the same grey through their own control).
+    @MainActor
+    static func greyInk(tokens: AtticColorTokens, onSelectedRow: Bool) -> AtticRGBA {
+        AtticSurfaceInk.toneInk(.meta, tokens: tokens, onSelectedRow: onSelectedRow)
     }
 }
 
@@ -2166,6 +2186,8 @@ private struct AtticDetailsCountButton: View {
     let help: (open: String, closed: String)
     let spokenLabel: String
     let hint: (open: String, closed: String)
+    /// The row's selected or pressed fill is under it.
+    var onSelectedRow = false
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -2177,7 +2199,7 @@ private struct AtticDetailsCountButton: View {
         let radius = AtticRadius.control(height: m.height)
         let hover = !disabled && (forced == .hover || hovered)
         let metaInk = AtticSurfaceInk.toneInk(.meta, tokens: design.tokens,
-            overlays: hover ? [design.tokens.hover, design.tokens.chipHover] : [])
+            overlays: hover ? [design.tokens.hover, design.tokens.chipHover] : [], onSelectedRow: onSelectedRow)
         Button(action: action) {
             HStack(spacing: m.iconGap) {
                 AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
