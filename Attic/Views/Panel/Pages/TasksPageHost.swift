@@ -181,8 +181,8 @@ struct TasksPageHost: View {
         }
         // Text typed in the add bar holds the panel open (the shell's
         // composer lock) until it is added or cleared; it is kept either way.
-        .onReceive(model.addBarState.$text.map { !$0.text.isEmpty }
-            .combineLatest(model.addBarState.$files.map { !$0.isEmpty }) { $0 || $1 }
+        .onReceive(model.addBarState.$text
+            .combineLatest(model.addBarState.$files, model.addBarState.$stagingFiles, TasksAddBarState.holdsPanel)
             .removeDuplicates()) { hasDraft in
             guard isCurrent else { return }
             // On the next turn (round 4): the shell's published lock redraws
@@ -298,7 +298,7 @@ struct TasksPageHost: View {
     }
 
     private func syncDraftLock(_ model: TasksPageModel) {
-        uiState.setInteractionLock(.taskComposer, isActive: !model.addBar.text.isEmpty || !model.addBarState.files.isEmpty)
+        uiState.setInteractionLock(.taskComposer, isActive: model.addBarState.holdsPanel)
     }
 
     private func handlePrimaryInputFocusRequest() {

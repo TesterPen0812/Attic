@@ -1227,6 +1227,9 @@ final class AtticLibrary {
             owned.writing = updated.writing; owned.groups = updated.groups
             return .applied
         }
+        // A list that could not be read is no proof that the task is gone:
+        // the step stays, to be tried again once the list is read.
+        if tasks.hasUnresolvedTaskReload { return .failed }
         // Tasks that left the list since (deleted, or moved to the Done log
         // when it is not reached) can't be taken back by this step any more.
         let listed = ids.allSatisfy {

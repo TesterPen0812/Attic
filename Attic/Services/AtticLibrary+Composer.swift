@@ -23,9 +23,26 @@ extension AtticLibrary {
                     .taskSnapshot(title: draft.title),
                   case .success = notes.createDocumentNote(id: UUID(), document: document, taskOwner: taskID, creatingTask: draft)
             else { return nil }
+            // The files the task was saved with are the task's now: the
+            // importer's hold on them ends here, as it does when the task
+            // store saves (`TaskStore.save`), so a later purge can take them.
+            self.tasks.taskImageFiles.files.finishCandidates(Set(draft.attachments.map(\.id)))
+            // The save committed: that is the answer. A list read that
+            // fails afterwards can't turn it into a failed create (the card
+            // would offer the same draft again, and a retry would make a
+            // second task) or lose its Undo step. One more read is tried;
+            // if the list is still behind, the task is answered as it was
+            // saved, and the list catches up on its next read.
             self.tasks.refresh()
-            guard let task = self.tasks.task(withID: taskID) else { return nil }
-            created = task
+            if self.tasks.task(withID: taskID) == nil { self.tasks.refresh() }
+            created = self.tasks.task(withID: taskID) ?? {
+                let saved = TaskItem(id: taskID, title: draft.title, status: draft.status,
+                                     priority: draft.priority, parentID: draft.parentID)
+                saved.tags = draft.tags
+                saved.dueDay = draft.dueDay
+                saved.dueTimeMinutes = draft.dueTimeMinutes
+                return saved
+            }()
             let ids = [taskID]
             let owned = itemOwnership(liveFamilyMembers(of: ids), deleted: false)
             return UndoStep(

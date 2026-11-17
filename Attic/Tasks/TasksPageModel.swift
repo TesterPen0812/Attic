@@ -209,6 +209,8 @@ final class TasksAddBarState: ObservableObject {
     @Published var stagingFiles = 0
     /// Clear invalidates providers still staging for this draft.
     var filesGeneration = UUID()
+    /// The last place given to a batch of files (`nextFilesPlace`).
+    var filesPlaced = 0
 
     /// The owner's side of the token field's undo: text and pieces step
     /// back together; nil when the draft has nothing to undo.
@@ -275,26 +277,24 @@ final class TasksPageModel: ObservableObject {
         return ready
     }
 
-    /// Await both the acknowledged creation and its submitted files. A new
-    /// command admitted during an import must settle before quit approval too.
+    /// The same as `prepareForTermination`: a task is saved with its files
+    /// in one save, so nothing of a submission is left to await.
     static func prepareForTerminationDurably(in store: TaskStore) async -> Bool {
-        let models = live.allObjects.filter { $0.store.container === store.container }
-        let failures = models.map { ($0, $0.acknowledgementFailures) }
-        var ready = true
-        while true {
-            guard prepareForTermination(in: store) else { return false }
-            let pending = live.allObjects.filter { $0.store.container === store.container }
-                .flatMap { Array($0.composerAttachmentTasks.values) }
-            guard !pending.isEmpty else {
-                return ready && failures.allSatisfy { $0.0.acknowledgementFailures == $0.1 }
-            }
-            for task in pending {
-                if !(await task.value) { ready = false }
-            }
-        }
+        prepareForTermination(in: store)
     }
 
-    var composerAttachmentTasks: [UUID: Task<Bool, Never>] = [:]
+    /// This draft's file batches being copied into the attachment store,
+    /// and the copies made (`TasksComposerFiles.swift`).
+    var composerPreparations: [UUID: Task<[TaskImageReference]?, Never>] = [:]
+    var composerPrepared: [UUID: [TaskImageReference]] = [:]
+    var composerPreparationTail: Task<[TaskImageReference]?, Never>?
+
+    /// A page model that goes ends its draft's files as the strip's × does:
+    /// Attic's staged copies and the copies running or made.
+    isolated deinit {
+        addBarState.files.forEach { $0.staging.discard() }
+        endComposerCopies()
+    }
 
     let library: AtticLibrary
     var store: TaskStore { library.tasks }
@@ -2778,14 +2778,19 @@ final class TasksPageModel: ObservableObject {
         // it: a failed save keeps the draft exactly as it was.
         var finished = addBar
         finished.typedReplacesPicks(parser: parser, caret: nil)
-        guard let draft = finished.draft(parser: parser, status: addStatus),
-              let task = library.createTasks([draft])?.first else { return nil }
+        guard let draft = finished.draft(parser: parser, status: addStatus) else { return nil }
+        // Files added while it was written are saved with it, in the task's
+        // own save (O17-06). They are all copied by now, or Return was
+        // refused above, and they leave the draft only once it is saved.
+        let files = composerFilesForSave()
+        var saving = draft
+        saving.attachments = files.references
+        guard let task = library.createTasks([saving])?.first else { return nil }
+        composerFilesSaved(files, on: task.title)
         addBarState.clearDraft()
         keepInView(task.id, on: tab)
         startDraftFromFilter()
         AtticSounds.play(.created)
-        // Files added while it was written go onto it (O17-06).
-        attachComposerFiles(to: task.id)
         selectOnly(nil)
         var revealed = false
         if openingPage {
@@ -2805,7 +2810,9 @@ final class TasksPageModel: ObservableObject {
     /// Preparing a provider cannot consume this draft yet. Keep the choice
     /// explicit: a later file callback must never submit a changed draft.
     func composerFilesReadyForSubmission() -> Bool {
-        guard addBarState.stagingFiles > 0 else { return true }
+        // A file still being staged or copied: nothing is created and
+        // nothing is cleared until Attic has its copy.
+        guard !composerFilesArePrepared else { return true }
         toasts.show(String(localized: "Preparing files · try again in a moment"),
                     actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
         return false
@@ -2819,19 +2826,23 @@ final class TasksPageModel: ObservableObject {
         guard let offer = pasteOffer else { return }
         let builder = TaskDraftBuilder(parser: parser, status: addStatus)
         let drafts = builder.drafts(from: offer.text, mode: asOne ? .single : .onePerLine)
-        guard let created = library.createTasks(drafts) else {
+        // A paste consumes the same draft as Return. For one-per-line, its
+        // files belong to the first task, which the page reveals, and are
+        // saved with it in the batch's own save.
+        let files = composerFilesForSave()
+        var saving = drafts
+        if !saving.isEmpty { saving[0].attachments = files.references }
+        guard let created = library.createTasks(saving) else {
             failedSave = .paste
             lastPasteAsOne = asOne
             return
         }
+        composerFilesSaved(files, on: created.first?.title ?? "")
         clearFailure(.paste)
         pasteOffer = nil
         // The bar is empty once the tasks exist, as after a single add (round
         // 12, CU: the draft stayed behind the batch).
         addBarState.clearDraft()
-        // A paste consumes the same draft as Return. For one-per-line,
-        // its files belong to the first task, which the page reveals.
-        if let first = created.first { attachComposerFiles(to: first.id) }
         // The same observable success as a single add (round 4): the first
         // new row comes into view; from Done, a toast says where they went;
         // VoiceOver hears how many were added.
