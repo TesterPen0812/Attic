@@ -595,7 +595,7 @@ final class NoteStore: ObservableObject {
             || !nextBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         guard let loaded = loadDocument(noteID: note.id), let base = loaded.content.document else { return false }
         do {
-            let document = try NoteAgentTextParser.document(title: title ?? NoteTextExport.agentLine(base.blocks[0], index: 0),
+            let document = try NoteAgentTextParser.document(title: title ?? NoteTextExport.agentTitle(base),
                 body: body ?? NoteTextExport.agentBody(base), base: base)
             guard case .success = saveDocument(noteID: note.id, document: document, baseRevisionID: loaded.revisionID) else { return false }
             return true

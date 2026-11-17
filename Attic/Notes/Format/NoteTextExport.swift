@@ -43,7 +43,7 @@ enum NoteTextExport {
 
     /// The body as an agent reads and writes it: Markdown-like lines where
     /// every object is addressable, so an agent can keep an image by keeping
-    /// its line.
+    /// its line. Literal text is escaped by `NoteAgentText`'s one rule.
     ///
     /// - checklist: `- [ ] text` / `- [x] text`
     /// - image: `![image](attic://image/<placement id>)`
@@ -56,15 +56,28 @@ enum NoteTextExport {
     }
 
     static func agentLine(_ block: NoteBlock, index: Int) -> String {
+        line(block, index: index, place: .line)
+    }
+
+    /// The title line as the update tools default it and compare it: written
+    /// as typed (dates as tokens, no escapes), since agents send `title` as
+    /// its own field.
+    static func agentTitle(_ document: NoteDocument) -> String {
+        line(document.blocks.first ?? .text(""), index: 0, place: .typed)
+    }
+
+    private static func line(_ block: NoteBlock, index: Int, place: NoteAgentText.Place) -> String {
         switch block.kind {
         case .text:
             var plain = block
-            plain.text = agentInlineText(block)
+            plain.text = agentInlineText(block, in: place)
             plain.inlines = []
             return plainLine(plain)
-        case .checklist: return (block.checked ? "- [x] " : "- [ ] ") + agentInlineText(block)
+        case .checklist: return (block.checked ? "- [x] " : "- [ ] ") + agentInlineText(block, in: place)
         case .image: return "![image](attic://image/\(block.id?.uuidString ?? ""))"
-        case .file: return "[file: \(block.filename ?? "file")](attic://file/\(block.id?.uuidString ?? ""))"
+        case .file:
+            let name = NoteAgentText.write([.text(block.filename ?? "file")], in: place)
+            return "[file: \(name)](attic://file/\(block.id?.uuidString ?? ""))"
         case .divider: return "---"
         case .table: return agentTable(block)
         case .opaque: return "[unsupported content](attic://block/\(index))"
@@ -73,34 +86,203 @@ enum NoteTextExport {
 
     /// A table as agents read and write it: an `attic:table` token line
     /// (its id, and `headerRow=false` when the header row is off), then a
-    /// GFM pipe table. Dates in cells read `[date:YYYY-MM-DD]`.
+    /// GFM pipe table whose first row is always GFM's header. Cells are
+    /// written by `NoteAgentText` (a line break as `<br>`).
     static func agentTable(_ block: NoteBlock) -> String {
         guard let table = block.table else { return "" }
         var token = "<!-- attic:table id=\(block.id?.uuidString ?? "")"
         if !table.headerRow { token += " headerRow=false" }
         token += " -->"
-        var visible = table
-        visible.headerRow = true
-        let grid = NoteTableText.markdown(visible) { cell in NoteTableText.plainCellMarkdown(agentInlineText(cell.block)) }
-        return token + "\n" + grid
+        guard table.isRectangular, !table.rows.isEmpty else { return token + "\n" }
+        func row(_ row: NoteTable.Row) -> String {
+            "| " + row.cells.map { agentInlineText($0.block, in: .cell) }.joined(separator: " | ") + " |"
+        }
+        let delimiter = "|" + table.columns.map { column in
+            switch column.align {
+            case .left: " --- "
+            case .center: " :---: "
+            case .right: " ---: "
+            }
+        }.joined(separator: "|") + "|"
+        return ([token, row(table.rows[0]), delimiter] + table.rows.dropFirst().map(row)).joined(separator: "\n")
     }
 
-    static func agentInlineText(_ block: NoteBlock) -> String {
-        guard !block.inlines.isEmpty else { return block.text }
-        var result = ""
+    /// A line's or a cell's text as agents read it: dates as
+    /// `[date:YYYY-MM-DD]`, an object this build can't read as
+    /// `[unsupported]`, literal text escaped for `place`.
+    static func agentInlineText(_ block: NoteBlock, in place: NoteAgentText.Place = .field) -> String {
+        NoteAgentText.write(NoteAgentText.pieces(block.text, inlines: block.inlines), in: place)
+    }
+}
+
+/// The agent text's one escaping rule (spec § 4.6). A backslash before
+/// `\`, `[`, `|`, `<`, `&` or white space (a space, a tab, a line break) makes
+/// that character literal text; before anything else it is itself
+/// (`C:\Users`). The export puts one before every literal `\ [ | <`, before an
+/// `&` that would read as an entity, before a line's line break or carriage
+/// return, and before a cell's edge white space. Real tokens are never
+/// escaped: `[date:YYYY-MM-DD]`, `[unsupported]`, a table's pipes and `<br>`,
+/// a checklist's `- [ ] ` and an object's line. Text sent without escapes
+/// keeps its old meaning.
+enum NoteAgentText {
+    /// Literal text, a date, or an object this build can't read.
+    enum Piece: Equatable {
+        case text(String)
+        case date(NoteDay)
+        case unsupported
+    }
+
+    /// Where the text is written:
+    /// - `line`: a body line; a line break continues the line (`\` at its end);
+    /// - `cell`: a pipe-table cell; a line break is `<br>`, and `<br>` and
+    ///   entities are read as they always were;
+    /// - `field`: a cell in a JSON field (`tables`, `set_cell`);
+    /// - `typed`: the title, and the composer's text as a person typed it:
+    ///   dates only, no escapes.
+    enum Place {
+        case line, cell, field, typed
+    }
+
+    static func pieces(_ text: String, inlines: [NoteInline]) -> [Piece] {
+        var result: [Piece] = []
+        var literal = ""
         var index = 0
-        for character in block.text {
-            if character == NoteDocument.objectCharacter, index < block.inlines.count {
-                switch block.inlines[index].kind {
-                case let .date(day): result += "[date:\(day.isoString)]"
-                case .opaque: result += "[unsupported]"
+        for character in text {
+            if character == NoteDocument.objectCharacter, index < inlines.count {
+                if !literal.isEmpty { result.append(.text(literal)); literal = "" }
+                switch inlines[index].kind {
+                case let .date(day): result.append(.date(day))
+                case .opaque: result.append(.unsupported)
                 }
                 index += 1
             } else {
-                result.append(character)
+                literal.append(character)
             }
         }
+        if !literal.isEmpty { result.append(.text(literal)) }
         return result
+    }
+
+    static func write(_ pieces: [Piece], in place: Place) -> String {
+        var output = ""
+        for (index, piece) in pieces.enumerated() {
+            switch piece {
+            case let .date(day): output += "[date:\(day.isoString)]"
+            case .unsupported: output += "[unsupported]"
+            case let .text(text):
+                guard place != .typed else { output += text; continue }
+                let characters = Array(text)
+                // A cell's edge white space would be trimmed as padding.
+                let leading = place == .cell && index == 0 ? characters.prefix(while: isPadding).count : 0
+                let trailing = place == .cell && index == pieces.count - 1
+                    ? characters.count - characters.reversed().prefix(while: isPadding).count : characters.count
+                for (offset, character) in characters.enumerated() {
+                    switch character {
+                    case "\\", "[", "|", "<": output += "\\" + String(character)
+                    case "&" where entity(characters, at: offset) != nil: output += "\\&"
+                    case "\n": output += place == .line ? "\\\n" : place == .cell ? "<br>" : "\n"
+                    case "\r": output += place == .field ? "\r" : "\\\r"
+                    case "\r\n": output += place == .line ? "\\\r\\\n" : place == .cell ? "\\\r<br>" : "\r\n"
+                    default:
+                        output += offset < leading || offset >= trailing ? "\\" + String(character) : String(character)
+                    }
+                }
+            }
+        }
+        return output
+    }
+
+    /// The other way: escapes undone, tokens read. A literal U+FFFC is
+    /// dropped (it would claim an object that isn't there).
+    static func read(_ text: String, in place: Place) -> [Piece] {
+        var result: [Piece] = []
+        var literal = ""
+        let characters = Array(text)
+        func flush() { if !literal.isEmpty { result.append(.text(literal)); literal = "" } }
+        func matches(_ token: String, at index: Int) -> Bool {
+            let token = Array(token)
+            return index + token.count <= characters.count && Array(characters[index..<(index + token.count)]) == token
+        }
+        var index = 0
+        while index < characters.count {
+            let character = characters[index]
+            if place != .typed, character == "\\", index + 1 < characters.count, isEscapable(characters[index + 1]) {
+                literal.append(characters[index + 1]); index += 2; continue
+            }
+            if character == NoteDocument.objectCharacter { index += 1; continue }
+            if character == "[" {
+                if matches("[date:", at: index), let close = characters[index...].firstIndex(of: "]"),
+                   let day = NoteDay(isoString: String(characters[(index + 6)..<close])) {
+                    flush(); result.append(.date(day)); index = close + 1; continue
+                }
+                if matches("[unsupported]", at: index) {
+                    flush(); result.append(.unsupported); index += "[unsupported]".count; continue
+                }
+            }
+            if place == .cell {
+                if let lineBreak = ["<br>", "<br/>", "<br />"].first(where: { matches($0, at: index) }) {
+                    literal.append("\n"); index += lineBreak.count; continue
+                }
+                if character == "&", let (value, length) = entity(characters, at: index) {
+                    literal += value; index += length; continue
+                }
+            }
+            literal.append(character)
+            index += 1
+        }
+        flush()
+        return result
+    }
+
+    static func isEscapable(_ character: Character) -> Bool {
+        "\\[|<&".contains(character) || character.isWhitespace
+    }
+
+    /// White space a pipe table trims from a cell's edges.
+    static func isPadding(_ character: Character) -> Bool {
+        character.isWhitespace && !character.isNewline
+    }
+
+    /// The character an entity at `index` stands for, and its length, read
+    /// as cells always read them (`&amp;`, `&lt;`, `&#124;`…).
+    static func entity(_ characters: [Character], at index: Int) -> (String, Int)? {
+        guard characters[index] == "&", let end = characters[index...].prefix(12).firstIndex(of: ";") else { return nil }
+        let name = String(characters[(index + 1)..<end])
+        let named = ["nbsp": " ", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "amp": "&"]
+        if let value = named[name] { return (value, end - index + 1) }
+        guard name.hasPrefix("#") else { return nil }
+        let digits = name.dropFirst()
+        let value: UInt32?
+        if digits.hasPrefix("x") {
+            guard digits.count > 1, digits.dropFirst().allSatisfy(\.isHexDigit) else { return nil }
+            value = UInt32(digits.dropFirst(), radix: 16)
+        } else {
+            guard !digits.isEmpty, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber) else { return nil }
+            value = UInt32(digits)
+        }
+        return (value.flatMap(UnicodeScalar.init).map { String(Character($0)) } ?? "", end - index + 1)
+    }
+
+    /// An agent's body as lines: a line break after an escaping `\` stays in
+    /// the line, and a carriage return before a line break is dropped unless
+    /// escaped. As typed, every line break ends a line.
+    static func lines(_ body: String, in place: Place) -> [String] {
+        guard !body.isEmpty else { return [] }
+        var result: [String] = []
+        var continues = false
+        for raw in body.components(separatedBy: "\n") {
+            var line = raw
+            if line.hasSuffix("\r"), place == .typed || !endsEscaping(line.dropLast()) { line.removeLast() }
+            if continues, let last = result.popLast() { line = last + "\n" + line }
+            result.append(line)
+            continues = place != .typed && endsEscaping(Substring(line))
+        }
+        return result
+    }
+
+    /// The text ends in an odd run of backslashes: the next character is escaped.
+    private static func endsEscaping(_ text: Substring) -> Bool {
+        text.reversed().prefix { $0 == "\\" }.count % 2 == 1
     }
 }
 
@@ -241,22 +423,24 @@ enum NoteAgentTextSafety {
 /// document's blocks wherever the agent kept them, so kept objects keep
 /// their IDs (and images their attachments).
 enum NoteAgentTextParser {
-    static func document(title: String, body: String, base: NoteDocument) throws -> NoteDocument {
+    /// `typed`: the body is text a person typed (the composer), read without
+    /// escapes; otherwise it is agent text (`NoteAgentText`).
+    static func document(title: String, body: String, base: NoteDocument, typed: Bool = false) throws -> NoteDocument {
+        let place: NoteAgentText.Place = typed ? .typed : .line
         var used = Set<Int>()
         let baseLines = base.blocks.enumerated().map { index, block in
             (index, block, NoteTextExport.agentLine(block, index: index))
         }
         var blocks: [NoteBlock] = []
         // The title keeps the base title block (and its fields) when unchanged.
-        if let first = base.blocks.first, first.kind == .text, NoteTextExport.agentLine(first, index: 0) == title {
+        if let first = base.blocks.first, first.kind == .text, NoteTextExport.agentTitle(base) == title {
             blocks.append(first)
             used.insert(0)
         } else {
-            blocks.append(try parseTextual(title, kind: .text, reusing: nil))
+            blocks.append(parseTextual(title, kind: .text, place: .typed))
         }
 
-        let lines = (body.isEmpty ? [] : body.components(separatedBy: "\n"))
-            .map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
+        let lines = NoteAgentText.lines(body, in: place)
         var usedTables = Set<UUID>()
         // Tables named by a token anywhere in the body are never matched by content.
         let tokenIDs = Set(lines.compactMap { NoteTableText.commentFields($0)?["id"].flatMap(UUID.init(uuidString:)) })
@@ -311,29 +495,26 @@ enum NoteAgentTextParser {
             // 3. A changed checklist line keeps the ID of a base line with
             //    the same text (ticking by an agent keeps the item).
             if let (checked, text) = checklistParts(line) {
+                let pieces = NoteAgentText.read(text, in: place)
                 let reusable = baseLines.first(where: {
-                    !used.contains($0.0) && $0.1.kind == .checklist && agentText(of: $0.1) == text
+                    !used.contains($0.0) && $0.1.kind == .checklist
+                        && NoteAgentText.pieces($0.1.text, inlines: $0.1.inlines) == pieces
                 })
                 var block = if let reusable { reusable.1 } else {
-                    try parseTextual(text, kind: .checklist, reusing: nil)
+                    parseTextual(text, kind: .checklist, place: place)
                 }
                 block.checked = checked
                 if let reusable { used.insert(reusable.0) }
                 blocks.append(block)
                 continue
             }
-            blocks.append(try parseTextual(line, kind: .text, reusing: nil))
+            blocks.append(parseTextual(line, kind: .text, place: place))
         }
         var document = base
         document.blocks = blocks
         try NoteAgentTextSafety.validateTables(base: base, proposed: document)
         try NoteAgentTextSafety.validate(base: base, proposed: document)
         return document
-    }
-
-    private static func agentText(of block: NoteBlock) -> String {
-        let line = NoteTextExport.agentLine(block, index: 1)
-        return checklistParts(line)?.1 ?? line
     }
 
     private static func checklistParts(_ line: String) -> (Bool, String)? {
@@ -346,43 +527,31 @@ enum NoteAgentTextParser {
         return nil
     }
 
+    /// `![…](scheme<id>)` or `[…](scheme<id>)`; an escaped `\[` is text. The
+    /// last `(scheme` counts, since a file's name is free text.
     private static func reference(in line: String, scheme: String) -> String? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasSuffix(")"), let open = trimmed.range(of: "(" + scheme),
-              trimmed.hasPrefix("!") || trimmed.hasPrefix("[") else { return nil }
+        guard trimmed.hasSuffix(")"), trimmed.hasPrefix("![") || trimmed.hasPrefix("["),
+              let open = trimmed.range(of: "(" + scheme, options: .backwards) else { return nil }
         return String(trimmed[open.upperBound..<trimmed.index(before: trimmed.endIndex)])
     }
 
-    /// Parses `[date:YYYY-MM-DD]` tokens into inline dates. A literal U+FFFC
-    /// in agent text is dropped (it would claim an object that isn't there).
-    private static func parseTextual(_ line: String, kind: NoteBlockKind, reusing: NoteBlock?) throws -> NoteBlock {
+    /// A line's text: dates become inline dates (each a new one); an
+    /// `[unsupported]` with no object behind it stays text.
+    private static func parseTextual(_ line: String, kind: NoteBlockKind, place: NoteAgentText.Place) -> NoteBlock {
         var text = ""
         var inlines: [NoteInline] = []
-        var reusableDates = reusing?.inlines ?? []
-        var remainder = Substring(line.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: ""))
-        while let start = remainder.range(of: "[date:") {
-            text += remainder[remainder.startIndex..<start.lowerBound]
-            let afterPrefix = remainder[start.upperBound...]
-            if let close = afterPrefix.firstIndex(of: "]"),
-               let day = NoteDay(isoString: String(afterPrefix[afterPrefix.startIndex..<close])) {
-                let id: UUID
-                if let index = reusableDates.firstIndex(where: { $0.kind == .date(day) }) {
-                    id = reusableDates.remove(at: index).id
-                } else {
-                    id = UUID()
-                }
+        for piece in NoteAgentText.read(line, in: place) {
+            switch piece {
+            case let .text(literal): text += literal
+            case .unsupported: text += "[unsupported]"
+            case let .date(day):
                 text.append(NoteDocument.objectCharacter)
-                inlines.append(NoteInline(id: id, kind: .date(day)))
-                remainder = afterPrefix[afterPrefix.index(after: close)...]
-            } else {
-                text += "[date:"
-                remainder = afterPrefix
+                inlines.append(NoteInline(id: UUID(), kind: .date(day)))
             }
         }
-        text += remainder
         var block = NoteBlock(kind: kind, text: text, inlines: inlines)
-        if kind == .checklist { block.id = reusing?.id ?? UUID() }
-        if let reusing, kind == reusing.kind { block.extras = reusing.extras }
+        if kind == .checklist { block.id = UUID() }
         return block
     }
 }

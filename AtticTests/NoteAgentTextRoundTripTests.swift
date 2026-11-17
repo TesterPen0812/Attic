@@ -25,6 +25,39 @@ final class NoteAgentTextRoundTripTests: XCTestCase {
         print("ROUND TRIP FAILURES\n" + failures.joined(separator: "\n"))
         XCTFail("\(failures.count) round-trip failures:\n" + failures.joined(separator: "\n"))
     }
+
+    /// Text an agent writes without escapes means what it always did; an
+    /// escape makes the marker text.
+    func testTextWithoutEscapesKeepsItsMeaningAndAnEscapeMakesItText() throws {
+        let tableID = UUID()
+        let base = NoteDocument(blocks: [.text("T"), .table(NoteTable(texts: [["a", "b"], ["1", "2"]]), id: tableID)])
+        let table = NoteTextExport.agentTable(base.blocks[1])
+        // (Dates go in a checklist line: a new date in a paragraph is refused
+        // by `NoteAgentTextSafety.validate`, which compares date ids.)
+        let body = ["- [ ] [date:2026-01-02] and \\[date:2026-01-02]", "- [ ] item", "- \\[ ] text", "C:\\Users\\me", "first\\", "second",
+                    table, "x | y", "after \\| table"].joined(separator: "\n")
+        let parsed = try NoteAgentTextParser.document(title: "T", body: body, base: base)
+        let blocks = Array(parsed.blocks.dropFirst())
+        XCTAssertEqual(blocks.count, 7, "\(blocks)")
+        XCTAssertEqual(blocks[0].inlines.map(\.kind), [.date(NoteDay(isoString: "2026-01-02")!)])
+        XCTAssertEqual(blocks[0].text, "\u{FFFC} and [date:2026-01-02]")
+        XCTAssertEqual(blocks[0].kind, .checklist)
+        XCTAssertEqual(blocks[1].kind, .checklist)
+        XCTAssertEqual(blocks[2], .text("- [ ] text"))
+        XCTAssertEqual(blocks[3], .text("C:\\Users\\me"), "a backslash before a letter is itself")
+        XCTAssertEqual(blocks[4], .text("first\nsecond"), "a backslash ending a line continues it")
+        XCTAssertEqual(blocks[5].table?.texts, [["a", "b"], ["1", "2"], ["x", "y"]], "an unescaped pipe line after a table is still a row")
+        XCTAssertEqual(blocks[6], .text("after | table"))
+    }
+
+    /// The composer reads what a person typed as typed: backslashes are
+    /// text and every line break ends a line.
+    func testTypedTextKeepsItsBackslashesAndLines() throws {
+        let body = "C:\\[x] \\| y\\\n- [ ] next \\[date:2026-01-02]"
+        let parsed = try NoteAgentTextParser.document(title: "T", body: body, base: .blank, typed: true)
+        XCTAssertEqual(parsed.blocks.dropFirst().map(\.text), ["C:\\[x] \\| y\\", "next \\\u{FFFC}"])
+        XCTAssertEqual(parsed.blocks.last?.inlines.count, 1, "a date token is a date, as before")
+    }
 }
 
 /// The generator and the legs, kept apart from XCTest.
@@ -281,17 +314,14 @@ enum NoteAgentRoundTripProperty {
         // date is left out: an edited line's dates get new ids, so the edit
         // is refused whatever the literal does.)
         if item.container.editableByText, d.blocks[item.block].inlines.isEmpty {
-            let line = NoteTextExport.agentBody(NoteDocument(blocks: [.text("T"), d.blocks[item.block]]))
-            var lines = body.components(separatedBy: "\n")
-            if let at = lines.firstIndex(of: line) {
-                lines[at] = line + " +"
-                var expected = d
-                expected.blocks[item.block].text += " +"
-                if let problem = check(parse(title(d), lines.joined(separator: "\n"), base: d), expected, meaningOnly: [item.block]) {
-                    failures.append(("its own line edited", problem))
-                }
-            } else {
-                failures.append(("its own line edited", "its line isn't one line of the body"))
+            // The agent appends to the block's own line, wherever it wraps.
+            let edited = d.blocks.enumerated().dropFirst().map { index, block in
+                NoteTextExport.agentLine(block, index: index) + (index == item.block ? " +" : "")
+            }.joined(separator: "\n")
+            var expected = d
+            expected.blocks[item.block].text += " +"
+            if let problem = check(parse(title(d), edited, base: d), expected, meaningOnly: [item.block]) {
+                failures.append(("its own line edited", problem))
             }
         }
         // By id: the cell's text as list_notes gives it, plus more.
