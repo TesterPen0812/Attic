@@ -119,11 +119,12 @@ enum NoteTextExport {
 /// `\`, `[`, `|`, `<`, `&` or white space (a space, a tab, a line break) makes
 /// that character literal text; before anything else it is itself
 /// (`C:\Users`). The export puts one before every literal `\ [ | <`, before an
-/// `&` that would read as an entity, before a line's line break or carriage
-/// return, and before a cell's edge white space. Real tokens are never
-/// escaped: `[date:YYYY-MM-DD]`, `[unsupported]`, a table's pipes and `<br>`,
-/// a checklist's `- [ ] ` and an object's line. Text sent without escapes
-/// keeps its old meaning.
+/// `&` that would read as an entity, and before a cell's edge white space.
+/// Real tokens are never escaped: `[date:YYYY-MM-DD]`, `[unsupported]`, a
+/// table's pipes and `<br>`, a checklist's `- [ ] ` and an object's line.
+/// Text sent without escapes keeps its old meaning. A line never holds a
+/// line break (the editor and every import make one block per line); a
+/// cell's line break is `<br>`.
 enum NoteAgentText {
     /// Literal text, a date, or an object this build can't read.
     enum Piece: Equatable {
@@ -133,7 +134,7 @@ enum NoteAgentText {
     }
 
     /// Where the text is written:
-    /// - `line`: a body line; a line break continues the line (`\` at its end);
+    /// - `line`: a body line;
     /// - `cell`: a pipe-table cell; a line break is `<br>`, and `<br>` and
     ///   entities are read as they always were;
     /// - `field`: a cell in a JSON field (`tables`, `set_cell`);
@@ -180,9 +181,8 @@ enum NoteAgentText {
                     switch character {
                     case "\\", "[", "|", "<": output += "\\" + String(character)
                     case "&" where entity(characters, at: offset) != nil: output += "\\&"
-                    case "\n": output += place == .line ? "\\\n" : place == .cell ? "<br>" : "\n"
-                    case "\r": output += place == .field ? "\r" : "\\\r"
-                    case "\r\n": output += place == .line ? "\\\r\\\n" : place == .cell ? "\\\r<br>" : "\r\n"
+                    case "\n" where place == .cell: output += "<br>"
+                    case "\r\n" where place == .cell: output += "\\\r<br>"
                     default:
                         output += offset < leading || offset >= trailing ? "\\" + String(character) : String(character)
                     }
@@ -263,26 +263,11 @@ enum NoteAgentText {
         return (value.flatMap(UnicodeScalar.init).map { String(Character($0)) } ?? "", end - index + 1)
     }
 
-    /// An agent's body as lines: a line break after an escaping `\` stays in
-    /// the line, and a carriage return before a line break is dropped unless
-    /// escaped. As typed, every line break ends a line.
-    static func lines(_ body: String, in place: Place) -> [String] {
+    /// An agent's body as lines; a carriage return before a line break is
+    /// dropped, as it always was.
+    static func lines(_ body: String) -> [String] {
         guard !body.isEmpty else { return [] }
-        var result: [String] = []
-        var continues = false
-        for raw in body.components(separatedBy: "\n") {
-            var line = raw
-            if line.hasSuffix("\r"), place == .typed || !endsEscaping(line.dropLast()) { line.removeLast() }
-            if continues, let last = result.popLast() { line = last + "\n" + line }
-            result.append(line)
-            continues = place != .typed && endsEscaping(Substring(line))
-        }
-        return result
-    }
-
-    /// The text ends in an odd run of backslashes: the next character is escaped.
-    private static func endsEscaping(_ text: Substring) -> Bool {
-        text.reversed().prefix { $0 == "\\" }.count % 2 == 1
+        return body.components(separatedBy: "\n").map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
     }
 }
 
@@ -440,7 +425,7 @@ enum NoteAgentTextParser {
             blocks.append(parseTextual(title, kind: .text, place: .typed))
         }
 
-        var lines = NoteAgentText.lines(body, in: place)
+        var lines = NoteAgentText.lines(body)
         // An empty body is the base's one empty line, when that is its body.
         if lines.isEmpty, base.blocks.count == 2, NoteTextExport.agentLine(base.blocks[1], index: 1).isEmpty { lines = [""] }
         var usedTables = Set<UUID>()

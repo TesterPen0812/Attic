@@ -34,20 +34,21 @@ final class NoteAgentTextRoundTripTests: XCTestCase {
         let table = NoteTextExport.agentTable(base.blocks[1])
         // (Dates go in a checklist line: a new date in a paragraph is refused
         // by `NoteAgentTextSafety.validate`, which compares date ids.)
-        let body = ["- [ ] [date:2026-01-02] and \\[date:2026-01-02]", "- [ ] item", "- \\[ ] text", "C:\\Users\\me", "first\\", "second",
+        let body = ["- [ ] [date:2026-01-02] and \\[date:2026-01-02]", "- [ ] item", "- \\[ ] text", "C:\\Users\\me", "last\\", "next",
                     table, "x | y", "after \\| table"].joined(separator: "\n")
         let parsed = try NoteAgentTextParser.document(title: "T", body: body, base: base)
         let blocks = Array(parsed.blocks.dropFirst())
-        XCTAssertEqual(blocks.count, 7, "\(blocks)")
+        XCTAssertEqual(blocks.count, 8, "\(blocks)")
         XCTAssertEqual(blocks[0].inlines.map(\.kind), [.date(NoteDay(isoString: "2026-01-02")!)])
         XCTAssertEqual(blocks[0].text, "\u{FFFC} and [date:2026-01-02]")
         XCTAssertEqual(blocks[0].kind, .checklist)
         XCTAssertEqual(blocks[1].kind, .checklist)
         XCTAssertEqual(blocks[2], .text("- [ ] text"))
         XCTAssertEqual(blocks[3], .text("C:\\Users\\me"), "a backslash before a letter is itself")
-        XCTAssertEqual(blocks[4], .text("first\nsecond"), "a backslash ending a line continues it")
-        XCTAssertEqual(blocks[5].table?.texts, [["a", "b"], ["1", "2"], ["x", "y"]], "an unescaped pipe line after a table is still a row")
-        XCTAssertEqual(blocks[6], .text("after | table"))
+        XCTAssertEqual(blocks[4], .text("last\\"), "a backslash ending a line is itself")
+        XCTAssertEqual(blocks[5], .text("next"))
+        XCTAssertEqual(blocks[6].table?.texts, [["a", "b"], ["1", "2"], ["x", "y"]], "an unescaped pipe line after a table is still a row")
+        XCTAssertEqual(blocks[7], .text("after | table"))
     }
 
     /// The composer reads what a person typed as typed: backslashes are
@@ -115,8 +116,15 @@ enum NoteAgentRoundTripProperty {
         "![image](attic://image/00000000-0000-0000-0000-000000000001)",
         "\\", "a\\", "\\\\", "\\[date:2026-01-02]", "\\|", "C:\\Users\\[x]",
         "&amp;", "&lt;b&gt;", "&#124;", "&#32;", "&nbsp;",
-        " x ", "\tx", "a\nb", "x\r", "a\u{2028}b"
+        " x ", "\tx", "a\nb", "a\r\nb", "a\u{2028}b"
     ]
+
+    /// A line break is only ever inside a cell: the editor and every import
+    /// make one block per line.
+    static func fits(_ marker: String, _ container: Container) -> Bool {
+        !marker.contains(where: \.isNewline) || marker == "a\u{2028}b"
+            || [.headerCell, .bodyCell, .formattedCell].contains(container)
+    }
 
     static let day = NoteDay(isoString: "2026-01-02")!
 
@@ -386,7 +394,7 @@ enum NoteAgentRoundTripProperty {
             grouped[key, default: []].append(context)
         }
         for marker in markers {
-            for container in Container.allCases {
+            for container in Container.allCases where fits(marker, container) {
                 for kind in Before.allCases {
                     let item = makeCase(marker, container, kind)
                     for (leg, problem) in legs(item) {
@@ -410,7 +418,8 @@ enum NoteAgentRoundTripProperty {
                 var blocks = [NoteBlock.text("T")]
                 for _ in 0..<generator.next(upTo: 6) + 2 {
                     let marker = markers[generator.next(upTo: markers.count)]
-                    let container = Container.allCases[generator.next(upTo: Container.allCases.count)]
+                    var container = Container.allCases[generator.next(upTo: Container.allCases.count)]
+                    if !fits(marker, container) { container = .bodyCell }
                     let kind = Before.allCases[generator.next(upTo: Before.allCases.count)]
                     let item = makeCase(marker, container, kind)
                     blocks += item.document.blocks.dropFirst().filter { $0.kind != .opaque }
