@@ -42,10 +42,28 @@ final class SelectedRowDetailInkTests: XCTestCase {
                         let tokens = design.tokens
                         XCTAssertFalse(AtticSurfaceInk.seeThrough(tokens))
                         let floor = tokens.panel.floor(for: .helper)
-                        for tone in Self.tones {
-                            let ink = byte(AtticSurfaceInk.toneInk(tone, tokens: tokens, onSelectedRow: true))
-                            for (name, fill) in [("selected", tokens.selected), ("pressed", tokens.pressed)] {
-                                let backgrounds = tokens.panel.backgrounds(for: .init(ink: .helper, foreground: ink, overlays: [fill]))
+                        // Every grey detail on the row: the date, the count
+                        // and its box (at rest and hovered), and "In
+                        // window", the note glyph and the links.
+                        let details: [(String, AtticRGBA)] = [
+                            ("date", AtticSurfaceInk.toneInk(.date, tokens: tokens, onSelectedRow: true)),
+                            ("count", AtticSurfaceInk.toneInk(.meta, tokens: tokens, onSelectedRow: true)),
+                            ("count hovered", AtticSurfaceInk.toneInk(.meta, tokens: tokens,
+                                overlays: [tokens.hover, tokens.chipHover], onSelectedRow: true)),
+                            ("in window, note, links", AtticTaskDetails.greyInk(tokens: tokens, onSelectedRow: true)),
+                        ]
+                        // The selected and pressed fills, alone and under a
+                        // detail control's hover chip (the count's fill, the
+                        // date's pill).
+                        let fills: [(String, [AtticRGBA])] = [
+                            ("selected", [tokens.selected]), ("pressed", [tokens.pressed]),
+                            ("selected + chip hover", [tokens.selected, tokens.chipHover]),
+                            ("pressed + chip hover", [tokens.pressed, tokens.chipHover]),
+                        ]
+                        for (tone, value) in details {
+                            let ink = byte(value)
+                            for (name, overlays) in fills {
+                                let backgrounds = tokens.panel.backgrounds(for: .init(ink: .helper, foreground: ink, overlays: overlays))
                                 for background in backgrounds.map(byte) {
                                     let contrast = ink.contrast(on: background)
                                     XCTAssertGreaterThanOrEqual(
@@ -62,6 +80,26 @@ final class SelectedRowDetailInkTests: XCTestCase {
         XCTAssertGreaterThan(checked, 0)
     }
 
+    /// The design's order holds on the row's fills: the date is never
+    /// quieter than the count.
+    func testSelectedRowDateIsNeverQuieterThanTheCount() {
+        for palette in AtticPanelTheme.allCases {
+            for mode in [AtticDesignContext.Mode.light, .dark] {
+                for ic in [false, true] {
+                    let tokens = design(palette, mode, surface: .solid, increaseContrast: ic).tokens
+                    let backgrounds = [tokens.selected, tokens.pressed].flatMap {
+                        tokens.panel.backgrounds(for: .init(ink: .helper, foreground: .white(1), overlays: [$0]))
+                    }
+                    func worst(_ c: AtticRGBA) -> Double { backgrounds.map { c.contrast(on: $0) }.min() ?? 0 }
+                    let date = AtticSurfaceInk.toneInk(.date, tokens: tokens, onSelectedRow: true)
+                    let count = AtticSurfaceInk.toneInk(.meta, tokens: tokens, onSelectedRow: true)
+                    XCTAssertGreaterThanOrEqual(worst(date), worst(count),
+                        "\(palette) \(mode.title) IC \(ic): date \(hex(date)) count \(hex(count))")
+                }
+            }
+        }
+    }
+
     /// Plain rows keep the base greys, pinned for Original as drawn at
     /// `ea9d45ac` (Solid, Light/Dark, Increase Contrast).
     func testPlainRowGreysAreUnchanged() {
@@ -75,6 +113,9 @@ final class SelectedRowDetailInkTests: XCTestCase {
             let tokens = design(.original, mode, surface: .solid, increaseContrast: ic).tokens
             XCTAssertEqual(hex(AtticSurfaceInk.toneInk(tone, tokens: tokens)), value, "\(mode.title) IC \(ic) \(tone)")
             XCTAssertEqual(AtticSurfaceInk.toneInk(tone, tokens: tokens), AtticSurfaceInk.tone(tone, tokens: tokens))
+            if tone == .meta {
+                XCTAssertEqual(AtticTaskDetails.greyInk(tokens: tokens, onSelectedRow: false), AtticSurfaceInk.tone(.meta, tokens: tokens))
+            }
         }
     }
 
@@ -87,6 +128,8 @@ final class SelectedRowDetailInkTests: XCTestCase {
                     for surface in [PanelSurfaceStyle.glass, .frosted] {
                         let tokens = design(palette, mode, surface: surface, increaseContrast: ic).tokens
                         XCTAssertTrue(AtticSurfaceInk.seeThrough(tokens))
+                        XCTAssertEqual(AtticTaskDetails.greyInk(tokens: tokens, onSelectedRow: true),
+                                       AtticTaskDetails.greyInk(tokens: tokens, onSelectedRow: false))
                         for tone in Self.tones {
                             XCTAssertEqual(AtticSurfaceInk.toneInk(tone, tokens: tokens, onSelectedRow: true),
                                            AtticSurfaceInk.toneInk(tone, tokens: tokens),

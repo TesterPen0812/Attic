@@ -1,17 +1,20 @@
 ## 2026-11-17 · Grey details on a selected or pressed row (1A, faint spots on Solid)
 
-On a selected or pressed task row, the count ("2/4"), its subtask box and the
-date take a stronger grey, just enough to keep the secondary floor (3 : 1, or
-4.5 : 1 under Increase Contrast, with the tokens' 1.5 % rendering margin) on
-both the selected and the pressed fill. `AtticSurfaceInk.toneInk(onSelectedRow:)`
-tunes the plain meta and date greys with `AtticRGBA.tuned(toContrast:against:lighten:)`
-against both fills and caches the result per colour key in the tone cache; rows
-never tune. Where a grey already passes it is unchanged (Light's date), and
-see-through Glass and Frosted keep their greys. Original Solid: Light count
-#848689 → #828487; Dark count #7B7D80 → #909194, date #8B8D91 → #919296; Light
-IC count #727477 → #5A5C5E, date #6A6C70 → #5B5D60; Dark IC count #96989A →
-#C8C9CA, date #97989C → #C8C9CB. Plain and hover rows, the fills, the title,
-the status ring and "!!" are unchanged.
+On a selected or pressed task row, every grey detail takes a stronger grey:
+the count ("2/4") and its subtask box, the date, "In window", the note glyph
+and the links count. It is just strong enough to keep the secondary floor
+(3 : 1, or 4.5 : 1 under Increase Contrast, with the tokens' 1.5 % rendering
+margin) on the selected and the pressed fill, alone and under a detail
+control's hover chip. `AtticSurfaceInk.toneInk(onSelectedRow:)` tunes the
+plain meta and date greys with `AtticRGBA.tuned(toContrast:against:lighten:)`
+and caches the result per colour key in the tone cache; rows never tune. The
+design's order holds (the date never quieter than the count). Where a grey
+already passes it is unchanged (Light's date); see-through Glass and Frosted
+keep their greys, and Reduce Transparency follows Solid. Original Solid:
+Light count #848689 → #7C7F82; Dark count #7B7D80 → #9A9C9E, date #8B8D91 →
+#9B9DA0; Light IC count #727477 → #57585A, date #6A6C70 → #56585B; Dark IC
+count #96989A → #D3D4D5, date #97989C → #D4D5D6. Plain and hover rows, the
+fills, the title, the status ring and "!!" are unchanged.
 
 ## 2026-11-15 · Settings legacy scroller viewport (CI standing, review round 1)
 

@@ -369,25 +369,50 @@ enum AtticSurfaceInk {
     /// A design grey on a selected or pressed row (owner, 17 Nov, 1A): the
     /// plain grey, made just strong enough to keep the role's own floor
     /// (3 : 1, or 4.5 : 1 under Increase Contrast, with the tokens' 1.5 %
-    /// so 8-bit drawing never rounds the pass away) on both the selected
-    /// and the pressed fill, through the same tuning as the hover inks.
-    /// Where it already passes it is unchanged (Light's date). See-through
-    /// Glass and Frosted keep their greys, which read 5.8-7 : 1 there as
-    /// drawn; the surface model's worst desktop would otherwise move them.
-    /// Resolved once per colour key, never per row.
+    /// so 8-bit drawing never rounds the pass away) on the row's fills,
+    /// through the same tuning as the hover inks. Every grey detail on the
+    /// row takes it (the count and its box, the date, "In window", the
+    /// note glyph, the links). Where it already passes it is unchanged
+    /// (Light's date). The design's order holds: a grey is never quieter
+    /// than the one under it (the date at least as strong as the count).
+    /// See-through Glass and Frosted keep their greys, which read
+    /// 5.8-7 : 1 there as drawn; the surface model's worst desktop would
+    /// otherwise move them. Resolved once per colour key, never per row.
     @MainActor
     static func selectedRowTone(_ tone: AtticPanelTone, tokens: AtticColorTokens) -> AtticRGBA {
         let plain = Self.tone(tone, tokens: tokens)
         guard !seeThrough(tokens) else { return plain }
         let key = ToneKey(colours: tokens.context, tone: tone, onSelectedRow: true)
         if let cached = toneCache[key] { return cached }
-        let backgrounds = [tokens.selected, tokens.pressed].flatMap {
-            tokens.panel.backgrounds(for: .init(ink: .helper, foreground: plain, overlays: [$0]))
+        let backgrounds = selectedRowBackgrounds(tokens)
+        var target = tokens.panel.floor(for: .helper) * AtticSurfaceModel.solverMargin
+        let quieter: AtticPanelTone? = switch tone {
+        case .groupHeader: .nextEventTime
+        case .nextEventTime: .date
+        case .date: .meta
+        case .meta: nil
         }
-        let value = plain.tuned(toContrast: tokens.panel.floor(for: .helper) * AtticSurfaceModel.solverMargin, against: backgrounds,
-                                lighten: tokens.context.mode == .dark)
+        if let quieter {
+            let below = selectedRowTone(quieter, tokens: tokens)
+            target = max(target, backgrounds.map { below.contrast(on: $0) }.min() ?? 0)
+        }
+        let value = plain.tuned(toContrast: target, against: backgrounds, lighten: tokens.context.mode == .dark)
         toneCache[key] = value
         return value
+    }
+
+    /// What a selected or pressed row's details sit on: the selected and
+    /// the pressed fill, each alone and under the hover chip a detail
+    /// control draws (the count's fill, the date's and tags' pill:
+    /// `chipHover`). A row's own hover fill never sits on its selection:
+    /// a selected or pressed row draws only that fill
+    /// (`AtticTaskRow.body`, the `highlight` choice).
+    static func selectedRowBackgrounds(_ tokens: AtticColorTokens) -> [AtticRGBA] {
+        [tokens.selected, tokens.pressed].flatMap { fill in
+            [[fill], [fill, tokens.chipHover]].flatMap {
+                tokens.panel.backgrounds(for: .init(ink: .helper, foreground: tokens.ink(.helper), overlays: $0))
+            }
+        }
     }
 
     /// Glass or Frosted as drawn (not Solid, not made solid by Reduce

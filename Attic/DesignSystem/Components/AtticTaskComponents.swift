@@ -2016,8 +2016,9 @@ struct AtticTaskDetails: View {
     /// The row's tag popover, anchored to the tags themselves so its arrow
     /// points at what was clicked (round 5, the owner's item 3).
     var tagsPopover: AtticAnchoredPopover? = nil
-    /// On a selected or pressed row's fill: the count and its box take the
-    /// grey that keeps its floor there (1A, owner 17 Nov).
+    /// On a selected or pressed row's fill: every grey detail (the count
+    /// and its box, "In window", the note glyph, the links) takes the grey
+    /// that keeps its floor there (1A, owner 17 Nov).
     var onSelectedRow = false
 
     @Environment(\.atticDesign) private var design
@@ -2025,8 +2026,9 @@ struct AtticTaskDetails: View {
     var body: some View {
         let m = AtticTaskRowMetrics.self
         let text: AtticInk = disabled ? .disabledText : .helper
-        // The design's meta grey (`AtticPanelTone.meta`).
-        let tone = disabled ? nil : AtticSurfaceInk.toneInk(.meta, tokens: design.tokens)
+        // The design's meta grey (`AtticPanelTone.meta`); on a selected or
+        // pressed row, the grey that keeps its floor there (1A).
+        let tone = disabled ? nil : Self.greyInk(tokens: design.tokens, onSelectedRow: onSelectedRow)
         let icon: AtticInk = disabled ? .disabledIcon : .icon
         HStack(spacing: m.detailsItemSpacing) {
             if model.inWindow {
@@ -2069,6 +2071,13 @@ struct AtticTaskDetails: View {
             }
         }
         .lineLimit(1)
+    }
+
+    /// The grey of "In window", the note glyph and the links count (the
+    /// count and its box take the same grey through their own control).
+    @MainActor
+    static func greyInk(tokens: AtticColorTokens, onSelectedRow: Bool) -> AtticRGBA {
+        AtticSurfaceInk.toneInk(.meta, tokens: tokens, onSelectedRow: onSelectedRow)
     }
 }
 
