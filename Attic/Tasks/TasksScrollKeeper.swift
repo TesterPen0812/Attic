@@ -175,7 +175,50 @@ struct TasksScrollKeeper: NSViewRepresentable {
             didSet { if drawn != oldValue { applyDrawn() } }
         }
 
+        // MARK: The tint hold (17 Nov)
+
+        private var liveScrollObservers: [NSObjectProtocol] = []
+        /// The gate this list holds while it scrolls (`AtticRowHoverGate`).
+        private var heldHoverGate: AtticRowHoverGate?
+
+        /// From a live scroll's start to its end (AppKit ends it after the
+        /// momentum), the list's rows hold their hover.
+        private func observeLiveScroll(_ scroll: NSScrollView) {
+            stopObservingLiveScroll()
+            liveScrollObservers.append(NotificationCenter.default.addObserver(
+                forName: NSScrollView.willStartLiveScrollNotification, object: scroll, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.holdRowHover() }
+            })
+            liveScrollObservers.append(NotificationCenter.default.addObserver(
+                forName: NSScrollView.didEndLiveScrollNotification, object: scroll, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.releaseRowHover() }
+            })
+        }
+
+        private func holdRowHover() {
+            let gate = proxies?.hoverGate(for: tab)
+            if gate !== heldHoverGate { releaseRowHover() }
+            heldHoverGate = gate
+            gate?.hold()
+        }
+
+        private func releaseRowHover() {
+            heldHoverGate?.release()
+            heldHoverGate = nil
+        }
+
+        /// Never leaves rows unable to hover: a list that goes away or stops
+        /// being drawn mid-scroll lets go.
+        private func stopObservingLiveScroll() {
+            liveScrollObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            liveScrollObservers.removeAll()
+            releaseRowHover()
+        }
+
         private func applyDrawn() {
+            if !drawn { releaseRowHover() }
             if !drawn { model?.flushScrollOffsets() }
             guard let scroll = enclosingScrollView, scroll.isHidden == drawn else { return }
             scroll.isHidden = !drawn
@@ -193,6 +236,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
             applyDrawn()
             proxies?.scrollViews[tab] = scroll
             observe(scroll.contentView)
+            observeLiveScroll(scroll)
             if let window { observeWindowLifecycle(window) }
             if let model, let pointer {
                 marquee = TasksMarqueeSelection(scroll: scroll, model: model, pointer: pointer, tab: tab,
@@ -207,6 +251,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
 
         override func viewDidHide() {
             super.viewDidHide()
+            releaseRowHover()
             model?.flushScrollOffsets()
         }
 
@@ -269,6 +314,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
 
         func stopObserving() {
             model?.flushScrollOffsets()
+            stopObservingLiveScroll()
             marquee = nil
             if let observer { NotificationCenter.default.removeObserver(observer) }
             observer = nil

@@ -1801,6 +1801,8 @@ struct TasksPage: View {
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
                     focusSelection: { id in setFocus(id) }, drawn: drawn).accessibilityHidden(true))
+                // Rows hold their hover while the list scrolls (the tint hold).
+                .environment(\.atticRowHoverGate, listProxies.hoverGate(for: tab))
                 // The clearance past the add bar's zone is room at the end
                 // of the list, not margin (see `TasksViewport.bottomMargin`);
                 // the open "+" card adds its own (P4).
@@ -5479,6 +5481,17 @@ final class TasksListProxies {
         let glide = TasksScrollGlide()
         glides[tab] = glide
         return glide
+    }
+
+    /// Each list's row hover gate (17 Nov, the tint hold): held by the
+    /// list's `TasksScrollKeeper` while it scrolls, read by its rows.
+    private var hoverGates: [TasksTab: AtticRowHoverGate] = [:]
+
+    func hoverGate(for tab: TasksTab) -> AtticRowHoverGate {
+        if let gate = hoverGates[tab] { return gate }
+        let gate = AtticRowHoverGate()
+        hoverGates[tab] = gate
+        return gate
     }
 
     // MARK: Scrollers (owner, 2026-10-01)

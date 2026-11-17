@@ -1400,6 +1400,44 @@ struct AtticJoinedSelectedRuns: View {
     }
 }
 
+/// Holds the task rows' hover while their list scrolls (17 Nov 2026, the
+/// owner's pick: the tint hold). One per list, driven by the list's live
+/// scroll (`TasksScrollKeeper`: AppKit's start and end of a live scroll,
+/// momentum included). While it holds, a row's pointer changes are kept,
+/// not shown: no row takes or drops the tint, the › or the slide, and the
+/// list is not laid out again for them. When it lets go, each row takes the
+/// last change it was told, so the row under the pointer is hovered at
+/// once. Selection, press and keyboard focus never pass through it. A row
+/// with no gate (no list, the gallery, captures) takes hover as before.
+@MainActor
+final class AtticRowHoverGate {
+    private(set) var isHolding = false
+    private var held: [AnyHashable: (inside: Bool, apply: (Bool) -> Void)] = [:]
+
+    /// The pointer entered (`true`) or left a row's part: applied now, or
+    /// kept until the scroll ends (only the last change for each key).
+    func pointer(_ inside: Bool, for key: AnyHashable, apply: @escaping (Bool) -> Void) {
+        guard isHolding else { return apply(inside) }
+        held[key] = (inside, apply)
+    }
+
+    func hold() { isHolding = true }
+
+    /// The scroll ended (or the list went away): every kept change lands.
+    func release() {
+        guard isHolding else { return }
+        isHolding = false
+        let pending = held
+        held.removeAll()
+        for change in pending.values { change.apply(change.inside) }
+    }
+}
+
+extension EnvironmentValues {
+    /// The list's hover gate (`AtticRowHoverGate`); nil: hover as it comes.
+    @Entry var atticRowHoverGate: AtticRowHoverGate? = nil
+}
+
 struct AtticTaskRow: View {
     /// The title's ink: the secondary grey once done (T-06 B, owner
     /// 2026-10-15; the filled mark stays), the disabled ink when disabled.
@@ -1487,10 +1525,20 @@ struct AtticTaskRow: View {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @Environment(\.atticRowHoverGate) private var hoverGate
     @State private var focused = false
     @State private var hovered = false
     @State private var dateHovered = false
     @State private var probeID = UUID()
+
+    private enum HoverPart: Hashable { case row, date }
+
+    /// The pointer over the row or its date, through the list's gate (held
+    /// while the list scrolls).
+    private func pointer(_ inside: Bool, over part: HoverPart, apply: @escaping (Bool) -> Void) {
+        guard let hoverGate else { return apply(inside) }
+        hoverGate.pointer(inside, for: [AnyHashable(probeID), AnyHashable(part)], apply: apply)
+    }
 
     #if DEBUG
     /// Test seam: how many times each row's body ran (bounded-update tests).
@@ -1670,7 +1718,7 @@ struct AtticTaskRow: View {
             }
         }
         .contentShape(Rectangle())
-        .onHover { hovered = $0 }
+        .onHover { inside in pointer(inside, over: .row) { hovered = $0 } }
         .onTapGesture {
             guard isEnabled else { return }
             switch Self.clickRoute(clickCount: Self.currentClickCount, edits: actions.editTitle != nil && capture == nil) {
@@ -1724,7 +1772,7 @@ struct AtticTaskRow: View {
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
-                .onHover { dateHovered = $0 }
+                .onHover { inside in pointer(inside, over: .date) { dateHovered = $0 } }
                 .atticRowControl()
                 .help(String(localized: "Change the date"))
                 .accessibilityLabel(String(localized: "Due \(due.text)"))
