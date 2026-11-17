@@ -210,6 +210,16 @@ enum NoteAgentText {
         return output
     }
 
+    /// Unescaped cell text as trunk read it before deciding anything:
+    /// `<br>` is a line break, then `NoteTableText.decodeEntities`. A cell's
+    /// content and the delimiter row both go through this, so text sent
+    /// without escapes keeps its meaning.
+    static func decodeCell(_ text: String) -> String {
+        var decoded = text
+        for lineBreak in ["<br>", "<br/>", "<br />"] { decoded = decoded.replacingOccurrences(of: lineBreak, with: "\n") }
+        return NoteTableText.decodeEntities(decoded)
+    }
+
     /// The other way. Escaped characters are literal text. The text between
     /// them is read as it always was: in a cell, `<br>` and entities are
     /// decoded first (`NoteTableText.decodeEntities`, so text sent without
@@ -221,11 +231,7 @@ enum NoteAgentText {
         var literal = ""
         func flush() { if !literal.isEmpty { result.append(.text(literal)); literal = "" } }
         func readFree(_ segment: String) {
-            var free = segment
-            if place == .cell || place == .typedCell {
-                for lineBreak in ["<br>", "<br/>", "<br />"] { free = free.replacingOccurrences(of: lineBreak, with: "\n") }
-                free = NoteTableText.decodeEntities(free)
-            }
+            let free = place == .cell || place == .typedCell ? decodeCell(segment) : segment
             let scalars = Array(free.unicodeScalars)
             func matches(_ token: String, at index: Int) -> Bool {
                 let token = Array(token.unicodeScalars)

@@ -787,6 +787,36 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(saved.blocks.dropFirst().map(\.text), ["end\r", "mid\rdle", "space \t", "added"])
     }
 
+    /// Dot R-1 (agent text r2): a delimiter row written with entities is
+    /// still a delimiter, as on trunk. Sent back without its token, a plain
+    /// table keeps its identity and cells; with its token, a plain or a
+    /// formatted table is kept whole.
+    func testADelimiterRowWrittenWithEntitiesStillKeepsTheTable() throws {
+        for delimiter in ["| &#45;&#45;&#45; |", "| -&#x2D;- |", "| ---&#32; |"] {
+            for (formatted, token) in [(false, false), (false, true), (true, true)] {
+                let context = "\(delimiter), \(formatted ? "formatted" : "plain"), \(token ? "with" : "without") its token"
+                let (noteStore, handler) = try makeNoteHandler()
+                var table = NoteTable(texts: [["h"], ["x"]])
+                if formatted { table.columns[0].width = 150 }
+                let base = NoteDocument(blocks: [.text("T"), .table(table)])
+                guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail(context) }
+                let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+                let listed = try listedNote(handler, id)
+                var lines = try XCTUnwrap(listed["body"] as? String).components(separatedBy: "\n")
+                XCTAssertEqual(lines.filter { $0 == "| --- |" }.count, 1, "\(context): \(lines)")
+                lines = lines.map { $0 == "| --- |" ? delimiter : $0 }
+                if !token { lines.removeAll { $0.hasPrefix("<!-- attic:table") } }
+                XCTAssertEqual(lines.contains { $0.hasPrefix("<!-- attic:table") }, token, "\(context): \(lines)")
+                let result = try callNoteTool(handler, "update_note", [
+                    "id": id.uuidString, "base_revision": try XCTUnwrap(listed["revision"] as? String),
+                    "body": lines.joined(separator: "\n")])
+                XCTAssertEqual(result["status"] as? String, "applied", "\(context): \(result)")
+                let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+                XCTAssertEqual(saved.blocks, stored.blocks, "\(context): the same table, by id and cells")
+            }
+        }
+    }
+
     /// Capy (agent text r1): the tool that can delete a table says so, and
     /// its operations are described by a schema.
     func testUpdateNoteTableIsMarkedDestructiveAndDescribesItsOperations() throws {

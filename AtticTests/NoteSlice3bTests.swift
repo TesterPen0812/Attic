@@ -458,6 +458,22 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertEqual(table.rows[1].cells[1].text, "A", "numeric references decode as before")
     }
 
+    /// Dot R-1 (agent text r2): a delimiter row typed with entities makes a
+    /// table, as it did on trunk.
+    func testAComposerDelimiterRowWrittenWithEntitiesMakesATable() throws {
+        let tasks = try makeTestStore()
+        let notes = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        for (delimiter, alignment) in [("| &#45;&#45;&#45; |", NoteTable.Alignment.left), ("| &#58;&#45;: |", .center), ("| --&#x2D;&#58; |", .right)] {
+            let id = try XCTUnwrap(library.createNote(title: "T", body: "| h |\n\(delimiter)\n| x |", tags: [], pinned: false, in: .tasks))
+            let blocks = try XCTUnwrap(notes.loadDocument(noteID: id)?.content.document?.blocks)
+            XCTAssertEqual(blocks.map(\.kind), [.text, .table], delimiter)
+            let table = try XCTUnwrap(blocks.last?.table, delimiter)
+            XCTAssertEqual(table.texts, [["h"], ["x"]], delimiter)
+            XCTAssertEqual(table.columns.map(\.align), [alignment], delimiter)
+        }
+    }
+
     func testStagedBatchRecoversAfterRestart() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let original = NoteDocument(blocks: [.text("Plan"), .text("body")])

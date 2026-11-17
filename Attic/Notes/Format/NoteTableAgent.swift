@@ -95,12 +95,17 @@ enum NoteAgentTableText {
         }
     }
 
-    /// A delimiter row's alignments (`| --- | :-: |`), or nil.
+    /// A delimiter row's alignments (`| --- | :-: |`), or nil. Each cell is
+    /// decoded as cell text is (`NoteAgentText.decodeCell`), as trunk did, so
+    /// `| &#45;&#45;&#45; |` is still a delimiter. A backslash makes a cell
+    /// text: an escaped character is literal, and an unescaped backslash is
+    /// itself (trunk's check failed on it too).
     private static func alignments(_ line: String) -> [NoteTable.Alignment]? {
         guard let cells = cells(line) else { return nil }
         var result: [NoteTable.Alignment] = []
         for cell in cells {
-            let value = cell.replacingOccurrences(of: " ", with: "")
+            guard !cell.contains("\\") else { return nil }
+            let value = NoteAgentText.decodeCell(cell).replacingOccurrences(of: " ", with: "")
             guard value.allSatisfy({ $0 == "-" || $0 == ":" }), value.contains("-") else { return nil }
             let left = value.hasPrefix(":"), right = value.hasSuffix(":")
             result.append(left && right ? .center : (right ? .right : .left))
