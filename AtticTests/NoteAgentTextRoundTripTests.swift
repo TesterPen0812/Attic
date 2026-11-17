@@ -49,6 +49,9 @@ final class NoteAgentTextRoundTripTests: XCTestCase {
         XCTAssertEqual(blocks[5], .text("next"))
         XCTAssertEqual(blocks[6].table?.texts, [["a", "b"], ["1", "2"], ["x", "y"]], "an unescaped pipe line after a table is still a row")
         XCTAssertEqual(blocks[7], .text("after | table"))
+        // A line sent with CRLF keeps a trailing backslash as text, as before.
+        let crlf = try NoteAgentTextParser.document(title: "T", body: "last\\\r\nnext", base: .blank)
+        XCTAssertEqual(crlf.blocks.dropFirst().map(\.text), ["last\\", "next"])
     }
 
     /// The composer reads what a person typed as typed: backslashes are
@@ -334,7 +337,7 @@ enum NoteAgentRoundTripProperty {
         if item.container.editableByText, d.blocks[item.block].inlines.isEmpty {
             // The agent appends to the block's own line, wherever it wraps.
             let edited = d.blocks.enumerated().dropFirst().map { index, block in
-                NoteTextExport.agentLine(block, index: index) + (index == item.block ? " +" : "")
+                NoteTextExport.bodyLine(NoteTextExport.agentLine(block, index: index) + (index == item.block ? " +" : ""))
             }.joined(separator: "\n")
             var expected = d
             expected.blocks[item.block].text += " +"

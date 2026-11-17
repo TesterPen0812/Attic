@@ -51,8 +51,15 @@ enum NoteTextExport {
     /// - inline date: `[date:2026-10-01]`
     static func agentBody(_ document: NoteDocument) -> String {
         document.blocks.enumerated().dropFirst().map { index, block in
-            agentLine(block, index: index)
+            bodyLine(agentLine(block, index: index))
         }.joined(separator: "\n")
+    }
+
+    /// A line as the body carries it. The reader drops one carriage return
+    /// at a line's end, as it always has, so a line that ends in its own
+    /// (escaped) carriage return carries one more for the reader to drop.
+    static func bodyLine(_ line: String) -> String {
+        line.hasSuffix("\r") ? line + "\r" : line
     }
 
     static func agentLine(_ block: NoteBlock, index: Int) -> String {
@@ -203,61 +210,58 @@ enum NoteAgentText {
         return output
     }
 
-    /// The other way, in three passes:
-    /// 1. escapes: an escaped character is held aside, and a stand-in that
-    ///    no token, `<br>` or entity can match takes its place;
-    /// 2. in a cell, `<br>` and entities are decoded exactly as cells always
-    ///    were (`NoteTableText.decodeEntities`), so text sent without
-    ///    escapes means what it did;
-    /// 3. tokens are read, and the held characters put back.
-    /// A literal U+FFFC is dropped (it would claim an object that isn't there).
+    /// The other way. Escaped characters are literal text. The text between
+    /// them is read as it always was: in a cell, `<br>` and entities are
+    /// decoded first (`NoteTableText.decodeEntities`, so text sent without
+    /// escapes means what it did), then tokens. An escaped character never
+    /// starts or joins a token, `<br>` or entity. A literal U+FFFC is dropped
+    /// (it would claim an object that isn't there).
     static func read(_ text: String, in place: Place) -> [Piece] {
-        let standIn: Unicode.Scalar = "\u{F0000}"
-        var held: [Character] = []
-        var free = ""
-        let characters = Array(text)
-        var index = 0
-        while index < characters.count {
-            let character = characters[index]
-            if character == "\\", index + 1 < characters.count, escapes(characters[index + 1], in: place) {
-                held.append(characters[index + 1]); free.unicodeScalars.append(standIn); index += 2; continue
-            }
-            if character.unicodeScalars.contains(standIn) {
-                held.append(character); free.unicodeScalars.append(standIn); index += 1; continue
-            }
-            free.append(character)
-            index += 1
-        }
-        if place == .cell || place == .typedCell {
-            for lineBreak in ["<br>", "<br/>", "<br />"] { free = free.replacingOccurrences(of: lineBreak, with: "\n") }
-            free = NoteTableText.decodeEntities(free)
-        }
         var result: [Piece] = []
         var literal = ""
-        var next = held.makeIterator()
         func flush() { if !literal.isEmpty { result.append(.text(literal)); literal = "" } }
-        let scalars = Array(free.unicodeScalars)
-        func matches(_ token: String, at index: Int) -> Bool {
-            let token = Array(token.unicodeScalars)
-            return index + token.count <= scalars.count && Array(scalars[index..<(index + token.count)]) == token
-        }
-        index = 0
-        while index < scalars.count {
-            let scalar = scalars[index]
-            if scalar == standIn { literal.append(next.next() ?? Character(scalar)); index += 1; continue }
-            if scalar == NoteDocument.objectCharacter.unicodeScalars.first { index += 1; continue }
-            if scalar == "[" {
-                if matches("[date:", at: index), let close = scalars[index...].firstIndex(of: "]"),
-                   let day = NoteDay(isoString: String(String.UnicodeScalarView(scalars[(index + 6)..<close]))) {
-                    flush(); result.append(.date(day)); index = close + 1; continue
-                }
-                if matches("[unsupported]", at: index) {
-                    flush(); result.append(.unsupported); index += "[unsupported]".unicodeScalars.count; continue
-                }
+        func readFree(_ segment: String) {
+            var free = segment
+            if place == .cell || place == .typedCell {
+                for lineBreak in ["<br>", "<br/>", "<br />"] { free = free.replacingOccurrences(of: lineBreak, with: "\n") }
+                free = NoteTableText.decodeEntities(free)
             }
-            literal.unicodeScalars.append(scalar)
-            index += 1
+            let scalars = Array(free.unicodeScalars)
+            func matches(_ token: String, at index: Int) -> Bool {
+                let token = Array(token.unicodeScalars)
+                return index + token.count <= scalars.count && Array(scalars[index..<(index + token.count)]) == token
+            }
+            var index = 0
+            while index < scalars.count {
+                let scalar = scalars[index]
+                if scalar == NoteDocument.objectCharacter.unicodeScalars.first { index += 1; continue }
+                if scalar == "[" {
+                    if matches("[date:", at: index), let close = scalars[index...].firstIndex(of: "]"),
+                       let day = NoteDay(isoString: String(String.UnicodeScalarView(scalars[(index + 6)..<close]))) {
+                        flush(); result.append(.date(day)); index = close + 1; continue
+                    }
+                    if matches("[unsupported]", at: index) {
+                        flush(); result.append(.unsupported); index += "[unsupported]".unicodeScalars.count; continue
+                    }
+                }
+                literal.unicodeScalars.append(scalar)
+                index += 1
+            }
         }
+        let characters = Array(text)
+        var segment = ""
+        var index = 0
+        while index < characters.count {
+            if characters[index] == "\\", index + 1 < characters.count, escapes(characters[index + 1], in: place) {
+                readFree(segment); segment = ""
+                literal.append(characters[index + 1])
+                index += 2
+            } else {
+                segment.append(characters[index])
+                index += 1
+            }
+        }
+        readFree(segment)
         flush()
         return result
     }
@@ -302,15 +306,12 @@ enum NoteAgentText {
         character.isWhitespace && !character.isNewline
     }
 
-    /// An agent's body as lines; a carriage return before a line break is
-    /// dropped, as it always was, unless a backslash escapes it (agent text).
-    static func lines(_ body: String, typed: Bool = false) -> [String] {
+    /// An agent's body as lines; one carriage return at a line's end is
+    /// dropped, as it always was (`bodyLine` writes one more where a line
+    /// ends in its own).
+    static func lines(_ body: String) -> [String] {
         guard !body.isEmpty else { return [] }
-        return body.components(separatedBy: "\n").map { line in
-            guard line.hasSuffix("\r") else { return line }
-            let escaped = !typed && line.dropLast().reversed().prefix { $0 == "\\" }.count % 2 == 1
-            return escaped ? line : String(line.dropLast())
-        }
+        return body.components(separatedBy: "\n").map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
     }
 }
 
@@ -468,7 +469,7 @@ enum NoteAgentTextParser {
             blocks.append(parseTextual(title, kind: .text, place: .typed))
         }
 
-        var lines = NoteAgentText.lines(body, typed: typed)
+        var lines = NoteAgentText.lines(body)
         // An empty body is the base's one empty line, when that is its body.
         if lines.isEmpty, base.blocks.count == 2, NoteTextExport.agentLine(base.blocks[1], index: 1).isEmpty { lines = [""] }
         var usedTables = Set<UUID>()
