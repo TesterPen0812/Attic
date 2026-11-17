@@ -1148,7 +1148,11 @@ final class AgentTaskTools {
             throw AgentToolError.invalidArguments(error.localizedDescription)
         }
         var document = current
-        if let edited { document.blocks[index].table = edited } else { document.blocks.remove(at: index) }
+        if let edited { document.blocks[index].table = edited } else {
+            document.blocks.remove(at: index)
+            // The note's last table takes its capability with it (refreshing only adds).
+            if !document.blocks.contains(where: { $0.kind == .table }) { document.requires.removeAll { $0 == "table-v1" } }
+        }
         document.refreshRequiredCapabilities()
         guard !document.isEmpty || !document.objectIDs.isEmpty else {
             throw AgentToolError.invalidArguments("Deleting this table would leave the note empty: delete the note with delete_note instead.")
