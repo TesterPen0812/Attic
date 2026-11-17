@@ -366,10 +366,28 @@ enum AtticSurfaceInk {
         return ink.withAlpha((mean(value) - mean(base)) / span)
     }
 
-    /// A design grey on a selected or pressed row (not yet tuned).
+    /// A design grey on a selected or pressed row (owner, 17 Nov, 1A): the
+    /// plain grey, made just strong enough to keep the role's own floor
+    /// (3 : 1, or 4.5 : 1 under Increase Contrast, with the tokens' 1.5 %
+    /// so 8-bit drawing never rounds the pass away) on both the selected
+    /// and the pressed fill, through the same tuning as the hover inks.
+    /// Where it already passes it is unchanged (Light's date). See-through
+    /// Glass and Frosted keep their greys, which read 5.8-7 : 1 there as
+    /// drawn; the surface model's worst desktop would otherwise move them.
+    /// Resolved once per colour key, never per row.
     @MainActor
     static func selectedRowTone(_ tone: AtticPanelTone, tokens: AtticColorTokens) -> AtticRGBA {
-        Self.tone(tone, tokens: tokens)
+        let plain = Self.tone(tone, tokens: tokens)
+        guard !seeThrough(tokens) else { return plain }
+        let key = ToneKey(colours: tokens.context, tone: tone, onSelectedRow: true)
+        if let cached = toneCache[key] { return cached }
+        let backgrounds = [tokens.selected, tokens.pressed].flatMap {
+            tokens.panel.backgrounds(for: .init(ink: .helper, foreground: plain, overlays: [$0]))
+        }
+        let value = plain.tuned(toContrast: tokens.panel.floor(for: .helper) * AtticSurfaceModel.solverMargin, against: backgrounds,
+                                lighten: tokens.context.mode == .dark)
+        toneCache[key] = value
+        return value
     }
 
     /// Glass or Frosted as drawn (not Solid, not made solid by Reduce
@@ -393,6 +411,7 @@ enum AtticSurfaceInk {
     private struct ToneKey: Hashable {
         let colours: AtticDesignContext.ColourKey
         let tone: AtticPanelTone
+        var onSelectedRow = false
     }
 
     @MainActor private static var toneCache: [ToneKey: AtticRGBA] = [:]

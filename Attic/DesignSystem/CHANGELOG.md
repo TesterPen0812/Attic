@@ -1,3 +1,18 @@
+## 2026-11-17 · Grey details on a selected or pressed row (1A, faint spots on Solid)
+
+On a selected or pressed task row, the count ("2/4"), its subtask box and the
+date take a stronger grey, just enough to keep the secondary floor (3 : 1, or
+4.5 : 1 under Increase Contrast, with the tokens' 1.5 % rendering margin) on
+both the selected and the pressed fill. `AtticSurfaceInk.toneInk(onSelectedRow:)`
+tunes the plain meta and date greys with `AtticRGBA.tuned(toContrast:against:lighten:)`
+against both fills and caches the result per colour key in the tone cache; rows
+never tune. Where a grey already passes it is unchanged (Light's date), and
+see-through Glass and Frosted keep their greys. Original Solid: Light count
+#848689 → #828487; Dark count #7B7D80 → #909194, date #8B8D91 → #919296; Light
+IC count #727477 → #5A5C5E, date #6A6C70 → #5B5D60; Dark IC count #96989A →
+#C8C9CA, date #97989C → #C8C9CB. Plain and hover rows, the fills, the title,
+the status ring and "!!" are unchanged.
+
 ## 2026-11-15 · Settings legacy scroller viewport (CI standing, review round 1)
 
 Settings' page-body scroll view now takes the content card's actual viewport
