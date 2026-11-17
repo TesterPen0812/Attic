@@ -72,16 +72,26 @@ final class AtticLibrary {
         (try? WorkspaceLegacyBridge.coordinator(for: container))?.lifecycleLibrary = self
         if let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) { coordinator.registerHistory(self.undo) }
         let inventory = tags
-        tasks.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
-        tasks.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
-        tasks.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
-        notes?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
-        notes?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
-        notes?.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        tasks.tagInventoryWillSave = { [weak inventory] in inventory?.recordChanges(in: $0) }
+        tasks.tagInventoryDidSave = { [weak inventory] in inventory?.applySavedChanges() }
+        tasks.tagInventoryDidReload = { [weak inventory] in inventory?.reconcile(tasks: $0) }
+        tasks.tagInventoryNeedsRebuild = { [weak inventory] in inventory?.rebuildInventory() }
+        tasks.tagInventoryRefreshed = { [weak inventory] in inventory?.refreshed(.task) }
+        notes?.tagInventoryWillSave = { [weak inventory] in inventory?.recordChanges(in: $0) }
+        notes?.tagInventoryDidSave = { [weak inventory] in inventory?.applySavedChanges() }
+        notes?.tagInventoryDidReload = { [weak inventory] in inventory?.reconcile(notes: $0) }
+        notes?.tagInventoryNeedsRebuild = { [weak inventory] in inventory?.rebuildInventory() }
+        notes?.tagInventoryRefreshed = { [weak inventory] in inventory?.refreshed(.note) }
         notes?.sharedTagCounts = { [weak inventory] in inventory?.countsByName }
-        canvases?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
-        canvases?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
-        canvases?.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        canvases?.tagInventoryWillSave = { [weak inventory] in inventory?.recordChanges(in: $0) }
+        canvases?.tagInventoryDidSave = { [weak inventory] in inventory?.applySavedChanges() }
+        canvases?.tagInventoryDidReload = { [weak inventory] in inventory?.reconcileBoards() }
+        canvases?.tagInventoryDidRollBack = { [weak inventory] in inventory?.discardPending() }
+        canvases?.tagInventoryNeedsRebuild = { [weak inventory] in inventory?.rebuildInventory() }
+        canvases?.tagInventoryRefreshed = { [weak inventory] in inventory?.refreshed(.canvas) }
+        // The model builds the inventory once, here; from now on it keeps it
+        // current after each durable save and reload, and no reader builds it.
+        tags.prepare()
         tagInventoryObservation = tags.inventoryChanges.sink { [weak notes] in notes?.objectWillChange.send() }
         tags.afterChange = { [weak self] in self?.refreshItemStores() }
         // Tags come and go through every store and agents: whenever the set
@@ -1382,10 +1392,15 @@ final class AtticLibrary {
         return succeeded
     }
 
+    /// One pass: each store's reload reconciles the kind it read, and the
+    /// shared tag inventory reads any kind no store reloaded once the pass
+    /// ends (`TagService.refreshing`).
     func refreshItemStores() {
-        tasks.refresh()
-        notes?.refresh()
-        canvases?.refresh()
+        tags.refreshing {
+            tasks.refresh()
+            notes?.refresh()
+            canvases?.refresh()
+        }
     }
 
     /// Always false, so failures read `return store.op() || fail(...)`.

@@ -31,7 +31,7 @@ final class PhaseXColourDataTests: XCTestCase {
         }
         try context.save()
         library.tasks.refresh()
-        library.tags.invalidateInventory()
+        library.tags.rebuildInventory()
     }
 
     private func rows(_ container: ModelContainer, named name: String? = nil) throws -> [TagColour] {
