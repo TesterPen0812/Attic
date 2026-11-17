@@ -113,39 +113,37 @@ struct CalendarDayView: View {
     // MARK: Hours
 
     private func hours(viewport: CGSize) -> some View {
-        PanelComposerClearance { extra in
-            ScrollView(.vertical) {
-                timeline(viewport: viewport)
-                    .padding(.horizontal, CalendarDayDesign.sideInset)
-                    .padding(.bottom, CalendarDesign.agendaBottom)
-                    .background(PanelComposerScrollKeeper().frame(width: 0, height: 0))
+        ScrollView(.vertical) {
+            timeline(viewport: viewport)
+                .padding(.horizontal, CalendarDayDesign.sideInset)
+                .padding(.bottom, CalendarDesign.agendaBottom)
+                .background(PanelComposerScrollKeeper().frame(width: 0, height: 0))
+        }
+        .panelComposerScrollRoom(base: 0)
+        .scrollIndicators(.never)
+        // Clean cut (3 Oct): the native soft scroll edge stays off.
+        .atticScrollEdgeEffect()
+        .scrollPosition($scroll)
+        .onScrollGeometryChange(for: Int.self) { geometry in
+            Int(max(0, geometry.contentOffset.y + geometry.contentInsets.top) / CalendarDayDesign.hourHeight)
+        } action: { _, new in
+            if bucket != new { bucket = new }
+        }
+        .mask(alignment: .top) {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: CalendarDayDesign.scrollFade)
+                Color.black
             }
-            .contentMargins(.bottom, extra, for: .scrollContent)
-            .scrollIndicators(.never)
-            // Clean cut (3 Oct): the native soft scroll edge stays off.
-            .atticScrollEdgeEffect()
-            .scrollPosition($scroll)
-            .onScrollGeometryChange(for: Int.self) { geometry in
-                Int(max(0, geometry.contentOffset.y + geometry.contentInsets.top) / CalendarDayDesign.hourHeight)
-            } action: { _, new in
-                if bucket != new { bucket = new }
-            }
-            .mask(alignment: .top) {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: CalendarDayDesign.scrollFade)
-                    Color.black
-                }
-            }
-            .clipped()
-            .accessibilityIdentifier("calendar-day-scroll")
-            .onAppear { openDay(viewport: viewport.height) }
-            .onChange(of: day) { _, _ in openDay(viewport: viewport.height) }
-            .onChange(of: isLoadingEvents) { _, loading in
-                guard !loading, awaitingEvents else { return }
-                awaitingEvents = false
-                scrollToOpening(viewport: viewport.height)
-            }
+        }
+        .clipped()
+        .accessibilityIdentifier("calendar-day-scroll")
+        .onAppear { openDay(viewport: viewport.height) }
+        .onChange(of: day) { _, _ in openDay(viewport: viewport.height) }
+        .onChange(of: isLoadingEvents) { _, loading in
+            guard !loading, awaitingEvents else { return }
+            awaitingEvents = false
+            scrollToOpening(viewport: viewport.height)
         }
     }
 

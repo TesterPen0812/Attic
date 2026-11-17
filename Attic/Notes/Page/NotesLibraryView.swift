@@ -16,6 +16,8 @@ struct NotesLibraryView: View {
     @ObservedObject var controller: NotesPageController
     @ObservedObject var store: NoteStore
     let layout: PanelPageLayout
+    /// The page's own bottom inset; the open card's room is added by the
+    /// list's scroll margin (`panelComposerScrollRoom`), not here.
     let bottomClearance: CGFloat
     /// The bottom row's top, up from the page's bottom edge (A15's fade).
     var bottomControls: CGFloat = 0
@@ -39,6 +41,8 @@ struct NotesLibraryView: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelPageIsCurrent) private var isCurrent
     @Environment(\.panelComposer) private var panelComposer
+    /// Read by the keyboard reveal only; never observed by the list.
+    @Environment(\.panelComposerRoom) private var composerRoom
     /// The search field's keyboard, as the top row's field reports it.
     private var fieldFocused: Bool {
         get { searchFocused }
@@ -490,7 +494,7 @@ struct NotesLibraryView: View {
                 }
             }
             .contentMargins(.top, restTop, for: .scrollContent)
-            .contentMargins(.bottom, bottomControls + bottomClearance, for: .scrollContent)
+            .panelComposerScrollRoom(base: bottomControls + bottomClearance)
             .contentMargins(.top, restTop, for: .scrollIndicators)
             .contentMargins(.bottom, bottomControls, for: .scrollIndicators)
             .modifier(PanelTransitScrollIndicators())
@@ -512,7 +516,9 @@ struct NotesLibraryView: View {
             // by the clip view; one not built yet is jumped to.
             .onChange(of: model.highlightedID) { _, id in
                 guard let id else { return }
-                if !reveal.reveal(id, clearTop: restTop, clearBottom: bottomControls + bottomClearance,
+                // The card's room is read here, when ↑ ↓ moves, not observed.
+                let cardRoom = PanelComposerScrollRoom.extra(height: composerRoom?.height ?? 0)
+                if !reveal.reveal(id, clearTop: restTop, clearBottom: bottomControls + bottomClearance + cardRoom,
                                   reduceMotion: design.reduceMotion) {
                     var jump = Transaction()
                     jump.disablesAnimations = true
