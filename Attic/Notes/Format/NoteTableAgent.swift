@@ -1,14 +1,15 @@
 import Foundation
 
-/// Tables as agents read and write them (spec § 4.6).
+/// Tables as agents read and write them (spec § 4.6; `ops/design/notes-tables.md`).
 ///
 /// - `list_notes` shows each table as an `<!-- attic:table id=… -->` token
 ///   line and a GFM pipe table, and lists its row and column ids.
-/// - `update_note` keeps a table whose token it keeps: cell text edits and
-///   added or removed rows and columns are merged into it, so unchanged
-///   rows, columns and cells keep their ids and marks. A pipe table without
-///   a token is a new table, unless it is a table whose token alone was
-///   removed (the whole table must go for it to be deleted).
+/// - `update_note` keeps a table whose text comes back as the export wrote
+///   it, whole. Any other table is rebuilt from its text, keeping its id. A
+///   table carrying something the text can't show (`carriesHidden`) must come
+///   back unchanged under its own token (`NoteAgentTextSafety.validateTables`). A pipe table
+///   without a token is a new table, unless it is a plain table whose token
+///   alone was removed (the whole table must go for it to be deleted).
 /// - `update_note_table` edits cells and structure by id
 ///   (`NoteTableAgentEdit`).
 /// - Every write is checked: rectangular, within the limits, cells inline.
@@ -52,8 +53,9 @@ enum NoteAgentTableText {
         return Parsed(id: id, headerOff: headerOff, hasToken: hasToken, rows: rows, alignments: alignments, consumed: end - start)
     }
 
-    /// The table block an agent's table becomes, merged into the base
-    /// table it names (or, without a token, one whose token alone went).
+    /// The table block an agent's table becomes: the base table it names
+    /// (or, without a token, a plain one whose token alone went) kept whole
+    /// when its text is unchanged, otherwise rebuilt from the text.
     static func block(_ parsed: Parsed, base: NoteDocument, used: inout Set<UUID>, tokenIDs: Set<UUID>) throws -> NoteBlock {
         let baseTables = base.blocks.filter { $0.kind == .table && $0.table != nil }
         var match: NoteBlock?
@@ -63,143 +65,125 @@ enum NoteAgentTableText {
             guard !used.contains(id) else { throw NoteAgentTextError.invalidTableEdit("The table \(id.uuidString) appears twice.") }
             match = found
         } else {
-            // A token-less copy of a table whose token alone was removed.
             match = baseTables.first { candidate in
-                guard let id = candidate.id, !used.contains(id), !tokenIDs.contains(id), let table = candidate.table else { return false }
-                return texts(table).first == parsed.rows.first
+                guard let id = candidate.id, !used.contains(id), !tokenIDs.contains(id), !carriesHidden(candidate) else { return false }
+                return exported(candidate)?.rows.first == parsed.rows.first
             }
-        }
-        if let match, let id = match.id, let table = match.table {
-            used.insert(id)
-            var merged = merge(table, rows: parsed.rows, alignments: parsed.alignments)
-            if parsed.hasToken { merged.headerRow = !parsed.headerOff }
-            var block = NoteBlock.table(merged, id: id)
-            block.extras = match.extras
-            return block
         }
         var table = NoteTable(headerRow: !parsed.headerOff,
                               columns: parsed.alignments.map { NoteTable.Column(align: $0) },
-                              rows: parsed.rows.map { NoteTable.Row(cells: $0.map { cell($0, reusing: nil) }) })
+                              rows: try parsed.rows.map { NoteTable.Row(cells: try $0.map { try cell($0, reusing: nil) }) })
         table.makeRectangular()
-        return .table(table)
-    }
-
-    /// The cells as agents read them (dates as `[date:YYYY-MM-DD]`).
-    static func texts(_ table: NoteTable) -> [[String]] {
-        table.rows.map { $0.cells.map { NoteTextExport.agentInlineText($0.block) } }
-    }
-
-    /// Merges an agent's rows into `table`: rows and columns the agent kept
-    /// keep their ids (matched by their text, in order, then by position);
-    /// a cell whose text is unchanged keeps its marks and dates.
-    static func merge(_ table: NoteTable, rows: [[String]], alignments: [NoteTable.Alignment]) -> NoteTable {
-        let old = texts(table)
-        let width = rows.first?.count ?? 0
-        // Columns: by header text when the header names are unique, else by position.
-        let oldHeaders = old.first ?? []
-        let newHeaders = rows.first ?? []
-        let columnMap: [Int?] = Set(oldHeaders).count == oldHeaders.count && Set(newHeaders).count == newHeaders.count
-            ? match(old: oldHeaders, new: newHeaders) : (0..<width).map { $0 < table.columnCount ? $0 : nil }
-        let rowMap = match(old: old.map { $0.joined(separator: "\u{1}") }, new: rows.map { $0.joined(separator: "\u{1}") })
-        var columns: [NoteTable.Column] = []
-        for (index, source) in columnMap.enumerated() {
-            var column = source.map { table.columns[$0] } ?? NoteTable.Column()
-            if index < alignments.count { column.align = alignments[index] }
-            columns.append(column)
+        guard let match, let id = match.id else { return .table(table) }
+        used.insert(id)
+        // Compared as the export writes it, so its own round trip (a line
+        // break read back as "\n") is never an edit.
+        if let stored = exported(match), stored.rows == parsed.rows, stored.alignments == parsed.alignments,
+           !parsed.hasToken || stored.headerOff == parsed.headerOff {
+            return match
         }
-        var result: [NoteTable.Row] = []
-        for (rowIndex, cells) in rows.enumerated() {
-            let sourceRow = rowMap[rowIndex]
-            var row = sourceRow.map { NoteTable.Row(id: table.rows[$0].id, cells: [], extras: table.rows[$0].extras) }
-                ?? NoteTable.Row(cells: [])
-            for (columnIndex, text) in cells.enumerated() {
-                var reusing: NoteTable.Cell?
-                if let sourceRow, let sourceColumn = columnMap[columnIndex] {
-                    let original = table.rows[sourceRow].cells[sourceColumn]
-                    if old[sourceRow][sourceColumn] == text {
-                        row.cells.append(original)
-                        continue
+        if !parsed.hasToken, let headerRow = match.table?.headerRow { table.headerRow = headerRow }
+        return .table(table, id: id)
+    }
+
+    /// A table block as an agent reads it, parsed back.
+    private static func exported(_ block: NoteBlock) -> Parsed? {
+        try? parse(lines: NoteTextExport.agentTable(block).components(separatedBy: "\n"), from: 0)
+    }
+
+    /// The table carries something its text can't show: a mark, a dragged
+    /// width, extras (on the table, a column, a row, a cell or an inline) or
+    /// an object the text names only `[unsupported]`. A date's id is not:
+    /// nothing outside the note refers to it.
+    static func carriesHidden(_ block: NoteBlock) -> Bool {
+        guard let table = block.table else { return false }
+        return !block.extras.isEmpty || !table.extras.isEmpty
+            || table.columns.contains { $0.width != nil || !$0.extras.isEmpty }
+            || table.rows.contains { row in
+                !row.extras.isEmpty || row.cells.contains { cell in
+                    !cell.marks.isEmpty || !cell.extras.isEmpty || cell.inlines.contains { inline in
+                        if case .opaque = inline.kind { return true }
+                        return !inline.extras.isEmpty
                     }
-                    reusing = original
                 }
-                row.cells.append(cell(text, reusing: reusing))
             }
-            result.append(row)
-        }
-        var merged = table
-        merged.columns = columns
-        merged.rows = result
-        merged.makeRectangular()
-        return merged
     }
 
-    /// New index → old index: equal keys in order first; then, between two
-    /// kept neighbours, the changed entries pair up in order (an edited row
-    /// keeps its id); the rest are new.
-    static func match(old: [String], new: [String]) -> [Int?] {
-        var result = [Int?](repeating: nil, count: new.count)
-        var cursor = 0
-        for (index, key) in new.enumerated() {
-            if cursor < old.count, let found = old[cursor...].firstIndex(of: key) {
-                result[index] = found
-                cursor = found + 1
-            }
-        }
-        // The gaps between anchors (and before the first, after the last).
-        var newStart = 0, oldStart = 0
-        func pairGap(newEnd: Int, oldEnd: Int) {
-            var oldIndex = oldStart
-            for newIndex in newStart..<newEnd where oldIndex < oldEnd {
-                result[newIndex] = oldIndex
-                oldIndex += 1
-            }
-        }
-        for (index, value) in result.enumerated() {
-            guard let value else { continue }
-            pairGap(newEnd: index, oldEnd: value)
-            newStart = index + 1
-            oldStart = value + 1
-        }
-        pairGap(newEnd: new.count, oldEnd: old.count)
-        return result
-    }
-
-    /// An agent's cell text: `[date:YYYY-MM-DD]` becomes a date (reusing a
-    /// date's id the cell had); other text is kept as typed, without marks.
-    static func cell(_ text: String, reusing: NoteTable.Cell?) -> NoteTable.Cell {
+    /// An agent's cell text. `[date:YYYY-MM-DD]` becomes a date and
+    /// `[unsupported]` the next object this build can't read, each keeping
+    /// the whole inline `reusing` had for it (a date by its day, others in
+    /// order); a token the text removes takes its object with it. Text can't
+    /// tell apart objects of one kind that differ (unreadable ones, or dates on
+    /// one day with different details), so keeping some of them is refused.
+    /// Other text is kept as typed, without marks.
+    static func cell(_ text: String, reusing: NoteTable.Cell?) throws -> NoteTable.Cell {
         var output = ""
         var inlines: [NoteInline] = []
-        var reusable = reusing?.inlines ?? []
+        var dates = reusing?.inlines.filter { if case .date = $0.kind { true } else { false } } ?? []
+        var unreadable = reusing?.inlines.filter { if case .opaque = $0.kind { true } else { false } } ?? []
+        var kept: [NoteInline] = []
         var remainder = Substring(text.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: ""))
-        while let start = remainder.range(of: "[date:") {
-            output += remainder[remainder.startIndex..<start.lowerBound]
-            let after = remainder[start.upperBound...]
-            if let close = after.firstIndex(of: "]"), let day = NoteDay(isoString: String(after[after.startIndex..<close])) {
-                let id = reusable.firstIndex(where: { $0.kind == .date(day) }).map { reusable.remove(at: $0).id } ?? UUID()
+        while let start = remainder.firstIndex(of: "[") {
+            output += remainder[remainder.startIndex..<start]
+            let token = remainder[start...]
+            if token.hasPrefix("[unsupported]"), !unreadable.isEmpty {
+                let reused = unreadable.removeFirst()
+                kept.append(reused)
+                inlines.append(reused)
                 output.append(NoteDocument.objectCharacter)
-                inlines.append(NoteInline(id: id, kind: .date(day)))
-                remainder = after[after.index(after: close)...]
+                remainder = token.dropFirst("[unsupported]".count)
+            } else if token.hasPrefix("[date:"), let close = token.firstIndex(of: "]"),
+                      let day = NoteDay(isoString: String(token[token.index(start, offsetBy: 6)..<close])) {
+                let reused = dates.firstIndex { $0.kind == .date(day) }.map { dates.remove(at: $0) }
+                if let reused { kept.append(reused) }
+                inlines.append(reused ?? NoteInline(id: UUID(), kind: .date(day)))
+                output.append(NoteDocument.objectCharacter)
+                remainder = token[token.index(after: close)...]
             } else {
-                output += "[date:"
-                remainder = after
+                output += "["
+                remainder = token.dropFirst()
             }
         }
         output += remainder
+        for removed in dates + unreadable {
+            guard kept.allSatisfy({ !sameGroup($0, removed) || ($0.kind == removed.kind && $0.extras == removed.extras) }) else {
+                throw NoteAgentTextError.invalidTableEdit("This cell has several [unsupported] objects or dates on one day that differ in ways the text can't show; keep all of their tokens or remove all of them.")
+            }
+        }
         return NoteTable.Cell(output, inlines: inlines, extras: reusing?.extras ?? [:])
+    }
+
+    /// Two inlines the text writes alike: both unreadable, or dates on one day.
+    private static func sameGroup(_ a: NoteInline, _ b: NoteInline) -> Bool {
+        switch (a.kind, b.kind) {
+        case (.opaque, .opaque): true
+        case let (.date(x), .date(y)): x == y
+        default: false
+        }
     }
 }
 
 /// `update_note_table`: precise edits to one table by id.
 ///
 /// Operations (applied in order, all or nothing):
-/// - `{"op": "set_cell", "row_id", "column_id", "text"}`
+/// - `{"op": "set_cell", "row_id", "column_id", "text"}`: the cell's own text
+///   keeps it whole; a new text clears its marks, and `notices` says so.
 /// - `{"op": "insert_row", "after_row_id"?: id or null (first), "cells"?: [text]}`
 /// - `{"op": "insert_column", "after_column_id"?: id or null (first), "cells"?: [text, one per row], "align"?}`
+/// - `{"op": "move_row", "row_id", "after_row_id": id or null (first)}`,
+///   `{"op": "move_column", "column_id", "after_column_id": id or null (first)}`:
+///   the line keeps its id, cells, marks, width and extras.
 /// - `{"op": "delete_row", "row_id"}`, `{"op": "delete_column", "column_id"}`
 /// - `{"op": "set_header_row", "value": bool}`, `{"op": "set_alignment", "column_id", "align": "left|center|right"}`
 enum NoteTableAgentEdit {
     static func apply(_ operations: [[String: Any]], to original: NoteTable) throws -> NoteTable {
+        var notices: [String] = []
+        return try apply(operations, to: original, notices: &notices)
+    }
+
+    static func apply(_ operations: [[String: Any]], to original: NoteTable, notices: inout [String]) throws -> NoteTable {
         var table = original
+        let readAgain = "Read the note again with list_notes for its current ids."
         func uuid(_ value: Any?, _ name: String) throws -> UUID {
             guard let text = value as? String, let id = UUID(uuidString: text) else {
                 throw NoteAgentTextError.invalidTableEdit("\(name) must be an id from list_notes.")
@@ -209,14 +193,14 @@ enum NoteTableAgentEdit {
         func row(_ value: Any?) throws -> Int {
             let id = try uuid(value, "row_id")
             guard let index = table.rows.firstIndex(where: { $0.id == id }) else {
-                throw NoteAgentTextError.invalidTableEdit("No row has id \(id.uuidString).")
+                throw NoteAgentTextError.invalidTableEdit("No row has id \(id.uuidString). \(readAgain)")
             }
             return index
         }
         func column(_ value: Any?) throws -> Int {
             let id = try uuid(value, "column_id")
             guard let index = table.columns.firstIndex(where: { $0.id == id }) else {
-                throw NoteAgentTextError.invalidTableEdit("No column has id \(id.uuidString).")
+                throw NoteAgentTextError.invalidTableEdit("No column has id \(id.uuidString). \(readAgain)")
             }
             return index
         }
@@ -226,6 +210,20 @@ enum NoteTableAgentEdit {
                 throw NoteAgentTextError.invalidTableEdit("cells must be \(count) strings.")
             }
             return list.compactMap { $0 as? String }
+        }
+        /// Where a moved line goes: after the line `name` names in `ids`, or
+        /// first for null. The key is required: a typo must not move a row
+        /// above the header.
+        func position(_ operation: [String: Any], _ name: String, in ids: [UUID]) throws -> Int {
+            guard let after = operation[name] else {
+                throw NoteAgentTextError.invalidTableEdit("\(operation["op"] ?? "A move") needs \(name): an id, or null to move it first.")
+            }
+            guard !(after is NSNull) else { return 0 }
+            let id = try uuid(after, name)
+            guard let index = ids.firstIndex(of: id) else {
+                throw NoteAgentTextError.invalidTableEdit("No other line has id \(id.uuidString) (a line can't move after itself). \(readAgain)")
+            }
+            return index + 1
         }
         func inlineOnly(_ text: String) throws -> String {
             guard !text.contains("\u{FFFC}") else { throw NoteAgentTextError.invalidTableEdit("A cell can't hold object characters.") }
@@ -239,27 +237,46 @@ enum NoteTableAgentEdit {
             case "set_cell":
                 let r = try row(operation["row_id"]), c = try column(operation["column_id"])
                 guard let text = operation["text"] as? String else { throw NoteAgentTextError.invalidTableEdit("set_cell needs text.") }
-                table.rows[r].cells[c] = NoteAgentTableText.cell(try inlineOnly(text), reusing: table.rows[r].cells[c])
+                let original = table.rows[r].cells[c]
+                guard try inlineOnly(text) != NoteTextExport.agentInlineText(original.block) else { break }
+                table.rows[r].cells[c] = try NoteAgentTableText.cell(text, reusing: original)
+                let kinds = NoteMark.Kind.allCases.filter { kind in original.marks.contains { $0.kind == kind } }.map(\.rawValue)
+                if let last = kinds.last {
+                    let named = kinds.count > 1 ? kinds.dropLast().joined(separator: ", ") + " and " + last : last
+                    notices.append(named.prefix(1).uppercased() + named.dropFirst() + " in the cell at row \(table.rows[r].id.uuidString), column \(table.columns[c].id.uuidString) "
+                                   + (kinds.count > 1 ? "were" : "was") + " cleared because its text changed.")
+                }
             case "insert_row":
                 let at = try operation["after_row_id"].flatMap { $0 is NSNull ? nil : $0 }.map { try row($0) + 1 } ?? 0
                 let cells = try texts(operation["cells"], count: table.columnCount)
                 table.insertRow(at: at)
-                table.rows[at].cells = try cells.map { NoteAgentTableText.cell(try inlineOnly($0), reusing: nil) }
+                table.rows[at].cells = try cells.map { try NoteAgentTableText.cell(try inlineOnly($0), reusing: nil) }
             case "insert_column":
                 let at = try operation["after_column_id"].flatMap { $0 is NSNull ? nil : $0 }.map { try column($0) + 1 } ?? 0
                 let cells = try texts(operation["cells"], count: table.rowCount)
                 let align = (operation["align"] as? String).flatMap(NoteTable.Alignment.init(rawValue:)) ?? .left
                 table.insertColumn(at: at, align: align)
                 for (index, text) in cells.enumerated() {
-                    table.rows[index].cells[at] = NoteAgentTableText.cell(try inlineOnly(text), reusing: nil)
+                    table.rows[index].cells[at] = try NoteAgentTableText.cell(try inlineOnly(text), reusing: nil)
                 }
+            case "move_row":
+                let source = try row(operation["row_id"])
+                let moving = table.rows.remove(at: source)
+                table.rows.insert(moving, at: try position(operation, "after_row_id", in: table.rows.map(\.id)))
+            case "move_column":
+                let source = try column(operation["column_id"])
+                let moving = table.columns.remove(at: source)
+                let cells = table.rows.indices.map { table.rows[$0].cells.remove(at: source) }
+                let at = try position(operation, "after_column_id", in: table.columns.map(\.id))
+                table.columns.insert(moving, at: at)
+                for index in table.rows.indices { table.rows[index].cells.insert(cells[index], at: at) }
             case "delete_row":
                 guard table.removeRow(at: try row(operation["row_id"])) else {
-                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one row; delete the table with update_note instead.")
+                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one row. To delete a plain table, remove it from the body with update_note; a table with formatting the text can't show is deleted in Attic.")
                 }
             case "delete_column":
                 guard table.removeColumn(at: try column(operation["column_id"])) else {
-                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one column; delete the table with update_note instead.")
+                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one column. To delete a plain table, remove it from the body with update_note; a table with formatting the text can't show is deleted in Attic.")
                 }
             case "set_header_row":
                 guard let value = operation["value"] as? Bool else { throw NoteAgentTextError.invalidTableEdit("set_header_row needs a boolean value.") }

@@ -109,6 +109,8 @@ enum NoteAgentTextError: LocalizedError, Equatable {
     case unknownFile(String)
     case unknownBlock(String)
     case lossyFormatting
+    /// A text rewrite changed a table that carries formatting the text can't show.
+    case formattedTable(String)
     case unsafeChecklist
     case raggedTable
     case tableTooLarge
@@ -127,6 +129,8 @@ enum NoteAgentTextError: LocalizedError, Equatable {
             "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
         case .lossyFormatting:
             "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic."
+        case let .formattedTable(id):
+            "The table \(id) has formatting the text can't show (marks, dragged widths or extras). Leave its token line and pipe table unchanged in update_note, and change it with update_note_table by id (set a cell, insert, delete or move a row or column)."
         case .raggedTable:
             "Every row of a table must have as many cells as its header row."
         case .tableTooLarge:
@@ -143,6 +147,15 @@ enum NoteAgentTextError: LocalizedError, Equatable {
 /// Surviving rich blocks retain their fields; plain text and checklist
 /// checked states may change, and whole checklist lines may be added or removed.
 enum NoteAgentTextSafety {
+    /// A text rewrite's tables. A plain table may change, come or go. A table
+    /// carrying anything the text can't show is a styled block: it must come
+    /// back equal, under its own token; it changes by id (`update_note_table`).
+    static func validateTables(base: NoteDocument, proposed: NoteDocument) throws {
+        for table in base.blocks where NoteAgentTableText.carriesHidden(table) {
+            guard proposed.blocks.contains(table) else { throw NoteAgentTextError.formattedTable(table.id?.uuidString ?? "") }
+        }
+    }
+
     static func validate(base: NoteDocument, proposed: NoteDocument) throws {
         // Whole checklist lines may be added or removed. Surviving base
         // items retain their identity and metadata exactly, in base order;
@@ -204,7 +217,8 @@ enum NoteAgentTextSafety {
             guard dates(base) == dates(proposed) else { throw NoteAgentTextError.lossyFormatting }
             return
         }
-        // Tables are matched by their own token and may change, come or go.
+        // Tables: `validateTables` for a text rewrite; edits by id
+        // (`update_note_table`) change them through this check too.
         let oldBlocks = base.blocks.filter { $0.kind != .checklist && $0.kind != .table }
         let newBlocks = proposed.blocks.filter { $0.kind != .checklist && $0.kind != .table }
         guard oldBlocks.count == newBlocks.count else { throw NoteAgentTextError.lossyFormatting }
@@ -312,6 +326,7 @@ enum NoteAgentTextParser {
         }
         var document = base
         document.blocks = blocks
+        try NoteAgentTextSafety.validateTables(base: base, proposed: document)
         try NoteAgentTextSafety.validate(base: base, proposed: document)
         return document
     }
