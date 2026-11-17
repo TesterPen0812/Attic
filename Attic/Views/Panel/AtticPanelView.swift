@@ -403,6 +403,7 @@ struct AtticPanelView: View {
     private var composerRoute: PanelComposerRoute {
         PanelComposerRoute(open: { [composerState] page, kind in composerState.model?.open(on: page, as: kind) },
                            isOpen: { [composerState] in composerState.model?.isOpen ?? false },
+                           closeForUnhandledEscape: { [composerState] in composerState.closeForUnhandledEscape() },
                            startTags: { [composerState] tags in composerState.model?.startTags(tags) })
     }
 

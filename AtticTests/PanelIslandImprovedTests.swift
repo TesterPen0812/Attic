@@ -198,6 +198,136 @@ final class PanelIslandImprovedTests: XCTestCase {
         XCTAssertFalse(island.isAwake, "the island settles 300 ms after exit even when input continues outside")
     }
 
+    /// What the live island reports when one of its controls has the
+    /// keyboard: its window is key and the control is focused.
+    private func focusKeyIsland(_ island: PanelIslandModel, _ item: PanelIslandItem = .page(.tasks)) {
+        island.reportIslandKey(true)
+        island.reportFocus(item)
+    }
+
+    /// Keyboard navigation can put focus on an island button while the
+    /// pointer is elsewhere. It must not turn into an invisible dot while
+    /// the key-focused button is still the target of Return or Space.
+    func testFocusedIslandItemStaysExpandedUntilKeyboardFocusLeaves() {
+        let clock = Clock()
+        let island = model(clock)
+        let rest = CGRect(x: 100, y: 100, width: 13, height: 43)
+        let awake = CGRect(x: 100, y: 56, width: 27, height: 99)
+
+        focusKeyIsland(island)
+        XCTAssertTrue(island.isAwake)
+        for index in 0..<360 {
+            island.track(pointer: CGPoint(x: 300 + index, y: 120), rest: rest, awake: awake)
+            clock.advance(0.01)
+            XCTAssertTrue(island.isAwake, "focused item collapsed after off-island pointer move \(index)")
+        }
+        island.reportFocus(nil)
+        clock.advance(0.29)
+        XCTAssertTrue(island.isAwake, "ordinary 300 ms pointer-leave delay still applies")
+        clock.advance(0.02)
+        XCTAssertFalse(island.isAwake)
+    }
+
+    /// Hiding the island must not swallow the next focus: a fresh focus on
+    /// reveal wakes the rest dots again.
+    func testKeyboardFocusReacquiredAfterSettleWakesIsland() {
+        let clock = Clock()
+        let island = model(clock)
+        focusKeyIsland(island)
+        XCTAssertTrue(island.isAwake)
+        island.settle()
+        XCTAssertFalse(island.isAwake)
+        island.reportFocus(.page(.notes))
+        XCTAssertTrue(island.isAwake, "a fresh focus after hide must expand the dots")
+    }
+
+    /// A hide must not leave a focus hold that later blocks the accepted
+    /// 300 ms pointer-leave settle, even when no focus change follows.
+    /// Hiding orders the key island window out, and its window reports the
+    /// key loss (`PanelIslandWindow.resignKey`); the hosted twin is
+    /// `PanelIslandTests.testHidingAKeyFocusedIslandReleasesItsHold`.
+    func testPointerSettlesAfterFocusedIslandIsHidden() {
+        let clock = Clock()
+        let island = model(clock)
+        let rest = CGRect(x: 100, y: 100, width: 13, height: 43)
+        let awake = CGRect(x: 100, y: 56, width: 27, height: 99)
+        focusKeyIsland(island)
+        island.settle()
+        island.reportIslandKey(false)
+        island.track(pointer: CGPoint(x: rest.midX, y: rest.midY), rest: rest, awake: awake)
+        island.track(pointer: CGPoint(x: 300, y: 120), rest: rest, awake: awake)
+        clock.advance(0.31)
+        XCTAssertFalse(island.isAwake, "a hidden focus must not hold a pointer wake")
+    }
+
+    /// The hold is one rule over two reported facts: a focused control
+    /// holds the island awake only while its window is key, and the same
+    /// retained focus holds again when the key comes back, however the
+    /// focus got there (Tab, code, VoiceOver).
+    func testTheKeyboardHoldFollowsTheReportedFocusAndKeyWindow() {
+        let clock = Clock()
+        let island = model(clock)
+        let rest = CGRect(x: 100, y: 100, width: 13, height: 43)
+        let awake = CGRect(x: 100, y: 56, width: 27, height: 99)
+        func away() { island.track(pointer: CGPoint(x: 300, y: 120), rest: rest, awake: awake) }
+
+        island.reportFocus(.page(.notes))
+        XCTAssertFalse(island.isAwake, "focus in a window without the keyboard holds nothing")
+        island.reportIslandKey(true)
+        XCTAssertTrue(island.isAwake, "the island taking the keyboard with a focused control wakes it")
+        away()
+        clock.advance(0.35)
+        XCTAssertTrue(island.isAwake)
+
+        island.reportIslandKey(false)
+        clock.advance(0.35)
+        XCTAssertFalse(island.isAwake, "losing the keyboard releases the hold")
+
+        island.reportIslandKey(true)
+        XCTAssertTrue(island.isAwake, "the same retained focus holds again when the keyboard returns")
+        away()
+        clock.advance(0.35)
+        XCTAssertTrue(island.isAwake)
+    }
+
+    /// The stand-in flies with the panel and shares the island's model, but
+    /// it has nothing to focus and never writes the keyboard hold. A key that
+    /// turns keyboard driving on or off while it is mounted leaves the live
+    /// island's hold alone (PR 16 review: Opus R-1, Astra R-1).
+    func testTheStandInNeverWritesTheKeyboardHold() {
+        let clock = Clock()
+        let island = model(clock)
+        let tracker = AtticKeyboardFocusTracker()
+        let size = CGSize(width: L.width + 2 * L.windowMargin, height: L.height() + 2 * L.windowMargin)
+        let host = NSHostingView(rootView: PanelIslandView(model: island, focusTracker: tracker, isStandIn: true)
+            .atticDesign(AtticDesignContext(mode: .light, reduceMotion: false, controls: .craft)))
+        host.frame = CGRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        func spin() {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        }
+        spin()
+        focusKeyIsland(island)
+        XCTAssertTrue(island.isAwake)
+        island.track(pointer: CGPoint(x: 4_000, y: 4_000), rest: .zero, awake: .zero)
+        for step in 0..<4 {
+            if step.isMultiple(of: 2) {
+                tracker.noteKeyboardNavigation()
+            } else {
+                tracker.observe(.leftMouseDown, keyCode: nil)
+            }
+            spin()
+            clock.advance(0.35)
+            XCTAssertTrue(island.isAwake, "the stand-in changed the live island's hold at step \(step)")
+        }
+    }
+
     // MARK: I5, I6
 
     func testNotesIsAPageAndDrawIsAPencilAndScribble() {

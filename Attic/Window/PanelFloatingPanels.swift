@@ -28,11 +28,13 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     let uiState = PanelUIState()
     let calendarPageState = CalendarPageState()
     let toasts = PanelToastCenter()
+    private let composerState = PanelComposerState()
     private let hostingView: AtticPanelHostingView
     private let chrome = PanelChromeInteractionState()
     private let store: TaskStore
     private let noteDraft: NoteDraftController
     private let settings: AppSettings
+    private let tasksPageState: TasksPageState
     private var cancellables: Set<AnyCancellable> = []
     private var keyLookAwaitsRelease = false
     private var fadeGeneration = 0
@@ -51,6 +53,7 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         store = deps.store
         noteDraft = deps.noteDraft
         settings = deps.settings
+        tasksPageState = TasksPageState(memory: deps.tasksMemory)
         uiState.becomeFloating(on: page)
         uiState.isPanelPinned = pinned
         uiState.updatePanelSize(frame.size)
@@ -63,8 +66,9 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
                 settings: deps.settings, toasts: toasts,
                 // Its own page state (its own Search and drafts), the
                 // remembered views shared with the docked panel's.
-                tasksPageState: TasksPageState(memory: deps.tasksMemory),
-                calendarPageState: calendarPageState),
+                tasksPageState: tasksPageState,
+                calendarPageState: calendarPageState,
+                composerState: composerState),
             panelCornerRadius: deps.settings.panelCornerSize,
             dockedCorner: deps.settings.corner,
             chromeInteractionState: chrome)
@@ -104,6 +108,11 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in self?.onPressed?() }
+        panel.onUnhandledEscape = { [weak self] in
+            guard let self, self.panel.isVisible else { return false }
+            if self.composerState.closeForUnhandledEscape() { return true }
+            return false
+        }
         panel.onUnhandledUndo = { [weak self] redo in
             guard let self else { return }
             AtticPanelController.performUnhandledUndo(redo: redo, section: self.uiState.selectedSection,
@@ -226,6 +235,8 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
 
     #if DEBUG
     var hostingViewForTesting: AtticPanelHostingView { hostingView }
+    var composerStateForTesting: PanelComposerState { composerState }
+    var tasksModelForTesting: TasksPageModel? { tasksPageState.builtModel }
     var calendarEventRowsOverrideForTesting: CalendarEventRowState?
     #endif
 

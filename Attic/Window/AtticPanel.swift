@@ -27,7 +27,9 @@ final class AtticPanel: NSPanel {
     private var tracingIdlePress = false
     /// Esc that nothing inside the panel used (a menu, a field, the list's
     /// own Esc all come first): the panel hides.
-    var onUnhandledEscape: (() -> Void)?
+    /// True only when the panel actually consumed Escape. Editors may pass
+    /// an unhandled Escape up the responder chain (for example, History).
+    var onUnhandledEscape: (() -> Bool)?
     /// ⌘Z (or ⇧⌘Z, `true`) that nothing inside the panel used: no text
     /// field or editor, no page with keyboard focus. The page's history
     /// takes it (Astra 23: the Undo toast owns no shortcut of its own).
@@ -285,7 +287,7 @@ final class AtticPanel: NSPanel {
         if event.keyCode == 53,
            event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
            !(firstResponder is NSTextView) {
-            if Self.isOwnEscape(event, in: self) { onUnhandledEscape?() }
+            if Self.isOwnEscape(event, in: self) { _ = onUnhandledEscape?() }
             return
         }
         if Self.isUndoKey(event), !AtticTextInput.isTyping(firstResponder), let onUnhandledUndo {
@@ -301,7 +303,7 @@ final class AtticPanel: NSPanel {
             return
         }
         guard Self.isOwnEscape(NSApp.currentEvent, in: self) else { return }
-        onUnhandledEscape?()
+        _ = onUnhandledEscape?()
     }
 
     /// O14-01 (owner, 2026-10-14): every click on the panel does what it
@@ -428,6 +430,19 @@ final class AtticPanel: NSPanel {
                 // Finish a returning presentation before AppKit hit-testing
                 // this new interaction at the untransformed content bounds.
                 onDirectContentInteraction?()
+            }
+            // A History preview may remain first responder after another
+            // host detaches its TextKit engine. In that state AppKit can
+            // route Escape to SwiftUI without calling cancelOperation on
+            // the read-only preview, skipping its History/Composer fallback.
+            if event.type == .keyDown, event.keyCode == 53,
+               event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+               Self.isOwnEscape(event, in: self), isKeyWindow,
+               let editor = firstResponder as? NoteEditorTextView,
+               editor.window === self, !editor.isEditable,
+               editor.engine == nil, editor.escapeFallback != nil {
+                editor.cancelOperation(self)
+                return
             }
             // Whatever view this press hits takes it, the overlay layer's
             // cards and bars included (2 Nov).

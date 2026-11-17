@@ -189,6 +189,29 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertNil(notes.workspaceSessionIfCached(draft.noteID), "the untouched draft is discarded")
     }
 
+    /// The page's Escape holds only for Version History over this task's
+    /// own note: not for another task's History, not for a task with no
+    /// note (its never-saved draft has no History), on one controller.
+    /// (A task page with no note session cannot exist: the registry attaches
+    /// a draft or throws; PR 16 re-check, Opus R-4.)
+    func testOnlyThisTasksOwnHistoryHoldsEscapeOnItsPage() async throws {
+        let owned = try seed(.boundary)
+        let bareTask = try XCTUnwrap(tasks.create(title: "No note"))
+        let presenter = try open(owned)
+        let bare = try open(bareTask.id)
+        let session = try XCTUnwrap(presenter.session)
+        XCTAssertEqual(bare.session?.isPersisted, false, "a task with no note opens a draft")
+        XCTAssertFalse(presenter.showsOwnHistory)
+        XCTAssertFalse(bare.showsOwnHistory, "nothing open: Escape goes Back")
+        let opened = await notes.openHistoryDurably(workspace: session)
+        XCTAssertTrue(opened)
+        XCTAssertNotNil(notes.historyBrowser)
+        XCTAssertTrue(presenter.showsOwnHistory, "this task's History takes Escape first")
+        XCTAssertFalse(bare.showsOwnHistory, "another task's History leaves this page's Escape alone")
+        notes.closeHistory()
+        XCTAssertFalse(presenter.showsOwnHistory)
+    }
+
     /// A second own note is refused: the store keeps one note per task.
     func testTheStoreRefusesASecondOwnNoteForOneTask() throws {
         let id = try seed(.boundary)

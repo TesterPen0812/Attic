@@ -8,6 +8,8 @@ struct PanelComposerRoute {
     let open: (ComposerPage, ComposerKind?) -> Void
     /// Whether the card is open (it then keeps Tab to itself).
     var isOpen: () -> Bool = { false }
+    /// History uses the shared card's Escape route before closing itself.
+    var closeForUnhandledEscape: () -> Bool = { false }
     /// An empty draft starts with these tags (Notes' picked tags, 13 Nov).
     var startTags: ([String]) -> Void = { _ in }
 

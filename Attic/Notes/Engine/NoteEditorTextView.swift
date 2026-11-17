@@ -1331,7 +1331,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         if marquee?.isEmpty == false { marquee?.clear(); return }
         // NSTextView has no cancelOperation of its own (calling super would
         // raise): what it doesn't take goes up the responder chain.
-        guard engine != nil else { return passEscapeOn(sender) }
+        // A preview may remain mounted after a second host detaches its
+        // engine. Its own Escape route still belongs to that preview.
+        guard engine != nil else {
+            if let escapeFallback { escapeFallback() } else { passEscapeOn(sender) }
+            return
+        }
         // The input method owns Esc during a composition.
         if hasMarkedText() { return }
         if engine?.slashSession != nil { engine?.dismissSlashSession(); return }
@@ -1345,7 +1350,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             return
         }
         if let escapeFallback { return escapeFallback() }
-        if let panel = window as? AtticPanel, let hide = panel.onUnhandledEscape { return hide() }
+        if let panel = window as? AtticPanel, panel.onUnhandledEscape?() == true { return }
         passEscapeOn(sender)
     }
 

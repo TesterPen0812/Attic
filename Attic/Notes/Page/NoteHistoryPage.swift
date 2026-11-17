@@ -11,6 +11,7 @@ struct NoteHistoryPage: View {
     @State private var menuAnchor = AtticMenuAnchor.Holder()
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelToasts) private var toasts
+    @Environment(\.panelComposer) private var composerRoute
 
     /// The version switch and its summary line, down from the panel's top.
     static func versionLine(_ layout: PanelPageLayout) -> ClosedRange<CGFloat> {
@@ -38,7 +39,12 @@ struct NoteHistoryPage: View {
                     bottomInset: 64 + layout.chromeInsets.bottom,
                     headerBottom: layout.headerBottom, design: design,
                     tagEditor: { AnyView(EmptyView()) }, tagCounts: { [:] },
-                    scrollOverride: browser.scrollOffset - layout.headerBottom - 76)
+                    scrollOverride: browser.scrollOffset - layout.headerBottom - 76,
+                    escapeFallback: { [weak controller, weak browser, weak session] in
+                        guard let controller, let browser, let session,
+                              controller.historyBrowser === browser, browser.preview === session else { return }
+                        if composerRoute?.closeForUnhandledEscape() != true { controller.closeHistory() }
+                    })
                     .id(session.id)
                     // Floating controls (owner, 2026-10-14): the preview runs on
                     // under the version line, visible through the variable
@@ -133,7 +139,9 @@ struct NoteHistoryPage: View {
             .padding(.bottom, layout.chromeInsets.bottom)
         }
         .onChange(of: design) { _, design in browser.preview?.engine.update(design: design) }
-        .onExitCommand { controller.closeHistory() }
+        .onExitCommand {
+            if composerRoute?.closeForUnhandledEscape() != true { controller.closeHistory() }
+        }
         .onAppear { chrome.menuCommands = { versionCommands } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("notes-history-browser")

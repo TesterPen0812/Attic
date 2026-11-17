@@ -166,6 +166,69 @@ final class PanelPullOutTests: XCTestCase {
         XCTAssertTrue(PanelPullOutState.restored([], workAreas: [visible]).floating.isEmpty)
         XCTAssertTrue(PanelPullOutState.decode(Data("junk".utf8)).isEmpty)
     }
+
+    /// Generated pull/dock/raise/pin/move sequences with a separate oracle.
+    /// Every step verifies the page routes and the saved floating stack;
+    /// periodic reloads simulate quitting and rebuilding state from disk.
+    func testSeededPanelSequencesRetainOneDockedPageAndSurviveRelaunch() throws {
+        let pages = PanelPage.allCases
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 875)
+        for seed in [UInt64(0xC0FFEE), 0xF005BA11, 0x12AB56CD, 0xBEEFFACE, 0x5EED2026] {
+            var random = seed
+            func next() -> UInt64 {
+                random = random &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                return random >> 32
+            }
+            var state = PanelPullOutState()
+            var expected: [PanelPullOutState.Floating] = []
+            for step in 0..<420 {
+                let page = pages[Int(next() % UInt64(pages.count))]
+                let frame = CGRect(x: 50 + CGFloat(next() % 800), y: 30 + CGFloat(next() % 250),
+                                   width: 340, height: 560)
+                let pinned = next() % 2 == 0
+                switch next() % 6 {
+                case 0:
+                    state.dockedShows(page)
+                case 1:
+                    let shouldPull = !expected.contains(where: { $0.page == page }) && expected.count < pages.count - 1
+                    XCTAssertEqual(state.pullOut(page, at: frame, pinned: pinned), shouldPull, "seed \(seed), step \(step)")
+                    if shouldPull { expected.append(.init(page: page, frame: frame, isPinned: pinned)) }
+                case 2:
+                    state.raise(page)
+                    if let index = expected.firstIndex(where: { $0.page == page }) {
+                        expected.append(expected.remove(at: index))
+                    }
+                case 3:
+                    state.setPinned(page, pinned)
+                    if let index = expected.firstIndex(where: { $0.page == page }) { expected[index].isPinned = pinned }
+                case 4:
+                    state.move(page, to: frame)
+                    if let index = expected.firstIndex(where: { $0.page == page }) { expected[index].frame = frame }
+                default:
+                    state.dockIn(page)
+                    expected.removeAll { $0.page == page }
+                }
+                let context = "seed \(seed), step \(step)"
+                XCTAssertEqual(state.floating, expected, context)
+                XCTAssertLessThan(state.floating.count, pages.count, context)
+                XCTAssertEqual(state.outPages, Set(expected.map(\.page)), context)
+                XCTAssertEqual(state.hidingWithDocked, expected.filter { !$0.isPinned }.map(\.page), context)
+                for item in pages {
+                    XCTAssertEqual(state.route(for: item), expected.contains(where: { $0.page == item }) ? .raise : .switchDocked,
+                                   context)
+                    if !state.isOut(item), expected.count < pages.count - 1 {
+                        XCTAssertNotNil(state.fallback(for: item), context)
+                    }
+                }
+                let saved = try XCTUnwrap(state.encoded())
+                XCTAssertEqual(PanelPullOutState.decode(saved), expected, context)
+                if step.isMultiple(of: 43) {
+                    state = PanelPullOutState.restored(PanelPullOutState.decode(saved), workAreas: [screen])
+                    XCTAssertEqual(state.floating, expected, "\(context): restored")
+                }
+            }
+        }
+    }
 }
 
 /// The pull-out with real panels in the invisible test host.
@@ -236,6 +299,9 @@ final class PanelPullOutHostedTests: XCTestCase {
         let state: PanelUIState
         let panel: AtticPanel
         let settings: AppSettings
+        let store: TaskStore
+        let notes: NoteStore
+        let noteDraft: NoteDraftController
         var island: PanelIslandWindows { controller.islandWindowsForTesting }
         var pullOut: PanelPullOutController { controller.pullOut }
         var workArea: CGRect {
@@ -607,6 +673,246 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
+    /// The panel gets Escape when the keyboard has moved from the composer
+    /// onto its chrome. A floating page must close its own card, just as the
+    /// docked page does, without changing the docked page or losing a draft.
+    func testFloatingPanelEscapeFromChromeClosesItsComposer() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires real event routing")
+        try withRig { rig in
+            rig.state.selectSection(.calendar)
+            spin(0.2)
+            rig.state.selectSection(.tasks)
+            spin(0.2)
+            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
+            let host = floating.hostingViewForTesting
+            let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+            let previous = NSApp.accessibilityAttributeValue(enhanced)
+            NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+            defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+            spin(0.4)
+
+            let dockedPageBeforeEscape = rig.state.selectedSection
+
+            let plus = try XCTUnwrap(elements(host).first {
+                ($0.accessibilityIdentifier?() ?? "") == "tasks-new-task"
+            })
+            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
+            spin(0.4)
+            @MainActor func cardOpen() -> Bool {
+                elements(host).contains { ($0.accessibilityIdentifier?() ?? "") == "composer-card" }
+            }
+            XCTAssertTrue(cardOpen(), "the floating page owns an open composer")
+            XCTAssertTrue(floating.composerStateForTesting.model?.isOpen == true, "the floating model owns the open card")
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.isKeyWindow, "the floating panel owns the key event")
+            XCTAssertTrue(floating.panel.makeFirstResponder(host), "Escape comes from the panel chrome")
+            let escape = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: floating.panel.windowNumber, context: nil,
+                characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(escape)
+            spin(until: { floating.composerStateForTesting.model?.isOpen == false }, timeout: 2)
+            XCTAssertFalse(floating.composerStateForTesting.model?.isOpen ?? false,
+                           "Escape closes the floating Composer model")
+            // Composer keeps its native card mounted to avoid a reopening
+            // hitch. AX child enumeration can outlive the folding animation;
+            // the model is the source of truth for whether the card is open.
+            XCTAssertTrue(floating.isVisible, "the composer gets first refusal; the panel stays")
+            XCTAssertEqual(rig.state.selectedSection, dockedPageBeforeEscape, "the previously shown docked page is unchanged")
+        }
+    }
+
+    /// Tasks' local Escape monitor runs before the window. With a quick
+    /// look expanded, an open Composer remains the topmost Escape target.
+    func testFloatingTasksEscapeClosesComposerBeforeQuickLook() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires real key routing")
+        try withRig { rig in
+            let task = try XCTUnwrap(rig.store.create(title: "Quick look beneath Composer"))
+            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
+            let host = floating.hostingViewForTesting
+            let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+            let previous = NSApp.accessibilityAttributeValue(enhanced)
+            NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+            defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+            spin(0.5)
+            let model = try XCTUnwrap(floating.tasksModelForTesting)
+            model.setExpanded(task.id, true)
+            XCTAssertTrue(model.expanded.contains(task.id))
+            let plus = try XCTUnwrap(elements(host).first {
+                ($0.accessibilityIdentifier?() ?? "") == "tasks-new-task"
+            })
+            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
+            spin(0.4)
+            XCTAssertTrue(floating.composerStateForTesting.model?.isOpen == true)
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.makeFirstResponder(host), "Escape is on chrome, not in an editor")
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: floating.panel.windowNumber, context: nil, characters: "\u{1b}",
+                charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(event)
+            spin(0.4)
+            XCTAssertFalse(floating.composerStateForTesting.model?.isOpen ?? false,
+                           "Escape closes the topmost Composer first")
+            XCTAssertTrue(model.expanded.contains(task.id), "the underlying quick look remains open")
+        }
+    }
+
+    /// The native history preview must close History on Escape after the
+    /// floating Composer has had its chance to handle the key.
+    func testFloatingNotesHistoryPreviewEscapeClosesHistory() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
+        try withRig { rig in
+            let id = UUID()
+            guard case .success = rig.notes.createDocumentNote(
+                id: id, document: NoteDocument(blocks: [.text("History Escape"), .text("One version")])) else {
+                return XCTFail("seed versioned note")
+            }
+            XCTAssertTrue(rig.notes.recordVersion(noteID: id, reason: .pause))
+            XCTAssertTrue(rig.noteDraft.pages.open(noteID: id))
+            rig.state.selectSection(.notes)
+            spin(0.4)
+            try pull(.notes, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .notes))
+            floating.makeKey()
+            var opened: Bool?
+            Task { @MainActor in opened = await rig.noteDraft.pages.openHistoryDurably() }
+            spin(until: { opened != nil }, timeout: 5)
+            XCTAssertEqual(opened, true)
+            spin(0.4)
+            let editor = try XCTUnwrap(rig.noteDraft.pages.historyBrowser?.preview?.engine.textView,
+                                       "history preview has its own native editor")
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.isKeyWindow)
+            XCTAssertTrue(floating.panel.makeFirstResponder(editor))
+            XCTAssertFalse(floating.composerStateForTesting.model?.isOpen ?? false)
+            let escape = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: floating.panel.windowNumber, context: nil,
+                characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(escape)
+            spin(0.2)
+            XCTAssertNil(rig.noteDraft.pages.historyBrowser, "Escape from preview exits History")
+            XCTAssertTrue(floating.panel.isVisible, "History Escape leaves the Notes panel visible")
+
+            // A version switch replaces the preview session and native editor.
+            // Its newly mounted editor must still route Escape back to History.
+            var reopened: Bool?
+            Task { @MainActor in reopened = await rig.noteDraft.pages.openHistoryDurably() }
+            spin(until: { reopened != nil }, timeout: 5)
+            XCTAssertEqual(reopened, true)
+            let browser = try XCTUnwrap(rig.noteDraft.pages.historyBrowser)
+            browser.showsCurrent.toggle()
+            rig.noteDraft.pages.refreshHistoryPreview()
+            spin(0.4)
+            let newEditor = try XCTUnwrap(browser.preview?.engine.textView)
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.isKeyWindow)
+            XCTAssertTrue(floating.panel.makeFirstResponder(newEditor))
+            NSApp.sendEvent(escape)
+            spin(0.2)
+            XCTAssertNil(rig.noteDraft.pages.historyBrowser, "Escape from remounted preview exits History")
+        }
+    }
+
+    func testFloatingTasksHistoryPreviewEscapeClosesHistory() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
+        try withRig { rig in
+            let task = try XCTUnwrap(rig.store.create(title: "Task history escape"))
+            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
+            floating.uiState.openTaskNote(task.id, from: .tasks)
+            spin(until: { rig.noteDraft.pages.taskNotePresenter?.session != nil }, timeout: 5)
+            let session = try XCTUnwrap(rig.noteDraft.pages.taskNotePresenter?.session)
+            XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0),
+                with: NSAttributedString(string: "Task body history"), name: "Type"))
+            var opened: Bool?
+            Task { @MainActor in
+                guard await rig.noteDraft.pages.preserveDurably(session) else { opened = false; return }
+                opened = await rig.noteDraft.pages.openHistoryDurably(workspace: session)
+            }
+            spin(until: { opened != nil }, timeout: 5)
+            XCTAssertEqual(opened, true)
+            spin(0.4)
+            func nativeEditors(_ view: NSView) -> [NoteEditorTextView] {
+                (view as? NoteEditorTextView).map { [$0] } ?? view.subviews.flatMap(nativeEditors)
+            }
+            let mounted = nativeEditors(floating.hostingViewForTesting)
+            let editor = try XCTUnwrap(mounted.first { !$0.isEditable }, "mounted read-only History editor")
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.isKeyWindow)
+            XCTAssertTrue(editor.window === floating.panel, "History preview belongs to the floating Tasks window")
+            XCTAssertTrue(floating.panel.makeFirstResponder(editor))
+            XCTAssertTrue(floating.panel.firstResponder === editor)
+            XCTAssertNotNil(editor.escapeFallback, "the mounted History preview must own its native Escape fallback")
+            let installedEscape = editor.escapeFallback
+            var nativeEscapeCallbacks = 0
+            editor.escapeFallback = { nativeEscapeCallbacks += 1; installedEscape?() }
+            let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: floating.panel.windowNumber,
+                context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(escape)
+            spin(0.2)
+            XCTAssertEqual(nativeEscapeCallbacks, 1, "real Escape must reach the mounted preview fallback")
+            XCTAssertNil(rig.noteDraft.pages.historyBrowser)
+            XCTAssertTrue(floating.panel.isVisible)
+        }
+    }
+
+    func testFloatingHistoryPreviewEscapeClosesComposerBeforeHistory() throws {
+        try checkFloatingHistoryEscapeOrder()
+    }
+
+    private func checkFloatingHistoryEscapeOrder() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
+        try withRig { rig in
+            let id = UUID()
+            guard case .success = rig.notes.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("History and Composer")])) else {
+                return XCTFail("seed note")
+            }
+            XCTAssertTrue(rig.noteDraft.pages.open(noteID: id))
+            rig.state.selectSection(.notes)
+            spin(0.4)
+            try pull(.notes, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .notes))
+            var opened: Bool?
+            Task { @MainActor in opened = await rig.noteDraft.pages.openHistoryDurably() }
+            spin(until: { opened != nil }, timeout: 5)
+            XCTAssertEqual(opened, true)
+            spin(0.4)
+            let browser = try XCTUnwrap(rig.noteDraft.pages.historyBrowser)
+            let editor = try XCTUnwrap(browser.preview?.engine.textView)
+            let composer = try XCTUnwrap(floating.composerStateForTesting.model)
+            composer.open(on: .notes)
+            spin(0.4)
+            floating.makeKey()
+            spin(until: { floating.panel.isKeyWindow })
+            XCTAssertTrue(floating.panel.isKeyWindow)
+            XCTAssertTrue(floating.panel.makeFirstResponder(editor))
+            let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: floating.panel.windowNumber,
+                context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(escape)
+            spin(0.2)
+            XCTAssertFalse(composer.isOpen)
+            XCTAssertTrue(rig.noteDraft.pages.historyBrowser === browser)
+            XCTAssertTrue(floating.panel.makeFirstResponder(editor))
+            NSApp.sendEvent(escape)
+            spin(0.2)
+            XCTAssertNil(rig.noteDraft.pages.historyBrowser)
+            XCTAssertTrue(floating.panel.isVisible)
+        }
+    }
+
     // MARK: Helpers
 
     /// Pulls `page` off the island and drops it at `point`.
@@ -666,9 +972,10 @@ final class PanelPullOutHostedTests: XCTestCase {
         let state = PanelUIState()
         let settings = AppSettings(defaults: defaults)
         let existing = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+        let draft = NoteDraftController(noteStore: notes)
         let controller = AtticPanelController(
             store: store, noteStore: notes, canvasSession: CanvasSession(store: CanvasStore(container: container)),
-            noteDraft: NoteDraftController(noteStore: notes), settings: settings, uiState: state
+            noteDraft: draft, settings: settings, uiState: state
         )
         let panel = try XCTUnwrap(NSApplication.shared.windows.compactMap { $0 as? AtticPanel }
             .first { !existing.contains(ObjectIdentifier($0)) })
@@ -682,7 +989,8 @@ final class PanelPullOutHostedTests: XCTestCase {
             spin(until: { hidden })
             panel.orderOut(nil)
         }
-        try body(Rig(controller: controller, state: state, panel: panel, settings: settings))
+        try body(Rig(controller: controller, state: state, panel: panel, settings: settings,
+                     store: store, notes: notes, noteDraft: draft))
     }
 
     private func elements(_ root: AnyObject) -> [AnyObject] {

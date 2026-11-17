@@ -898,6 +898,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
     /// Every tag in Notes with its count (for the title's suggestions).
     let tagCounts: () -> [String: Int]
     var scrollOverride: CGFloat? = nil
+    var escapeFallback: (() -> Void)? = nil
 
     final class Coordinator {
         var engine: NoteEditorEngine?
@@ -949,6 +950,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         let selection = session.selection
         context.coordinator.engine = engine
         let (scrollView, textView) = engine.makeView()
+        textView.escapeFallback = escapeFallback
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
         engine.find.setGeometry(top: topInset, column: columnInset)
@@ -1034,6 +1036,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        (scrollView.documentView as? NoteEditorTextView)?.escapeFallback = escapeFallback
         context.coordinator.scrollIndicators.bind(scrollView, transit: pageTransit)
         context.coordinator.setCurrent(isCurrent, in: scrollView)
         context.coordinator.composerFollower.bind(scroll: scrollView, room: composerRoom)
@@ -1054,6 +1057,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        (scrollView.documentView as? NoteEditorTextView)?.escapeFallback = nil
         coordinator.composerFollower.stop()
         coordinator.scrollIndicators.stop()
         coordinator.accessories?.invalidate()
