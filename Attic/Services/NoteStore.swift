@@ -133,12 +133,17 @@ final class NoteStore: ObservableObject {
     /// Keep this with the published snapshot, rather than fetching per row.
     private(set) var itemWritingIDs: [UUID: UUID] = [:]
     @Published private(set) var notes: [NoteItem] = [] {
-        didSet { presentationIndex = nil; presentationByID = nil; tagInventory = nil; tagInventoryDidRefresh() }
+        didSet { presentationIndex = nil; presentationByID = nil; tagInventory = nil }
     }
     /// Wired by AtticLibrary to the shared tag inventory. No store scans on save.
     var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
     var tagInventoryDidSave: () -> Void = {}
-    var tagInventoryDidRefresh: () -> Void = {}
+    /// A reload read every note row; the shared inventory reconciles from
+    /// those rows. `nil` (a failed reload, a held commit, an outside import)
+    /// makes it rebuild from the store.
+    var tagInventoryDidReload: ([NoteItem]?) -> Void = { _ in }
+    /// A save failed and was rolled back.
+    var tagInventoryDidRollBack: () -> Void = {}
     private var tagInventory: (counts: [String: Int], rows: [UUID: String])?
     private(set) var tagInventoryBuildCount = 0
     private(set) var tagInventoryNoteReadCount = 0
@@ -1536,6 +1541,7 @@ final class NoteStore: ObservableObject {
             try? await Task.sleep(for: .milliseconds(100))
             guard !Task.isCancelled else { return }
             self?.refresh()
+            self?.tagInventoryDidReload(nil)
             self?.cloudSyncProtection.completeImportRefresh()
             self?.reconcileProtectedCloudSyncActivity(for: .importData)
             self?.cloudImportRefreshTask = nil
@@ -1736,11 +1742,14 @@ final class NoteStore: ObservableObject {
                 ? "The save outcome is still being checked. This note is held."
                 : error.localizedDescription
             rollback(retaining: edits)
-            tagInventoryDidRefresh()
+            // A held commit may still land: the inventory rebuilds from the
+            // store. Any other failure never happened.
+            if error is WorkspaceLegacyBridge.CommitHeld { tagInventoryDidReload(nil) } else { tagInventoryDidRollBack() }
             do {
                 try reloadModels()
                 lastErrorMessage = saveError
             } catch {
+                tagInventoryDidReload(nil)
                 lastErrorMessage = "\(saveError) · Reload failed: \(error.localizedDescription)"
             }
             return false
@@ -1793,6 +1802,7 @@ final class NoteStore: ObservableObject {
         let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
         itemWritingIDs = Self.itemWritingIDs(from: presentation.notes)
         notes = uniqueNotes.filter { $0.deletedAt == nil }
+        tagInventoryDidReload(presentation.notes)
         // A deleted note's attachments stay stored (and their files stay
         // reconciled below) but are not presented.
         let deletedNoteIDs = Set(uniqueNotes.filter { $0.deletedAt != nil }.map(\.id))
@@ -1818,11 +1828,12 @@ final class NoteStore: ObservableObject {
         } catch {
             let saveError = error.localizedDescription
             transactionContext.rollback()
-            tagInventoryDidRefresh()
+            if error is WorkspaceLegacyBridge.CommitHeld { tagInventoryDidReload(nil) } else { tagInventoryDidRollBack() }
             do {
                 try reloadModels()
                 lastErrorMessage = saveError
             } catch {
+                tagInventoryDidReload(nil)
                 lastErrorMessage = "\(saveError) · Reload failed: \(error.localizedDescription)"
             }
             return .failed(lastErrorMessage ?? "Unable to save attachments.")
@@ -1868,6 +1879,7 @@ final class NoteStore: ObservableObject {
         documentReplicaCapabilityCache.removeAll()
         itemWritingIDs = Self.itemWritingIDs(from: fetchedNotes)
         notes = visibleUniqueNotes(from: fetchedNotes).filter { $0.deletedAt == nil }
+        tagInventoryDidReload(fetchedNotes)
         revisionChangedNoteIDs = nil
         revision &+= 1
     }
@@ -2131,6 +2143,8 @@ final class NoteStore: ObservableObject {
         .debounce(for: .milliseconds(200), scheduler: DispatchQueue.main)
         .sink { [weak self] _ in
             self?.refresh()
+            // An outside import always rebuilds the shared tag inventory.
+            self?.tagInventoryDidReload(nil)
         }
         #endif
     }

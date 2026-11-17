@@ -469,7 +469,11 @@ final class CanvasStore: ObservableObject {
     /// Wired by AtticLibrary to the shared tag inventory. No store scans on save.
     var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
     var tagInventoryDidSave: () -> Void = {}
-    var tagInventoryDidRefresh: () -> Void = {}
+    /// The store reloaded (or a reload failed); the shared inventory
+    /// reconciles its board rows.
+    var tagInventoryDidReload: () -> Void = {}
+    /// A save failed and was rolled back.
+    var tagInventoryDidRollBack: () -> Void = {}
     @Published var revision: UInt64 = 0
     @Published var cloudSyncStatus = CloudSyncStatus()
 

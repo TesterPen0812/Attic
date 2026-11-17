@@ -74,14 +74,20 @@ final class AtticLibrary {
         let inventory = tags
         tasks.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
         tasks.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
-        tasks.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        tasks.tagInventoryDidReload = { [weak inventory] in inventory?.reconcile(tasks: $0) }
+        tasks.tagInventoryDidRollBack = { [weak inventory] in inventory?.discardPending() }
         notes?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
         notes?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
-        notes?.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        notes?.tagInventoryDidReload = { [weak inventory] in inventory?.reconcile(notes: $0) }
+        notes?.tagInventoryDidRollBack = { [weak inventory] in inventory?.discardPending() }
         notes?.sharedTagCounts = { [weak inventory] in inventory?.countsByName }
         canvases?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
         canvases?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
-        canvases?.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        canvases?.tagInventoryDidReload = { [weak inventory] in inventory?.reconcileBoards() }
+        canvases?.tagInventoryDidRollBack = { [weak inventory] in inventory?.discardPending() }
+        // The model builds the inventory once, here; from now on it keeps it
+        // current after each durable save and reload, and no reader builds it.
+        tags.prepare()
         tagInventoryObservation = tags.inventoryChanges.sink { [weak notes] in notes?.objectWillChange.send() }
         tags.afterChange = { [weak self] in self?.refreshItemStores() }
         // Tags come and go through every store and agents: whenever the set
