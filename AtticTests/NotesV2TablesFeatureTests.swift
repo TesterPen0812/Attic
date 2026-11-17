@@ -923,10 +923,12 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         """)
     }
 
-    func testAnAgentsTableEditMergesIntoTheTableKeepingIdsAndMarks() throws {
+    /// Owner's pick (16 Nov, `ops/design/notes-tables.md`): a plain table takes
+    /// an agent's text; a table carrying marks, widths or extras must come back
+    /// unchanged (it is edited by id with `update_note_table`).
+    func testAnAgentsTableEditRebuildsAPlainTableAndRefusesAFormattedOne() throws {
         let id = UUID()
-        var table = pillars
-        table[P(row: 1, column: 0)].marks = [NoteMark(.bold, offset: 0, length: 15)]
+        let table = pillars
         let base = NoteDocument(blocks: [.text("T"), .table(table, id: id), .text("End")])
         var lines = NoteTextExport.agentBody(base).components(separatedBy: "\n")
         // Edit one cell and add a row.
@@ -936,11 +938,20 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         let merged = try XCTUnwrap(edited.blocks[1].table)
         XCTAssertEqual(edited.blocks[1].id, id)
         XCTAssertEqual(merged.rowCount, 5)
-        XCTAssertEqual(merged.rows.prefix(4).map(\.id), table.rows.map(\.id), "kept rows keep their ids")
-        XCTAssertEqual(merged.columns.map(\.id), table.columns.map(\.id))
-        XCTAssertEqual(merged[P(row: 1, column: 0)].marks, table[P(row: 1, column: 0)].marks, "an unchanged cell keeps its marks")
         XCTAssertEqual(merged[P(row: 2, column: 1)].text, "Systems encrypted, then restored")
         XCTAssertEqual(merged[P(row: 4, column: 0)].text, "Safety")
+        // With a bold cell, the same edit is refused, and so is removing the token;
+        // the untouched table is kept with its marks.
+        var formatted = table
+        formatted[P(row: 1, column: 0)].marks = [NoteMark(.bold, offset: 0, length: 15)]
+        let formattedBase = NoteDocument(blocks: [.text("T"), .table(formatted, id: id), .text("End")])
+        for body in [lines, NoteTextExport.agentBody(formattedBase).components(separatedBy: "\n").filter { !$0.hasPrefix("<!--") }] {
+            XCTAssertThrowsError(try NoteAgentTextParser.document(title: "T", body: body.joined(separator: "\n"), base: formattedBase)) {
+                XCTAssertEqual($0 as? NoteAgentTextError, .formattedTable(id.uuidString))
+            }
+        }
+        let untouched = try NoteAgentTextParser.document(title: "T", body: NoteTextExport.agentBody(formattedBase), base: formattedBase)
+        XCTAssertEqual(untouched.blocks[1], formattedBase.blocks[1], "an unchanged cell keeps its marks")
         // The token alone removed: the table stays (same id).
         let withoutToken = NoteTextExport.agentBody(base).components(separatedBy: "\n").filter { !$0.hasPrefix("<!--") }
         let kept = try NoteAgentTextParser.document(title: "T", body: withoutToken.joined(separator: "\n"), base: base)

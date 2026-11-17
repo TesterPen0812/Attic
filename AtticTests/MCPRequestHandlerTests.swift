@@ -540,6 +540,95 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(noteStore.note(withID: id)?.body, body2)
     }
 
+    /// Deep fix 4 (`ops/design/notes-tables.md`): a table rewrite that would
+    /// drop hidden formatting is refused for the whole update. With two tables,
+    /// a refusal on the second leaves the body and the first table untouched.
+    func testUpdateNoteRefusingOneTableLeavesTheWholeNoteUntouched() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let first = NoteTable(texts: [["Pillar", "What happened"], ["Integrity", "Systems encrypted"]])
+        var second = NoteTable(texts: [["K", "V"], ["a", "1"], ["b", "2"], ["c", "3"]])
+        for row in 1...3 { second.rows[row].extras = ["owner": .string("r\(row)")] }
+        let firstID = UUID(), secondID = UUID()
+        let base = NoteDocument(blocks: [.text("Two tables"), .text("Intro"), .table(first, id: firstID),
+                                         .text("Between"), .table(second, id: secondID)])
+        guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+        let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        // The body and the first table change; the second has its rows reordered
+        // and every V cell edited, which text can't tell from other rows.
+        var editedFirst = first
+        editedFirst.rows[1].cells[1] = NoteTable.Cell("Encrypted and held")
+        var reordered = second
+        reordered.rows.swapAt(1, 2)
+        for row in 1...3 { reordered.rows[row].cells[1] = NoteTable.Cell("v\(row) new") }
+        let wire = NoteDocument(blocks: [.text("Two tables"), .text("Intro, edited"), .table(editedFirst, id: firstID),
+                                         .text("Between"), .table(reordered, id: secondID)])
+        let revision = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        let message = try noteToolError(handler, ["id": id.uuidString, "base_revision": revision,
+                                                  "body": NoteTextExport.agentBody(wire)])
+        XCTAssertTrue(message.contains("update_note_table") && message.contains(secondID.uuidString), message)
+        XCTAssertFalse(message.contains(firstID.uuidString), "the refusal names the formatted table only")
+        XCTAssertEqual(noteStore.note(withID: id)?.revisionToken, revision, "nothing was saved")
+        XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, stored, "the body and both tables are untouched")
+        // The positive control: the same update with the second table untouched is applied.
+        let control = NoteDocument(blocks: [.text("Two tables"), .text("Intro, edited"), .table(editedFirst, id: firstID),
+                                            .text("Between"), .table(second, id: secondID)])
+        let applied = try callNoteTool(handler, "update_note", ["id": id.uuidString, "base_revision": revision,
+                                                                "body": NoteTextExport.agentBody(control)])
+        XCTAssertEqual(applied["status"] as? String, "applied")
+        let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        XCTAssertEqual(saved.blocks[1].text, "Intro, edited")
+        XCTAssertEqual(saved.blocks[2].id, firstID)
+        XCTAssertEqual(saved.blocks[2].table?.texts, editedFirst.texts, "the plain table takes the text")
+        XCTAssertEqual(saved.blocks[4], stored.blocks[4], "the untouched formatted table is kept whole")
+    }
+
+    /// The owner's pick (16 Nov): a formatted table changed through the body is
+    /// refused; the agent makes the change by id, every mark, width, date and
+    /// extra stays on its line, and the result says when marks were cleared.
+    func testAFormattedTableIsChangedByIDWhenTheBodyIsRefused() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        var table = NoteTable(texts: [["#", "Name"], ["1", "a"], ["2", "b"], ["3", "c"]])
+        table.columns[1].width = 150
+        table.rows[1].extras = ["owner": .string("a")]
+        table.rows[2].cells[1].marks = [NoteMark(.bold, offset: 0, length: 1), NoteMark(.italic, offset: 0, length: 1)]
+        table.rows[3].cells[1].marks = [NoteMark(.bold, offset: 0, length: 1)]
+        let tableID = UUID()
+        let base = NoteDocument(blocks: [.text("Ranked"), .table(table, id: tableID)])
+        guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+        let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        // Sorted backwards and renumbered through the body: refused, nothing saved.
+        var sorted = table
+        sorted.rows = [table.rows[0], table.rows[3], table.rows[2], table.rows[1]]
+        sorted.rows[1].cells[0] = NoteTable.Cell("1")
+        sorted.rows[3].cells[0] = NoteTable.Cell("3")
+        let revision = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        let message = try noteToolError(handler, ["id": id.uuidString, "base_revision": revision,
+            "body": NoteTextExport.agentBody(NoteDocument(blocks: [.text("Ranked"), .table(sorted, id: tableID)]))])
+        XCTAssertTrue(message.contains("update_note_table") && message.contains("move a row or column") && message.contains(tableID.uuidString), message)
+        XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, stored)
+        // By id: the moves, the numbers, a new name for b (its marks cleared, and said) and c's own name (kept).
+        let rows = table.rows.map(\.id.uuidString), columns = table.columns.map(\.id.uuidString)
+        let result = try callNoteTool(handler, "update_note_table", [
+            "id": id.uuidString, "base_revision": revision, "table_id": tableID.uuidString,
+            "operations": [
+                ["op": "move_row", "row_id": rows[3], "after_row_id": rows[0]],
+                ["op": "move_row", "row_id": rows[1], "after_row_id": rows[2]],
+                ["op": "set_cell", "row_id": rows[3], "column_id": columns[0], "text": "1"],
+                ["op": "set_cell", "row_id": rows[1], "column_id": columns[0], "text": "3"],
+                ["op": "set_cell", "row_id": rows[2], "column_id": columns[1], "text": "B"],
+                ["op": "set_cell", "row_id": rows[3], "column_id": columns[1], "text": "c"]
+            ]
+        ])
+        XCTAssertEqual(result["status"] as? String, "applied")
+        let notices = try XCTUnwrap(result["notices"] as? [String])
+        XCTAssertEqual(notices.count, 1, "\(notices)")
+        XCTAssertTrue(notices.first?.hasPrefix("Bold and italic in the cell at row \(rows[2])") == true, "\(notices)")
+        var expected = sorted
+        expected.rows[2].cells[1] = NoteTable.Cell("B")
+        let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.last)
+        XCTAssertEqual(saved, .table(expected, id: tableID), "ids, the width, row extras and c's bold are where they started")
+    }
+
     func testUpdateNoteCanAddAndRemoveChecklistLinesInPlainAndRichNotes() throws {
         for rich in [false, true] {
             for removing in [false, true] {
