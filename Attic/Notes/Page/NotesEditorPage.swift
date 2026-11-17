@@ -15,6 +15,10 @@ import UniformTypeIdentifiers
 /// controller and its session rules.
 struct NotesEditorPage: View {
     #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
+    #if DEBUG
     /// Lifetime regression probes; never owns either observed object.
     static var lifetimeProbe: ((NotesPageChrome, NotesLibraryModel) -> Void)?
     #endif
@@ -129,7 +133,7 @@ struct NotesEditorPage: View {
 
     private var pageContent: some View {
         ZStack(alignment: .bottom) {
-            PanelComposerClearance { extra in
+            PanelComposerClearance(.notesPage) { extra in
                 content(extraBottom: extra)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -192,6 +196,9 @@ struct NotesEditorPage: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         pageContent
         .atticTagColourOrigin(.page(.notesLibrary))
         .onAppear {

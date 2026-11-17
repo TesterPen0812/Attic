@@ -121,20 +121,71 @@ final class PanelComposerRoom: ObservableObject {
     }
 }
 
+/// Which page a `PanelComposerClearance` belongs to. Only DEBUG builds
+/// read it (the clearance's content-closure counts); release ignores it.
+enum PanelComposerClearanceSite: Hashable {
+    case unnamed
+    /// Notes' whole page content (`NotesEditorPage.pageContent`).
+    case notesPage
+    /// Calendar's month grid scroll view (`CalendarPage.scroller`).
+    case calendarGrid
+    /// Calendar's day hours scroll view (`CalendarDayView.hours`).
+    case calendarDay
+}
+
+#if DEBUG
+/// Test seam (HiddenPagesCountersTests): content-closure calls per site.
+@MainActor
+enum PanelComposerClearanceCounts {
+    /// Calls through the observed path (a room is in the environment).
+    static var observed: [PanelComposerClearanceSite: Int] = [:]
+    /// Calls through `content(0)` (no room in the environment).
+    static var unobserved: [PanelComposerClearanceSite: Int] = [:]
+}
+#endif
+
 /// Observe only the content that needs the card's extra scroll clearance.
 struct PanelComposerClearance<Content: View>: View {
     @Environment(\.panelComposerRoom) private var room
-    @ViewBuilder let content: (CGFloat) -> Content
+    let content: (CGFloat) -> Content
+    #if DEBUG
+    private let site: PanelComposerClearanceSite
+    #endif
+
+    init(_ site: PanelComposerClearanceSite = .unnamed, @ViewBuilder content: @escaping (CGFloat) -> Content) {
+        self.content = content
+        #if DEBUG
+        self.site = site
+        #endif
+    }
 
     var body: some View {
-        if let room { Observed(room: room, content: content) }
-        else { content(0) }
+        if let room {
+            #if DEBUG
+            Observed(room: room, content: content, site: site)
+            #else
+            Observed(room: room, content: content)
+            #endif
+        } else {
+            #if DEBUG
+            let _ = PanelComposerClearanceCounts.unobserved[site, default: 0] += 1
+            #endif
+            content(0)
+        }
     }
 
     private struct Observed: View {
         @ObservedObject var room: PanelComposerRoom
         let content: (CGFloat) -> Content
-        var body: some View { content(max(0, room.height - AtticControlSize.addBarHeight)) }
+        #if DEBUG
+        let site: PanelComposerClearanceSite
+        #endif
+        var body: some View {
+            #if DEBUG
+            let _ = PanelComposerClearanceCounts.observed[site, default: 0] += 1
+            #endif
+            content(max(0, room.height - AtticControlSize.addBarHeight))
+        }
     }
 }
 

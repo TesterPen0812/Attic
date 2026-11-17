@@ -2,6 +2,10 @@ import SwiftUI
 
 /// The one place the shell hosts the Canvas page (rebuilt in phase 4).
 struct CanvasPageHost: View {
+    #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
     let canvasSession: CanvasSession
     @ObservedObject var uiState: PanelUIState
     let layout: PanelPageLayout
@@ -15,6 +19,9 @@ struct CanvasPageHost: View {
 
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         // The Draw page takes Canvas's place only while `AtticDraw.enabled`
         // is on (off until job 3 switches it over).
         if AtticDraw.isEnabled {

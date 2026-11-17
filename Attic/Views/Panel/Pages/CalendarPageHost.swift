@@ -87,6 +87,10 @@ final class CalendarPageState: ObservableObject {
 /// do: the circle completes (or reopens) through the same command. Open
 /// Page in the row menu or ⌘Return opens over Calendar until Back.
 struct CalendarPageHost: View {
+    #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
     let store: TaskStore
     @ObservedObject var state: CalendarPageState
     @ObservedObject var uiState: PanelUIState
@@ -96,6 +100,9 @@ struct CalendarPageHost: View {
     var taskNotes: TaskNoteEntryServices?
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         CalendarPage(model: state.model(store: store, resumeDefaults: uiState.resumeDefaults,
                                         owner: uiState.isFloating ? .floating : .docked),
                      layout: layout, taskActions: taskActions, onNewTask: onNewTask,
