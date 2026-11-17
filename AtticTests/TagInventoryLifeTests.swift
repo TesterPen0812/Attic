@@ -18,11 +18,16 @@ final class TagInventoryLifeTests: XCTestCase {
         let composer: ComposerModel
     }
 
+    private final class Switch { var on = false }
+
     private static let pool = ["motion", "design", "home", "errand", "reading", "focus", "later-maybe", "admin"]
 
     /// A small tracker-shaped store: nearly every open task tagged (two or three tags each), a tagged
     /// Done log, tagged notes, and one tag carried only by an archived task.
-    private func makeRig() throws -> Rig {
+    /// - `failingNoteReloads`: while on, every fresh context the Notes store asks for fails, so its
+    ///   presentation reloads fail.
+    /// - `taskSaveLandsThenThrows`: while on, the task store's writes reach the store and then throw.
+    private func makeRig(failingNoteReloads: Switch? = nil, taskSaveLandsThenThrows: Switch? = nil) throws -> Rig {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let seed = ModelContext(container)
         let base = Date(timeIntervalSince1970: 1_700_000_000)
@@ -50,9 +55,17 @@ final class TagInventoryLifeTests: XCTestCase {
             seed.insert(note)
         }
         try seed.save()
-        let tasks = TaskStore(container: container)
+        let tasks = TaskStore(container: container, persist: { context in
+            try context.save()
+            if taskSaveLandsThenThrows?.on == true { throw WorkspaceFoundationError.unknown }
+        })
+        let freshNoteContext: (() throws -> ModelContext)? = failingNoteReloads.map { failing in {
+            if failing.on { throw NSError(domain: "TagInventoryLifeTests", code: 2) }
+            return ModelContext(container)
+        } }
         let notes = trackAttachmentReconciliation(of: NoteStore(container: container,
-                                                               attachmentFileStore: makeTestAttachmentFileStore()))
+                                                               attachmentFileStore: makeTestAttachmentFileStore(),
+                                                               makeFreshContext: freshNoteContext))
         let library = AtticLibrary(tasks: tasks, notes: notes)
         let page = TasksPageModel(library: library, services: TasksPageServices())
         let composer = ComposerModel(tasks: page, services: ComposerServices())
@@ -282,29 +295,160 @@ final class TagInventoryLifeTests: XCTestCase {
         }
     }
 
-    /// A save that fails leaves the inventory as it was, and no reader builds it afterwards.
-    func testFailedSaveLeavesTheInventoryExact() throws {
+    /// Dot's R-1 (PR 21): a note written outside the Notes store (Merge into This Note stages the
+    /// alternate's deletion in the coordinator's transaction), then item-store reloads where the
+    /// task reload succeeds and the Notes reload fails. The model rebuilds the inventory from the
+    /// store; the deleted note's tag is gone before any later Notes reload succeeds, and no reader
+    /// builds it.
+    func testFailedNotesReloadAfterAnOutsideNoteWriteLeavesNoStaleTag() throws {
+        let failing = Switch()
+        let rig = try makeRig(failingNoteReloads: failing)
+        readAsRedraw(rig)
+        XCTAssertEqual(rig.library.tags.countsByName["note-only"], 1)
+        let other = ModelContext(rig.container)
+        let note = try XCTUnwrap(other.fetch(FetchDescriptor<NoteItem>()).first { $0.tags == ["note-only"] })
+        note.deletedAt = Date()
+        try other.save()
+        failing.on = true
+        rig.library.refreshItemStores()
+        let builds = rig.library.tags.inventoryBuildCount
+        readAsRedraw(rig)
+        XCTAssertEqual(rig.library.tags.inventoryBuildCount, builds, "a reader built the inventory")
+        XCTAssertNil(rig.library.tags.countsByName["note-only"], "a deleted note's tag stays counted")
+        XCTAssertNil(rig.notes.tagCounts["note-only"], "Notes' counts still offer a deleted note's tag")
+        assertMatchesFreshBuild(rig, "failed Notes reload")
+        failing.on = false
+    }
+
+    /// Astra's R-1 (PR 21): a task save whose outcome stays unresolved. Deleting a task deletes its
+    /// writing in the same journaled commit; the write lands, then throws, and the coordinator cannot
+    /// read back what happened (`WorkspaceFoundationError.unknown`, not `CommitHeld`). Nothing
+    /// reloads the Notes store afterwards. The model rebuilds from the store: the deleted writing's
+    /// tag is gone, and no reader builds it.
+    func testUnresolvedSaveOutcomeLeavesNoStaleTag() throws {
+        let landsThenThrows = Switch()
+        let rig = try makeRig(taskSaveLandsThenThrows: landsThenThrows)
+        createFromCard(rig, "Task with tagged writing", writing: "Its writing.")
+        let id = try XCTUnwrap(rig.library.tasks.tasks.first { $0.title == "Task with tagged writing" }?.id)
+        let other = ModelContext(rig.container)
+        let writing = try XCTUnwrap(WorkspaceItemLifecycle.writing(taskIDs: [id], in: other).first)
+        writing.tags = ["writing-only"]
+        try other.save()
+        rig.library.refreshItemStores()
+        readAsRedraw(rig)
+        XCTAssertEqual(rig.library.tags.countsByName["writing-only"], 1)
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: rig.container)
+        landsThenThrows.on = true
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        XCTAssertFalse(rig.library.tasks.delete(taskIDs: [id]))
+        landsThenThrows.on = false
+        coordinator.beforeReconciliationRead = nil
+        let stored = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == writing.id }
+        XCTAssertTrue(!stored.isEmpty && stored.allSatisfy { $0.deletedAt != nil }, "the writing's deletion reached the store")
+        let builds = rig.library.tags.inventoryBuildCount
+        readAsRedraw(rig)
+        XCTAssertEqual(rig.library.tags.inventoryBuildCount, builds, "a reader built the inventory")
+        XCTAssertNil(rig.library.tags.countsByName["writing-only"], "a deleted writing's tag stays counted")
+        assertMatchesFreshBuild(rig, "unresolved save outcome")
+        XCTAssertTrue(rig.library.tasks.setPriority(.high, for: try XCTUnwrap(rig.library.tasks.task(withID: try openRow(rig, 1)))))
+        readAsRedraw(rig)
+        XCTAssertNil(rig.library.tags.countsByName["writing-only"], "an unrelated save brings the stale tag back")
+    }
+
+    /// Opus's R-2 (PR 21): a publication that reloads only the task store after a commit that also
+    /// changed a note (Remove from Tasks while a newer draft exists writes the task's tags to its
+    /// note and retires the task; a Merge Notes Undo whose session moved flips the alternate note).
+    /// A reload of one store after a commit made elsewhere reads the other kinds from the store, in
+    /// the model.
+    func testTasksOnlyReloadAfterACommitThatChangedANoteLeavesNoStaleTag() throws {
+        let rig = try makeRig()
+        readAsRedraw(rig)
+        let other = ModelContext(rig.container)
+        let task = try XCTUnwrap(other.fetch(FetchDescriptor<TaskItem>()).first { $0.tags.contains("reading") && $0.deletedAt == nil && $0.doneLoggedAt == nil })
+        let note = try XCTUnwrap(other.fetch(FetchDescriptor<NoteItem>()).first { $0.tags == ["note-only"] })
+        note.tags = ["note-only", "moved-from-task"]
+        task.deletedAt = Date()
+        try other.save()
+        rig.library.tasks.refresh()
+        let builds = rig.library.tags.inventoryBuildCount
+        readAsRedraw(rig)
+        XCTAssertEqual(rig.library.tags.inventoryBuildCount, builds, "a reader built the inventory")
+        XCTAssertEqual(rig.library.tags.countsByName["moved-from-task"], 1, "the note's new tag is missing")
+        assertMatchesFreshBuild(rig, "tasks-only reload after a commit that changed a note")
+        // The Notes store's own reload alone, after a commit that also changed a task.
+        let again = ModelContext(rig.container)
+        let tagged = try XCTUnwrap(again.fetch(FetchDescriptor<TaskItem>()).first { $0.tags.contains("errand") && $0.deletedAt == nil })
+        tagged.tags = ["errand", "from-notes-commit"]
+        let sameNote = try XCTUnwrap(again.fetch(FetchDescriptor<NoteItem>()).first { $0.id == note.id })
+        sameNote.tags = ["note-only"]
+        try again.save()
+        rig.notes.refresh()
+        let builds2 = rig.library.tags.inventoryBuildCount
+        readAsRedraw(rig)
+        XCTAssertEqual(rig.library.tags.inventoryBuildCount, builds2, "a reader built the inventory")
+        XCTAssertEqual(rig.library.tags.countsByName["from-notes-commit"], 1, "the task's new tag is missing")
+        assertMatchesFreshBuild(rig, "Notes-only reload after a commit that changed a task")
+    }
+
+    /// Every way a save can fail leaves the inventory exact, and no reader builds it afterwards: a
+    /// failed task edit, a failed creation, a failed note edit, and a held task edit whose write
+    /// landed (`CommitHeld`). The build count is taken after each failure and before the first
+    /// reader, so a reader's rebuild is told apart from the model's own rebuild.
+    func testFailedSavesLeaveTheInventoryExact() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let seed = ModelContext(container)
         let task = TaskItem(title: "Tagged")
         task.tags = ["kept"]
         seed.insert(task)
+        let note = NoteItem(title: "Tagged note")
+        note.tags = ["note-kept"]
+        seed.insert(note)
         try seed.save()
-        var failSaves = false
+        enum Mode { case saves, throwsBefore, landsThenThrows }
+        var mode = Mode.saves
         let persist: (ModelContext) throws -> Void = { context in
-            if failSaves { throw NSError(domain: "TagInventoryLifeTests", code: 1) }
+            if mode == .throwsBefore { throw NSError(domain: "TagInventoryLifeTests", code: 1) }
             try context.save()
+            if mode == .landsThenThrows { throw NSError(domain: "TagInventoryLifeTests", code: 3) }
         }
         let tasks = TaskStore(container: container, persist: persist)
-        let library = AtticLibrary(tasks: tasks, persist: persist)
-        XCTAssertEqual(library.tags.countsByName, ["kept": 1])
-        let builds = library.tags.inventoryBuildCount
-        failSaves = true
-        XCTAssertFalse(tasks.setTags(["lost"], for: try XCTUnwrap(tasks.tasks.first)))
-        XCTAssertNil(tasks.create(title: "Not saved"))
-        failSaves = false
-        XCTAssertEqual(library.tags.countsByName, ["kept": 1], "nothing that failed to save is counted")
-        XCTAssertEqual(library.tags.namesOldestFirst, TagService(container: container).namesOldestFirst)
-        XCTAssertLessThanOrEqual(library.tags.inventoryBuildCount - builds, 1, "at most the model's own rebuild after a failed reload")
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, persist: persist,
+                                                               attachmentFileStore: makeTestAttachmentFileStore()))
+        let library = AtticLibrary(tasks: tasks, notes: notes, persist: persist)
+        XCTAssertEqual(library.tags.countsByName, ["kept": 1, "note-kept": 1])
+        func readersBuildNothing(_ step: String, expected: [String: Int]? = nil, _ body: () throws -> Void) rethrows {
+            try body()
+            mode = .saves
+            let afterFailure = library.tags.inventoryBuildCount
+            _ = library.tags.countsByName
+            _ = library.tags.counts()
+            _ = library.tags.names
+            _ = library.tags.namesOldestFirst
+            _ = notes.tagCounts
+            XCTAssertEqual(library.tags.inventoryBuildCount, afterFailure, "\(step): a reader built the inventory")
+            let fresh = TagService(container: container)
+            if let expected { XCTAssertEqual(library.tags.countsByName, expected, "\(step): counts") }
+            XCTAssertEqual(library.tags.counts(), fresh.counts(), "\(step): counts against the store")
+            XCTAssertEqual(library.tags.namesOldestFirst, fresh.namesOldestFirst, "\(step): colour order")
+        }
+        try readersBuildNothing("failed task tag edit", expected: ["kept": 1, "note-kept": 1]) {
+            mode = .throwsBefore
+            XCTAssertFalse(tasks.setTags(["lost"], for: try XCTUnwrap(tasks.tasks.first)))
+        }
+        readersBuildNothing("failed creation", expected: ["kept": 1, "note-kept": 1]) {
+            mode = .throwsBefore
+            XCTAssertNil(tasks.create(title: "Not saved"))
+        }
+        try readersBuildNothing("failed note tag edit", expected: ["kept": 1, "note-kept": 1]) {
+            mode = .throwsBefore
+            XCTAssertFalse(notes.setTags(["note-lost"], for: try XCTUnwrap(notes.notes.first)))
+        }
+        try readersBuildNothing("held task tag edit whose write landed") {
+            let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+            coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+            defer { coordinator.beforeReconciliationRead = nil }
+            mode = .landsThenThrows
+            _ = tasks.setTags(["landed"], for: try XCTUnwrap(tasks.tasks.first))
+        }
     }
 }
