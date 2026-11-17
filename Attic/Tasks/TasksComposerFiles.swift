@@ -78,19 +78,24 @@ extension TasksPageModel {
         Task { @MainActor [weak self] in
             do {
                 let staging = try await TaskDroppedFiles.stage(batch)
-                guard let self, self.addBarState.filesGeneration == generation else { staging.discard(); return }
+                guard self?.addBarState.filesGeneration == generation else { staging.discard(); return }
                 guard !staging.urls.isEmpty else {
                     staging.discard()
-                    self.addBarState.stagingFiles -= 1
+                    self?.addBarState.stagingFiles -= 1
                     return
                 }
                 let files = TasksComposerFiles(staging: staging, place: place)
-                self.announceComposerFiles(files)
-                let copied = await self.prepareComposerFiles(files).value
-                // The strip was cleared meanwhile: the copy ended itself.
-                guard self.addBarState.filesGeneration == generation else { staging.discard(); return }
-                self.addBarState.stagingFiles -= 1
+                self?.announceComposerFiles(files)
+                // The page model is never held across the copy: one that
+                // goes meanwhile ends the copy (`deinit`) and its staging here.
+                guard let copy = self?.prepareComposerFiles(files) else { staging.discard(); return }
+                let copied = await copy.value
+                // The strip was cleared or the page went meanwhile: the copy ended itself.
+                guard let self, self.addBarState.filesGeneration == generation else { staging.discard(); return }
+                // In the bar before it stops counting as staged, so the
+                // draft never lets go of the panel in between.
                 if copied != nil { self.addBarState.insert(files) }
+                self.addBarState.stagingFiles -= 1
             } catch {
                 guard let self, self.addBarState.filesGeneration == generation else { return }
                 self.addBarState.stagingFiles -= 1
@@ -192,11 +197,13 @@ extension TasksPageModel {
         let urls = files.staging.urls, id = files.id, images = store.taskImageFiles
         let copy = Task { @MainActor [weak self] () -> [TaskImageReference]? in
             _ = await previous?.value
-            guard let self, self.composerPreparations[id] != nil, !Task.isCancelled else { return nil }
+            // `self` is never held across the copy: a page model that goes
+            // meanwhile cancels it at once (`deinit`).
+            guard self?.composerPreparations[id] != nil, !Task.isCancelled,
+                  let existing = self?.composerPrepared.values.flatMap({ $0 }) else { return nil }
             do {
-                let references = try await images.importAttachments(
-                    urls, existing: self.composerPrepared.values.flatMap { $0 })
-                guard self.composerPreparations[id] != nil else {
+                let references = try await images.importAttachments(urls, existing: existing)
+                guard let self, self.composerPreparations[id] != nil else {
                     await images.remove(references)
                     return nil
                 }
@@ -204,7 +211,7 @@ extension TasksPageModel {
                 self.composerPrepared[id] = references
                 return references
             } catch {
-                guard self.composerPreparations[id] != nil else { return nil }
+                guard let self, self.composerPreparations[id] != nil else { return nil }
                 self.composerPreparations[id] = nil
                 self.store.reportAttachmentImportFailure(error)
                 self.addBarState.files.removeAll { $0.id == id }

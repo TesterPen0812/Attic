@@ -289,7 +289,12 @@ final class TasksPageModel: ObservableObject {
     var composerPrepared: [UUID: [TaskImageReference]] = [:]
     var composerPreparationTail: Task<[TaskImageReference]?, Never>?
 
-    isolated deinit { endComposerCopies() }
+    /// A page model that goes ends its draft's files as the strip's × does:
+    /// Attic's staged copies and the copies running or made.
+    isolated deinit {
+        addBarState.files.forEach { $0.staging.discard() }
+        endComposerCopies()
+    }
 
     let library: AtticLibrary
     var store: TaskStore { library.tasks }

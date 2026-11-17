@@ -174,27 +174,36 @@ final class AppSettingsTests: XCTestCase {
         let page = TasksPageModel(library: AtticLibrary(tasks: store))
         page.services.acknowledgementDelay = .seconds(3_600)
         let composer = ComposerModel(tasks: page)
-        for acknowledged in [true, false] {
-            let name = "Submitted-\(acknowledged).txt"
-            var staging = TaskAttachmentStaging()
-            let stagingRoot = try staging.makeOwnedDirectory()
-            let file = stagingRoot.appendingPathComponent(name)
-            staging.urls = [file]
-            let bytes = Data("File submitted just before quit".utf8)
-            try bytes.write(to: file)
+        // A task with a file saves at Return (both routes); one without
+        // waits for its frame (`acknowledgementDelay`), and Quit drains it.
+        for (acknowledged, withFile) in [(true, true), (false, true), (true, false)] {
+            let name = "Submitted-\(acknowledged)-\(withFile).txt"
             composer.open(on: .tasks(.now))
             page.addBar.text = name
-            page.addBarState.files.append(TasksComposerFiles(staging: staging))
-            // A draft's files are copied before it can be submitted.
-            for _ in 0..<500 where !page.composerFilesArePrepared { try await Task.sleep(for: .milliseconds(10)) }
-            XCTAssertTrue(page.composerFilesArePrepared, "the file is copied within five seconds")
+            let bytes = Data("File submitted just before quit".utf8)
+            if withFile {
+                var staging = TaskAttachmentStaging()
+                let stagingRoot = try staging.makeOwnedDirectory()
+                let file = stagingRoot.appendingPathComponent(name)
+                staging.urls = [file]
+                try bytes.write(to: file)
+                page.addBarState.files.append(TasksComposerFiles(staging: staging))
+                // A draft's files are copied before it can be submitted.
+                for _ in 0..<500 where !page.composerFilesArePrepared { try await Task.sleep(for: .milliseconds(10)) }
+                XCTAssertTrue(page.composerFilesArePrepared, "the file is copied within five seconds")
+            }
             if acknowledged { composer.submit() }
             else { let created = await composer.create(); XCTAssertTrue(created) }
+            if !withFile {
+                let waiting = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+                XCTAssertNil(waiting.first { $0.title == name }, "the creation is still waiting for its frame")
+            }
             let ready = await coordinator.prepareForTerminationDurably()
             XCTAssertTrue(ready)
             let saved = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
-            let task = try XCTUnwrap(saved.first { $0.title == name })
-            XCTAssertEqual(task.attachments.map(\.filename), [name], "quit approval must include the submitted file")
+            let task = try XCTUnwrap(saved.first { $0.title == name }, "quit approval must include the submitted task")
+            XCTAssertEqual(task.attachments.map(\.filename), withFile ? [name] : [],
+                           "quit approval must include the submitted file")
             if let attachment = task.attachments.first {
                 let verified = try await store.taskImageFiles.verifiedURL(for: attachment)
                 let url = try XCTUnwrap(verified)

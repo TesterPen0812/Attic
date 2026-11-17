@@ -574,16 +574,23 @@ final class ComposerTests: XCTestCase {
         try Data("held".utf8).write(to: url)
         let started = expectation(description: "drop requested")
         let dropped = HeldFileProvider(started: started, name: "Held.pdf")
+        let dropRoot = TaskAttachmentStaging.ownedRootURL
+        let before = Set((try? FileManager.default.contentsOfDirectory(at: dropRoot, includingPropertiesForKeys: nil)) ?? [])
 
         page.addComposerFiles([dropped.provider])
 
         XCTAssertTrue(page.addBar.text.isEmpty)
         XCTAssertTrue(page.addBarState.holdsPanel, "the draft holds the panel from the drop")
         await fulfillment(of: [started], timeout: 5)
+        let staged = try XCTUnwrap(try FileManager.default.contentsOfDirectory(at: dropRoot, includingPropertiesForKeys: nil)
+            .first { !before.contains($0) })
         XCTAssertTrue(page.addBarState.holdsPanel)
         page.clearComposerFiles()
         XCTAssertFalse(page.addBarState.holdsPanel)
         dropped.finish(url)
+        // The cleared drop's staging ends inside this test, never in a
+        // later one's view of the shared drop folder.
+        try await waitForComposer { !FileManager.default.fileExists(atPath: staged.path) }
     }
 
     /// M7: a page model that goes away ends its draft's copies: the import
@@ -615,6 +622,140 @@ final class ComposerTests: XCTestCase {
             stored = try? await tasks.taskImageFiles.verifiedURL(for: copy)
         }
         XCTAssertNil(stored, "the copy no task names is removed")
+    }
+
+    /// Holds the attachment importer inside its coordinated read of one
+    /// file until `release()`: a file presenter that doesn't let go at once.
+    private final class HeldRead: NSObject, NSFilePresenter, @unchecked Sendable {
+        let presentedItemURL: URL?
+        let presentedItemOperationQueue = OperationQueue()
+        let reached = XCTestExpectation(description: "the importer reached the held file")
+        private let lock = NSLock()
+        private var reader: (() -> Void)?
+        private var released = false
+
+        init(_ url: URL) {
+            presentedItemURL = url
+            super.init()
+            reached.assertForOverFulfill = false
+            NSFileCoordinator.addFilePresenter(self)
+        }
+
+        func relinquishPresentedItem(toReader reader: @escaping ((() -> Void)?) -> Void) {
+            let go = { reader(nil) }
+            let now = lock.withLock { () -> Bool in
+                if released { return true }
+                self.reader = go
+                return false
+            }
+            if now { go() } else { reached.fulfill() }
+        }
+
+        func release() {
+            let go = lock.withLock { () -> (() -> Void)? in
+                released = true
+                defer { reader = nil }
+                return reader
+            }
+            go?()
+            NSFileCoordinator.removeFilePresenter(self)
+        }
+    }
+
+    private func regularFiles(under root: URL) -> [URL] {
+        let all = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])?.allObjects as? [URL] ?? []
+        return all.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+    }
+
+    /// Round 2, finding 1: closing the page while a copy is held inside the
+    /// importer lets the page model go at once, so its copies end then and
+    /// there (a dropped batch queued behind the held copy too). Once the
+    /// importer lets go, nothing it made is left.
+    func testComposerFilesR3AClosedPageDuringACopyGoesAtOnce() async throws {
+        let source = try pickedFile("Held.pdf")
+        let hold = HeldRead(source)
+        addTeardownBlock { hold.release() }
+        let filesRoot = ownedTemporaryDirectory(prefix: "ComposerHeldCopy")
+        let ownContainer = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let ownLibrary = AtticLibrary(tasks: TaskStore(container: ownContainer, taskImageFiles: TaskImageFiles(rootURL: filesRoot)))
+        let dropRoot = TaskAttachmentStaging.ownedRootURL
+        let before = Set((try? FileManager.default.contentsOfDirectory(at: dropRoot, includingPropertiesForKeys: nil)) ?? [])
+        weak var released: TasksPageModel?
+        var copies: [Task<[TaskImageReference]?, Never>] = []
+        var dropped: URL?
+        do {
+            let other = TasksPageModel(library: ownLibrary, services: TasksPageServices(now: { [now] in now }))
+            other.addComposerFiles(urls: [source])
+            await fulfillment(of: [hold.reached], timeout: 5)
+            // A pasted image waits behind the held copy.
+            let image = NSItemProvider(item: try pngBytes() as NSData, typeIdentifier: UTType.png.identifier)
+            other.addComposerFiles([image])
+            try await waitForComposer { other.composerPreparations.count == 2 }
+            copies = Array(other.composerPreparations.values)
+            dropped = try FileManager.default.contentsOfDirectory(at: dropRoot, includingPropertiesForKeys: nil)
+                .first { !before.contains($0) }
+            released = other
+        }
+        XCTAssertNil(released, "the page model goes while its copy is held in the importer")
+        XCTAssertEqual(copies.count, 2)
+        XCTAssertTrue(copies.allSatisfy(\.isCancelled), "the draft's copies ended with the page model")
+        let staged = try XCTUnwrap(dropped)
+
+        hold.release()
+        for copy in copies {
+            let made = await copy.value
+            XCTAssertNil(made, "a copy of a closed page attaches nothing")
+        }
+        try await waitForComposer { !FileManager.default.fileExists(atPath: staged.path) }
+        XCTAssertEqual(regularFiles(under: filesRoot), [], "the held copy removed what it made")
+    }
+
+    /// Round 2, finding 2: a page model that goes away removes Attic's
+    /// staged copy of a pasted image as the strip's × does, without
+    /// waiting for the next launch's sweep.
+    func testComposerFilesR3ATornDownPageDiscardsItsStagedFiles() async throws {
+        weak var released: TasksPageModel?
+        var staged: URL?
+        var reference: TaskImageReference?
+        do {
+            let other = TasksPageModel(library: library, services: TasksPageServices(now: { [now] in now }))
+            let image = NSItemProvider(item: try pngBytes() as NSData, typeIdentifier: UTType.png.identifier)
+            other.addComposerFiles([image])
+            try await waitForComposer { other.addBarState.files.count == 1 && other.composerFilesArePrepared }
+            staged = other.addBarState.files.first?.staging.ownedDirectory
+            reference = other.composerPrepared.values.first?.first
+            released = other
+        }
+        XCTAssertNil(released, "the page model is gone")
+        let directory = try XCTUnwrap(staged, "a pasted image is staged in Attic's own drop folder")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path), "the staged copy goes with the page model")
+        let copy = try XCTUnwrap(reference)
+        var stored = try? await tasks.taskImageFiles.verifiedURL(for: copy)
+        for _ in 0..<500 where stored != nil {
+            try await Task.sleep(for: .milliseconds(10))
+            stored = try? await tasks.taskImageFiles.verifiedURL(for: copy)
+        }
+        XCTAssertNil(stored, "the prepared copy goes too")
+    }
+
+    /// Round 2, finding 3: with no words in the bar, a dropped batch holds
+    /// the panel from the drop until it is in the bar, with no lapse when
+    /// its copy finishes. The pipeline is the page host's own
+    /// (`TasksPageHost`'s composer lock).
+    func testComposerFilesR3ADroppedBatchHoldsThePanelWithoutALapse() async throws {
+        final class Seen { var values: [Bool] = [] }
+        let seen = Seen()
+        let state = page.addBarState
+        let watch = state.$text.combineLatest(state.$files, state.$stagingFiles, TasksAddBarState.holdsPanel)
+            .removeDuplicates()
+            .sink { seen.values.append($0) }
+        defer { watch.cancel() }
+        XCTAssertTrue(page.addBar.text.isEmpty)
+
+        _ = try await pasteAnImage()
+
+        XCTAssertEqual(seen.values, [false, true], "the lock is never let go between the drop and the bar")
+        page.clearComposerFiles()
     }
 
     private var container: ModelContainer!
