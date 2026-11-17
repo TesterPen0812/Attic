@@ -18,7 +18,7 @@ switched off (see [What is not active](#what-is-not-active)).
 
 - Reveals from a chosen screen corner after a set delay, or from the global
   shortcut with a new task ready to type.
-- Three pages: **Tasks**, **Notes** and **Canvas**.
+- Four pages: **Tasks**, **Notes**, **Calendar** and **Draw**.
 - Content scrolls under the floating controls, with a slight blur at the top
   and each bottom control’s own glass.
 - Glass or solid surfaces, palettes and tint, Light and Dark, and Reduce
@@ -27,7 +27,7 @@ switched off (see [What is not active](#what-is-not-active)).
 
 ### Tasks
 
-- Three tabs: **Now**, **Later** and **Done**. A task in Now is To do or In
+- Three tabs: **Now**, **Backlog** and **Done**. A task in Now is To do or In
   Progress.
 - Priorities, due dates, tags, subtasks one level deep, and file and image
   attachments.
@@ -178,8 +178,10 @@ Scripts/run_local_ui_tests.zsh
   The main unit runner skips those complete suites; optimized cost tests keep
   their existing jobs. Both unit runners are required in `fast` and `full`.
 - **CI** is [`.github/workflows/macos-ci.yml`](.github/workflows/macos-ci.yml)
-  ("Attic CI"). It runs on pull requests and on pushes to `main`, using the
-  `full` lane. A manual run picks a lane:
+  ("Attic CI"). It runs on pushes to `main`, using the `full` lane. It does not
+  start on pull-request pushes: a pull request's CI is started by hand at gate
+  time (`gh workflow run "Attic CI" --ref <branch> -f lane=full`). A manual run
+  picks a lane:
   - `fast`: builds, runs the split unit suites, full-history Notes editor seeds
     and generated round trips in parallel, the static analyzer, and the
     project-generation checks. Timing gates report but don't block.
