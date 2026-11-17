@@ -26,8 +26,8 @@ final class NoteAgentTextRoundTripTests: XCTestCase {
         XCTFail("\(failures.count) round-trip failures:\n" + failures.joined(separator: "\n"))
     }
 
-    /// Text an agent writes without escapes means what it always did; an
-    /// escape makes the marker text.
+    /// Markup an agent writes without escapes means what it did in a new
+    /// note; an escape makes the marker text.
     func testTextWithoutEscapesKeepsItsMeaningAndAnEscapeMakesItText() throws {
         let tableID = UUID()
         let base = NoteDocument(blocks: [.text("T"), .table(NoteTable(texts: [["a", "b"], ["1", "2"]]), id: tableID)])
