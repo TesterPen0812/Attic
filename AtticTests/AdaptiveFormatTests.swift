@@ -162,7 +162,10 @@ final class AdaptiveFormatTests: XCTestCase {
         XCTAssertTrue(model.rowStyleListOpen)
         spin(0.2)
         host.layoutSubtreeIfNeeded()
-        let names = NoteFormatModel.stripStyles.map { "notes-format-strip-" + id($0) }
+        // Check the public AX names independently of the router: composing
+        // its already-prefixed identifiers once duplicated "notes-format-".
+        let names = ["notes-format-strip-heading1", "notes-format-strip-heading2", "notes-format-strip-heading3",
+                     "notes-format-strip-body", "notes-format-strip-mono"]
         let cells = try names.map { try XCTUnwrap(frame($0, in: host), $0) }
         XCTAssertEqual(NoteFormatModel.stripStyles.map(NoteFormatStyleStrip.name), ["Title", "Heading", "Subheading", "Body", "Mono"])
         for command in [NoteFormatCommand.paragraph(.bullet), .paragraph(.number), .paragraph(.checklist), .table, .outdent, .indent] {

@@ -291,7 +291,7 @@ final class NoteCommandRouter {
         return result
     }
 
-    static func identifier(_ command: NoteFormatCommand) -> String {
+    static func identifier(_ command: NoteFormatCommand, prefix: String = "notes-format-") -> String {
         let name: String = switch command {
         case let .paragraph(style):
             switch style {
@@ -317,6 +317,6 @@ final class NoteCommandRouter {
         case .table: "table"
         case .toggleHeadingFold: "heading-fold"
         }
-        return "notes-format-\(name)"
+        return prefix + name
     }
 }
