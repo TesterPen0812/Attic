@@ -440,7 +440,9 @@ enum NoteAgentTextParser {
             blocks.append(parseTextual(title, kind: .text, place: .typed))
         }
 
-        let lines = NoteAgentText.lines(body, in: place)
+        var lines = NoteAgentText.lines(body, in: place)
+        // An empty body is the base's one empty line, when that is its body.
+        if lines.isEmpty, base.blocks.count == 2, NoteTextExport.agentLine(base.blocks[1], index: 1).isEmpty { lines = [""] }
         var usedTables = Set<UUID>()
         // Tables named by a token anywhere in the body are never matched by content.
         let tokenIDs = Set(lines.compactMap { NoteTableText.commentFields($0)?["id"].flatMap(UUID.init(uuidString:)) })
