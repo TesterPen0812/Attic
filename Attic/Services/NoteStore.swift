@@ -139,11 +139,15 @@ final class NoteStore: ObservableObject {
     var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
     var tagInventoryDidSave: () -> Void = {}
     /// A reload read every note row; the shared inventory reconciles from
-    /// those rows. `nil` (a failed reload, a held commit, an outside import)
-    /// makes it rebuild from the store.
+    /// those rows. `nil` (a failed reload, an outside import) makes it
+    /// rebuild from the store.
     var tagInventoryDidReload: ([NoteItem]?) -> Void = { _ in }
-    /// A save failed and was rolled back.
-    var tagInventoryDidRollBack: () -> Void = {}
+    /// A save failed. Its outcome is not proven, so the shared inventory
+    /// rebuilds from the store.
+    var tagInventorySaveFailed: () -> Void = {}
+    /// `refresh()` ran: a reload after a commit made elsewhere, which may
+    /// have changed other kinds too.
+    var tagInventoryRefreshed: () -> Void = {}
     private var tagInventory: (counts: [String: Int], rows: [UUID: String])?
     private(set) var tagInventoryBuildCount = 0
     private(set) var tagInventoryNoteReadCount = 0
@@ -1513,6 +1517,7 @@ final class NoteStore: ObservableObject {
     }
 
     func refresh() {
+        defer { tagInventoryRefreshed() }
         do {
             try reloadModels()
             lastErrorMessage = nil
@@ -1742,24 +1747,31 @@ final class NoteStore: ObservableObject {
                 ? "The save outcome is still being checked. This note is held."
                 : error.localizedDescription
             rollback(retaining: edits)
-            // A held commit may still land: the inventory rebuilds from the
-            // store. Any other failure never happened.
-            if error is WorkspaceLegacyBridge.CommitHeld { tagInventoryDidReload(nil) } else { tagInventoryDidRollBack() }
+            tagInventorySaveFailed()
             do {
                 try reloadModels()
                 lastErrorMessage = saveError
             } catch {
-                tagInventoryDidReload(nil)
                 lastErrorMessage = "\(saveError) · Reload failed: \(error.localizedDescription)"
             }
             return false
         }
     }
 
+    /// Every Notes reload ends with the shared tag inventory told what it read: the rows it
+    /// installed (`installPresentation`), or, when it read nothing, `nil`, and the inventory
+    /// rebuilds from the store. A reload can follow a note write the inventory never saw (an
+    /// outside context, the workspace coordinator's transaction), so a failed one must not leave
+    /// the inventory as it was.
     private func reloadModels(preservingAttachmentProofs: Bool = false) throws {
-        let refreshedContext = try makeFreshContext()
-        let presentation = try presentationSnapshot(in: refreshedContext)
-        installPresentation(presentation, using: refreshedContext, preservingAttachmentProofs: preservingAttachmentProofs)
+        do {
+            let refreshedContext = try makeFreshContext()
+            let presentation = try presentationSnapshot(in: refreshedContext)
+            installPresentation(presentation, using: refreshedContext, preservingAttachmentProofs: preservingAttachmentProofs)
+        } catch {
+            tagInventoryDidReload(nil)
+            throw error
+        }
     }
 
     private func registerSuccessfulLocalSave(changedNoteIDs: Set<UUID>? = nil) {
@@ -1828,12 +1840,11 @@ final class NoteStore: ObservableObject {
         } catch {
             let saveError = error.localizedDescription
             transactionContext.rollback()
-            if error is WorkspaceLegacyBridge.CommitHeld { tagInventoryDidReload(nil) } else { tagInventoryDidRollBack() }
+            tagInventorySaveFailed()
             do {
                 try reloadModels()
                 lastErrorMessage = saveError
             } catch {
-                tagInventoryDidReload(nil)
                 lastErrorMessage = "\(saveError) · Reload failed: \(error.localizedDescription)"
             }
             return .failed(lastErrorMessage ?? "Unable to save attachments.")

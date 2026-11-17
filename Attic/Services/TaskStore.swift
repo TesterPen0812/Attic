@@ -385,11 +385,16 @@ final class TaskStore: ObservableObject {
     var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
     var tagInventoryDidSave: () -> Void = {}
     /// A reload read every task row; the shared inventory reconciles from
-    /// those rows. `nil` (a failed reload, a held commit, an outside import)
-    /// makes it rebuild from the store.
+    /// those rows. `nil` (a failed reload, an outside import) makes it
+    /// rebuild from the store.
     var tagInventoryDidReload: ([TaskItem]?) -> Void = { _ in }
-    /// A save failed and was rolled back.
-    var tagInventoryDidRollBack: () -> Void = {}
+    /// A save failed. Its outcome is not proven (a write can land and still
+    /// throw; a journaled commit can stay unresolved), so the shared
+    /// inventory rebuilds from the store.
+    var tagInventorySaveFailed: () -> Void = {}
+    /// `refresh()` ran: a reload after a commit made elsewhere, which may
+    /// have changed other kinds too.
+    var tagInventoryRefreshed: () -> Void = {}
 
     @Published private(set) var revision: UInt64 = 0
     /// Task-row state changes only on durable task publications; task-writing
@@ -4241,6 +4246,7 @@ final class TaskStore: ObservableObject {
     }
 
     func refresh() {
+        defer { tagInventoryRefreshed() }
         do {
             try reloadTasks()
             errorNotice = nil
@@ -4381,9 +4387,7 @@ final class TaskStore: ObservableObject {
                 ? "The save outcome is still being checked. This item is held."
                 : error.localizedDescription
             rollback(retaining: edits)
-            // A held commit may still land: the inventory rebuilds from the
-            // store. Any other failure never happened.
-            if error is WorkspaceLegacyBridge.CommitHeld { tagInventoryDidReload(nil) } else { tagInventoryDidRollBack() }
+            tagInventorySaveFailed()
             do {
                 try reloadTasks()
                 report(saveError, owner: owner)

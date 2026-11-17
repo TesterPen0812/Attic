@@ -161,10 +161,59 @@ final class TagService {
         }
     }
 
-    /// A save failed and was rolled back: what it touched never happened.
+    /// Changes were discarded before any save was attempted: what they
+    /// touched never happened.
     func discardPending() {
         pending = [:]
         rebuildAfterSave = false
+    }
+
+    // One rule for every commit the patch above does not cover: the model
+    // reads the store again here, never a reader.
+    // - A save that failed: its outcome is not proven (a write can land and
+    //   still throw; a journaled commit can stay unresolved).
+    // - A reload that read nothing (`reconcile(tasks: nil)`).
+    // - A reload after a commit made elsewhere (a store's `refresh()`): that
+    //   commit may have changed other kinds too, so every kind no store
+    //   reloaded with it is read from the store.
+
+    /// A save failed. The model builds again from what the store holds.
+    func saveFailed() {
+        invalidateInventory()
+    }
+
+    /// Reloads of several stores after one commit made elsewhere
+    /// (`AtticLibrary.refreshItemStores`): each reconciles the kind it read,
+    /// and once they are done every kind none of them read is read here.
+    func refreshing(_ body: () -> Void) {
+        guard refreshPass == nil else { return body() }
+        refreshPass = []
+        body()
+        let refreshed = refreshPass ?? []
+        refreshPass = nil
+        reconcileFromStore(except: refreshed)
+    }
+
+    /// A store's `refresh()` ran. Its reload reconciled its own kind; the
+    /// other kinds are read from the store now, or at the end of the pass
+    /// it is part of.
+    func refreshed(_ kind: AtticItemKind) {
+        if refreshPass != nil { refreshPass?.insert(kind); return }
+        reconcileFromStore(except: [kind])
+    }
+
+    private var refreshPass: Set<AtticItemKind>?
+
+    private func reconcileFromStore(except refreshed: Set<AtticItemKind>) {
+        guard inventory != nil else { return rebuild() }
+        let context = ModelContext(container)
+        do {
+            if !refreshed.contains(.task) { reconcile(tasks: try fetchRows(FetchDescriptor<TaskItem>(), in: context)) }
+            if !refreshed.contains(.note) { reconcile(notes: try fetchRows(FetchDescriptor<NoteItem>(), in: context)) }
+        } catch {
+            return invalidateInventory()
+        }
+        if !refreshed.contains(.canvas) { reconcileBoards() }
     }
 
     /// An explicit refresh: the model builds the inventory again now, and

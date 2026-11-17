@@ -472,8 +472,14 @@ final class CanvasStore: ObservableObject {
     /// The store reloaded (or a reload failed); the shared inventory
     /// reconciles its board rows.
     var tagInventoryDidReload: () -> Void = {}
-    /// A save failed and was rolled back.
+    /// Changes were discarded before any save was attempted.
     var tagInventoryDidRollBack: () -> Void = {}
+    /// A save failed. Its outcome is not proven, so the shared inventory
+    /// rebuilds from the store.
+    var tagInventorySaveFailed: () -> Void = {}
+    /// `refresh()` ran: a reload after a commit made elsewhere, which may
+    /// have changed other kinds too.
+    var tagInventoryRefreshed: () -> Void = {}
     @Published var revision: UInt64 = 0
     @Published var cloudSyncStatus = CloudSyncStatus()
 

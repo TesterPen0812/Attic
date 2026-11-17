@@ -98,7 +98,7 @@ extension CanvasStore {
 
     private func rollBackFailedSave(restoringSelection previousSelection: UUID?) {
         context.rollback()
-        tagInventoryDidRollBack()
+        tagInventorySaveFailed()
         if let previousSelection, selectedCanvasID != previousSelection {
             selectedCanvasID = previousSelection
         }

@@ -75,16 +75,20 @@ final class AtticLibrary {
         tasks.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
         tasks.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
         tasks.tagInventoryDidReload = { [weak inventory] in inventory?.reconcile(tasks: $0) }
-        tasks.tagInventoryDidRollBack = { [weak inventory] in inventory?.discardPending() }
+        tasks.tagInventorySaveFailed = { [weak inventory] in inventory?.saveFailed() }
+        tasks.tagInventoryRefreshed = { [weak inventory] in inventory?.refreshed(.task) }
         notes?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
         notes?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
         notes?.tagInventoryDidReload = { [weak inventory] in inventory?.reconcile(notes: $0) }
-        notes?.tagInventoryDidRollBack = { [weak inventory] in inventory?.discardPending() }
+        notes?.tagInventorySaveFailed = { [weak inventory] in inventory?.saveFailed() }
+        notes?.tagInventoryRefreshed = { [weak inventory] in inventory?.refreshed(.note) }
         notes?.sharedTagCounts = { [weak inventory] in inventory?.countsByName }
         canvases?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
         canvases?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
         canvases?.tagInventoryDidReload = { [weak inventory] in inventory?.reconcileBoards() }
         canvases?.tagInventoryDidRollBack = { [weak inventory] in inventory?.discardPending() }
+        canvases?.tagInventorySaveFailed = { [weak inventory] in inventory?.saveFailed() }
+        canvases?.tagInventoryRefreshed = { [weak inventory] in inventory?.refreshed(.canvas) }
         // The model builds the inventory once, here; from now on it keeps it
         // current after each durable save and reload, and no reader builds it.
         tags.prepare()
@@ -1388,10 +1392,15 @@ final class AtticLibrary {
         return succeeded
     }
 
+    /// One pass: each store's reload reconciles the kind it read, and the
+    /// shared tag inventory reads any kind no store reloaded once the pass
+    /// ends (`TagService.refreshing`).
     func refreshItemStores() {
-        tasks.refresh()
-        notes?.refresh()
-        canvases?.refresh()
+        tags.refreshing {
+            tasks.refresh()
+            notes?.refresh()
+            canvases?.refresh()
+        }
     }
 
     /// Always false, so failures read `return store.op() || fail(...)`.
