@@ -384,7 +384,18 @@ final class TaskStore: ObservableObject {
     /// Wired by AtticLibrary to the shared tag inventory. No store scans on save.
     var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
     var tagInventoryDidSave: () -> Void = {}
-    var tagInventoryDidRefresh: () -> Void = {}
+    /// A reload read every task row: every replica, deleted ones included,
+    /// from one committed context. The shared inventory reconciles from
+    /// them, and treats a row it holds but is not given as gone, so never
+    /// pass a partial or filtered list.
+    var tagInventoryDidReload: (_ allRows: [TaskItem]) -> Void = { _ in }
+    /// What the store holds is not known from here: a failed save (its
+    /// outcome is not proven), a failed reload, an outside import. The shared
+    /// inventory rebuilds from the store.
+    var tagInventoryNeedsRebuild: () -> Void = {}
+    /// `refresh()` ran: a reload after a commit made elsewhere, which may
+    /// have changed other kinds too.
+    var tagInventoryRefreshed: () -> Void = {}
 
     @Published private(set) var revision: UInt64 = 0
     /// Task-row state changes only on durable task publications; task-writing
@@ -4236,6 +4247,7 @@ final class TaskStore: ObservableObject {
     }
 
     func refresh() {
+        defer { tagInventoryRefreshed() }
         do {
             try reloadTasks()
             errorNotice = nil
@@ -4311,7 +4323,6 @@ final class TaskStore: ObservableObject {
             #if ATTIC_OPERATION_CRASH_TESTS
             onSaveTiming?("presentation", presentationStart.duration(to: .now))
             #endif
-            tagInventoryDidSave()
             // Publish the revision only after the index sees the durable
             // change. Undo/Redo use the same save path; failed saves rebuild
             // from the rolled-back context below. The changed rows are read
@@ -4351,6 +4362,9 @@ final class TaskStore: ObservableObject {
                     indexReadFailed = true
                 }
             }
+            // The tag inventory publishes after the Done index has the saved
+            // rows, so chips and Done search never disagree in one update.
+            tagInventoryDidSave()
             if indexReadFailed || presentationReadFailed {
                 // The fallback reload itself publishes the complete recovered
                 // state. Do not notify subscribers of an unconfirmed change.
@@ -4374,7 +4388,7 @@ final class TaskStore: ObservableObject {
                 ? "The save outcome is still being checked. This item is held."
                 : error.localizedDescription
             rollback(retaining: edits)
-            tagInventoryDidRefresh()
+            tagInventoryNeedsRebuild()
             do {
                 try reloadTasks()
                 report(saveError, owner: owner)
@@ -4478,7 +4492,8 @@ final class TaskStore: ObservableObject {
         #if DEBUG
         fullTaskReloadCount += 1
         #endif
-        defer { tagInventoryDidRefresh() }
+        var reloaded: [TaskItem]?
+        defer { if let reloaded { tagInventoryDidReload(reloaded) } else { tagInventoryNeedsRebuild() } }
         #if DEBUG
         if listRefreshFailures > 0 {
             listRefreshFailures -= 1
@@ -4489,6 +4504,7 @@ final class TaskStore: ObservableObject {
         let refreshedContext = initialContext ?? Self.makeStoreContext(container)
         let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
         try WorkspaceLegacyBridge.establishScopeBaseline(refreshedContext, roots: fetched, entities: [.task])
+        reloaded = fetched
         let unique = Self.canonicalReplicas(from: fetched)
         context = refreshedContext
         taskEditNeedsReload = false
@@ -4574,6 +4590,8 @@ final class TaskStore: ObservableObject {
         .debounce(for: .milliseconds(200), scheduler: DispatchQueue.main)
         .sink { [weak self] _ in
             self?.refresh()
+            // An outside import always rebuilds the shared tag inventory.
+            self?.tagInventoryNeedsRebuild()
         }
         #endif
     }
@@ -4632,6 +4650,7 @@ final class TaskStore: ObservableObject {
             try? await Task.sleep(for: .milliseconds(100))
             guard !Task.isCancelled else { return }
             self?.refresh()
+            self?.tagInventoryNeedsRebuild()
             self?.cloudSyncProtection.completeImportRefresh()
             self?.reconcileProtectedCloudSyncActivity(for: .importData)
             self?.cloudImportRefreshTask = nil

@@ -90,6 +90,7 @@ extension CanvasStore {
 
     func refresh() {
         guard !isDormant else { return }
+        defer { tagInventoryRefreshed() }
         // One-time migration of rows written before the scalar payload columns
         // existed. After this runs, presentation resolution validates images
         // without faulting external storage (CANVAS-016/PERF-08).
