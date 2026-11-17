@@ -350,16 +350,16 @@ final class TagTests: XCTestCase {
             XCTAssertTrue(service.names.isEmpty)
         }
         XCTAssertEqual(attempts, 1, "failed reads must not fetch again on each keystroke")
-        service.invalidateInventory()
+        service.rebuildInventory()
         XCTAssertTrue(service.names.isEmpty)
         XCTAssertEqual(attempts, 2, "one retry per explicit refresh, even if it still fails")
 
         shouldFail = false
         XCTAssertTrue(service.names.isEmpty, "recovery waits for invalidation")
         task.tags = ["work"]
-        service.invalidate(in: context)
+        service.recordChanges(in: context)
         try context.save()
-        service.publishInventoryChange()
+        service.applySavedChanges()
         XCTAssertEqual(service.countsByName, ["work": 1], "a saved tag edit permits recovery")
         XCTAssertEqual(service.names, ["work"])
         XCTAssertEqual(attempts, 3)
@@ -380,8 +380,8 @@ final class TagTests: XCTestCase {
         library.tasks.refresh()
         try assertInventory(library, ["new": 1])
         old.updatedAt = Date(timeIntervalSince1970: 3_000)
-        library.tags.invalidate(in: seed)
-        try seed.save(); library.tags.publishInventoryChange()
+        library.tags.recordChanges(in: seed)
+        try seed.save(); library.tags.applySavedChanges()
         try assertInventory(library, ["old": 1])
     }
 
