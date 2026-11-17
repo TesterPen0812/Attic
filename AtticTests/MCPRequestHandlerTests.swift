@@ -725,6 +725,68 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertTrue(message.contains("delete_note"), message)
     }
 
+    /// Astra R-1, Dot R-1 (agent text r1): text sent without escapes means
+    /// what it did on trunk: a cell's entities are decoded, then its tokens read.
+    func testAnEntityWrittenDateInACellIsStillADate() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let tableID = UUID()
+        let day = NoteDay(isoString: "2026-01-02")!
+        var table = NoteTable(texts: [["H", "V"], ["", "x"]])
+        table.rows[1].cells[0] = NoteTable.Cell("\u{FFFC}", inlines: [NoteInline(id: UUID(), kind: .date(day))])
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("T"), .table(table, id: tableID)])) else { return XCTFail() }
+        let body = "<!-- attic:table id=\(tableID.uuidString) -->\n| H | V |\n| --- | --- |\n| &#91;date:2026-01-02&#93; | &#38;#65; |"
+        let result = try callNoteTool(handler, "update_note", [
+            "id": id.uuidString, "base_revision": try XCTUnwrap(noteStore.note(withID: id)?.revisionToken), "body": body])
+        XCTAssertEqual(result["status"] as? String, "applied")
+        let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.last?.table)
+        XCTAssertEqual(saved.rows[1].cells[0].text, "\u{FFFC}")
+        XCTAssertEqual(saved.rows[1].cells[0].inlines.map(\.kind), [.date(day)], "still a date")
+        XCTAssertEqual(saved.rows[1].cells[1].text, "A", "numeric references decode as before")
+    }
+
+    /// Astra R-2 (agent text r1): a cell's own text, sent without escapes,
+    /// is no change: the cell keeps its bold and nothing is reported cleared.
+    func testSetCellWithACellsOwnUnescapedTextKeepsItWhole() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        var table = NoteTable(texts: [["H"], ["[unsupported]"]])
+        table.rows[1].cells[0].marks = [NoteMark(.bold, offset: 0, length: 13)]
+        let tableID = UUID()
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("T"), .table(table, id: tableID)])) else { return XCTFail() }
+        let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.last?.table)
+        let result = try callNoteTool(handler, "update_note_table", [
+            "id": id.uuidString, "base_revision": try XCTUnwrap(noteStore.note(withID: id)?.revisionToken), "table_id": tableID.uuidString,
+            "operations": [["op": "set_cell", "row_id": table.rows[1].id.uuidString,
+                            "column_id": table.columns[0].id.uuidString, "text": "[unsupported]"]]])
+        XCTAssertEqual(result["status"] as? String, "applied")
+        XCTAssertTrue((result["notices"] as? [String] ?? []).isEmpty, "\(result)")
+        let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.last?.table)
+        XCTAssertEqual(saved.rows[1].cells[0], stored.rows[1].cells[0])
+    }
+
+    /// Astra R-3 (agent text r1): a carriage return kept in a line survives
+    /// the writer's own round trip (a title-only update, and its body echoed).
+    func testACarriageReturnInALineSurvivesATitleOnlyUpdateAndItsOwnBody() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let created = try callNoteTool(handler, "create_note", ["title": "T", "body": "end\r\r\nmid\rdle\nspace \t"])
+        let id = try XCTUnwrap(((created["note"] as? [String: Any])?["id"] as? String).flatMap(UUID.init(uuidString:)), "\(created)")
+        let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        XCTAssertEqual(stored.blocks.dropFirst().map(\.text), ["end\r", "mid\rdle", "space \t"], "a body's own CR before LF goes, as before")
+        let titled = try callNoteTool(handler, "update_note", [
+            "id": id.uuidString, "base_revision": try XCTUnwrap(noteStore.note(withID: id)?.revisionToken), "title": "T2"])
+        XCTAssertEqual(titled["status"] as? String, "applied")
+        var saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        XCTAssertEqual(Array(saved.blocks.dropFirst()), Array(stored.blocks.dropFirst()))
+        let listed = try listedNote(handler, id)
+        let echoed = try callNoteTool(handler, "update_note", [
+            "id": id.uuidString, "base_revision": try XCTUnwrap(listed["revision"] as? String),
+            "body": try XCTUnwrap(listed["body"] as? String) + "\nadded"])
+        XCTAssertEqual(echoed["status"] as? String, "applied")
+        saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        XCTAssertEqual(saved.blocks.dropFirst().map(\.text), ["end\r", "mid\rdle", "space \t", "added"])
+    }
+
     private func noteTableToolError(_ handler: MCPRequestHandler, _ arguments: [String: Any]) throws -> String {
         let body = try JSONSerialization.data(withJSONObject: [
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",

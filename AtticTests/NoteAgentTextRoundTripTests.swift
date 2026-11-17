@@ -125,14 +125,15 @@ enum NoteAgentRoundTripProperty {
         "![image](attic://image/00000000-0000-0000-0000-000000000001)",
         "\\", "a\\", "\\\\", "\\[date:2026-01-02]", "\\|", "C:\\Users\\[x]",
         "&amp;", "&lt;b&gt;", "&#124;", "&#32;", "&nbsp;",
-        " x ", "\tx", "a\nb", "a\r\nb", "a\u{2028}b"
+        " x ", "\tx", "x ", "x\t", "a\nb", "a\r\nb", "x\r", "a\rb", "x\r\r", "a\u{2028}b",
+        "&#91;date:2026-01-02&#93;", "&#38;#65;", "a & b"
     ]
 
-    /// A line break is only ever inside a cell: the editor and every import
-    /// make one block per line.
+    /// A line feed is only ever inside a cell or a file's name: the editor
+    /// and every import make one block per line. A carriage return can be
+    /// anywhere.
     static func fits(_ marker: String, _ container: Container) -> Bool {
-        !marker.contains(where: \.isNewline) || marker == "a\u{2028}b"
-            || [.headerCell, .bodyCell, .formattedCell].contains(container)
+        !marker.unicodeScalars.contains("\n") || [.headerCell, .bodyCell, .formattedCell, .fileName].contains(container)
     }
 
     static let day = NoteDay(isoString: "2026-01-02")!

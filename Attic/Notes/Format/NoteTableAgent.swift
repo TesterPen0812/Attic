@@ -298,7 +298,8 @@ enum NoteTableAgentEdit {
                 guard let text = operation["text"] as? String else { throw NoteAgentTextError.invalidTableEdit("set_cell needs text.") }
                 let original = table.rows[r].cells[c]
                 let pieces = NoteAgentText.read(try inlineOnly(text), in: .field)
-                guard pieces != NoteAgentText.pieces(original.text, inlines: original.inlines) else { break }
+                guard NoteAgentText.resolved(pieces, objects: NoteAgentText.opaqueCount(original.inlines))
+                        != NoteAgentText.pieces(original.text, inlines: original.inlines) else { break }
                 table.rows[r].cells[c] = try NoteAgentTableText.cell(pieces, reusing: original)
                 let kinds = NoteMark.Kind.allCases.filter { kind in original.marks.contains { $0.kind == kind } }.map(\.rawValue)
                 if let last = kinds.last {

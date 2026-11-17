@@ -116,10 +116,11 @@ enum NoteTextExport {
 }
 
 /// The agent text's one escaping rule (spec § 4.6). A backslash before
-/// `\`, `[`, `|`, `<`, `&` or white space (a space, a tab, a line break) makes
-/// that character literal text; before anything else it is itself
-/// (`C:\Users`). The export puts one before every literal `\ [ | <`, before an
-/// `&` that would read as an entity, and before a cell's edge white space.
+/// `\`, `[`, `|`, `<`, `&` or white space (a space, a tab, a carriage return)
+/// makes that character literal text; before anything else it is itself
+/// (`C:\Users`). The export puts one before every literal `\ [ | <`, a line's
+/// carriage return, a cell's `&` that could start an entity, a cell's edge
+/// white space and a line's trailing white space.
 /// Real tokens are never escaped: `[date:YYYY-MM-DD]`, `[unsupported]`, a
 /// table's pipes and `<br>`, a checklist's `- [ ] ` and an object's line.
 /// Text sent without escapes keeps its old meaning. A line never holds a
@@ -175,17 +176,24 @@ enum NoteAgentText {
             case let .text(text):
                 guard place != .typed, place != .typedCell else { output += text; continue }
                 let characters = Array(text)
-                // A cell's edge white space would be trimmed as padding.
+                // Edge white space a reader could trim: a cell's both edges,
+                // a line's end.
                 let leading = place == .cell && index == 0 ? characters.prefix(while: isPadding).count : 0
-                let trailing = place == .cell && index == pieces.count - 1
+                let trailing = place != .field && index == pieces.count - 1
                     ? characters.count - characters.reversed().prefix(while: isPadding).count : characters.count
                 for (offset, character) in characters.enumerated() {
                     switch character {
                     case "\\", "[", "|", "<": output += "\\" + String(character)
-                    case "&" where entity(characters, at: offset) != nil: output += "\\&"
+                    // A cell decodes entities; `&` starts one only before `#` or a letter.
+                    case "&" where place == .cell && offset + 1 < characters.count
+                        && (characters[offset + 1] == "#" || characters[offset + 1].isLetter): output += "\\&"
                     case "\n" where place == .cell: output += "<br>"
                     case "\r" where place == .cell: output += "&#13;"
                     case "\r\n" where place == .cell: output += "&#13;<br>"
+                    // A line holds a line break only in a file's name, which is
+                    // never read back (the file is found by its id).
+                    case "\n" where place == .line, "\r\n" where place == .line: output += "<br>"
+                    case "\r" where place == .line: output += "\\\r"
                     default:
                         output += offset < leading || offset >= trailing ? "\\" + String(character) : String(character)
                     }
@@ -195,47 +203,94 @@ enum NoteAgentText {
         return output
     }
 
-    /// The other way: escapes undone, tokens read. A literal U+FFFC is
-    /// dropped (it would claim an object that isn't there).
+    /// The other way, in three passes:
+    /// 1. escapes: an escaped character is held aside, and a stand-in that
+    ///    no token, `<br>` or entity can match takes its place;
+    /// 2. in a cell, `<br>` and entities are decoded exactly as cells always
+    ///    were (`NoteTableText.decodeEntities`), so text sent without
+    ///    escapes means what it did;
+    /// 3. tokens are read, and the held characters put back.
+    /// A literal U+FFFC is dropped (it would claim an object that isn't there).
     static func read(_ text: String, in place: Place) -> [Piece] {
-        var result: [Piece] = []
-        var literal = ""
+        let standIn: Unicode.Scalar = "\u{F0000}"
+        var held: [Character] = []
+        var free = ""
         let characters = Array(text)
-        func flush() { if !literal.isEmpty { result.append(.text(literal)); literal = "" } }
-        func matches(_ token: String, at index: Int) -> Bool {
-            let token = Array(token)
-            return index + token.count <= characters.count && Array(characters[index..<(index + token.count)]) == token
-        }
         var index = 0
         while index < characters.count {
             let character = characters[index]
-            if character == "\\", index + 1 < characters.count,
-               place == .typedCell ? "|\\".contains(characters[index + 1]) : place != .typed && isEscapable(characters[index + 1]) {
-                literal.append(characters[index + 1]); index += 2; continue
+            if character == "\\", index + 1 < characters.count, escapes(characters[index + 1], in: place) {
+                held.append(characters[index + 1]); free.unicodeScalars.append(standIn); index += 2; continue
             }
-            if character == NoteDocument.objectCharacter { index += 1; continue }
-            if character == "[" {
-                if matches("[date:", at: index), let close = characters[index...].firstIndex(of: "]"),
-                   let day = NoteDay(isoString: String(characters[(index + 6)..<close])) {
+            if character.unicodeScalars.contains(standIn) {
+                held.append(character); free.unicodeScalars.append(standIn); index += 1; continue
+            }
+            free.append(character)
+            index += 1
+        }
+        if place == .cell || place == .typedCell {
+            for lineBreak in ["<br>", "<br/>", "<br />"] { free = free.replacingOccurrences(of: lineBreak, with: "\n") }
+            free = NoteTableText.decodeEntities(free)
+        }
+        var result: [Piece] = []
+        var literal = ""
+        var next = held.makeIterator()
+        func flush() { if !literal.isEmpty { result.append(.text(literal)); literal = "" } }
+        let scalars = Array(free.unicodeScalars)
+        func matches(_ token: String, at index: Int) -> Bool {
+            let token = Array(token.unicodeScalars)
+            return index + token.count <= scalars.count && Array(scalars[index..<(index + token.count)]) == token
+        }
+        index = 0
+        while index < scalars.count {
+            let scalar = scalars[index]
+            if scalar == standIn { literal.append(next.next() ?? Character(scalar)); index += 1; continue }
+            if scalar == NoteDocument.objectCharacter.unicodeScalars.first { index += 1; continue }
+            if scalar == "[" {
+                if matches("[date:", at: index), let close = scalars[index...].firstIndex(of: "]"),
+                   let day = NoteDay(isoString: String(String.UnicodeScalarView(scalars[(index + 6)..<close]))) {
                     flush(); result.append(.date(day)); index = close + 1; continue
                 }
                 if matches("[unsupported]", at: index) {
-                    flush(); result.append(.unsupported); index += "[unsupported]".count; continue
+                    flush(); result.append(.unsupported); index += "[unsupported]".unicodeScalars.count; continue
                 }
             }
-            if place == .cell || place == .typedCell {
-                if let lineBreak = ["<br>", "<br/>", "<br />"].first(where: { matches($0, at: index) }) {
-                    literal.append("\n"); index += lineBreak.count; continue
-                }
-                if character == "&", let (value, length) = entity(characters, at: index) {
-                    literal += value; index += length; continue
-                }
-            }
-            literal.append(character)
+            literal.unicodeScalars.append(scalar)
             index += 1
         }
         flush()
         return result
+    }
+
+    /// `pieces` as they apply to text that holds `objects` unreadable
+    /// objects: an `[unsupported]` beyond them is the literal text it reads
+    /// as (as `cell` and the parser build it), so like is compared with like.
+    static func resolved(_ pieces: [Piece], objects: Int) -> [Piece] {
+        var result: [Piece] = []
+        var left = objects
+        for var piece in pieces {
+            if piece == .unsupported {
+                if left > 0 { left -= 1 } else { piece = .text("[unsupported]") }
+            }
+            if case let .text(text) = piece, case let .text(previous)? = result.last {
+                result[result.count - 1] = .text(previous + text)
+            } else {
+                result.append(piece)
+            }
+        }
+        return result
+    }
+
+    static func opaqueCount(_ inlines: [NoteInline]) -> Int {
+        inlines.filter { if case .opaque = $0.kind { true } else { false } }.count
+    }
+
+    private static func escapes(_ character: Character, in place: Place) -> Bool {
+        switch place {
+        case .typed: false
+        case .typedCell: character == "|" || character == "\\"
+        case .line, .cell, .field: isEscapable(character)
+        }
     }
 
     static func isEscapable(_ character: Character) -> Bool {
@@ -247,31 +302,15 @@ enum NoteAgentText {
         character.isWhitespace && !character.isNewline
     }
 
-    /// The character an entity at `index` stands for, and its length, read
-    /// as cells always read them (`&amp;`, `&lt;`, `&#124;`…).
-    static func entity(_ characters: [Character], at index: Int) -> (String, Int)? {
-        guard characters[index] == "&", let end = characters[index...].prefix(12).firstIndex(of: ";") else { return nil }
-        let name = String(characters[(index + 1)..<end])
-        let named = ["nbsp": " ", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "amp": "&"]
-        if let value = named[name] { return (value, end - index + 1) }
-        guard name.hasPrefix("#") else { return nil }
-        let digits = name.dropFirst()
-        let value: UInt32?
-        if digits.hasPrefix("x") {
-            guard digits.count > 1, digits.dropFirst().allSatisfy(\.isHexDigit) else { return nil }
-            value = UInt32(digits.dropFirst(), radix: 16)
-        } else {
-            guard !digits.isEmpty, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber) else { return nil }
-            value = UInt32(digits)
-        }
-        return (value.flatMap(UnicodeScalar.init).map { String(Character($0)) } ?? "", end - index + 1)
-    }
-
     /// An agent's body as lines; a carriage return before a line break is
-    /// dropped, as it always was.
-    static func lines(_ body: String) -> [String] {
+    /// dropped, as it always was, unless a backslash escapes it (agent text).
+    static func lines(_ body: String, typed: Bool = false) -> [String] {
         guard !body.isEmpty else { return [] }
-        return body.components(separatedBy: "\n").map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
+        return body.components(separatedBy: "\n").map { line in
+            guard line.hasSuffix("\r") else { return line }
+            let escaped = !typed && line.dropLast().reversed().prefix { $0 == "\\" }.count % 2 == 1
+            return escaped ? line : String(line.dropLast())
+        }
     }
 }
 
@@ -429,7 +468,7 @@ enum NoteAgentTextParser {
             blocks.append(parseTextual(title, kind: .text, place: .typed))
         }
 
-        var lines = NoteAgentText.lines(body)
+        var lines = NoteAgentText.lines(body, typed: typed)
         // An empty body is the base's one empty line, when that is its body.
         if lines.isEmpty, base.blocks.count == 2, NoteTextExport.agentLine(base.blocks[1], index: 1).isEmpty { lines = [""] }
         var usedTables = Set<UUID>()
@@ -489,7 +528,8 @@ enum NoteAgentTextParser {
                 let pieces = NoteAgentText.read(text, in: place)
                 let reusable = baseLines.first(where: {
                     !used.contains($0.0) && $0.1.kind == .checklist
-                        && NoteAgentText.pieces($0.1.text, inlines: $0.1.inlines) == pieces
+                        && NoteAgentText.resolved(pieces, objects: NoteAgentText.opaqueCount($0.1.inlines))
+                            == NoteAgentText.pieces($0.1.text, inlines: $0.1.inlines)
                 })
                 var block = if let reusable { reusable.1 } else {
                     parseTextual(text, kind: .checklist, place: place)

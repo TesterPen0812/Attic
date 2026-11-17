@@ -414,6 +414,50 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertEqual(notes.loadDocument(noteID: noteID)?.content.document?.attachmentIDs, [item.id])
     }
 
+    /// Astra R-5 (agent text r1): a file's name may hold a line break; its
+    /// line stays one line, so the note round-trips.
+    func testAFileNamedWithALineBreakSurvivesATitleOnlyUpdateAndItsOwnBody() async throws {
+        let notes = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: try makeTestStore(), noteStore: notes)
+        for name in ["a\nb.txt", "a\r\nb.txt", "a\rb.txt"] {
+            let item = staged(name)
+            let noteID = UUID()
+            let document = NoteDocument(blocks: [.text("Plan"), .text("prose"),
+                .file(attachmentID: item.id, filename: item.filename,
+                    contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+            guard case .success = notes.createDocumentNote(id: noteID, document: document, staged: [item]) else {
+                return XCTFail("create")
+            }
+            let stored = try XCTUnwrap(notes.loadDocument(noteID: noteID)?.content.document)
+            XCTAssertEqual(stored.blocks.last?.filename, name)
+            _ = try tools.call(name: "update_note", arguments: ["id": noteID.uuidString,
+                "base_revision": try XCTUnwrap(notes.note(withID: noteID)?.revisionToken), "title": "Plan 2"])
+            var saved = try XCTUnwrap(notes.loadDocument(noteID: noteID)?.content.document)
+            XCTAssertEqual(saved.blocks.first?.text, "Plan 2", name.debugDescription)
+            XCTAssertEqual(Array(saved.blocks.dropFirst()), Array(stored.blocks.dropFirst()), name.debugDescription)
+            let body = NoteTextExport.agentBody(saved)
+            XCTAssertEqual(body.components(separatedBy: "\n").count, 2, "\(name.debugDescription): the file is one line")
+            _ = try tools.call(name: "update_note", arguments: ["id": noteID.uuidString,
+                "base_revision": try XCTUnwrap(notes.note(withID: noteID)?.revisionToken), "body": body])
+            saved = try XCTUnwrap(notes.loadDocument(noteID: noteID)?.content.document)
+            XCTAssertEqual(Array(saved.blocks.dropFirst()), Array(stored.blocks.dropFirst()), name.debugDescription)
+        }
+    }
+
+    /// Astra R-1, Dot R-1 (agent text r1): a table typed in the composer
+    /// reads as it did: entities first, then dates.
+    func testAComposerTableReadsEntitiesBeforeDates() throws {
+        let tasks = try makeTestStore()
+        let notes = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        let body = "| h | v |\n| --- | --- |\n| &#91;date:2026-01-02] | &#38;#65; |"
+        let id = try XCTUnwrap(library.createNote(title: "T", body: body, tags: [], pinned: false, in: .tasks))
+        let table = try XCTUnwrap(notes.loadDocument(noteID: id)?.content.document?.blocks.last?.table)
+        XCTAssertEqual(table.rows[1].cells[0].text, "\u{FFFC}")
+        XCTAssertEqual(table.rows[1].cells[0].inlines.map(\.kind), [.date(NoteDay(isoString: "2026-01-02")!)])
+        XCTAssertEqual(table.rows[1].cells[1].text, "A", "numeric references decode as before")
+    }
+
     func testStagedBatchRecoversAfterRestart() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let original = NoteDocument(blocks: [.text("Plan"), .text("body")])
