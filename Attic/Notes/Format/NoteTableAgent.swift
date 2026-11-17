@@ -27,7 +27,9 @@ enum NoteAgentTableText {
     /// by a delimiter row), or nil. A ragged table throws. A row is a line
     /// with an unescaped `|`: a following line whose pipes are all escaped
     /// is not one, so a table ends where the export's next line begins.
-    static func parse(lines: [String], from start: Int) throws -> Parsed? {
+    /// `typed`: a table a person typed reads as it always did (any line with
+    /// a pipe is a row; only `\|` and `\\` are escapes in its cells).
+    static func parse(lines: [String], from start: Int, typed: Bool = false) throws -> Parsed? {
         var index = start
         var id: UUID?
         var headerOff = false
@@ -38,7 +40,7 @@ enum NoteAgentTableText {
             headerOff = fields["headerRow"] == "false"
             index += 1
         }
-        guard index + 1 < lines.count, let header = cells(lines[index]),
+        guard index + 1 < lines.count, let header = cells(lines[index], typed: typed),
               let alignments = alignments(lines[index + 1]) else {
             if hasToken { throw NoteAgentTextError.invalidTableEdit("A table token must be followed by its pipe table.") }
             return nil
@@ -46,20 +48,21 @@ enum NoteAgentTableText {
         guard alignments.count == header.count else { throw NoteAgentTextError.raggedTable }
         var rows = [header]
         var end = index + 2
-        while end < lines.count, let cells = cells(lines[end]) {
+        while end < lines.count, let cells = cells(lines[end], typed: typed) {
             guard cells.count == header.count else { throw NoteAgentTextError.raggedTable }
             rows.append(cells)
             end += 1
         }
         guard header.count <= NoteTable.maxColumns, rows.count <= NoteTable.maxRows else { throw NoteAgentTextError.tableTooLarge }
         return Parsed(id: id, headerOff: headerOff, hasToken: hasToken,
-                      rows: rows.map { $0.map { NoteAgentText.read($0, in: .cell) } }, alignments: alignments, consumed: end - start)
+                      rows: rows.map { $0.map { NoteAgentText.read($0, in: typed ? .typedCell : .cell) } }, alignments: alignments, consumed: end - start)
     }
 
     /// A row's cells, still escaped, split at unescaped pipes and trimmed of
     /// unescaped padding; nil without an unescaped pipe. A leading and a
-    /// trailing pipe enclose the row.
-    private static func cells(_ line: String) -> [String]? {
+    /// trailing pipe enclose the row. Typed, any pipe makes a row and all
+    /// padding is trimmed, as before.
+    private static func cells(_ line: String, typed: Bool = false) -> [String]? {
         var cells: [String] = []
         var current = ""
         var escaped = false
@@ -76,7 +79,7 @@ enum NoteAgentTableText {
             }
         }
         cells.append(current)
-        guard piped else { return nil }
+        guard piped || typed && line.contains("|") else { return nil }
         let blank: (String) -> Bool = { $0.allSatisfy(NoteAgentText.isPadding) }
         if blank(cells[0]) { cells.removeFirst() }
         if let last = cells.last, blank(last) { cells.removeLast() }
@@ -85,7 +88,7 @@ enum NoteAgentTableText {
             // Trailing padding goes unless a backslash escapes it.
             var kept = 0, escaping = false
             for (offset, character) in cell.enumerated() {
-                if escaping || !NoteAgentText.isPadding(character) { kept = offset + 1 }
+                if escaping && !typed || !NoteAgentText.isPadding(character) { kept = offset + 1 }
                 escaping = !escaping && character == "\\"
             }
             return String(cell.prefix(kept).drop(while: NoteAgentText.isPadding))

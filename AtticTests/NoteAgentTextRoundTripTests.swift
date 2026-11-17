@@ -58,6 +58,15 @@ final class NoteAgentTextRoundTripTests: XCTestCase {
         let parsed = try NoteAgentTextParser.document(title: "T", body: body, base: .blank, typed: true)
         XCTAssertEqual(parsed.blocks.dropFirst().map(\.text), ["C:\\[x] \\| y\\", "next \\\u{FFFC}"])
         XCTAssertEqual(parsed.blocks.last?.inlines.count, 1, "a date token is a date, as before")
+        // A typed table reads as it always did: only `\|` and `\\` are
+        // escapes, and any line with a pipe is a row.
+        let table = "| a\\[x] | b\\|c\\\\d |\n| --- | --- |\n| \\<y \\&z | [date:2026-01-02] |\n\\| e | f"
+        let typedTable = try NoteAgentTextParser.document(title: "T", body: table, base: .blank, typed: true)
+        XCTAssertEqual(typedTable.blocks.count, 2, "\(typedTable.blocks)")
+        XCTAssertEqual(typedTable.blocks.last?.table?.texts,
+                       [["a\\[x]", "b|c\\d"], ["\\<y \\&z", "2026-01-02"], ["| e", "f"]])
+        let column = try NoteAgentTextParser.document(title: "T", body: "| h |\n| --- |\nx \\| y", base: .blank, typed: true)
+        XCTAssertEqual(column.blocks.last?.table?.texts, [["h"], ["x | y"]])
     }
 }
 

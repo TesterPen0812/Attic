@@ -139,9 +139,11 @@ enum NoteAgentText {
     ///   entities are read as they always were;
     /// - `field`: a cell in a JSON field (`tables`, `set_cell`);
     /// - `typed`: the title, and the composer's text as a person typed it:
-    ///   dates only, no escapes.
+    ///   dates only, no escapes;
+    /// - `typedCell`: a cell a person typed, read as it always was: `<br>`,
+    ///   entities, and only `\|` and `\\` as escapes.
     enum Place {
-        case line, cell, field, typed
+        case line, cell, field, typed, typedCell
     }
 
     static func pieces(_ text: String, inlines: [NoteInline]) -> [Piece] {
@@ -171,7 +173,7 @@ enum NoteAgentText {
             case let .date(day): output += "[date:\(day.isoString)]"
             case .unsupported: output += "[unsupported]"
             case let .text(text):
-                guard place != .typed else { output += text; continue }
+                guard place != .typed, place != .typedCell else { output += text; continue }
                 let characters = Array(text)
                 // A cell's edge white space would be trimmed as padding.
                 let leading = place == .cell && index == 0 ? characters.prefix(while: isPadding).count : 0
@@ -182,7 +184,8 @@ enum NoteAgentText {
                     case "\\", "[", "|", "<": output += "\\" + String(character)
                     case "&" where entity(characters, at: offset) != nil: output += "\\&"
                     case "\n" where place == .cell: output += "<br>"
-                    case "\r\n" where place == .cell: output += "\\\r<br>"
+                    case "\r" where place == .cell: output += "&#13;"
+                    case "\r\n" where place == .cell: output += "&#13;<br>"
                     default:
                         output += offset < leading || offset >= trailing ? "\\" + String(character) : String(character)
                     }
@@ -206,7 +209,8 @@ enum NoteAgentText {
         var index = 0
         while index < characters.count {
             let character = characters[index]
-            if place != .typed, character == "\\", index + 1 < characters.count, isEscapable(characters[index + 1]) {
+            if character == "\\", index + 1 < characters.count,
+               place == .typedCell ? "|\\".contains(characters[index + 1]) : place != .typed && isEscapable(characters[index + 1]) {
                 literal.append(characters[index + 1]); index += 2; continue
             }
             if character == NoteDocument.objectCharacter { index += 1; continue }
@@ -219,7 +223,7 @@ enum NoteAgentText {
                     flush(); result.append(.unsupported); index += "[unsupported]".count; continue
                 }
             }
-            if place == .cell {
+            if place == .cell || place == .typedCell {
                 if let lineBreak = ["<br>", "<br/>", "<br />"].first(where: { matches($0, at: index) }) {
                     literal.append("\n"); index += lineBreak.count; continue
                 }
@@ -436,7 +440,7 @@ enum NoteAgentTextParser {
             let line = lines[index]
             index += 1
             // 0. A table: its token line (if any) and its pipe rows.
-            if let parsed = try NoteAgentTableText.parse(lines: lines, from: index - 1) {
+            if let parsed = try NoteAgentTableText.parse(lines: lines, from: index - 1, typed: typed) {
                 let block = try NoteAgentTableText.block(parsed, base: base, used: &usedTables, tokenIDs: tokenIDs)
                 blocks.append(block)
                 index = index - 1 + parsed.consumed
