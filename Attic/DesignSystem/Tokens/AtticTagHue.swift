@@ -346,9 +346,13 @@ enum AtticSurfaceInk {
     /// wherever the panel sits. Solid, and Reduce Transparency, keep the
     /// opaque grey. Interactive metadata includes its state fills before
     /// converting the tuned grey back to see-through ink.
+    ///
+    /// `onSelectedRow`: the grey sits on a selected or pressed row's fill
+    /// (the count, its subtask box and the date; owner, 17 Nov, 1A).
     @MainActor
-    static func toneInk(_ tone: AtticPanelTone, tokens: AtticColorTokens, overlays: [AtticRGBA] = []) -> AtticRGBA {
-        var value = Self.tone(tone, tokens: tokens)
+    static func toneInk(_ tone: AtticPanelTone, tokens: AtticColorTokens, overlays: [AtticRGBA] = [],
+                        onSelectedRow: Bool = false) -> AtticRGBA {
+        var value = onSelectedRow ? selectedRowTone(tone, tokens: tokens) : Self.tone(tone, tokens: tokens)
         if !overlays.isEmpty {
             let backgrounds = tokens.panel.backgrounds(for: .init(ink: .helper, foreground: value, overlays: overlays))
             value = value.tuned(toContrast: toneFloor(tokens), against: backgrounds, lighten: tokens.context.mode == .dark)
@@ -360,6 +364,12 @@ enum AtticSurfaceInk {
         let span = mean(ink) - mean(base)
         guard abs(span) > 0.01 else { return value }
         return ink.withAlpha((mean(value) - mean(base)) / span)
+    }
+
+    /// A design grey on a selected or pressed row (not yet tuned).
+    @MainActor
+    static func selectedRowTone(_ tone: AtticPanelTone, tokens: AtticColorTokens) -> AtticRGBA {
+        Self.tone(tone, tokens: tokens)
     }
 
     /// Glass or Frosted as drawn (not Solid, not made solid by Reduce
