@@ -384,14 +384,15 @@ final class TaskStore: ObservableObject {
     /// Wired by AtticLibrary to the shared tag inventory. No store scans on save.
     var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
     var tagInventoryDidSave: () -> Void = {}
-    /// A reload read every task row; the shared inventory reconciles from
-    /// those rows. `nil` (a failed reload, an outside import) makes it
-    /// rebuild from the store.
-    var tagInventoryDidReload: ([TaskItem]?) -> Void = { _ in }
-    /// A save failed. Its outcome is not proven (a write can land and still
-    /// throw; a journaled commit can stay unresolved), so the shared
+    /// A reload read every task row: every replica, deleted ones included,
+    /// from one committed context. The shared inventory reconciles from
+    /// them, and treats a row it holds but is not given as gone, so never
+    /// pass a partial or filtered list.
+    var tagInventoryDidReload: (_ allRows: [TaskItem]) -> Void = { _ in }
+    /// What the store holds is not known from here: a failed save (its
+    /// outcome is not proven), a failed reload, an outside import. The shared
     /// inventory rebuilds from the store.
-    var tagInventorySaveFailed: () -> Void = {}
+    var tagInventoryNeedsRebuild: () -> Void = {}
     /// `refresh()` ran: a reload after a commit made elsewhere, which may
     /// have changed other kinds too.
     var tagInventoryRefreshed: () -> Void = {}
@@ -4387,7 +4388,7 @@ final class TaskStore: ObservableObject {
                 ? "The save outcome is still being checked. This item is held."
                 : error.localizedDescription
             rollback(retaining: edits)
-            tagInventorySaveFailed()
+            tagInventoryNeedsRebuild()
             do {
                 try reloadTasks()
                 report(saveError, owner: owner)
@@ -4492,7 +4493,7 @@ final class TaskStore: ObservableObject {
         fullTaskReloadCount += 1
         #endif
         var reloaded: [TaskItem]?
-        defer { tagInventoryDidReload(reloaded) }
+        defer { if let reloaded { tagInventoryDidReload(reloaded) } else { tagInventoryNeedsRebuild() } }
         #if DEBUG
         if listRefreshFailures > 0 {
             listRefreshFailures -= 1
@@ -4590,7 +4591,7 @@ final class TaskStore: ObservableObject {
         .sink { [weak self] _ in
             self?.refresh()
             // An outside import always rebuilds the shared tag inventory.
-            self?.tagInventoryDidReload(nil)
+            self?.tagInventoryNeedsRebuild()
         }
         #endif
     }
@@ -4649,7 +4650,7 @@ final class TaskStore: ObservableObject {
             try? await Task.sleep(for: .milliseconds(100))
             guard !Task.isCancelled else { return }
             self?.refresh()
-            self?.tagInventoryDidReload(nil)
+            self?.tagInventoryNeedsRebuild()
             self?.cloudSyncProtection.completeImportRefresh()
             self?.reconcileProtectedCloudSyncActivity(for: .importData)
             self?.cloudImportRefreshTask = nil

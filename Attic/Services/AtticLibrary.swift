@@ -72,22 +72,22 @@ final class AtticLibrary {
         (try? WorkspaceLegacyBridge.coordinator(for: container))?.lifecycleLibrary = self
         if let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) { coordinator.registerHistory(self.undo) }
         let inventory = tags
-        tasks.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
-        tasks.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
+        tasks.tagInventoryWillSave = { [weak inventory] in inventory?.recordChanges(in: $0) }
+        tasks.tagInventoryDidSave = { [weak inventory] in inventory?.applySavedChanges() }
         tasks.tagInventoryDidReload = { [weak inventory] in inventory?.reconcile(tasks: $0) }
-        tasks.tagInventorySaveFailed = { [weak inventory] in inventory?.saveFailed() }
+        tasks.tagInventoryNeedsRebuild = { [weak inventory] in inventory?.rebuildInventory() }
         tasks.tagInventoryRefreshed = { [weak inventory] in inventory?.refreshed(.task) }
-        notes?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
-        notes?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
+        notes?.tagInventoryWillSave = { [weak inventory] in inventory?.recordChanges(in: $0) }
+        notes?.tagInventoryDidSave = { [weak inventory] in inventory?.applySavedChanges() }
         notes?.tagInventoryDidReload = { [weak inventory] in inventory?.reconcile(notes: $0) }
-        notes?.tagInventorySaveFailed = { [weak inventory] in inventory?.saveFailed() }
+        notes?.tagInventoryNeedsRebuild = { [weak inventory] in inventory?.rebuildInventory() }
         notes?.tagInventoryRefreshed = { [weak inventory] in inventory?.refreshed(.note) }
         notes?.sharedTagCounts = { [weak inventory] in inventory?.countsByName }
-        canvases?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
-        canvases?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
+        canvases?.tagInventoryWillSave = { [weak inventory] in inventory?.recordChanges(in: $0) }
+        canvases?.tagInventoryDidSave = { [weak inventory] in inventory?.applySavedChanges() }
         canvases?.tagInventoryDidReload = { [weak inventory] in inventory?.reconcileBoards() }
         canvases?.tagInventoryDidRollBack = { [weak inventory] in inventory?.discardPending() }
-        canvases?.tagInventorySaveFailed = { [weak inventory] in inventory?.saveFailed() }
+        canvases?.tagInventoryNeedsRebuild = { [weak inventory] in inventory?.rebuildInventory() }
         canvases?.tagInventoryRefreshed = { [weak inventory] in inventory?.refreshed(.canvas) }
         // The model builds the inventory once, here; from now on it keeps it
         // current after each durable save and reload, and no reader builds it.

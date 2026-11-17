@@ -138,13 +138,15 @@ final class NoteStore: ObservableObject {
     /// Wired by AtticLibrary to the shared tag inventory. No store scans on save.
     var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
     var tagInventoryDidSave: () -> Void = {}
-    /// A reload read every note row; the shared inventory reconciles from
-    /// those rows. `nil` (a failed reload, an outside import) makes it
-    /// rebuild from the store.
-    var tagInventoryDidReload: ([NoteItem]?) -> Void = { _ in }
-    /// A save failed. Its outcome is not proven, so the shared inventory
-    /// rebuilds from the store.
-    var tagInventorySaveFailed: () -> Void = {}
+    /// A reload read every note row: every replica, deleted ones included,
+    /// from one committed context. The shared inventory reconciles from
+    /// them, and treats a row it holds but is not given as gone, so never
+    /// pass a partial or filtered list.
+    var tagInventoryDidReload: (_ allRows: [NoteItem]) -> Void = { _ in }
+    /// What the store holds is not known from here: a failed save (its
+    /// outcome is not proven), a failed reload, an outside import. The shared
+    /// inventory rebuilds from the store.
+    var tagInventoryNeedsRebuild: () -> Void = {}
     /// `refresh()` ran: a reload after a commit made elsewhere, which may
     /// have changed other kinds too.
     var tagInventoryRefreshed: () -> Void = {}
@@ -1546,7 +1548,7 @@ final class NoteStore: ObservableObject {
             try? await Task.sleep(for: .milliseconds(100))
             guard !Task.isCancelled else { return }
             self?.refresh()
-            self?.tagInventoryDidReload(nil)
+            self?.tagInventoryNeedsRebuild()
             self?.cloudSyncProtection.completeImportRefresh()
             self?.reconcileProtectedCloudSyncActivity(for: .importData)
             self?.cloudImportRefreshTask = nil
@@ -1747,7 +1749,7 @@ final class NoteStore: ObservableObject {
                 ? "The save outcome is still being checked. This note is held."
                 : error.localizedDescription
             rollback(retaining: edits)
-            tagInventorySaveFailed()
+            tagInventoryNeedsRebuild()
             do {
                 try reloadModels()
                 lastErrorMessage = saveError
@@ -1759,8 +1761,8 @@ final class NoteStore: ObservableObject {
     }
 
     /// Every Notes reload ends with the shared tag inventory told what it read: the rows it
-    /// installed (`installPresentation`), or, when it read nothing, `nil`, and the inventory
-    /// rebuilds from the store. A reload can follow a note write the inventory never saw (an
+    /// installed (`installPresentation`), or, when it read nothing, that it must rebuild from the
+    /// store. A reload can follow a note write the inventory never saw (an
     /// outside context, the workspace coordinator's transaction), so a failed one must not leave
     /// the inventory as it was.
     private func reloadModels(preservingAttachmentProofs: Bool = false) throws {
@@ -1769,7 +1771,7 @@ final class NoteStore: ObservableObject {
             let presentation = try presentationSnapshot(in: refreshedContext)
             installPresentation(presentation, using: refreshedContext, preservingAttachmentProofs: preservingAttachmentProofs)
         } catch {
-            tagInventoryDidReload(nil)
+            tagInventoryNeedsRebuild()
             throw error
         }
     }
@@ -1840,7 +1842,7 @@ final class NoteStore: ObservableObject {
         } catch {
             let saveError = error.localizedDescription
             transactionContext.rollback()
-            tagInventorySaveFailed()
+            tagInventoryNeedsRebuild()
             do {
                 try reloadModels()
                 lastErrorMessage = saveError
@@ -2155,7 +2157,7 @@ final class NoteStore: ObservableObject {
         .sink { [weak self] _ in
             self?.refresh()
             // An outside import always rebuilds the shared tag inventory.
-            self?.tagInventoryDidReload(nil)
+            self?.tagInventoryNeedsRebuild()
         }
         #endif
     }

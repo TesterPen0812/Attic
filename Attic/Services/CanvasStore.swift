@@ -474,9 +474,9 @@ final class CanvasStore: ObservableObject {
     var tagInventoryDidReload: () -> Void = {}
     /// Changes were discarded before any save was attempted.
     var tagInventoryDidRollBack: () -> Void = {}
-    /// A save failed. Its outcome is not proven, so the shared inventory
-    /// rebuilds from the store.
-    var tagInventorySaveFailed: () -> Void = {}
+    /// What the store holds is not known from here (a failed save: its
+    /// outcome is not proven). The shared inventory rebuilds from the store.
+    var tagInventoryNeedsRebuild: () -> Void = {}
     /// `refresh()` ran: a reload after a commit made elsewhere, which may
     /// have changed other kinds too.
     var tagInventoryRefreshed: () -> Void = {}

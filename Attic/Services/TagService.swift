@@ -114,7 +114,7 @@ final class TagService {
     /// deleted, its creation date, or any change to an item whose replicas
     /// disagree). Content-only edits of an item with one replica touch
     /// nothing. Nothing is applied until the save is durable.
-    func invalidate(in context: ModelContext) {
+    func recordChanges(in context: ModelContext) {
         guard let inventory else {
             // A failed build has no row metadata to compare. The next durable
             // save permits one fresh attempt, just like a refresh.
@@ -141,7 +141,7 @@ final class TagService {
     /// After a durable save (or rollback-free completion): patches the items
     /// the save touched from their saved rows, and publishes only if the tags
     /// in use, their counts or their order changed.
-    func publishInventoryChange() {
+    func applySavedChanges() {
         if rebuildAfterSave {
             rebuildAfterSave = false
             pending = [:]
@@ -172,15 +172,11 @@ final class TagService {
     // reads the store again here, never a reader.
     // - A save that failed: its outcome is not proven (a write can land and
     //   still throw; a journaled commit can stay unresolved).
-    // - A reload that read nothing (`reconcile(tasks: nil)`).
+    // - A reload that read nothing, or an outside import (a store's
+    //   `tagInventoryNeedsRebuild`): `rebuildInventory()`.
     // - A reload after a commit made elsewhere (a store's `refresh()`): that
     //   commit may have changed other kinds too, so every kind no store
     //   reloaded with it is read from the store.
-
-    /// A save failed. The model builds again from what the store holds.
-    func saveFailed() {
-        invalidateInventory()
-    }
 
     /// Reloads of several stores after one commit made elsewhere
     /// (`AtticLibrary.refreshItemStores`): each reconciles the kind it read,
@@ -211,31 +207,28 @@ final class TagService {
             if !refreshed.contains(.task) { reconcile(tasks: try fetchRows(FetchDescriptor<TaskItem>(), in: context)) }
             if !refreshed.contains(.note) { reconcile(notes: try fetchRows(FetchDescriptor<NoteItem>(), in: context)) }
         } catch {
-            return invalidateInventory()
+            return rebuildInventory()
         }
         if !refreshed.contains(.canvas) { reconcileBoards() }
     }
 
     /// An explicit refresh: the model builds the inventory again now, and
     /// publishes if it differs. Also the one fresh attempt after a failure.
-    func invalidateInventory(publish: Bool = true) {
+    func rebuildInventory() {
         pending = [:]
         rebuildAfterSave = false
-        rebuild(publish: publish)
+        rebuild()
     }
 
     /// The task store reloaded: reconcile from every task row it read.
-    /// `nil` means the reload failed, so the model builds again.
-    func reconcile(tasks rows: [TaskItem]?) {
-        guard let rows else { return invalidateInventory() }
+    func reconcile(tasks rows: [TaskItem]) {
         reconcile(.task, rows, describe: { ($0.persistentModelID, $0.id, Self.state(of: $0)) }, winner: { replicas in
             TaskStore.canonicalReplicas(from: replicas).first.flatMap { $0.deletedAt == nil ? Self.item($0.tagsRaw, $0.createdAt) : nil }
         })
     }
 
     /// The note store reloaded: reconcile from every note row it read.
-    func reconcile(notes rows: [NoteItem]?) {
-        guard let rows else { return invalidateInventory() }
+    func reconcile(notes rows: [NoteItem]) {
         reconcile(.note, rows, describe: { ($0.persistentModelID, $0.id, Self.state(of: $0)) }, winner: { replicas in
             NoteStore.canonicalReplicas(from: replicas).first.flatMap { $0.deletedAt == nil ? Self.item($0.tagsRaw, $0.createdAt) : nil }
         })
@@ -250,7 +243,7 @@ final class TagService {
             let rows = try ModelContext(container).fetchCanvasReplicas(FetchDescriptor<CanvasBoardItem>())
             reconcile(.canvas, rows, describe: { ($0.persistentModelID, $0.id, Self.state(of: $0)) }, winner: Self.boardItem)
         } catch {
-            invalidateInventory()
+            rebuildInventory()
         }
     }
 
@@ -698,7 +691,7 @@ final class TagService {
     }
 
     private func save(_ context: ModelContext) -> Bool {
-        invalidate(in: context)
+        recordChanges(in: context)
         do {
             try WorkspaceLegacyBridge.persist(context, using: persist, sourceName: "TagService")
             lastErrorMessage = nil
@@ -706,7 +699,7 @@ final class TagService {
             context.rollback()
             // The outcome of a failed write may still be unknown (a held
             // commit): the model builds again from what the store holds.
-            invalidateInventory()
+            rebuildInventory()
             lastErrorMessage = error.localizedDescription
             return false
         }
@@ -715,7 +708,7 @@ final class TagService {
         // patched and published after them, so no publication runs ahead of
         // the Done index.
         afterChange()
-        publishInventoryChange()
+        applySavedChanges()
         return true
     }
 }
