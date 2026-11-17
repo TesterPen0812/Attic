@@ -47,7 +47,9 @@ enum AgentActionWords {
         case "move_subtask": return clip("Moving \(title ?? "a subtask")")
         case "create_note": return clip("Creating \(title ?? "a note")")
         case "update_note": return clip("Writing in \(title ?? "your note")")
-        case "update_note_table": return clip("Editing a table in \(title ?? "your note")")
+        case "update_note_table":
+            if deletesTable(args) { return clip("Deleting a table from \(title ?? "your note")") }
+            return clip("Editing a table in \(title ?? "your note")")
         case "restore_item", "restore_items", "restore": return clip("Restoring \(title ?? "items")")
         case "update_tags": return "Updating tags"
         case "link": return "Linking items"
@@ -114,7 +116,9 @@ enum AgentActionWords {
             }
             return clip("Updated \(actualName ?? "your note")")
         case "update_note_table":
-            return clip("\(row["status"] as? String == "pending" ? "Proposed a table edit for" : "Updated a table in") \(actualName ?? "your note")")
+            let pending = row["status"] as? String == "pending"
+            if deletesTable(args) { return clip("\(pending ? "Proposed deleting a table from" : "Deleted a table from") \(actualName ?? "your note")") }
+            return clip("\(pending ? "Proposed a table edit for" : "Updated a table in") \(actualName ?? "your note")")
         case "restore_item", "restore_items", "restore": return clip("Restored \(actualName ?? quantity(count, "item", "items"))")
         case "update_tags": return "Updated tags"
         case "link": return "Linked items"
@@ -137,6 +141,10 @@ enum AgentActionWords {
             return clip("Added \(object ?? "drawing") to \(canvas ?? "your sketch")")
         default: return clip(running(name, args))
         }
+    }
+
+    private static func deletesTable(_ args: [String: Any]) -> Bool {
+        (args["operations"] as? [[String: Any]])?.contains { $0["op"] as? String == "delete_table" } == true
     }
 
     private static func subject(_ args: [String: Any], key: String = "title") -> String? {
