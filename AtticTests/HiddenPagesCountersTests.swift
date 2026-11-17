@@ -393,6 +393,8 @@ final class HiddenPagesCountersTests: XCTestCase {
             // Second case: Notes resting on an open note (the editor leaf).
             let noteID = rig.seed.freeNotes[0]
             XCTAssertEqual(wait { await rig.draft.pages.openFromLibrary(noteID: noteID) }, true, "harness: the note opened")
+            // The library's own next step after an open (`NotesEditorPage.openFromLibrary`): it dismisses itself.
+            rig.notesLibrary.dismissAfterOpenedNote(rig.draft.pages, requestedQuery: "")
             pump(rig.content, rig.panel)
             XCTAssertEqual(rig.draft.pages.active?.noteID, noteID, "harness: Notes rests on the open note")
             XCTAssertFalse(rig.draft.pages.isLibraryPresented, "harness: Notes left its library")
