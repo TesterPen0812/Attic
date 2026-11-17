@@ -787,6 +787,22 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(saved.blocks.dropFirst().map(\.text), ["end\r", "mid\rdle", "space \t", "added"])
     }
 
+    /// Capy (agent text r1): the tool that can delete a table says so, and
+    /// its operations are described by a schema.
+    func testUpdateNoteTableIsMarkedDestructiveAndDescribesItsOperations() throws {
+        let (_, handler) = try makeNoteHandler()
+        let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"])
+        let result = try XCTUnwrap(try decode(handler.handle(body: body))["result"] as? [String: Any])
+        let tool = try XCTUnwrap((result["tools"] as? [[String: Any]])?.first { $0["name"] as? String == "update_note_table" })
+        XCTAssertEqual((tool["annotations"] as? [String: Any])?["destructiveHint"] as? Bool, true)
+        let properties = try XCTUnwrap((tool["inputSchema"] as? [String: Any])?["properties"] as? [String: Any])
+        let items = try XCTUnwrap((properties["operations"] as? [String: Any])?["items"] as? [String: Any])
+        let op = try XCTUnwrap((items["properties"] as? [String: Any])?["op"] as? [String: Any])
+        XCTAssertEqual(op["enum"] as? [String], ["set_cell", "insert_row", "insert_column", "move_row", "move_column",
+                                                 "delete_row", "delete_column", "set_header_row", "set_alignment", "delete_table"])
+        XCTAssertEqual(items["required"] as? [String], ["op"])
+    }
+
     private func noteTableToolError(_ handler: MCPRequestHandler, _ arguments: [String: Any]) throws -> String {
         let body = try JSONSerialization.data(withJSONObject: [
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
