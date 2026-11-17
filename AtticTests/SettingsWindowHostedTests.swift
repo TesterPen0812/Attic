@@ -1,7 +1,133 @@
 import AppKit
+import ObjectiveC
 import SwiftUI
 import XCTest
 @testable import Attic
+
+/// Override only the preference getter for isolated Settings fixtures. Tests
+/// set the mounted style for geometry, or post the native notification for
+/// the separate live-preference path.
+@MainActor
+private enum SettingsScrollerPreference {
+    private static let readings: (overlay: IMP, legacy: IMP) = {
+        func getter(_ style: NSScroller.Style) -> IMP {
+            let read: @convention(block) (AnyObject) -> Int = { _ in style.rawValue }
+            return imp_implementationWithBlock(read)
+        }
+        return (getter(.overlay), getter(.legacy))
+    }()
+
+    static func install(_ style: NSScroller.Style) throws -> @MainActor () -> Void {
+        let method = try XCTUnwrap(class_getClassMethod(NSScroller.self, #selector(getter: NSScroller.preferredScrollerStyle)))
+        let previous = method_setImplementation(method, style == .legacy ? readings.legacy : readings.overlay)
+        return { method_setImplementation(method, previous) }
+    }
+}
+
+/// A mounted native scroller whose parts the audit may exclude. `frame` is
+/// in the AX API's screen space (top-left origin), so that it can be compared
+/// with what an assistive app reads out of process.
+private struct SettingsNativeScrollAXBar {
+    let scroller: NSScroller
+    let scrollView: NSScrollView
+    let frame: CGRect
+}
+
+extension SettingsNativeScrollAXBar {
+    /// The scroller's own NSAccessibility frame (Cocoa screen space, bottom-left
+    /// origin) flipped against the primary screen into AX screen space.
+    init?(scroller: NSScroller, scrollView: NSScrollView) {
+        guard let cocoa = (scroller as AnyObject).accessibilityFrame?(),
+              let primary = NSScreen.screens.first else { return nil }
+        self.init(scroller: scroller, scrollView: scrollView,
+                  frame: CGRect(x: cocoa.minX, y: primary.frame.maxY - cocoa.maxY,
+                                width: cocoa.width, height: cocoa.height))
+    }
+}
+
+/// One AXScrollBar as the AX server reports it to another process.
+private struct SettingsExternalScrollAXBar {
+    let frame: CGRect
+    let hidden: Bool?
+    let hiddenError: AXError
+}
+
+private struct SettingsScrollAXSnapshot {
+    let scrollbars: [SettingsExternalScrollAXBar]
+    let traversalSucceeded: Bool
+}
+
+/// Read every AXScrollBar the way VoiceOver does: from the application
+/// element, through the AX server, as the base audit did. Nothing here comes
+/// from the NSScroller objects the guard compares it with. The invisible
+/// test host has no windows in this tree, so callers run it only where the
+/// host presents windows (ATTIC_KEY_WINDOW_TESTS=1: CI and the Air).
+private enum SettingsExternalScrollAX {
+    static func read() -> SettingsScrollAXSnapshot {
+        var bars: [SettingsExternalScrollAXBar] = []
+        var applicationChildrenRead = false
+        func copy<T>(_ element: AXUIElement, _ attribute: String, _ type: AXValueType, _ initial: T) -> T? {
+            var raw: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
+                  let raw, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+            var value = initial
+            return AXValueGetValue(raw as! AXValue, type, &value) ? value : nil
+        }
+        func visit(_ element: AXUIElement, depth: Int) {
+            guard depth < 30 else { return }
+            var role: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) == .success,
+               role as? String == kAXScrollBarRole as String,
+               // A bar without a frame matches no native bar, so it exempts nothing.
+               let origin = copy(element, kAXPositionAttribute, .cgPoint, CGPoint.zero),
+               let size = copy(element, kAXSizeAttribute, .cgSize, CGSize.zero) {
+                var hidden: CFTypeRef?
+                let error = AXUIElementCopyAttributeValue(element, kAXHiddenAttribute as CFString, &hidden)
+                bars.append(SettingsExternalScrollAXBar(frame: CGRect(origin: origin, size: size),
+                                                        hidden: error == .success ? hidden as? Bool : nil,
+                                                        hiddenError: error))
+            }
+            var children: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success
+            else { return }
+            if depth == 0 { applicationChildrenRead = true }
+            for child in (children as? [AXUIElement]) ?? [] { visit(child, depth: depth + 1) }
+        }
+        visit(AXUIElementCreateApplication(getpid()), depth: 0)
+        return SettingsScrollAXSnapshot(scrollbars: bars, traversalSucceeded: applicationChildrenRead)
+    }
+}
+
+private enum SettingsScrollAXGuard {
+    static func permitsExclusion(nativeBars: [SettingsNativeScrollAXBar],
+                                 read: () -> SettingsScrollAXSnapshot) -> Bool {
+        guard !nativeBars.isEmpty else { return false }
+        let snapshot = read()
+        guard snapshot.traversalSucceeded else { return false }
+        for native in nativeBars {
+            let matches = snapshot.scrollbars.filter { external in
+                abs(external.frame.minX - native.frame.minX) <= 2 &&
+                abs(external.frame.minY - native.frame.minY) <= 2 &&
+                abs(external.frame.width - native.frame.width) <= 2 &&
+                abs(external.frame.height - native.frame.height) <= 2
+            }
+            guard matches.count == 1, let matched = matches.first,
+                  native.scroller === native.scrollView.verticalScroller ||
+                    native.scroller === native.scrollView.horizontalScroller else { return false }
+            switch native.scrollView.scrollerStyle {
+            case .legacy:
+                // A visible native legacy bar can legitimately lack AXHidden;
+                // no other AX error, absent bar, or hidden native bar qualifies.
+                guard !native.scroller.isHidden, matched.hiddenError == .attributeUnsupported else { return false }
+            case .overlay:
+                guard matched.hiddenError == .success, matched.hidden == true else { return false }
+            @unknown default:
+                return false
+            }
+        }
+        return true
+    }
+}
 
 /// Signals when SwiftUI has evaluated the next Appearance state. The test
 /// then forces the hosted layout/display candidate; no onscreen frame is used.
@@ -37,6 +163,24 @@ final class SettingsWindowHostedTests: XCTestCase {
         window?.close()
         window = nil
         try await super.tearDown()
+    }
+
+    private func withScrollerPreference(_ style: NSScroller.Style, check: () throws -> Void) throws {
+        let previous = NSScroller.preferredScrollerStyle
+        let restore = try SettingsScrollerPreference.install(style)
+        defer {
+            // Let outstanding TasksScrollKeeper restyles from a previously
+            // mounted test host drain before replacing the global getter.
+            spin(0.32)
+            restore()
+            XCTAssertEqual(NSScroller.preferredScrollerStyle, previous)
+        }
+        XCTAssertEqual(NSScroller.preferredScrollerStyle, style)
+        try check()
+    }
+
+    private func nativeScrollViews(in view: NSView) -> [NSScrollView] {
+        ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(nativeScrollViews(in:))
     }
 
     private func spin(_ seconds: TimeInterval = 0.15) {
@@ -351,6 +495,18 @@ final class SettingsWindowHostedTests: XCTestCase {
     /// Accessibility of each Settings page's hosted controls; the earlier
     /// appearance/defaults audit did not exercise VoiceOver's control tree.
     func testA11yEverySettingsSectionNamesItsInteractiveControls() throws {
+        // Excluding scroller parts needs the out-of-process AX tree, which
+        // has no windows in the invisible host.
+        try XCTSkipIf(TestPresentationPolicy.isInvisible,
+                      "Requires ATTIC_KEY_WINDOW_TESTS=1: the out-of-process AX tree needs a host with windows")
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withScrollerPreference(style) {
+                try checkA11yEverySettingsSectionNamesItsInteractiveControls()
+            }
+        }
+    }
+
+    private func checkA11yEverySettingsSectionNamesItsInteractiveControls() throws {
         // Navigation follows the isolated AppSettings suite, so visiting
         // About cannot change another test's starting page.
         let suite = "SettingsAX.\(UUID().uuidString)"
@@ -383,31 +539,6 @@ final class SettingsWindowHostedTests: XCTestCase {
             }
             return result
         }
-        var axDiagnostic = ""
-        func externalScrollbarsAreHidden() -> Bool {
-            var found = false
-            var allHidden = true
-            func visit(_ element: AXUIElement, depth: Int) {
-                guard depth < 25 else { return }
-                var rawRole: CFTypeRef?
-                if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &rawRole) == .success,
-                   rawRole as? String == kAXScrollBarRole as String {
-                    found = true
-                    var hidden: CFTypeRef?
-                    if AXUIElementCopyAttributeValue(element, kAXHiddenAttribute as CFString, &hidden) != .success ||
-                       hidden as? Bool != true { allHidden = false }
-                }
-                var children: CFTypeRef?
-                let childrenResult = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children)
-                if depth == 0 { axDiagnostic = "application children=\(childrenResult.rawValue) trusted=\(AXIsProcessTrusted())" }
-                guard childrenResult == .success else {
-                    return
-                }
-                for child in (children as? [AXUIElement]) ?? [] { visit(child, depth: depth + 1) }
-            }
-            visit(AXUIElementCreateApplication(getpid()), depth: 0)
-            return found && allHidden
-        }
         for section in SettingsSection.allCases {
             host.layoutSubtreeIfNeeded()
             spin(0.12)
@@ -421,23 +552,49 @@ final class SettingsWindowHostedTests: XCTestCase {
             let after = descendants(host, visited: &visited)
             // AppKit reports four NSAccessibilityScrollerPart pseudo-buttons
             // even while their parent scrollbar has AXHidden=true. They are
-            // not reachable controls; require that state from an external AX
-            // client before excluding only those system-created parts.
+            // not reachable controls. Exclude them only when each part's
+            // mounted scroller appears, at its own frame, in the out-of-process
+            // AX tree with the AXHidden contract of its style.
             let hiddenParts = after.filter { String(describing: type(of: $0)) == "NSAccessibilityScrollerPart" }
             if !hiddenParts.isEmpty {
-                // AppKit can publish its private scroller parts before the
-                // external AX client sees the containing scrollbar's hidden
-                // state. Require that actual state, not a fixed paint delay.
+                let nativeScrollbars: [(scroll: NSScrollView, bar: NSScroller)] = nativeScrollViews(in: host)
+                    .flatMap { scroll -> [(scroll: NSScrollView, bar: NSScroller)] in
+                        [scroll.verticalScroller, scroll.horizontalScroller]
+                            .compactMap { $0 }.map { (scroll: scroll, bar: $0) }
+                    }
+                func parentScroller(of part: AnyObject) -> NSScroller? {
+                    var node: AnyObject? = part
+                    for _ in 0..<24 {
+                        if let scroller = node as? NSScroller {
+                            return nativeScrollbars.first { $0.bar === scroller }?.bar
+                        }
+                        node = node?.accessibilityParent?() as AnyObject?
+                    }
+                    return nil
+                }
+                let matched = hiddenParts.compactMap(parentScroller(of:))
+                XCTAssertEqual(matched.count, hiddenParts.count,
+                               "Every excluded native part must resolve to a mounted NSScroller")
+                let distinct = Dictionary(grouping: matched, by: ObjectIdentifier.init).values.compactMap(\.first)
+                let nativeBars = distinct.compactMap { bar -> SettingsNativeScrollAXBar? in
+                    guard let scroll = nativeScrollbars.first(where: { $0.bar === bar })?.scroll else { return nil }
+                    return SettingsNativeScrollAXBar(scroller: bar, scrollView: scroll)
+                }
+                XCTAssertEqual(nativeBars.count, distinct.count, "Every native scroller needs an AX frame")
+                // Native AppKit scroller parts have no app-owned labels.
+                // AppKit can publish the parts before the AX server reports
+                // their bar; wait for that state, not a fixed delay.
                 let deadline = Date().addingTimeInterval(2)
-                var scrollbarsHidden = externalScrollbarsAreHidden()
-                while !scrollbarsHidden && Date() < deadline {
+                var allowed = false
+                repeat {
+                    allowed = matched.count == hiddenParts.count && nativeBars.count == distinct.count &&
+                        SettingsScrollAXGuard.permitsExclusion(nativeBars: nativeBars,
+                                                               read: SettingsExternalScrollAX.read)
+                    if allowed { break }
                     RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
                     host.layoutSubtreeIfNeeded()
-                    scrollbarsHidden = externalScrollbarsAreHidden()
-                }
-                XCTAssertTrue(scrollbarsHidden,
-                              "native scrollbar buttons may be excluded only while the AX scrollbar is hidden")
-                print("CI6_SETTINGS_AX section=\(section.rawValue) \(axDiagnostic)")
+                } while Date() < deadline
+                XCTAssertTrue(allowed, "Excluded native parts require their bar, at its frame, in the out-of-process AX tree with its style's AXHidden state")
             }
             let interactive = after.filter {
                 roles.contains($0.accessibilityRole?()?.rawValue ?? "") &&
@@ -452,7 +609,103 @@ final class SettingsWindowHostedTests: XCTestCase {
         }
     }
 
+    private func withMountedAXScroller(_ style: NSScroller.Style,
+                                      check: (SettingsNativeScrollAXBar) throws -> Void) throws {
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        scroll.hasVerticalScroller = true
+        scroll.documentView = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 600))
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 320, height: 200),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        scroll.scrollerStyle = style
+        scroll.tile()
+        let bar = try XCTUnwrap(scroll.verticalScroller)
+        try check(try XCTUnwrap(SettingsNativeScrollAXBar(scroller: bar, scrollView: scroll)))
+    }
+
+    /// CI-standing r3 R-2: the audit's reader is the out-of-process AX tree.
+    /// It must find a mounted bar at that bar's frame, and must not vouch for
+    /// a bar at a frame where AX reports none.
+    func testCIStandingAXGuardReadsTheOutOfProcessTree() throws {
+        try XCTSkipIf(TestPresentationPolicy.isInvisible,
+                      "Requires ATTIC_KEY_WINDOW_TESTS=1: the out-of-process AX tree needs a host with windows")
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withMountedAXScroller(style) { native in
+                let deadline = Date().addingTimeInterval(2)
+                var found = false
+                repeat {
+                    found = SettingsScrollAXGuard.permitsExclusion(nativeBars: [native],
+                                                                   read: SettingsExternalScrollAX.read)
+                    if !found { spin(0.02) }
+                } while !found && Date() < deadline
+                XCTAssertTrue(found, "AX reports the mounted \(style) bar at its frame with its AXHidden contract")
+                let elsewhere = SettingsNativeScrollAXBar(scroller: native.scroller, scrollView: native.scrollView,
+                                                          frame: native.frame.offsetBy(dx: 50, dy: 0))
+                XCTAssertFalse(SettingsScrollAXGuard.permitsExclusion(nativeBars: [elsewhere],
+                                                                      read: SettingsExternalScrollAX.read),
+                               "A frame where AX reports no \(style) bar must not exempt its parts")
+            }
+        }
+    }
+
+    func testCIStandingAXGuardRejectsUnavailableTree() throws {
+        try withMountedAXScroller(.legacy) { native in
+            XCTAssertFalse(SettingsScrollAXGuard.permitsExclusion(nativeBars: [native]) {
+                SettingsScrollAXSnapshot(scrollbars: [], traversalSucceeded: false)
+            }, "A legacy scroller cannot turn a failed external traversal into a pass")
+        }
+    }
+
+    func testCIStandingAXGuardRejectsNonUnsupportedError() throws {
+        try withMountedAXScroller(.legacy) { native in
+            XCTAssertFalse(SettingsScrollAXGuard.permitsExclusion(nativeBars: [native]) {
+                SettingsScrollAXSnapshot(scrollbars: [SettingsExternalScrollAXBar(
+                    frame: native.frame, hidden: nil, hiddenError: .cannotComplete)],
+                    traversalSucceeded: true)
+            }, "Only attributeUnsupported is allowed for a matched native legacy scrollbar")
+        }
+    }
+
+    func testCIStandingAXGuardMatchesNativeLegacyAndOverlayBars() throws {
+        try withMountedAXScroller(.legacy) { native in
+            let matching = SettingsExternalScrollAXBar(frame: native.frame, hidden: nil,
+                                                        hiddenError: .attributeUnsupported)
+            XCTAssertTrue(SettingsScrollAXGuard.permitsExclusion(nativeBars: [native]) {
+                SettingsScrollAXSnapshot(scrollbars: [matching], traversalSucceeded: true)
+            })
+            let unrelated = SettingsExternalScrollAXBar(frame: native.frame.offsetBy(dx: 50, dy: 0),
+                                                         hidden: nil, hiddenError: .attributeUnsupported)
+            XCTAssertFalse(SettingsScrollAXGuard.permitsExclusion(nativeBars: [native]) {
+                SettingsScrollAXSnapshot(scrollbars: [unrelated], traversalSucceeded: true)
+            }, "An unrelated visible scrollbar must never exempt native parts")
+            XCTAssertFalse(SettingsScrollAXGuard.permitsExclusion(nativeBars: [native]) {
+                SettingsScrollAXSnapshot(scrollbars: [], traversalSucceeded: true)
+            }, "Missing external scrollbar must fail")
+        }
+        try withMountedAXScroller(.overlay) { native in
+            XCTAssertTrue(SettingsScrollAXGuard.permitsExclusion(nativeBars: [native]) {
+                SettingsScrollAXSnapshot(scrollbars: [SettingsExternalScrollAXBar(
+                    frame: native.frame, hidden: true, hiddenError: .success)],
+                    traversalSucceeded: true)
+            })
+            XCTAssertFalse(SettingsScrollAXGuard.permitsExclusion(nativeBars: [native]) {
+                SettingsScrollAXSnapshot(scrollbars: [SettingsExternalScrollAXBar(
+                    frame: native.frame, hidden: nil, hiddenError: .attributeUnsupported)],
+                    traversalSucceeded: true)
+            }, "Only a native legacy bar can use attributeUnsupported")
+        }
+    }
+
     func testR24ScrollContentFillsWideShortAndNarrowTallHost() throws {
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withScrollerPreference(style) { try checkR24ScrollContentFillsWideShortAndNarrowTallHost() }
+        }
+    }
+
+    private func checkR24ScrollContentFillsWideShortAndNarrowTallHost() throws {
         let suite = "SettingsR24.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -501,10 +754,535 @@ final class SettingsWindowHostedTests: XCTestCase {
             let scroll = try XCTUnwrap(candidate,
                                        "The undersized Settings host must offer scrolling")
             let content = try XCTUnwrap(scroll.documentView)
-            XCTAssertGreaterThanOrEqual(content.frame.width, max(640, size.width) - 2,
-                                        "Sidebar background and page card must fill the wide host")
-            XCTAssertGreaterThanOrEqual(content.frame.height, max(460, size.height) - 2,
-                                        "Content must fill the tall host without leaving a bare strip")
+            XCTAssertEqual(scroll.frame.width, size.width, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(scroll.contentView.bounds.width, size.width + 0.5)
+            XCTAssertEqual(scroll.scrollerStyle, NSScroller.preferredScrollerStyle)
+            if size.width >= SettingsWindowLayout.minimumContentSize.width {
+                XCTAssertEqual(content.frame.width, scroll.contentView.bounds.width, accuracy: 1,
+                               "At a wide host the page must follow the native clip, including its gutter")
+            }
+            XCTAssertGreaterThanOrEqual(content.frame.width,
+                                        max(SettingsWindowLayout.minimumContentSize.width,
+                                            scroll.contentView.bounds.width) - 2,
+                                        "Sidebar background and page card must fill the available clip")
+            XCTAssertEqual(content.frame.height,
+                           max(SettingsWindowLayout.minimumContentSize.height, scroll.contentView.bounds.height),
+                           accuracy: 0.5,
+                           "Content must fill the native clip exactly, excluding the horizontal track")
+        }
+    }
+
+    func testR24ScrollerPreferenceChangesKeepBothAxesAvailable() throws {
+        let size = CGSize(width: 590, height: 390)
+        let restoreOverlay = try SettingsScrollerPreference.install(.overlay)
+        defer { spin(0.32); restoreOverlay() }
+        let host = NSHostingView(rootView: GeometryReader { available in
+            SettingsAdaptiveScroll(size: available.size) { Color.clear }
+        })
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+
+        func verify(_ size: CGSize, style: NSScroller.Style) throws {
+            window.setContentSize(size)
+            host.frame = CGRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            spin(0.12)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let scroll = try XCTUnwrap(nativeScrollViews(in: host).first { $0.frame.height > 200 },
+                                       "Settings retains the native outer scroll view")
+            // Simulate AppKit's real preference restyle on the mounted scroll
+            // view. A getter swizzle and notification by themselves do not.
+            scroll.scrollerStyle = style
+            let deadline = Date().addingTimeInterval(2)
+            repeat {
+                scroll.layoutSubtreeIfNeeded()
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                if let document = scroll.documentView {
+                    let clip = scroll.contentView
+                    let clipped = document.frame.width > clip.bounds.width + 0.5
+                    let fits = size.width < SettingsWindowLayout.minimumContentSize.width ||
+                        abs(document.frame.width - clip.bounds.width) <= 1
+                    if scroll.hasHorizontalScroller == clipped && fits &&
+                        abs(scroll.frame.width - size.width) <= 0.5 { break }
+                }
+                spin(0.01)
+            } while Date() < deadline
+            let clip = scroll.contentView
+            let document = try XCTUnwrap(scroll.documentView)
+            let isHorizontallyClipped = document.frame.width > clip.bounds.width + 0.5
+            XCTAssertEqual(scroll.frame.width, size.width, accuracy: 0.5,
+                           "Native scroller gutters must not grow the SwiftUI host")
+            XCTAssertLessThanOrEqual(clip.bounds.width, window.contentView!.bounds.width + 0.5)
+            XCTAssertEqual(scroll.hasHorizontalScroller, isHorizontallyClipped,
+                           "Horizontal scrolling must match clipping at \(size), \(style): document \(document.frame), clip \(clip.bounds)")
+            XCTAssertTrue(scroll.hasVerticalScroller)
+            if isHorizontallyClipped {
+                clip.scroll(to: CGPoint(x: 0, y: clip.bounds.origin.y))
+                scroll.reflectScrolledClipView(clip)
+                let x = clip.bounds.origin.x
+                clip.scroll(to: CGPoint(x: min(15, document.frame.width - clip.bounds.width),
+                                        y: clip.bounds.origin.y))
+                scroll.reflectScrolledClipView(clip)
+                XCTAssertGreaterThan(clip.bounds.origin.x, x,
+                                     "A wheel-less mouse must be able to reach the right edge")
+            }
+        }
+
+        for currentStyle in [NSScroller.Style.overlay, .legacy, .overlay] {
+            let restore = try SettingsScrollerPreference.install(currentStyle)
+            defer { spin(0.32); restore() }
+            for size in [CGSize(width: 590, height: 390), CGSize(width: 650, height: 400),
+                         CGSize(width: 640, height: 400), CGSize(width: 630, height: 400)] {
+                try verify(size, style: currentStyle)
+            }
+        }
+    }
+
+    /// The explicit setter above checks geometry. This path changes the
+    /// preferred style while a real SettingsView and a Tasks keeper are both
+    /// mounted, and never assigns the requested style to Settings itself.
+    private func runLiveScrollerPreferenceChange(injectReverter: Bool) throws -> (settings: Bool, tasks: Bool) {
+        let original = NSScroller.preferredScrollerStyle
+        let restoreOverlay = try SettingsScrollerPreference.install(.overlay)
+        defer {
+            spin(0.35) // Drain the keeper's deferred 0.25-second restyle.
+            restoreOverlay()
+            XCTAssertEqual(NSScroller.preferredScrollerStyle, original)
+        }
+        let suite = "SettingsLiveScroller.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(SettingsSection.appearance.rawValue, forKey: SettingsSection.selectionStorageKey)
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let host = NSHostingView(rootView: SettingsView(
+            settings: AppSettings(defaults: defaults),
+            loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+            agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+            globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+        let settingsWindow = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 640, height: 400),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+        settingsWindow.isReleasedWhenClosed = false
+        settingsWindow.contentView = host
+        settingsWindow.orderFront(nil)
+        defer { settingsWindow.orderOut(nil); settingsWindow.contentView = nil; settingsWindow.close() }
+        let settingsDeadline = Date().addingTimeInterval(2)
+        var settingsScrolls = nativeScrollViews(in: host)
+        while settingsScrolls.count < 2 && Date() < settingsDeadline {
+            host.layoutSubtreeIfNeeded()
+            settingsWindow.displayIfNeeded()
+            spin(0.02)
+            settingsScrolls = nativeScrollViews(in: host)
+        }
+        XCTAssertGreaterThanOrEqual(settingsScrolls.count, 2, "Appearance must have inner and outer scrollers")
+        XCTAssertTrue(settingsScrolls.allSatisfy { $0.scrollerStyle == .overlay })
+
+        let tasksScroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 260, height: 200))
+        tasksScroll.hasVerticalScroller = true
+        let tasksDocument = NSView(frame: CGRect(x: 0, y: 0, width: 260, height: 800))
+        let keeper = TasksScrollKeeper.KeeperView(frame: .zero)
+        tasksDocument.addSubview(keeper)
+        tasksScroll.documentView = tasksDocument
+        let tasksWindow = NSWindow(contentRect: CGRect(x: -5700, y: -6000, width: 260, height: 200),
+                                   styleMask: .borderless, backing: .buffered, defer: false)
+        tasksWindow.isReleasedWhenClosed = false
+        tasksWindow.contentView = tasksScroll
+        tasksWindow.orderFront(nil)
+        defer {
+            keeper.removeFromSuperview()
+            tasksWindow.orderOut(nil)
+            tasksWindow.contentView = nil
+            tasksWindow.close()
+        }
+        XCTAssertEqual(tasksScroll.scrollerStyle, .overlay, "Tasks keeper starts with overlay scrollers")
+
+        let restoreLegacy = try SettingsScrollerPreference.install(.legacy)
+        defer { spin(0.35); restoreLegacy() }
+        // Simulate AppKit's reset of Tasks to the new system preference.
+        // Do not set the desired Settings style anywhere in this test.
+        tasksScroll.scrollerStyle = .legacy
+        var reverted = false
+        var reverter: NSObjectProtocol?
+        if injectReverter {
+            reverter = NotificationCenter.default.addObserver(
+                forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: .main
+            ) { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak host] in
+                    guard let host else { return }
+                    for scroll in self.nativeScrollViews(in: host) { scroll.scrollerStyle = .overlay }
+                    reverted = true
+                }
+            }
+        }
+        defer { if let reverter { NotificationCenter.default.removeObserver(reverter) } }
+        NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            settingsWindow.displayIfNeeded()
+            let settingsReached = nativeScrollViews(in: host).allSatisfy { $0.scrollerStyle == .legacy }
+            if settingsReached && tasksScroll.scrollerStyle == .overlay && (!injectReverter || reverted) { break }
+            spin(0.02)
+        }
+        // The Tasks keeper schedules another restyle at 0.25 s. Its callback
+        // must settle before independently checking the two mounted views.
+        if injectReverter {
+            let revertDeadline = Date().addingTimeInterval(1)
+            while !reverted && Date() < revertDeadline { spin(0.02) }
+            XCTAssertTrue(reverted, "The injected observer must actually revert Settings")
+        }
+        spin(0.35)
+        let mountedSettingsScrolls = nativeScrollViews(in: host)
+        return (mountedSettingsScrolls.count >= 2 &&
+                    mountedSettingsScrolls.allSatisfy { $0.scrollerStyle == .legacy },
+                tasksScroll.scrollerStyle == .overlay)
+    }
+
+    func testCIStandingLiveScrollerPreferenceNotification() throws {
+        let result = try runLiveScrollerPreferenceChange(injectReverter: false)
+        XCTAssertTrue(result.settings, "Mounted Settings must adopt the live system preference")
+        XCTAssertTrue(result.tasks, "Tasks must independently restore its owner-selected overlay policy")
+    }
+
+    func testCIStandingLivePreferenceDetectsRevertingSettingsObserver() throws {
+        let result = try runLiveScrollerPreferenceChange(injectReverter: true)
+        XCTAssertFalse(result.settings, "A reverting Settings observer must make the live check fail")
+        XCTAssertTrue(result.tasks, "A Settings regression must not hide Tasks' independent state")
+    }
+
+    /// R-1: Appearance mode tiles fit the real inner clip under legacy scrollbars.
+    func testCIStandingAppearanceCardsFitLegacyInnerClip() throws {
+        try withScrollerPreference(.legacy) {
+            let suite = "SettingsLegacyCards.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            defaults.set(SettingsSection.appearance.rawValue, forKey: SettingsSection.selectionStorageKey)
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let store = TaskStore(container: container)
+            let host = NSHostingView(rootView: SettingsView(
+                settings: AppSettings(defaults: defaults),
+                loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+                agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+                globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+            let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 640, height: 460),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.orderOut(nil); window.contentView = nil; window.close() }
+            let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+            let previous = NSApp.accessibilityAttributeValue(enhanced)
+            NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+            defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+
+            for size in [CGSize(width: 640, height: 460), CGSize(width: 640, height: 400)] {
+                window.setContentSize(size)
+                host.frame = CGRect(origin: .zero, size: size)
+                let deadline = Date().addingTimeInterval(2)
+                repeat {
+                    host.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                    spin(0.05)
+                } while Date() < deadline
+                // This is a layout fixture, not the live preference test.
+                // Apply the style to mounted scroll views just as AppKit does.
+                for scroll in nativeScrollViews(in: host) {
+                    scroll.scrollerStyle = .legacy
+                    scroll.tile()
+                }
+                host.layoutSubtreeIfNeeded()
+                spin(0.32)
+                host.layoutSubtreeIfNeeded()
+                let elements = ci8Elements(host)
+                func frame(_ id: String) throws -> CGRect {
+                    let item = try XCTUnwrap(elements.first { $0.accessibilityIdentifier?() == id })
+                    return try XCTUnwrap((item as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+                }
+                let mode = try frame("setting-appearance")
+                let palette = try frame("setting-panel-theme")
+                let preview = try frame("setting-appearance-preview")
+                let dark = try frame("setting-appearance-dark")
+                let inner = try XCTUnwrap(nativeScrollViews(in: host).filter { $0.frame.height > 100 }
+                    .min { $0.frame.width < $1.frame.width })
+                let clip = window.convertToScreen(inner.contentView.convert(inner.contentView.bounds, to: nil))
+                let outer = try XCTUnwrap(nativeScrollViews(in: host).first)
+                XCTAssertLessThanOrEqual(inner.frame.width,
+                                         outer.contentView.bounds.width - AtticLayout.settingsSidebarWidth
+                                         - AtticSpacing.settingsCardInset + 0.5,
+                                         "The inner scroll view, including its gutter, must stay inside the card viewport")
+                XCTAssertEqual(inner.scrollerStyle, .legacy)
+                print("CI_R1 size=\(size) mode=\(mode) palette=\(palette) preview=\(preview) dark=\(dark) clip=\(clip) inner=\(inner.frame) hasV=\(inner.hasVerticalScroller) hidden=\(String(describing: inner.verticalScroller?.isHidden)) all=\(nativeScrollViews(in: host).map { ($0.frame, $0.contentView.bounds) })")
+                XCTAssertGreaterThan(mode.width, 0)
+                XCTAssertLessThanOrEqual(dark.maxX, clip.maxX - AtticSpacing.settingsGroupInset + 0.5,
+                                         "The final mode tile must remain inside the group inset")
+                XCTAssertLessThanOrEqual(mode.maxX, clip.maxX - AtticSpacing.settingsGroupInset + 0.5,
+                                         "Mode card keeps its trailing inset at \(size)")
+                XCTAssertLessThanOrEqual(palette.maxX, clip.maxX - AtticSpacing.settingsGroupInset + 0.5)
+                XCTAssertEqual(mode.width, preview.width, accuracy: 0.5,
+                               "Mode card must match the full-width preview, not overflow the column")
+            }
+        }
+    }
+
+    /// R-1: hidden outer legacy indicators do not reserve an idle track.
+    func testCIStandingHiddenLegacyIndicatorsLeaveTheOuterClipFullWidth() throws {
+        try withScrollerPreference(.legacy) {
+            let size = CGSize(width: 860, height: 650)
+            let host = NSHostingView(rootView: GeometryReader { available in
+                SettingsAdaptiveScroll(size: available.size) { Color.clear }
+            })
+            let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.orderOut(nil); window.contentView = nil; window.close() }
+            let deadline = Date().addingTimeInterval(2)
+            var outer: NSScrollView?
+            repeat {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                outer = nativeScrollViews(in: host).first { abs($0.frame.width - size.width) < 1 }
+                spin(0.02)
+            } while outer == nil && Date() < deadline
+            let scroll = try XCTUnwrap(outer)
+            // This is an explicit legacy-layout fixture. The getter override
+            // alone does not restyle a native view that AppKit already made.
+            scroll.scrollerStyle = .legacy
+            scroll.tile()
+            XCTAssertEqual(scroll.scrollerStyle, .legacy)
+            XCTAssertEqual(scroll.contentView.bounds.width, size.width, accuracy: 0.5,
+                           "A hidden, non-scrolling legacy indicator must not reserve a track")
+        }
+    }
+
+    /// CI-standing R-4 (pre-existing): the horizontal legacy track must
+    /// consume viewport height, not create an otherwise unnecessary vertical range.
+    func testR24LegacyHorizontalTrackDoesNotCreateVerticalOverflow() throws {
+        try withScrollerPreference(.legacy) {
+            let size = CGSize(width: 580, height: 650)
+            let host = NSHostingView(rootView: GeometryReader { available in
+                SettingsAdaptiveScroll(size: available.size) { Color.clear }
+            })
+            let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.orderOut(nil); window.contentView = nil; window.close() }
+
+            let deadline = Date().addingTimeInterval(2)
+            var scroll: NSScrollView?
+            repeat {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                scroll = nativeScrollViews(in: host).first { $0.frame.height > 200 }
+                spin(0.05)
+            } while Date() < deadline
+            let mounted = try XCTUnwrap(scroll)
+            let document = try XCTUnwrap(mounted.documentView)
+            XCTAssertEqual(mounted.scrollerStyle, .legacy)
+            XCTAssertTrue(mounted.hasHorizontalScroller)
+            XCTAssertGreaterThan(document.frame.width, mounted.contentView.bounds.width)
+            XCTAssertLessThanOrEqual(document.frame.height, mounted.contentView.bounds.height + 0.5,
+                                     "A horizontal legacy track must not create a spurious vertical scroll range")
+        }
+    }
+
+    /// A bare SettingsAdaptiveScroll in an off-screen window, settled at `size`.
+    private func withAdaptiveScrollFixture(_ size: CGSize,
+                                           check: (NSWindow, NSView, NSScrollView) throws -> Void) throws {
+        let host = NSHostingView(rootView: GeometryReader { available in
+            SettingsAdaptiveScroll(size: available.size) { Color.clear }
+        })
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -6000, y: -6000), size: size),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        let deadline = Date().addingTimeInterval(2)
+        var scroll: NSScrollView?
+        repeat {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            scroll = nativeScrollViews(in: host).first { $0.frame.height > 200 }
+            spin(0.05)
+        } while scroll == nil && Date() < deadline
+        spin(0.3)
+        host.layoutSubtreeIfNeeded()
+        try check(window, host, try XCTUnwrap(scroll, "Settings mounts its native outer scroll view"))
+    }
+
+    /// CI-standing r3 R-1: each resize step must lay the page out at the
+    /// clip height of that step's frame, in that same layout pass. A height
+    /// published back from AppKit after layout arrives a pass late, and
+    /// costs a second pass of the whole Settings tree on every resize step.
+    func testCIStandingLegacyTrackHeightFollowsEachResizeInTheSameLayoutPass() throws {
+        try withScrollerPreference(.legacy) {
+            try withAdaptiveScrollFixture(CGSize(width: 580, height: 650)) { window, host, scroll in
+                XCTAssertEqual(scroll.scrollerStyle, .legacy)
+                // 590 and back to 580 is Opus' stale-dedupe sequence; the
+                // others change the height alone, and cross no threshold.
+                for size in [CGSize(width: 590, height: 650), CGSize(width: 580, height: 650),
+                             CGSize(width: 580, height: 600), CGSize(width: 600, height: 620),
+                             CGSize(width: 580, height: 650)] {
+                    window.setContentSize(size)
+                    host.frame = CGRect(origin: .zero, size: size)
+                    // No run-loop turn: only work done inside layout counts.
+                    host.layoutSubtreeIfNeeded()
+                    let document = try XCTUnwrap(scroll.documentView)
+                    XCTAssertTrue(scroll.hasHorizontalScroller, "\(size) keeps the horizontal axis")
+                    XCTAssertLessThan(scroll.contentView.bounds.height, size.height,
+                                      "The legacy horizontal track takes height from the clip at \(size)")
+                    XCTAssertEqual(document.frame.height, scroll.contentView.bounds.height, accuracy: 0.5,
+                                   "The page fills the clip of this resize step, in the same pass, at \(size)")
+                }
+                spin(0.3)
+                host.layoutSubtreeIfNeeded()
+                let document = try XCTUnwrap(scroll.documentView)
+                XCTAssertEqual(document.frame.height, scroll.contentView.bounds.height, accuracy: 0.5,
+                               "No later correction may leave a vertical range after the sequence")
+            }
+        }
+    }
+
+    /// CI-standing r3 R-1: a live switch to "Always show scroll bars" while
+    /// Settings is open re-fits the page to the new, shorter clip.
+    func testCIStandingLivePreferenceChangeRefitsTheLegacyTrackHeight() throws {
+        let restoreOverlay = try SettingsScrollerPreference.install(.overlay)
+        defer { spin(0.32); restoreOverlay() }
+        try withAdaptiveScrollFixture(CGSize(width: 580, height: 650)) { _, host, scroll in
+            XCTAssertEqual(scroll.scrollerStyle, .overlay)
+            let restoreLegacy = try SettingsScrollerPreference.install(.legacy)
+            defer { spin(0.32); restoreLegacy() }
+            // Settings itself follows the notification; nothing here sets a style.
+            NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+            spin(0.3)
+            host.layoutSubtreeIfNeeded()
+            let document = try XCTUnwrap(scroll.documentView)
+            XCTAssertEqual(scroll.scrollerStyle, .legacy)
+            XCTAssertLessThan(scroll.contentView.bounds.height, 650,
+                              "The legacy horizontal track takes height from the clip")
+            XCTAssertEqual(document.frame.height, scroll.contentView.bounds.height, accuracy: 0.5,
+                           "After a live preference change the page fills the new clip, with no vertical range")
+        }
+    }
+
+    /// CI-standing r3 cause 4: the bridge sits beside the outer scroll view and
+    /// finds it by frame. Pin that lookup: through 590 → 650 → 640 → 630 on the
+    /// Appearance page, which has its own inner scroll view, only the outer
+    /// scroll view takes the horizontal axis, and only below 640 pt. A lookup
+    /// that finds nothing, or finds the inner page, fails here.
+    func testCIStandingBridgeDrivesOnlyTheOuterScrollView() throws {
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withScrollerPreference(style) {
+                let suite = "SettingsBridge.\(UUID().uuidString)"
+                let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+                defer { defaults.removePersistentDomain(forName: suite) }
+                defaults.set(SettingsSection.appearance.rawValue, forKey: SettingsSection.selectionStorageKey)
+                let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+                let store = TaskStore(container: container)
+                let host = NSHostingView(rootView: SettingsView(
+                    settings: AppSettings(defaults: defaults),
+                    loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+                    agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+                    globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+                let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 590, height: 460),
+                                      styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = host
+                window.orderFront(nil)
+                defer { window.orderOut(nil); window.contentView = nil; window.close() }
+                for size in [CGSize(width: 590, height: 460), CGSize(width: 650, height: 460),
+                             CGSize(width: 640, height: 460), CGSize(width: 630, height: 460)] {
+                    window.setContentSize(size)
+                    host.frame = CGRect(origin: .zero, size: size)
+                    let deadline = Date().addingTimeInterval(2)
+                    var scrolls: [NSScrollView] = []
+                    repeat {
+                        host.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                        spin(0.05)
+                        scrolls = nativeScrollViews(in: host)
+                    } while scrolls.count < 2 && Date() < deadline
+                    let outer = try XCTUnwrap(scrolls.first { abs($0.frame.width - size.width) <= 0.5 &&
+                                                              abs($0.frame.height - size.height) <= 0.5 },
+                                              "\(style) \(size): the outer scroll view")
+                    let inner = scrolls.filter { $0 !== outer }
+                    XCTAssertFalse(inner.isEmpty, "\(style) \(size): Appearance has its own inner scroll view")
+                    XCTAssertEqual(outer.hasHorizontalScroller, size.width < SettingsWindowLayout.minimumContentSize.width,
+                                   "\(style) \(size): the outer scroll view has the horizontal axis only below 640 pt")
+                    for scroll in inner {
+                        XCTAssertFalse(scroll.hasHorizontalScroller,
+                                       "\(style) \(size): the inner page's scroll view never gets the horizontal axis")
+                    }
+                }
+            }
+        }
+    }
+
+    /// CI 43876814715: six Settings UI tests found a sidebar section that
+    /// exists but is not hittable. XCUI's hittable check is the AX hit test at
+    /// the element's centre; each sidebar row and the page's own controls must
+    /// be what that hit test finds, at a normal and an undersized window.
+    func testSettingsSidebarRowsAreWhatTheAccessibilityHitTestFinds() throws {
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withScrollerPreference(style) {
+                let suite = "SettingsHit.\(UUID().uuidString)"
+                let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+                defer { defaults.removePersistentDomain(forName: suite) }
+                let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+                let store = TaskStore(container: container)
+                let host = NSHostingView(rootView: SettingsView(
+                    settings: AppSettings(defaults: defaults),
+                    loginItemService: LoginItemService(readStatus: { .notRegistered }, changeRegistration: { _ in }),
+                    agentServer: AgentServer(port: 0, bearerToken: "test", handler: MCPRequestHandler(tools: AgentTaskTools(store: store))),
+                    globalHotKey: GlobalHotKey(combination: .newTask), library: nil))
+                let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 860, height: 650),
+                                      styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = host
+                window.orderFront(nil)
+                defer { window.orderOut(nil); window.contentView = nil; window.close() }
+                let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+                let previous = NSApp.accessibilityAttributeValue(enhanced)
+                NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+                defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+                for size in [CGSize(width: 860, height: 650), CGSize(width: 600, height: 420)] {
+                    window.setContentSize(size)
+                    host.frame = CGRect(origin: .zero, size: size)
+                    for _ in 0..<6 { host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); spin(0.05) }
+                    var report: [String] = []
+                    for section in SettingsSection.allCases {
+                        let row = try XCTUnwrap(ci8Elements(host).first {
+                            $0.accessibilityIdentifier?() == section.accessibilityIdentifier
+                        }, "\(section.rawValue) row exists")
+                        let frame = try XCTUnwrap(row.accessibilityFrame?())
+                        // A row scrolled out of an undersized window cannot be hit.
+                        guard window.frame.contains(frame) else { continue }
+                        let hit = host.accessibilityHitTest(NSPoint(x: frame.midX, y: frame.midY)) as AnyObject?
+                        var found = false
+                        var node = hit
+                        for _ in 0..<6 {
+                            if node === row { found = true }
+                            node = node?.accessibilityParent?() as AnyObject?
+                        }
+                        if !found {
+                            report.append("\(section.rawValue) \(frame) hit \(hit.map { String(describing: type(of: $0)) } ?? "nil") \((hit?.accessibilityRole?() ?? nil)?.rawValue ?? "") \(hit?.accessibilityFrame?() ?? .zero)")
+                        }
+                        XCTAssertTrue(found, "\(style) \(size): the AX hit test finds the \(section.rawValue) row")
+                    }
+                    if !report.isEmpty { print("SETTINGS_HITTEST \(style) \(size)\n" + report.joined(separator: "\n")) }
+                }
+            }
         }
     }
 
@@ -532,6 +1310,12 @@ final class SettingsWindowHostedTests: XCTestCase {
     }
 
     func testUX2DefaultWindowKeepsSettingsContentWithinViewport() throws {
+        for style in [NSScroller.Style.overlay, .legacy] {
+            try withScrollerPreference(style) { try checkUX2DefaultWindowKeepsSettingsContentWithinViewport() }
+        }
+    }
+
+    private func checkUX2DefaultWindowKeepsSettingsContentWithinViewport() throws {
         // The viewport assertion targets General's controls; an earlier AX
         // navigation test cannot affect this fresh scratch suite.
         let suite = "SettingsUX2.\(UUID().uuidString)"

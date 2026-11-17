@@ -1019,9 +1019,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // Esc with nothing left to close hides the panel, as a swipe does;
         // the corner then needs the pointer to leave before it reveals again.
         panel.onUnhandledEscape = { [weak self] in
-            guard let self, self.panel.isVisible else { return }
-            if self.composerState.closeForUnhandledEscape() { return }
-            self.requestInteractiveHide()
+            guard let self, self.panel.isVisible else { return false }
+            if self.composerState.closeForUnhandledEscape() { return true }
+            return self.requestInteractiveHide().isAccepted
         }
         // ⌘Z with the keyboard nowhere in a page (after clicking the pin,
         // say) reaches that page's history, including Notes and Draw.

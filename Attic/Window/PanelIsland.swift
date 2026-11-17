@@ -491,6 +491,14 @@ final class PanelIslandModel: ObservableObject {
     private var settleTurn = 0
     private var settleScheduled = false
     private var labelHiddenAt: Date?
+    /// The keyboard hold: one rule over two facts the live island reports,
+    /// its focused control and whether its window is key. A focused control
+    /// in the key island holds it awake, however the focus got there (Tab,
+    /// code, VoiceOver); the same retained focus holds again when the key
+    /// comes back. The stand-in has nothing to focus and reports nothing.
+    private var focusedItem: PanelIslandItem?
+    private var islandIsKey = false
+    private var holdsForKeyboard: Bool { focusedItem != nil && islandIsKey }
     /// Whether the pointer was within the wake zone at its last move.
     private var pointerNear = false
     /// A pull off the island is under way: it stays awake.
@@ -599,6 +607,24 @@ final class PanelIslandModel: ObservableObject {
         onOpenSettings()
     }
 
+    /// The live island's focused control (nil: none).
+    func reportFocus(_ item: PanelIslandItem?) {
+        focusedItem = item
+        keyboardHoldChanged()
+    }
+
+    /// The island window took or gave up the keyboard.
+    func reportIslandKey(_ key: Bool) {
+        islandIsKey = key
+        keyboardHoldChanged()
+    }
+
+    /// A focus or key change: held, it wakes (a focus that moves while the
+    /// island rests shows it again); released, the pointer rule decides.
+    private func keyboardHoldChanged() {
+        if holdsForKeyboard { wake() } else { settleIfAway() }
+    }
+
     // MARK: Resting and waking (D4)
 
     func wake() {
@@ -625,14 +651,16 @@ final class PanelIslandModel: ObservableObject {
 
     /// Settles in 300 ms unless something holds it awake by then.
     private func settleIfAway() {
-        guard isAwake, !pointerNear, !isSnapTarget, !isPulling, !settleScheduled else { return }
+        guard isAwake, !pointerNear, !isSnapTarget, !isPulling,
+              !holdsForKeyboard, !settleScheduled else { return }
         settleScheduled = true
         settleTurn &+= 1
         let turn = settleTurn
         schedule(PanelIslandLayout.settleDelay) { [weak self] in
             guard let self, self.settleTurn == turn else { return }
             self.settleScheduled = false
-            guard !self.pointerNear, !self.isSnapTarget, !self.isPulling else { return }
+            guard !self.pointerNear, !self.isSnapTarget, !self.isPulling,
+                  !self.holdsForKeyboard else { return }
             self.settle()
         }
     }
@@ -659,6 +687,10 @@ final class PanelIslandModel: ObservableObject {
 /// VoiceOver reads "Pages" with a named button per page, the current one
 /// selected, then Settings.
 struct PanelIslandView: View {
+    #if DEBUG
+    /// Allows a hosted test to observe the real native Tab focus binding.
+    @MainActor static var focusProbe: ((FocusState<PanelIslandItem?>.Binding) -> Void)?
+    #endif
     @ObservedObject var model: PanelIslandModel
     @ObservedObject var focusTracker: AtticKeyboardFocusTracker
     /// The stand-in that flies with the panel's hide and reveal: the same
@@ -699,17 +731,9 @@ struct PanelIslandView: View {
         let reduceMotion = design.reduceMotion
         Group {
             if reduceMotion {
-                // Reduce Motion: it fades between the two; the one showing
-                // takes the pointer and VoiceOver (at rest too, as without
-                // Reduce Motion).
-                ZStack(alignment: .topLeading) {
-                    drawing(awake: false, interactive: !isStandIn && !model.isAwake)
-                        .opacity(model.isAwake ? 0 : 1)
-                        .accessibilityHidden(model.isAwake)
-                    drawing(awake: true, interactive: !isStandIn && model.isAwake)
-                        .opacity(model.isAwake ? 1 : 0)
-                        .accessibilityHidden(!model.isAwake)
-                }
+                // Crossfade only the faces; a single mounted Button per item
+                // keeps native focus through the rest/awake transition.
+                drawing(awake: model.isAwake, interactive: !isStandIn)
                 .animation(AtticMotionScale.reducedFade, value: model.isAwake)
             } else {
                 drawing(awake: model.isAwake, interactive: !isStandIn)
@@ -730,7 +754,13 @@ struct PanelIslandView: View {
                 .accessibilityHidden(true)
         }
         .padding(L.windowMargin)
-        .onChange(of: focused) { _, now in if now != nil { model.wake() } }
+        .onAppear {
+            #if DEBUG
+            if !isStandIn { Self.focusProbe?($focused) }
+            #endif
+        }
+        // The live island reports its focus; the model owns the hold.
+        .onChange(of: focused) { _, now in if !isStandIn { model.reportFocus(now) } }
         .accessibilityElement(children: isStandIn ? .ignore : .contain)
         .accessibilityLabel(String(localized: "Pages"))
         .accessibilityIdentifier(isStandIn ? "" : "panel-section-picker")
@@ -747,9 +777,20 @@ struct PanelIslandView: View {
         let capsule = awake ? bounds : restRect
         let travels = L.chipTravels(reduceMotion: design.reduceMotion)
         return ZStack(alignment: .topLeading) {
-            PanelIslandSurface(cornerRadius: min(radius, min(capsule.width, capsule.height) / 2))
-                .frame(width: capsule.width, height: capsule.height)
-                .offset(x: capsule.minX, y: capsule.minY)
+            if design.reduceMotion {
+                PanelIslandSurface(cornerRadius: min(radius, min(restRect.width, restRect.height) / 2))
+                    .frame(width: restRect.width, height: restRect.height)
+                    .offset(x: restRect.minX, y: restRect.minY)
+                    .opacity(model.isAwake ? 0 : 1)
+                PanelIslandSurface(cornerRadius: min(radius, min(bounds.width, bounds.height) / 2))
+                    .frame(width: bounds.width, height: bounds.height)
+                    .offset(x: bounds.minX, y: bounds.minY)
+                    .opacity(model.isAwake ? 1 : 0)
+            } else {
+                PanelIslandSurface(cornerRadius: min(radius, min(capsule.width, capsule.height) / 2))
+                    .frame(width: capsule.width, height: capsule.height)
+                    .offset(x: capsule.minX, y: capsule.minY)
+            }
             // L5: one chip, travelling from the old item to the new one.
             if travels {
                 let chip = itemRect(current)
@@ -770,7 +811,7 @@ struct PanelIslandView: View {
                     if interactive {
                         item(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
                     } else {
-                        face(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
+                        visualFace(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
                     }
                 }
                 .frame(width: rect.width, height: rect.height)
@@ -779,7 +820,12 @@ struct PanelIslandView: View {
             }
             ForEach(Array(L.pages.enumerated()), id: \.element) { index, page in
                 if let agentPage = AgentPage(page), model.agentDots.contains(agentPage) {
-                    agentDot(index, awake: awake, dots: dots)
+                    if design.reduceMotion {
+                        agentDot(index, awake: false, dots: dots).opacity(model.isAwake ? 0 : 1)
+                        agentDot(index, awake: true, dots: dots).opacity(model.isAwake ? 1 : 0)
+                    } else {
+                        agentDot(index, awake: awake, dots: dots)
+                    }
                 }
             }
             let settings = itemRect(L.pages.count)
@@ -787,7 +833,7 @@ struct PanelIslandView: View {
                 if interactive {
                     settingsItem(awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
                 } else {
-                    settingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
+                    visualSettingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: !travels)
                 }
             }
             .frame(width: settings.width, height: settings.height)
@@ -822,6 +868,20 @@ struct PanelIslandView: View {
 
     /// Settings as drawn: no dot of its own at rest. It folds into the last
     /// page's dot and grows back out of it, in the same motion as the pages.
+    @ViewBuilder
+    private func visualSettingsFace(awake: Bool, dots: [L.RestDot], chipRadius: CGFloat, chips: Bool) -> some View {
+        if design.reduceMotion {
+            ZStack {
+                settingsFace(awake: false, dots: dots, chipRadius: chipRadius, chips: chips)
+                    .opacity(model.isAwake ? 0 : 1)
+                settingsFace(awake: true, dots: dots, chipRadius: chipRadius, chips: chips)
+                    .opacity(model.isAwake ? 1 : 0)
+            }
+        } else {
+            settingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
+        }
+    }
+
     private func settingsFace(awake: Bool, dots: [L.RestDot], chipRadius: CGFloat, chips: Bool) -> some View {
         let rect = itemRect(L.pages.count)
         let centre = dotCentre(dots.count - 1, dots: dots)
@@ -843,7 +903,7 @@ struct PanelIslandView: View {
 
     private func settingsItem(awake: Bool, dots: [L.RestDot], chipRadius: CGFloat, chips: Bool) -> some View {
         Button { model.clickSettings() } label: {
-            settingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
+            visualSettingsFace(awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
         }
         .buttonStyle(.plain)
         .focused($focused, equals: .settings)
@@ -860,6 +920,21 @@ struct PanelIslandView: View {
     /// An item as drawn: the hover fill (and under Reduce Motion its own
     /// chip), and its mark: a dot at rest that travels to the item's place
     /// and grows into the icon awake (D4), with the out dot.
+    @ViewBuilder
+    private func visualFace(_ page: PanelPage, index: Int, awake: Bool, dots: [L.RestDot],
+                            chipRadius: CGFloat, chips: Bool) -> some View {
+        if design.reduceMotion {
+            ZStack {
+                face(page, index: index, awake: false, dots: dots, chipRadius: chipRadius, chips: chips)
+                    .opacity(model.isAwake ? 0 : 1)
+                face(page, index: index, awake: true, dots: dots, chipRadius: chipRadius, chips: chips)
+                    .opacity(model.isAwake ? 1 : 0)
+            }
+        } else {
+            face(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
+        }
+    }
+
     private func face(_ page: PanelPage, index: Int, awake: Bool, dots: [L.RestDot], chipRadius: CGFloat,
                       chips: Bool) -> some View {
         let isSelected = page == model.page
@@ -910,7 +985,7 @@ struct PanelIslandView: View {
                       chips: Bool) -> some View {
         let isSelected = page == model.page
         return Button { model.click(page) } label: {
-            face(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
+            visualFace(page, index: index, awake: awake, dots: dots, chipRadius: chipRadius, chips: chips)
         }
         .buttonStyle(.plain)
         .focused($focused, equals: .page(page))
@@ -1116,6 +1191,8 @@ final class PanelIslandWindow: NSPanel {
     /// The island can take the keyboard (Full Keyboard Access, VoiceOver);
     /// the label window never can.
     var allowsKey = false
+    /// It took (true) or gave up (false) the keyboard.
+    var onKeyChange: ((Bool) -> Void)?
     /// The left button's presses, drags and releases, in screen points,
     /// before SwiftUI sees them (pulling a page off the island).
     var onPointer: ((PanelIslandPointer) -> Void)?
@@ -1124,6 +1201,16 @@ final class PanelIslandWindow: NSPanel {
     private var pressing = false
     private var trackedRelease = false
     private var tracingIdlePress = false
+
+    override func becomeKey() {
+        super.becomeKey()
+        onKeyChange?(true)
+    }
+
+    override func resignKey() {
+        super.resignKey()
+        onKeyChange?(false)
+    }
 
     override func nextEvent(matching mask: NSEvent.EventTypeMask) -> NSEvent? {
         let event = super.nextEvent(matching: mask)
@@ -1358,6 +1445,9 @@ final class PanelIslandWindows {
         self.standIn = standIn
         island.onIdleTraceContext = { [weak self] in self?.onIdleTraceContext?() }
         island.onPointer = { [weak self] pointer in self?.handlePointer(pointer) }
+        // SwiftUI may retain @FocusState after another window becomes key:
+        // the window's own key state, not the focus, ends and renews the hold.
+        island.onKeyChange = { [weak model] in model?.reportIslandKey($0) }
     }
 
     /// The panel starts to move: the stand-in in its motion layer takes

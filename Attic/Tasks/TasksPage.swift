@@ -1323,6 +1323,8 @@ struct TasksPage: View {
         guard event.type == .keyDown, event.keyCode == 53,
               event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
               model.isPageShown, let window = pointer.view?.window, event.window === window, window.isKeyWindow,
+              // The panel's open Composer is the topmost Escape target.
+              panelComposer?.isOpen() != true,
               !AtticTextInput.hasKeyboard, !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder),
               model.editingTitleID == nil, model.newSubtaskParentID == nil, model.renamingSubtaskID == nil,
               !addBarFocused, !searchFocused, metaPopover == nil,

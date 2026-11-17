@@ -1,3 +1,11 @@
+## 2026-11-15 · Settings legacy scroller viewport (CI standing, review round 1)
+
+Settings' page-body scroll view now takes the content card's actual viewport
+width. The native legacy scrollbar gutter stays within that frame, so
+Appearance cannot widen the card and move the sidebar when switching themes
+at the minimum window width. Overlay layout, materials and motion are unchanged;
+Settings follows the system scroller preference.
+
 ## 2026-11-13 · Settings pop-up accessibility (CI8-AX)
 
 Settings pop-up rows keep their real, enabled VoiceOver button, identifier

@@ -76,10 +76,17 @@ struct AtticSettingsScrollPage<Content: View>: View {
     var body: some View {
         Group {
             if capture == nil {
-                ScrollView {
-                    column
+                GeometryReader { viewport in
+                    ScrollView {
+                        column
+                    }
+                    // The scroll view's ideal width includes a legacy
+                    // vertical scrollbar's gutter. Constrain its frame to
+                    // the card's actual viewport so that gutter cannot
+                    // widen Appearance and shift the sidebar left.
+                    .frame(width: viewport.size.width, height: viewport.size.height)
+                    .scrollIndicators(.automatic)
                 }
-                .scrollIndicators(.automatic)
             } else {
                 column.frame(maxHeight: .infinity, alignment: .top)
             }

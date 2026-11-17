@@ -57,7 +57,7 @@ final class PanelIntegrationTests: XCTestCase {
             charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
         XCTAssertFalse(try XCTUnwrap(keys?.handler)(escape), "the library must let Escape reach the open composer")
         XCTAssertTrue(panel.noteDraft.pages.isLibraryPresented, "Escape must not open a ghost Title editor")
-        window.onUnhandledEscape?()
+        _ = window.onUnhandledEscape?()
         spin(until: { element("composer-title") == nil })
         XCTAssertNil(element("composer-title"), "Escape folds the composer")
     }
@@ -630,6 +630,41 @@ final class PanelIntegrationTests: XCTestCase {
         followupSwitch(panel, to: .notes)
         XCTAssertEqual(panel.noteDraft.pages.active?.engine.plainText, "Imported writing")
         XCTAssertFalse(panel.noteDraft.pages.active?.engine === session.engine, "stale engine is replaced before showing")
+    }
+
+    func testDockedHistoryPreviewEscapeClosesHistoryWithoutHidingPanel() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "requires a key window")
+        let (panel, session, editor) = try await followupNotes()
+        editor.insertText("Docked History", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertTrue(panel.noteDraft.prepareToLeave(.hide))
+        let opened = await panel.noteDraft.pages.openHistoryDurably()
+        XCTAssertTrue(opened)
+        spin(until: { panel.noteDraft.pages.historyBrowser?.preview?.engine.textView != nil })
+        let preview = try XCTUnwrap(panel.noteDraft.pages.historyBrowser?.preview?.engine.textView)
+        let window = panel.controller.panelForTesting
+        window.makeKey()
+        spin(until: { window.isKeyWindow })
+        XCTAssertTrue(window.isKeyWindow)
+        XCTAssertTrue(window.makeFirstResponder(preview))
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        NSApp.sendEvent(escape)
+        spin(0.6)
+        XCTAssertNil(panel.noteDraft.pages.historyBrowser)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(session.engine.plainText, "Docked History")
+    }
+
+    func testUnhandledEscapeDeclinesWhenDirtyNoteRejectsHide() async throws {
+        let (panel, session, editor) = try await followupNotes()
+        editor.insertText("Unsaved Escape draft", replacementRange: NSRange(location: 0, length: 0))
+        panel.gate.shouldFail = true
+        defer { panel.gate.shouldFail = false }
+        XCTAssertEqual(panel.controller.panelForTesting.onUnhandledEscape?(), false,
+                       "rejected hide must not claim the key was consumed")
+        XCTAssertTrue(panel.controller.panelForTesting.isVisible)
+        XCTAssertEqual(session.engine.plainText, "Unsaved Escape draft")
     }
 
     func testFollowupKeptNotesFailedSaveRollsBackAndRefusesLeaving() async throws {

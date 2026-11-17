@@ -601,7 +601,7 @@ private struct NoteFormatStyleStripCell: View {
         .help(NoteFormatModel.help(command))
         .accessibilityLabel(NoteFormatStyleStrip.name(command))
         .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-        .accessibilityIdentifier("notes-format-strip-" + NoteCommandRouter.identifier(command))
+        .accessibilityIdentifier(NoteCommandRouter.identifier(command, prefix: "notes-format-strip-"))
     }
 }
 
