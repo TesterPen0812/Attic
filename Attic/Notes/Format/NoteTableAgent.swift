@@ -220,7 +220,18 @@ enum NoteAgentTableText {
 ///   the line keeps its id, cells, marks, width and extras.
 /// - `{"op": "delete_row", "row_id"}`, `{"op": "delete_column", "column_id"}`
 /// - `{"op": "set_header_row", "value": bool}`, `{"op": "set_alignment", "column_id", "align": "left|center|right"}`
+/// - `{"op": "delete_table"}`, alone: the call's table goes (`deletesTable`;
+///   the only way an agent deletes a formatted table).
 enum NoteTableAgentEdit {
+    static let deleteAlone = "delete_table deletes the whole table: send it as the only operation."
+
+    /// The operations delete the table. `delete_table` must be the only one.
+    static func deletesTable(_ operations: [[String: Any]]) throws -> Bool {
+        guard operations.contains(where: { $0["op"] as? String == "delete_table" }) else { return false }
+        guard operations.count == 1 else { throw NoteAgentTextError.invalidTableEdit(deleteAlone) }
+        return true
+    }
+
     static func apply(_ operations: [[String: Any]], to original: NoteTable) throws -> NoteTable {
         var notices: [String] = []
         return try apply(operations, to: original, notices: &notices)
@@ -318,11 +329,11 @@ enum NoteTableAgentEdit {
                 for index in table.rows.indices { table.rows[index].cells.insert(cells[index], at: at) }
             case "delete_row":
                 guard table.removeRow(at: try row(operation["row_id"])) else {
-                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one row. To delete a plain table, remove it from the body with update_note; a table with formatting the text can't show is deleted in Attic.")
+                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one row. To delete the table, send {\"op\": \"delete_table\"} alone.")
                 }
             case "delete_column":
                 guard table.removeColumn(at: try column(operation["column_id"])) else {
-                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one column. To delete a plain table, remove it from the body with update_note; a table with formatting the text can't show is deleted in Attic.")
+                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one column. To delete the table, send {\"op\": \"delete_table\"} alone.")
                 }
             case "set_header_row":
                 guard let value = operation["value"] as? Bool else { throw NoteAgentTextError.invalidTableEdit("set_header_row needs a boolean value.") }
@@ -333,6 +344,8 @@ enum NoteTableAgentEdit {
                     throw NoteAgentTextError.invalidTableEdit("align must be left, center or right.")
                 }
                 table.columns[c].align = align
+            case "delete_table":
+                throw NoteAgentTextError.invalidTableEdit(deleteAlone)
             default:
                 throw NoteAgentTextError.invalidTableEdit("Unknown operation \"\(op)\".")
             }

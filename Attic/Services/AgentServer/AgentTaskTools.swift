@@ -366,7 +366,7 @@ final class AgentTaskTools {
         AgentToolRegistration(definition: [
             "name": "update_note",
             "title": "Update Attic Note",
-            "description": "Replace an Attic note's title, body, or both. Pass the `revision` that list_notes returned as `base_revision`: the write fails if the note changed since, or doesn't exist. A title or body must remain non-empty. In a note stored in the new format, keep checklist (`- [ ] …`), image (`![image](attic://image/…)`), file (`[file: name](attic://file/…)`) and date (`[date:YYYY-MM-DD]`) lines exactly as returned. Literal text is escaped: a backslash before \\, [, |, <, & or a space makes it plain text (`\\[date:2026-01-02]` is text, `[date:2026-01-02]` a date; a line with `\\|` is not a table row), and a backslash ending a line continues the same paragraph on the next line; write literal text the same way. Text written without escapes means what it always did. Tables read as an `<!-- attic:table id=… -->` line and a GFM pipe table: keep the token line. A plain table can be edited in the pipe table (it is rebuilt from the text, with new row and column ids); a pipe table without a token is a new table; removing a table's token and its rows deletes it. A table with formatting the text can't show (bold, links, dragged widths, unsupported content) must come back unchanged: change it with update_note_table. Removing or changing an object token is rejected; text edits preserve objects. If the person has the note open, the change waits (status \"pending\") and applies when they leave it unchanged; the note's previous text is kept as a version.",
+            "description": "Replace an Attic note's title, body, or both. Pass the `revision` that list_notes returned as `base_revision`: the write fails if the note changed since, or doesn't exist. A title or body must remain non-empty. In a note stored in the new format, keep checklist (`- [ ] …`), image (`![image](attic://image/…)`), file (`[file: name](attic://file/…)`) and date (`[date:YYYY-MM-DD]`) lines exactly as returned. Literal text is escaped: a backslash before \\, [, |, <, & or a space makes it plain text (`\\[date:2026-01-02]` is text, `[date:2026-01-02]` a date; a line with `\\|` is not a table row), and a backslash ending a line continues the same paragraph on the next line; write literal text the same way. Text written without escapes means what it always did. Tables read as an `<!-- attic:table id=… -->` line and a GFM pipe table: keep the token line. A plain table can be edited in the pipe table (it is rebuilt from the text, with new row and column ids); a pipe table without a token is a new table; removing a table's token and its rows deletes it. A table with formatting the text can't show (bold, links, dragged widths, unsupported content) must come back unchanged: change or delete it with update_note_table. Removing or changing an object token is rejected; text edits preserve objects. If the person has the note open, the change waits (status \"pending\") and applies when they leave it unchanged; the note's previous text is kept as a version.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -397,7 +397,7 @@ final class AgentTaskTools {
         AgentToolRegistration(definition: [
             "name": "update_note_table",
             "title": "Edit a Table in an Attic Note",
-            "description": "Edit one table in a note precisely, by the row, column and table ids list_notes returns under `tables`, without rewriting the body. Operations run in order, all or nothing: {\"op\":\"set_cell\",\"row_id\",\"column_id\",\"text\"}, {\"op\":\"insert_row\",\"after_row_id\" (null: first),\"cells\":[text…]}, {\"op\":\"insert_column\",\"after_column_id\" (null: first),\"cells\":[one per row],\"align\"}, {\"op\":\"move_row\",\"row_id\",\"after_row_id\" (null: first)}, {\"op\":\"move_column\",\"column_id\",\"after_column_id\" (null: first)}, {\"op\":\"delete_row\",\"row_id\"}, {\"op\":\"delete_column\",\"column_id\"}, {\"op\":\"set_header_row\",\"value\":bool}, {\"op\":\"set_alignment\",\"column_id\",\"align\":\"left|center|right\"}. A moved row or column keeps its id, formatting and widths. Cells hold text, `[date:YYYY-MM-DD]` and `[unsupported]` (keep it to keep that object); as list_notes writes them, a backslash before \\, [, |, <, & or a space makes it plain text (`\\[date:2026-01-02]` is text). set_cell with a cell's own text keeps it unchanged; a new text clears the cell's marks (bold, links…), and the result's `notices` say so. Pass the note's `revision` as `base_revision`. If the person has the note open, the change waits (status \"pending\").",
+            "description": "Edit one table in a note precisely, by the row, column and table ids list_notes returns under `tables`, without rewriting the body. Operations run in order, all or nothing: {\"op\":\"set_cell\",\"row_id\",\"column_id\",\"text\"}, {\"op\":\"insert_row\",\"after_row_id\" (null: first),\"cells\":[text…]}, {\"op\":\"insert_column\",\"after_column_id\" (null: first),\"cells\":[one per row],\"align\"}, {\"op\":\"move_row\",\"row_id\",\"after_row_id\" (null: first)}, {\"op\":\"move_column\",\"column_id\",\"after_column_id\" (null: first)}, {\"op\":\"delete_row\",\"row_id\"}, {\"op\":\"delete_column\",\"column_id\"}, {\"op\":\"set_header_row\",\"value\":bool}, {\"op\":\"set_alignment\",\"column_id\",\"align\":\"left|center|right\"}, and {\"op\":\"delete_table\"} alone, which deletes the whole table (the only way to delete a table with formatting the text can't show). A moved row or column keeps its id, formatting and widths. Cells hold text, `[date:YYYY-MM-DD]` and `[unsupported]` (keep it to keep that object); as list_notes writes them, a backslash before \\, [, |, <, & or a space makes it plain text (`\\[date:2026-01-02]` is text). set_cell with a cell's own text keeps it unchanged; a new text clears the cell's marks (bold, links…), and the result's `notices` say so. Pass the note's `revision` as `base_revision`. If the person has the note open, the change waits (status \"pending\").",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -1138,16 +1138,21 @@ final class AgentTaskTools {
               let table = current.blocks[index].table else {
             throw AgentToolError.invalidArguments("No table with id \(rawTable) is in this note.")
         }
-        let edited: NoteTable
+        var edited: NoteTable?
         var notices: [String] = []
         do {
-            edited = try NoteTableAgentEdit.apply(operations, to: table, notices: &notices)
+            if try !NoteTableAgentEdit.deletesTable(operations) {
+                edited = try NoteTableAgentEdit.apply(operations, to: table, notices: &notices)
+            }
         } catch {
             throw AgentToolError.invalidArguments(error.localizedDescription)
         }
         var document = current
-        document.blocks[index].table = edited
+        if let edited { document.blocks[index].table = edited } else { document.blocks.remove(at: index) }
         document.refreshRequiredCapabilities()
+        guard !document.isEmpty || !document.objectIDs.isEmpty else {
+            throw AgentToolError.invalidArguments("Deleting this table would leave the note empty: delete the note with delete_note instead.")
+        }
         let stale = readSet?.stale == true || baseRevision != note.revisionToken
         let disposition = stale ? NoteAgentWriteDisposition.proposal : noteStore.agentWriteDisposition(note.id)
         let write = {
@@ -1160,9 +1165,14 @@ final class AgentTaskTools {
         switch result {
         case .success(.applied):
             let updated = noteStore.note(withID: note.id) ?? note
-            var block = document.blocks[index]
-            block.table = edited
-            var payload: [String: Any] = ["status": "applied", "table": NoteTableAgentEdit.serialize(block), "note": serializeNote(updated)]
+            var payload: [String: Any] = ["status": "applied", "note": serializeNote(updated)]
+            if let edited {
+                var block = current.blocks[index]
+                block.table = edited
+                payload["table"] = NoteTableAgentEdit.serialize(block)
+            } else {
+                payload["deleted_table"] = tableID.uuidString
+            }
             if !notices.isEmpty { payload["notices"] = notices }
             return try encode(payload)
         case let .success(.pending(editID)):

@@ -312,7 +312,7 @@ enum NoteAgentTextError: LocalizedError, Equatable {
         case .lossyFormatting:
             "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic."
         case let .formattedTable(id):
-            "The table \(id) has formatting the text can't show (marks, dragged widths or extras). Leave its token line and pipe table unchanged in update_note, and change it with update_note_table by id (set a cell, insert, delete or move a row or column)."
+            "The table \(id) has formatting the text can't show (marks, dragged widths or extras). Leave its token line and pipe table unchanged in update_note, and change it with update_note_table by id (set a cell, insert, delete or move a row or column, or delete_table to delete it)."
         case .raggedTable:
             "Every row of a table must have as many cells as its header row."
         case .tableTooLarge:

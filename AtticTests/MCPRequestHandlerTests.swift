@@ -677,6 +677,65 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(saved.rows[1].cells[1], NoteTable.Cell("b2"))
     }
 
+    /// `delete_table` is how an agent deletes a table, formatted or not; the
+    /// rest of the note is left byte for byte.
+    func testDeleteTableRemovesTheTableAndLeavesTheRestOfTheNoteAsItWas() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        var table = NoteTable(texts: [["H", "V"], ["a", "b"]])
+        table.columns[1].width = 150
+        table.rows[1].cells[0].marks = [NoteMark(.bold, offset: 0, length: 1)]
+        let tableID = UUID()
+        var heading = NoteBlock.text("Plan", style: "heading"); heading.level = 2
+        let base = NoteDocument(blocks: [.text("T"), heading, .table(table, id: tableID), .text("after | x"), .checklist("item")])
+        guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+        let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        let revision = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        let arguments: [String: Any] = ["id": id.uuidString, "base_revision": revision, "table_id": tableID.uuidString]
+        // The text route refuses, and says how.
+        var withoutTable = stored
+        withoutTable.blocks.remove(at: 2)
+        let refusal = try noteToolError(handler, ["id": id.uuidString, "base_revision": revision, "body": NoteTextExport.agentBody(withoutTable)])
+        XCTAssertTrue(refusal.contains("delete_table"), refusal)
+        // A last row or column says how, and delete_table goes alone.
+        var oneRow = arguments
+        oneRow["operations"] = [["op": "delete_row", "row_id": table.rows[1].id.uuidString],
+                                ["op": "delete_row", "row_id": table.rows[0].id.uuidString]]
+        XCTAssertTrue(try noteTableToolError(handler, oneRow).contains("{\"op\": \"delete_table\"}"))
+        var mixed = arguments
+        mixed["operations"] = [["op": "delete_table"], ["op": "set_header_row", "value": false]]
+        XCTAssertEqual(try noteTableToolError(handler, mixed), NoteTableAgentEdit.deleteAlone)
+        XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, stored, "nothing was written")
+        // Deleted.
+        var deletion = arguments
+        deletion["operations"] = [["op": "delete_table"]]
+        let result = try callNoteTool(handler, "update_note_table", deletion)
+        XCTAssertEqual(result["status"] as? String, "applied")
+        XCTAssertEqual(result["deleted_table"] as? String, tableID.uuidString)
+        let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        XCTAssertEqual(saved.blocks, withoutTable.blocks)
+        XCTAssertEqual(saved.blocks.map(NoteContentCodec.encodeBlock), withoutTable.blocks.map(NoteContentCodec.encodeBlock),
+                       "every other block is byte for byte as it was")
+        XCTAssertFalse(saved.requires.contains("table-v1"), "the note no longer needs tables")
+        // A table that is the whole note can't be deleted this way.
+        let only = UUID()
+        guard case let .success((onlyID, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text(""), .table(NoteTable(texts: [["x"]]), id: only)])) else { return XCTFail() }
+        let message = try noteTableToolError(handler, ["id": onlyID.uuidString, "table_id": only.uuidString,
+            "base_revision": try XCTUnwrap(noteStore.note(withID: onlyID)?.revisionToken), "operations": [["op": "delete_table"]]])
+        XCTAssertTrue(message.contains("delete_note"), message)
+    }
+
+    private func noteTableToolError(_ handler: MCPRequestHandler, _ arguments: [String: Any]) throws -> String {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "update_note_table", "arguments": arguments]
+        ])
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: body).body)) as? [String: Any])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        return try XCTUnwrap((result["content"] as? [[String: Any]])?.first?["text"] as? String)
+    }
+
     /// Dot R-1 and Opus R-5 (r2): `set_cell` on a cell holding literal date
     /// text beside a real date of the same day with extras.
     func testSetCellKeepsALiteralDateAsTextAndTheRealDateWhole() throws {
