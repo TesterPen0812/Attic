@@ -127,12 +127,14 @@ final class TasksCountGuardTests: XCTestCase {
             model.completeAcknowledged(id) { _ in }
             XCTAssertNotNil(model.held[id])
             XCTAssertEqual(model.rows(for: model.tab).map(\.id), before, "a press keeps every row in place")
+            XCTAssertEqual(model.rowsRestateMismatches, 0, "a press's restated list differs from its full build")
             XCTAssertEqual(model.rows(for: model.tab).first { $0.id == id }?.model.state, .done)
             return before
         }
         func save(_ id: UUID, keeping before: [UUID]) {
             model.settlePendingCompletionAcknowledgements(through: id)
             XCTAssertEqual(model.rows(for: model.tab).map(\.id), before, "a save keeps the held row in place")
+            XCTAssertEqual(model.rowsRestateMismatches, 0, "a save's restated list differs from its full build")
         }
         func release(_ id: UUID) {
             model.releaseHold(id)
@@ -202,6 +204,78 @@ final class TasksCountGuardTests: XCTestCase {
         XCTAssertGreaterThan(model.rowsRestateCount[.backlog, default: 0], 0)
     }
 
+    /// R-1 (review of PR 30): a held row stays where it was drawn through
+    /// any full build of the list, also when the manual order mixes date
+    /// groups. The full build put a held row back at its drawn index in the
+    /// ungrouped list (ordered by state, then manual order), which moved it
+    /// within its own group. The restate oracle is off: this is what the
+    /// panel shows when anything rebuilds the list during a hold.
+    func testHeldRowStaysPutThroughAFullBuildWhenManualOrderMixesDateGroups() throws {
+        // Manual order X Y Z W V U, drawn Today (Y W V) · Tomorrow (X Z) · No date (U).
+        let (model, store) = try makeDatedModel([("X", 1, nil), ("Y", 0, nil), ("Z", 1, nil), ("W", 0, nil), ("V", 0, nil), ("U", nil, nil)])
+        XCTAssertEqual(model.rows(for: .now).map(\.model.title), ["Y", "W", "V", "X", "Z", "U"])
+        /// The list after two full builds (the fold of "Completed today"
+        /// changes the key, and Now draws no done rows).
+        func rebuilt() -> [UUID] {
+            let misses = model.rowsCacheMissCount[.now, default: 0]
+            model.toggleCompletedToday()
+            _ = model.rows(for: .now)
+            model.toggleCompletedToday()
+            let ids = model.rows(for: .now).map(\.id)
+            XCTAssertEqual(model.rowsCacheMissCount[.now, default: 0], misses + 2, "the list was built in full")
+            return ids
+        }
+        // X: the middle row, first of Tomorrow but behind Today's rows in
+        // the manual order. Then one row of each other group.
+        for title in ["X", "W", "U", "Z"] {
+            let before = model.rows(for: .now).map(\.id)
+            let id = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id)
+            model.completeAcknowledged(id) { _ in }
+            XCTAssertNotNil(model.held[id])
+            XCTAssertEqual(model.rows(for: .now).map(\.id), before, "\(title): the press keeps every row in place")
+            XCTAssertEqual(rebuilt(), before, "\(title): a full build during the hold keeps every row in place")
+            model.settlePendingCompletionAcknowledgements(through: id)
+            XCTAssertEqual(store.task(withID: id)?.status, .done)
+            XCTAssertEqual(model.rows(for: .now).map(\.id), before, "\(title): the save keeps every row in place")
+            XCTAssertEqual(rebuilt(), before, "\(title): a full build after the save keeps every row in place")
+            model.releaseHold(id)
+            XCTAssertFalse(model.rows(for: .now).contains { $0.id == id }, "\(title): the released row leaves")
+        }
+    }
+
+    /// R-1, with the restate oracle on: ticks across every kind of date
+    /// group in a manual order that mixes them (Overdue over two days with
+    /// clocks, Today with clocks, Tomorrow, No date). Each press keeps every
+    /// row in place, each save keeps the held row at its place, and no
+    /// restated list differs from its full build.
+    func testTickRestatesAsAFullBuildWouldWhenManualOrderMixesDateGroups() throws {
+        TasksPageModel.checksRowsRestate = true
+        defer { TasksPageModel.checksRowsRestate = false }
+        let (model, store) = try makeDatedModel([("H", -2, 600), ("X", 1, nil), ("Y", 0, 540), ("Q", -1, nil), ("Z", 1, nil),
+                                                 ("W", 0, nil), ("A", -2, 540), ("V", 0, 480), ("U", nil, nil)])
+        // Overdue (A Q H: A and H share a day, ordered by clock) · Today (V Y W) · Tomorrow (X Z) · No date (U).
+        XCTAssertEqual(model.rows(for: .now).map(\.model.title), ["A", "Q", "H", "V", "Y", "W", "X", "Z", "U"])
+        let restates = model.rowsRestateCount[.now, default: 0]
+        // H: Overdue over two days with clocks. Y: the middle row. X: the
+        // first of Tomorrow, behind Today's rows in the manual order. U: the last.
+        for title in ["H", "Y", "X", "U"] {
+            let before = model.rows(for: .now).map(\.id)
+            let id = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id)
+            let index = try XCTUnwrap(before.firstIndex(of: id))
+            model.completeAcknowledged(id) { _ in }
+            XCTAssertNotNil(model.held[id])
+            XCTAssertEqual(model.rows(for: .now).map(\.id), before, "\(title): the press keeps every row in place")
+            XCTAssertEqual(model.rowsRestateMismatches, 0, "\(title): the press's restated list differs from its full build")
+            model.settlePendingCompletionAcknowledgements(through: id)
+            XCTAssertEqual(store.task(withID: id)?.status, .done)
+            XCTAssertEqual(model.rows(for: .now).firstIndex { $0.id == id }, index, "\(title): the save keeps the held row in place")
+            XCTAssertEqual(model.rowsRestateMismatches, 0, "\(title): the save's restated list differs from its full build")
+            model.releaseHold(id)
+            XCTAssertFalse(model.rows(for: .now).contains { $0.id == id }, "\(title): the released row leaves")
+        }
+        XCTAssertGreaterThan(model.rowsRestateCount[.now, default: 0], restates)
+    }
+
     // MARK: - Rig
 
     private static let size = CGSize(width: 344, height: 520)
@@ -230,6 +304,32 @@ final class TasksCountGuardTests: XCTestCase {
         for index in 0..<notes { context.insert(NoteItem(title: "Note \(index)", body: "Unrelated note \(index)")) }
         try context.save()
         return TaskStore(container: container)
+    }
+
+    /// Open tasks on Now in this manual order (the first is first), each
+    /// with its due day as days from today and its clock in minutes, and the
+    /// model on them, with the save and the release left to the test.
+    private func makeDatedModel(_ specs: [(title: String, day: Int?, clock: Int?)]) throws -> (TasksPageModel, TaskStore) {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let context = ModelContext(container)
+        let calendar = Calendar.autoupdatingCurrent, now = Date()
+        var order: Int64 = 10_000_000
+        for spec in specs {
+            order -= 1_024
+            let item = TaskItem(title: spec.title, status: .todo, createdAt: now, manualOrder: order)
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            if let day = spec.day {
+                item.dueDay = DueDay(date: calendar.date(byAdding: .day, value: day, to: now)!, calendar: calendar)
+                item.dueTimeMinutes = spec.clock
+            }
+            context.insert(item)
+        }
+        try context.save()
+        let store = TaskStore(container: container)
+        var services = TasksPageServices()
+        services.acknowledgementDelay = .seconds(25)
+        services.doneHold = .seconds(25)
+        return (TasksPageModel(library: AtticLibrary(tasks: store), services: services), store)
     }
 
     private func page(_ model: TasksPageModel, _ store: TaskStore) -> NSView {
