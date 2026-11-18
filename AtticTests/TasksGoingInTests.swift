@@ -697,6 +697,33 @@ final class TasksGoingInHostedTests: XCTestCase {
         try scrollUnderAStillPointer(hosted, tab: .done)
     }
 
+    /// A panel put away mid-scroll may never hear the scroll's end: the
+    /// list lets its rows' hover go then, so they can hover again.
+    func testAPanelPutAwayMidScrollLetsItsRowsHoverAgain() throws {
+        var services = TasksPageServices()
+        services.openTaskNote = { _ in }
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false, services: services)
+        defer { hosted.close() }
+        hosted.model.clearSelection()
+        try hover(hosted, at: nil)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let scroll = try XCTUnwrap(hosted.lists(in: content).first { list in
+            let frame = list.convert(list.bounds, to: nil)
+            return frame.height > content.bounds.height / 2 && frame.minX > -1 && frame.minX < content.bounds.width / 2
+        })
+        let row = try XCTUnwrap(hosted.pointer.frames.filter { $0.key.tab == .now && $0.value.minY > 140 }.min { $0.value.minY < $1.value.minY })
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        try hover(hosted, at: CGPoint(x: row.value.minX + TasksDesignMetrics.textX + 30,
+                                      y: row.value.minY + TasksRowDesign.paddingY + TasksRowDesign.line / 2), settle: 0.3)
+        XCTAssertNotEqual(AtticTaskRow.drawsOpen[row.key.id], true, "held while the list scrolls")
+        // Put away with no end of the scroll.
+        hosted.window.orderOut(nil)
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: hosted.window)
+        hosted.window.orderFront(nil)
+        hosted.spin(0.4)
+        XCTAssertEqual(AtticTaskRow.drawsOpen[row.key.id], true, "the held change landed when the panel was put away")
+    }
+
     /// The pointer rests on a row of `tab`; the tab's list scrolls under it
     /// in steps, as a live scroll does (AppKit's start and end
     /// notifications on the list's own scroll view, the pointer's tracking

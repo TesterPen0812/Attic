@@ -262,18 +262,19 @@ struct TasksScrollKeeper: NSViewRepresentable {
             lifecycleObservers.append(NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification, object: window, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.model?.flushScrollOffsets() }
+                MainActor.assumeIsolated { self?.releaseRowHover(); self?.model?.flushScrollOffsets() }
             })
             lifecycleObservers.append(NotificationCenter.default.addObserver(
                 forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
             ) { [weak self, weak window] _ in
                 MainActor.assumeIsolated {
-                    if window?.isVisible == false { self?.model?.flushScrollOffsets() }
+                    // A panel put away mid-scroll may never hear the end.
+                    if window?.isVisible == false { self?.releaseRowHover(); self?.model?.flushScrollOffsets() }
                 }
             })
             for name in [NSApplication.willTerminateNotification, NSApplication.didHideNotification] {
                 lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.model?.flushScrollOffsets() }
+                    MainActor.assumeIsolated { self?.releaseRowHover(); self?.model?.flushScrollOffsets() }
                 })
             }
         }

@@ -10,8 +10,10 @@ the row under the pointer is hovered at once. One gate per list,
 start of a live scroll to its end. The row reads it from the environment
 (`atticRowHoverGate`). Selected, pressed and keyboard-focused rows, rows
 outside a Tasks list, and the ring's and the tag line's own hover are
-unchanged. A scroll that AppKit does not report as a live scroll (a plain
-mouse wheel's notches, by AppKit's documentation) is not held.
+unchanged. The gate also lets go when the list is hidden or undrawn, its
+window closes or is put away, or the app hides. A scroll that AppKit does not
+report as a live scroll is not held; whether a plain mouse wheel's notches
+are is not checked.
 
 ## 2026-11-17 · Grey details on a selected or pressed row (1A, faint spots on Solid)
 
