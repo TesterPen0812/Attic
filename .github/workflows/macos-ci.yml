@@ -298,6 +298,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_soak_test_plumbing.py
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_generate_sounds.py
 
+      - name: Check test waits, skips, and retries
+        run: |
+          python3 Scripts/check_test_waits.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_check_test_waits.py'
+
       - name: Verify branch ancestry and initial cleanliness
         run: |
           git merge-base --is-ancestor "$LUNA_REPAIRED_COMMIT" HEAD
