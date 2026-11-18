@@ -6,6 +6,10 @@ import SwiftUI
 /// on other days. A click opens an event where it is, through the agenda's
 /// own row and editing state; later hours move down to make room.
 struct CalendarDayView: View {
+    #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
     let model: CalendarPageModel
     let snapshot: CalendarPageSnapshot
     @ObservedObject var eventRows: CalendarEventRowState
@@ -53,6 +57,9 @@ struct CalendarDayView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let allDay = events.filter(\.isAllDay)
         let tasks = self.tasks
         VStack(spacing: 0) {

@@ -15,6 +15,10 @@ import UniformTypeIdentifiers
 /// controller and its session rules.
 struct NotesEditorPage: View {
     #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
+    #if DEBUG
     /// Lifetime regression probes; never owns either observed object.
     static var lifetimeProbe: ((NotesPageChrome, NotesLibraryModel) -> Void)?
     #endif
@@ -190,6 +194,9 @@ struct NotesEditorPage: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         pageContent
         .atticTagColourOrigin(.page(.notesLibrary))
         .onAppear {
@@ -389,7 +396,7 @@ struct NotesEditorPage: View {
                                                   removal: .identity)
                                     : slide(from: Self.libraryEdge))
         } else if let review = controller.proposalReview, let changes = review.changes {
-            PanelComposerClearance { extra in
+            PanelComposerClearance(.notesLeaf) { extra in
                 NoteProposalInPlaceReview(controller: controller, review: review, changes: changes,
                     columnInset: columnInset, topInset: topInset, bottomInset: bottomControls + bottomInset + extra,
                     design: design)
@@ -397,13 +404,13 @@ struct NotesEditorPage: View {
                 .overlay { AtticFloatingControlsBand(height: bottomControls) }
                 .accessibilitySortPriority(3)
         } else if let review = controller.proposalReview {
-            PanelComposerClearance { extra in
+            PanelComposerClearance(.notesLeaf) { extra in
                 NoteProposalComparison(controller: controller, store: noteStore, review: review,
                     columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: layout.chromeInsets.bottom + extra,
                     design: design)
             }
         } else if let session = controller.active {
-            PanelComposerClearance { extra in
+            PanelComposerClearance(.notesLeaf) { extra in
                 NoteEditorRepresentable(session: session, chrome: chrome, columnInset: columnInset,
                                         topInset: topInset, bottomInset: bottomControls + bottomInset + extra, headerBottom: layout.headerBottom,
                                         design: design, tagEditor: { AnyView(tagEditor(for: session)) },
