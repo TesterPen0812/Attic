@@ -317,65 +317,94 @@ class RequiredChecksTests(unittest.TestCase):
         host_rel = 'AtticNotesSeed/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost'
         # The process table and signals are simulated: the loop never looks up
         # or signals a live process other than the stubs it starts itself.
-        # 101 and 202 run this job's host path before the step; 303 runs the
-        # same suffix under another root. The stub test adds 9000+n for a seed
-        # that leaves its host running.
+        # 101 and 202 run this job's host path before the step. During every
+        # seed the stub test adds 303, the same suffix under another root.
+        # Modes add this seed's own hosts (9001, 9002) at the job's path.
         stub_test = ('#!/bin/bash\nseed=$(printf "%s\\n" "$@" | sed -n "s/.*testGeneratedSeed//p")\n'
-                     'echo "test $seed" >> "$CALLS"\n'
+                     'echo "test $seed leftover:$(grep -v "^101 \\|^202 \\|^303 " "$TABLE" | tr "\\n" ,)" >> "$CALLS"\n'
+                     'grep -q "^303 " "$TABLE" || echo "303 $RUNNER_TEMP/other-root/' + host_rel + '" >> "$TABLE"\n'
+                     'host="$RUNNER_TEMP/' + host_rel + '"\n'
                      'if [ "$seed" = "$FAIL_SEED" ]; then\n'
                      '  case "$MODE" in\n'
                      '    fail) exit 65 ;;\n'
-                     '    leave-host|leave-stubborn-host) echo "9001 $RUNNER_TEMP/' + host_rel + '" >> "$TABLE"; exit 65 ;;\n'
-                     '    hang) sleep 30 ;;\n'
+                     '    leave-host|leave-stubborn-host|replace-host) echo "9001 $host" >> "$TABLE"; exit 65 ;;\n'
+                     '    leave-two-stubborn-hosts) printf "9001 %s\\n9002 %s\\n" "$host" "$host" >> "$TABLE"; exit 65 ;;\n'
+                     '    pass-leave-unkillable-host) echo "9001 $host" >> "$TABLE"; exit 0 ;;\n'
+                     '    hang) /bin/sleep 30 ;;\n'
                      '  esac\n'
                      'fi\nexit 0\n')
         stub_xcrun = ('#!/bin/bash\necho "read" >> "$CALLS"\n'
-                      'case "$*" in *notes-seed-$FAIL_SEED/*) [ "$MODE" = reader-hang ] && sleep 30 ;; esac\n'
+                      'case "$*" in *notes-seed-$FAIL_SEED/*) [ "$MODE" = reader-hang ] && /bin/sleep 30 ;; esac\n'
                       'echo \'{"passedTests":1,"failedTests":0,"skippedTests":0,"expectedFailures":0}\'\n')
         stub_table = '#!/bin/bash\ncat "$TABLE"\n'
+        # TERM ends a host unless it is stubborn; replace-host's TERM starts a
+        # same-path successor 9002; KILL ends any host except an unkillable one.
         stub_signal = ('#!/bin/bash\necho "$1 $2" >> "$SIGNALS"\n'
-                       'if [ "$1" = -KILL ] || [ "$MODE" != leave-stubborn-host ]; then\n'
-                       '  grep -v "^$2 " "$TABLE" > "$TABLE.new"; mv "$TABLE.new" "$TABLE"\nfi\n')
-        cases = [  # (seeds, fail seed, mode, exit code, test runs, signals)
-            ('11012 11013 11014 11015', '', 'pass', 0, 4, []),
-            ('11012 11013 11014 11015', '11013', 'fail', 1, 4, []),
-            ('11012 11013 11014 11015', '11013', 'leave-host', 1, 4, ['-TERM 9001']),
-            ('11012 11013 11014 11015', '11013', 'leave-stubborn-host', 1, 4, ['-TERM 9001', '-KILL 9001']),
-            ('11012 11013 11014 11015', '11013', 'hang', 1, 4, []),
-            ('11012 11013 11014 11015', '11012', 'reader-hang', 1, 4, []),
-            ('', '', 'pass', 1, 0, []),
-            ('11012 1101x 11014 11015', '', 'pass', 1, 3, []),
+                       'drop() { grep -v "^$1 " "$TABLE" > "$TABLE.new"; mv "$TABLE.new" "$TABLE"; }\n'
+                       'case "$MODE:$1:$2" in\n'
+                       '  pass-leave-unkillable-host:*) ;;\n'
+                       '  leave-stubborn-host:-TERM:*|leave-two-stubborn-hosts:-TERM:*) ;;\n'
+                       '  replace-host:-TERM:9001) drop 9001; echo "9002 $(awk \'$1 == 101 { print $2 }\' "$TABLE")" >> "$TABLE" ;;\n'
+                       '  *) drop "$2" ;;\n'
+                       'esac\n')
+        # Cleanup's 1 s sleeps return at once and are counted; longer sleeps
+        # (the watchdog's limits) are real.
+        stub_sleep = '#!/bin/bash\nif [ "$1" = 1 ]; then echo 1 >> "$SLEEPS"; exit 0; fi\nexec /bin/sleep "$@"\n'
+        cases = [  # (seeds, fail seed, mode, exit code, test runs, signals, max 1 s sleeps or None)
+            ('11012 11013 11014 11015', '', 'pass', 0, 4, [], None),
+            ('11012 11013 11014 11015', '11013', 'fail', 1, 4, [], None),
+            ('11012 11013 11014 11015', '11013', 'leave-host', 1, 4, ['-TERM 9001'], None),
+            ('11012 11013 11014 11015', '11013', 'leave-stubborn-host', 1, 4, ['-TERM 9001', '-KILL 9001'], None),
+            # 9002 appears during the grace, so it is caught by the KILL rescan.
+            ('11012 11013 11014 11015', '11013', 'replace-host', 1, 4, ['-TERM 9001', '-KILL 9002'], None),
+            # One shared 10 s grace for both hosts: 5 + 10 + 1 sleeps at most.
+            ('11012 11013 11014 11015', '11013', 'leave-two-stubborn-hosts', 1, 4,
+             ['-TERM 9001', '-TERM 9002', '-KILL 9001', '-KILL 9002'], 16),
+            ('11012 11013 11014 11015', '11013', 'pass-leave-unkillable-host', 1, 4,
+             ['-TERM 9001', '-KILL 9001'] * 3, None),
+            ('11012 11013 11014 11015', '11013', 'hang', 1, 4, [], None),
+            ('11012 11013 11014 11015', '11012', 'reader-hang', 1, 4, [], None),
+            ('', '', 'pass', 1, 0, [], None),
+            ('11012 1101x 11014 11015', '', 'pass', 1, 3, [], None),
         ]
-        for seeds, fail_seed, mode, code, runs, signals in cases:
+        for seeds, fail_seed, mode, code, runs, signals, max_sleeps in cases:
             with self.subTest(seeds=seeds, fail_seed=fail_seed, mode=mode), tempfile.TemporaryDirectory() as tmp:
                 tmp = Path(tmp)
                 (tmp / 'Scripts').mkdir()
                 (tmp / 'bin').mkdir()
                 for path, body in [(tmp / 'Scripts/xcodebuild_locked.sh', stub_test), (tmp / 'bin/xcrun', stub_xcrun),
-                                   (tmp / 'bin/table', stub_table), (tmp / 'bin/signal', stub_signal)]:
+                                   (tmp / 'bin/table', stub_table), (tmp / 'bin/signal', stub_signal),
+                                   (tmp / 'bin/sleep', stub_sleep)]:
                     path.write_text(body)
                     path.chmod(path.stat().st_mode | stat.S_IEXEC)
-                (tmp / 'table').write_text(f'101 {tmp}/{host_rel}\n202 {tmp}/{host_rel}\n303 {tmp}/other-root/{host_rel}\n')
+                (tmp / 'table').write_text(f'101 {tmp}/{host_rel}\n202 {tmp}/{host_rel}\n')
                 env = dict(os.environ, PATH=f"{tmp / 'bin'}:{os.environ['PATH']}", RUNNER_TEMP=str(tmp),
                            CALLS=str(tmp / 'calls'), FAIL_SEED=fail_seed, MODE=mode, NOTES_SEEDS=seeds,
-                           TABLE=str(tmp / 'table'), SIGNALS=str(tmp / 'signals'),
+                           TABLE=str(tmp / 'table'), SIGNALS=str(tmp / 'signals'), SLEEPS=str(tmp / 'sleeps'),
                            NOTES_PROCESS_TABLE=str(tmp / 'bin/table'), NOTES_SIGNAL=str(tmp / 'bin/signal'),
                            NOTES_SEED_HOST='AtticUnitTestHost', NOTES_SEED_TIMEOUT_SECONDS='2',
                            NOTES_RESULT_TIMEOUT_SECONDS='2')
                 result = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-e', '-c', script], cwd=tmp, env=env,
                                         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
-                calls = (tmp / 'calls').read_text().split('\n') if (tmp / 'calls').exists() else []
+                calls = (tmp / 'calls').read_text().splitlines() if (tmp / 'calls').exists() else []
                 sent = (tmp / 'signals').read_text().splitlines() if (tmp / 'signals').exists() else []
                 self.assertEqual(result.returncode, code, result.stdout + result.stderr)
                 self.assertEqual(sum(line.startswith('test ') for line in calls), runs, calls)
                 self.assertEqual(sent, signals, result.stdout)
                 table = (tmp / 'table').read_text()
-                for survivor in ['101 ', '202 ', '303 ']:
+                for survivor in ['101 ', '202 '] + (['303 '] if runs else []):
                     self.assertIn(survivor, table)
+                if mode == 'pass-leave-unkillable-host':
+                    self.assertIn('still running after 3 cleanup passes', result.stdout)
+                    self.assertIn('failed: 11013', result.stdout)
+                else:
+                    # No host of a seed is still there when the next seed starts.
+                    self.assertTrue(all(line.endswith('leftover:') for line in calls if line.startswith('test ')), calls)
+                if max_sleeps is not None:
+                    sleeps = len((tmp / 'sleeps').read_text().splitlines()) if (tmp / 'sleeps').exists() else 0
+                    self.assertLessEqual(sleeps, max_sleeps)
                 if mode in ('hang', 'reader-hang'):
                     self.assertIn('timed out after 2 s', result.stdout)
-                if signals:
-                    self.assertIn('pid 9001 is gone' + (' after KILL' if '-KILL 9001' in signals else ''), result.stdout)
 
     def test_generated_methods_compile_in_exactly_one_lane(self):
         import json

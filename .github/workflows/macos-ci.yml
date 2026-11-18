@@ -324,43 +324,41 @@ jobs:
               if [ "$path" = "$host_path" ] || [ "$path" = "$host_path_physical" ]; then echo "$pid"; fi
             done
           }
-          is_host_pid() {
-            host_pids | grep -qx "$1"
-          }
           seed_hosts() {
             local pid
             for pid in $(host_pids); do
               printf '%s\n' "$hosts_before" | grep -qx "$pid" || echo "$pid"
             done
           }
+          # Up to 3 passes: rescan, TERM every host the seed left, one shared
+          # 10 s grace, KILL any left. A host still running after that fails
+          # the seed, so no host carries silently into the next seed.
           stop_seed_hosts() {
-            local host hosts waited=0
+            local host hosts waited=0 pass=0
             # A host that is already exiting gets 5 s to finish on its own.
             while [ "$waited" -lt 5 ] && [ -n "$(seed_hosts)" ]; do sleep 1; waited=$((waited + 1)); done
+            while [ "$pass" -lt 3 ]; do
+              hosts=$(seed_hosts)
+              [ -n "$hosts" ] || return 0
+              pass=$((pass + 1))
+              for host in $hosts; do
+                echo "::warning::Seed $seed left $NOTES_SEED_HOST pid $host running: sending TERM (pass $pass)"
+                send_signal -TERM "$host" 2>/dev/null || true
+              done
+              waited=0
+              while [ "$waited" -lt 10 ] && [ -n "$(seed_hosts)" ]; do sleep 1; waited=$((waited + 1)); done
+              hosts=$(seed_hosts)
+              [ -n "$hosts" ] || continue
+              for host in $hosts; do
+                echo "::warning::Seed $seed: $NOTES_SEED_HOST pid $host outlived TERM: sending KILL (pass $pass)"
+                send_signal -KILL "$host" 2>/dev/null || true
+              done
+              sleep 1
+            done
             hosts=$(seed_hosts)
             [ -n "$hosts" ] || return 0
-            for host in $hosts; do
-              if is_host_pid "$host"; then
-                echo "::warning::Seed $seed left $NOTES_SEED_HOST pid $host running: sending TERM"
-                send_signal -TERM "$host" 2>/dev/null || true
-              fi
-            done
-            for host in $hosts; do
-              waited=0
-              while [ "$waited" -lt 10 ] && is_host_pid "$host"; do sleep 1; waited=$((waited + 1)); done
-              if ! is_host_pid "$host"; then
-                echo "Seed $seed: $NOTES_SEED_HOST pid $host is gone"
-                continue
-              fi
-              echo "::warning::Seed $seed: $NOTES_SEED_HOST pid $host ignored TERM: sending KILL"
-              send_signal -KILL "$host" 2>/dev/null || true
-              sleep 1
-              if is_host_pid "$host"; then
-                echo "::error::Seed $seed: $NOTES_SEED_HOST pid $host is still running after KILL"
-              else
-                echo "Seed $seed: $NOTES_SEED_HOST pid $host is gone after KILL"
-              fi
-            done
+            echo "::error::Seed $seed: $NOTES_SEED_HOST still running after 3 cleanup passes: pid" $hosts
+            return 1
           }
 
           read_result() {
@@ -392,8 +390,9 @@ jobs:
                   -only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed$seed || status=$?
                 ;;
             esac
-            stop_seed_hosts
-            if [ "$status" -eq 0 ] && [ ! -e "$out/timed-out" ] \
+            host_left=0
+            stop_seed_hosts || host_left=1
+            if [ "$status" -eq 0 ] && [ "$host_left" -eq 0 ] && [ ! -e "$out/timed-out" ] \
               && run_bounded "Notes editor generated seed $seed result reader" "$NOTES_RESULT_TIMEOUT_SECONDS" read_result "$out"; then
               passed=$((passed + 1))
               echo "Notes editor generated seed $seed passed"
