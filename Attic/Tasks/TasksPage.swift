@@ -4461,6 +4461,22 @@ final class TasksDragSession {
     }
 }
 
+#if DEBUG
+/// DEBUG count of the row wrapper's bodies per row, beside
+/// `AtticTaskRow.evaluations` for the row leaf, and the drag group each
+/// wrapper would start a drag with (design/tasks-breadth.md, slice 1a).
+/// A generic view cannot keep its own static state.
+@MainActor enum TasksCellBodyCounts {
+    static var evaluations: [TasksRowID: Int] = [:]
+    static var dragGroups: [TasksRowID: () -> [UUID]] = [:]
+
+    static func note(_ row: TasksRowID, dragGroup: @escaping () -> [UUID]) {
+        evaluations[row, default: 0] += 1
+        dragGroups[row] = dragGroup
+    }
+}
+#endif
+
 /// A row that can be dragged to reorder (owner fix 6, review 1). The lift is
 /// a modifier (the row keeps its identity mid-drag); the translation lives in
 /// `@GestureState`, which resets itself when the system cancels the drag, and
@@ -4515,6 +4531,9 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     @State private var reports = TasksCellReports()
 
     var body: some View {
+        #if DEBUG
+        let _ = TasksCellBodyCounts.note(TasksRowID(tab: tab, id: id), dragGroup: { [group] in group })
+        #endif
         let lifted = drag?.id == id && translation != nil
         let hidden = lifted || (drag?.id == id && drag?.landing == true) || dragOutRow == TasksRowID(tab: tab, id: id)
         // Read here, in the cell's own body, so a new target moves the
