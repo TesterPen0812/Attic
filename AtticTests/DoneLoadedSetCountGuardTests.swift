@@ -77,6 +77,105 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
         XCTAssertEqual(edited[1], edited[3], "TA-04: an archived task's edit re-read more rows with more pages loaded")
     }
 
+    /// The fix's own check (the oracle): every in-place update of the loaded
+    /// pages is read again in full and compared, rows, families and order,
+    /// and every reused Done row is projected again and compared. Run through
+    /// edits elsewhere, archived edits (a parent's and, where the page lists
+    /// it, a subtask's), a search, a failed read and Retry, and the changes
+    /// that must still read the pages in full: an archived delete and its
+    /// Undo, Restore to Now, and a delete that gives the store a new context.
+    func testDoneLogInPlaceUpdatesMatchAFullRead() throws {
+        TasksPageModel.checksDoneLogInPlace = true
+        defer { TasksPageModel.checksDoneLogInPlace = false }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let context = ModelContext(container)
+        let now = Date()
+        var order: Int64 = 10_000_000
+        var parents: [UUID] = [], children: [UUID] = []
+        for index in 0..<12 {
+            order -= 1_024
+            let open = TaskItem(title: "Open task \(index)", status: .todo, createdAt: now, manualOrder: order)
+            open.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(open)
+        }
+        for index in 0..<100 {
+            order -= 1_024
+            let completed = now.addingTimeInterval(-86_400 - Double(index + 1) * 3_600)
+            let parent = TaskItem(title: "Finished task \(index)", status: .done, createdAt: now, completedAt: completed, manualOrder: order)
+            parent.listOrderVersion = TaskItem.currentListOrderVersion
+            parent.doneLoggedAt = completed
+            context.insert(parent)
+            parents.append(parent.id)
+            if index % 4 == 0 {
+                for step in 0..<2 {
+                    let child = TaskItem(title: "Step \(step) of \(index)", status: .done, createdAt: now,
+                                         completedAt: completed.addingTimeInterval(-Double(step + 1) * 60), parentID: parent.id)
+                    child.doneLoggedAt = completed
+                    context.insert(child)
+                    children.append(child.id)
+                }
+            }
+        }
+        try context.save()
+        let store = TaskStore(container: container)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let hosting = page(model, store)
+        model.select(tab: .done)
+        model.showPagerPage(animated: false)
+        settle(hosting)
+        model.loadDoneLogIfNeeded()
+        model.loadMoreDoneLog()
+        settle(hosting)
+        XCTAssertEqual(model.doneLogTasks.count, 2 * TasksPageModel.doneLogPageSize)
+        var inPlace = model.doneLogInPlaceRefreshCount
+        func step(_ name: String, inPlace expected: Bool, _ body: () -> Void) {
+            body()
+            settle(hosting)
+            settle(hosting)
+            _ = model.doneDays()
+            let ran = model.doneLogInPlaceRefreshCount > inPlace
+            print("DONE_IN_PLACE step=\"\(name)\" in_place=\(ran) loaded=\(model.doneLogTasks.count) "
+                  + "failure=\(model.doneLogFailure != nil) mismatches=\(model.doneLogInPlaceMismatches.count)")
+            XCTAssertEqual(ran, expected, "\(name): updated in place")
+            XCTAssertEqual(model.doneLogInPlaceMismatches, [], "\(name)")
+            inPlace = model.doneLogInPlaceRefreshCount
+        }
+        let nowIDs = store.tasks.filter { $0.status == .todo }.map(\.id)
+        step("edit on Now", inPlace: true) { XCTAssertTrue(model.setPriority(.high, for: [nowIDs[0]]).isApplied) }
+        step("archived priority", inPlace: true) { XCTAssertTrue(model.setPriority(.high, for: [parents[4]]).isApplied) }
+        step("archived tag on a family", inPlace: true) { XCTAssertTrue(model.toggleTag("kept", for: [parents[8]]).isApplied) }
+        if model.listedTask(children[0]) != nil {
+            step("archived subtask's tag", inPlace: true) { XCTAssertTrue(model.toggleTag("step", for: [children[0]]).isApplied) }
+        } else {
+            print("DONE_IN_PLACE step=\"archived subtask's tag\" skipped: the page does not list an archived subtask")
+        }
+        step("two edits, then the page reads", inPlace: true) {
+            XCTAssertTrue(model.setPriority(.medium, for: [nowIDs[1]]).isApplied)
+            XCTAssertTrue(model.setPriority(.low, for: [parents[12]]).isApplied)
+        }
+        store.doneLogReadFailures = 1
+        step("archived edit whose read fails", inPlace: false) {
+            XCTAssertTrue(model.setPriority(.medium, for: [parents[16]]).isApplied)
+        }
+        XCTAssertNotNil(model.doneLogFailure, "a failed read shows Retry")
+        XCTAssertEqual(model.doneLogTasks.count, 2 * TasksPageModel.doneLogPageSize, "a failed read keeps what loaded")
+        step("Retry", inPlace: true) { model.retryDoneLog() }
+        XCTAssertNil(model.doneLogFailure)
+        step("archived delete reads in full", inPlace: false) { XCTAssertTrue(model.delete([parents[20]]).isApplied) }
+        step("its Undo reads in full", inPlace: false) { XCTAssertTrue(model.undo().isApplied) }
+        step("edit after Undo", inPlace: true) { XCTAssertTrue(model.setPriority(.high, for: [parents[20]]).isApplied) }
+        step("Restore to Now reads in full", inPlace: false) { XCTAssertTrue(model.restoreToNow([parents[24]]).isApplied) }
+        step("a delete on Now gives the store a new context", inPlace: false) {
+            XCTAssertTrue(model.delete([nowIDs[2]]).isApplied)
+        }
+        step("edit after the new context", inPlace: true) { XCTAssertTrue(model.setPriority(.high, for: [nowIDs[3]]).isApplied) }
+        model.doneSearch = "Finished task 3"
+        model.flushDoneSearchInput()
+        settle(hosting)
+        step("search: edit on Now", inPlace: true) { XCTAssertTrue(model.setPriority(.low, for: [nowIDs[4]]).isApplied) }
+        step("search: archived edit", inPlace: true) { XCTAssertTrue(model.setPriority(.low, for: [parents[32]]).isApplied) }
+    }
+
     // MARK: - Rig
 
     private static let size = CGSize(width: 344, height: 520)

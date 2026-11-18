@@ -411,7 +411,13 @@ final class TaskStore: ObservableObject {
     weak var commandLibrary: AtticLibrary?
 
     let container: ModelContainer
-    private var context: ModelContext
+    private var context: ModelContext {
+        didSet { contextGeneration &+= 1 }
+    }
+    /// Counts the times the store started reading through a new context. A
+    /// page that keeps rows it read (the Done log) reads them again when this
+    /// changed, so it never presents rows of a context the store let go.
+    private(set) var contextGeneration: UInt64 = 0
     private var taskEditNeedsReload = false
     /// The last list read failed, so the list may lack tasks that are saved.
     var hasUnresolvedTaskReload: Bool { taskEditNeedsReload }
@@ -3031,6 +3037,42 @@ final class TaskStore: ObservableObject {
             report(error.localizedDescription, owner: nil)
             return DoneLogPage(tasks: [], next: cursor, hasMore: true, failure: error.localizedDescription)
         }
+    }
+
+    /// The first `limit` IDs of the panel's logical cursor and how many it
+    /// walks in all, from the index (no read). The Done page compares them
+    /// with what it loaded to tell whether a save moved its loaded rows.
+    func indexedDoneLogIDs(limit: Int, matching query: String = "", tags: TagPicks = .none) -> (ids: [UUID], total: Int) {
+        let ids = doneSearchIDs(matching: query, tags: tags)
+        return (Array(ids.prefix(max(0, limit))), ids.count)
+    }
+
+    /// Done log main tasks by ID, the replica each shows. A task no longer
+    /// in the log is left out. A failed read returns its message, as a
+    /// failed page does.
+    func doneLogTasks(withIDs ids: [UUID]) -> (tasks: [TaskItem], failure: String?) {
+        donePageReadCount += 1
+        guard !ids.isEmpty else { return ([], nil) }
+        do {
+            let rows = try readDoneLog(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+            return (Self.canonicalReplicas(from: rows).filter {
+                $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil
+            }, nil)
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return ([], error.localizedDescription)
+        }
+    }
+
+    /// The parent of every saved replica of `ids` (a subtask's, wherever it
+    /// is: listed, logged or deleted); nil when the read failed.
+    func savedParentIDs(of ids: Set<UUID>) -> Set<UUID>? {
+        guard !ids.isEmpty else { return [] }
+        let wanted = Array(ids)
+        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { wanted.contains($0.id) })) else {
+            return nil
+        }
+        return Set(rows.compactMap(\.parentID))
     }
 
     /// The Done log's order: most recently finished first (the shown

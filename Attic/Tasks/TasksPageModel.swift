@@ -608,6 +608,20 @@ final class TasksPageModel: ObservableObject {
     private var doneLogTag: TagPicks?
     private var doneLogRevision: UInt64?
     private var doneLogCursor = TaskStore.DoneLogCursor()
+    /// The tasks the store's saves named since the loaded pages were read
+    /// (`doneLogRevision`); nil once a save named none (a full reload, an
+    /// uncertain change). F4 and TA-04: only the loaded families these touch
+    /// are read again.
+    private var doneLogChangedIDs: Set<UUID>? = []
+    /// The store's context the loaded pages were read through
+    /// (`TaskStore.contextGeneration`).
+    private var doneLogContextGeneration: UInt64?
+    /// An edit asked for the loaded pages again (`reloadDoneLogAfterEdit`).
+    private var doneLogNeedsRead = false
+    /// Each loaded subtask's parent, for a save that names only the subtask.
+    private var doneLogParentByChild: [UUID: UUID] = [:]
+    /// The loaded pages are as the store is now.
+    private var doneLogIsCurrent: Bool { doneLogRevision == store.revision && !doneLogNeedsRead }
 
     var dateEnvironmentDidPublish: ((Notification) -> Void)?
     /// Resolve the calendar when shorthand is used: the retained page can
@@ -654,6 +668,7 @@ final class TasksPageModel: ObservableObject {
         library.tasks.$revision.dropFirst()
             .sink { [weak self] _ in
                 guard let self else { return }
+                self.noteDoneLogChanged(self.store.revisionChangedTaskIDs)
                 self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
                 self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
             }
@@ -709,19 +724,7 @@ final class TasksPageModel: ObservableObject {
         #if DEBUG
         rowProjectionBuildCount += 1
         #endif
-        let subtasks: [TaskItem]
-        if task.doneLoggedAt != nil {
-            // Archived families are loaded with the page. Looking these up
-            // in the live-family index needlessly builds all active tasks.
-            subtasks = doneLogChildren[task.id] ?? []
-        } else if store.parent(of: task) != nil {
-            subtasks = []
-        } else if store.task(withID: task.id) != nil {
-            subtasks = store.subtasks(of: task.id)
-        } else {
-            // A Done log task: its family left the list with it.
-            subtasks = doneLogChildren[task.id] ?? []
-        }
+        let subtasks = rowSubtasks(of: task)
         let open = expanded.contains(task.id)
         var model = TaskRowPresentation.row(for: task, subtasks: subtasks, today: today,
                                             calendar: services.calendar(), locale: services.locale)
@@ -746,6 +749,22 @@ final class TasksPageModel: ObservableObject {
             subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : [],
             due: task.dueDay
         )
+    }
+
+    /// The subtasks a row shows: an archived row's from its loaded family.
+    private func rowSubtasks(of task: TaskItem) -> [TaskItem] {
+        if task.doneLoggedAt != nil {
+            // Archived families are loaded with the page. Looking these up
+            // in the live-family index needlessly builds all active tasks.
+            return doneLogChildren[task.id] ?? []
+        } else if store.parent(of: task) != nil {
+            return []
+        } else if store.task(withID: task.id) != nil {
+            return store.subtasks(of: task.id)
+        } else {
+            // A Done log task: its family left the list with it.
+            return doneLogChildren[task.id] ?? []
+        }
     }
 
     private struct RowsKey: Equatable {
@@ -874,7 +893,7 @@ final class TasksPageModel: ObservableObject {
         }
         let row = rowModel(for: task, match: match)
         removeRowProjection(task.id, from: tab)
-        let children = Set(store.subtasks(of: task.id).map(\.id))
+        let children = Set(rowSubtasks(of: task).map(\.id))
         rowProjections[tab, default: [:]][task.id] = CachedRowProjection(
             task: task, row: row, match: match, day: day, environment: environment,
             noteOwnersRevision: noteOwnersRevision, held: hold, expanded: open, childIDs: children)
@@ -1202,13 +1221,20 @@ final class TasksPageModel: ObservableObject {
         var current: (day: Date, rows: [TasksListRow])?
         for task in finished {
             let day = calendar.startOfDay(for: task.completedAt ?? task.updatedAt)
-            var row = rowModel(for: task)
-            if !query.isEmpty {
-                // The match is highlighted in the title (owner item 17).
-                var model = row.model
-                model.titleMatch = query
-                row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks)
+            // The match is highlighted in the title (owner item 17). TA-04:
+            // a row already projected is reused, so a new page or an edit
+            // projects only its own rows.
+            var row = projectedRow(for: task, tab: .done, match: query.isEmpty ? nil : query)
+            if !query.isEmpty { row = TasksListRow(id: row.id, model: row.model, status: row.status, subtasks: row.subtasks) }
+            #if DEBUG
+            if Self.checksDoneLogInPlace {
+                var fresh = rowModel(for: task, match: query.isEmpty ? nil : query)
+                if !query.isEmpty { fresh = TasksListRow(id: fresh.id, model: fresh.model, status: fresh.status, subtasks: fresh.subtasks) }
+                if fresh != row || fresh.model.subtasks?.total != row.model.subtasks?.total {
+                    doneLogInPlaceMismatches.append("projection \(task.title): kept \(row.model.title) \(row.model.priority) read \(fresh.model.title) \(fresh.model.priority)")
+                }
             }
+            #endif
             if current?.day == day {
                 current?.rows.append(row)
             } else {
@@ -1260,7 +1286,8 @@ final class TasksPageModel: ObservableObject {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let tag = tagPicks
         let same = doneLogQuery == query && doneLogTag == tag
-        guard !same || doneLogRevision != store.revision else { return }
+        guard !same || !doneLogIsCurrent else { return }
+        if same, refreshLoadedDoneLog(query: query, tag: tag) { return }
         let limit = same ? max(Self.doneLogPageSize, doneLogTasks.count) : Self.doneLogPageSize
         let page = IdleLatencyTrace.span("task_done_load") {
             store.indexedDoneLogPage(limit: limit, matching: query, tags: tag)
@@ -1277,12 +1304,125 @@ final class TasksPageModel: ObservableObject {
         }
         doneLogQuery = query
         doneLogTag = tag
-        doneLogRevision = store.revision
+        markDoneLogRead()
         setDoneLog(page.tasks)
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
         doneLogFailure = nil
     }
+
+    /// F4, TA-04: after saves that named their tasks, the loaded pages are
+    /// brought up to date in place: only the loaded families the saves
+    /// touched are read again, and only their rows are projected again.
+    /// That holds while the loaded rows are still the cursor's first rows
+    /// (from the index, no read) and the store reads through the context
+    /// they came from. Otherwise (false) the pages are read again, as before.
+    /// A failed read keeps what loaded and stops until Retry, as a page does.
+    private func refreshLoadedDoneLog(query: String, tag: TagPicks) -> Bool {
+        guard doneLogRevision != nil, doneLogRevision != store.revision, doneLogFailure == nil,
+              let changed = doneLogChangedIDs, doneLogContextGeneration == store.contextGeneration else { return false }
+        let loaded = doneLogTasks.map(\.id)
+        let loadedIDs = Set(loaded)
+        let index = store.indexedDoneLogIDs(limit: loaded.count, matching: query, tags: tag)
+        guard index.ids.count == loaded.count, loadedIDs.count == loaded.count, Set(index.ids) == loadedIDs else { return false }
+        var touched = Set<UUID>(), unlisted = Set<UUID>()
+        for id in changed {
+            if loadedIDs.contains(id) { touched.insert(id); continue }
+            if let parent = doneLogParentByChild[id] { touched.insert(parent) }
+            if let listed = store.task(withID: id) {
+                if let parent = listed.parentID, loadedIDs.contains(parent) { touched.insert(parent) }
+            } else {
+                unlisted.insert(id)
+            }
+        }
+        if !unlisted.isEmpty {
+            // Logged, deleted or gone: where its saved replicas belong.
+            guard let parents = store.savedParentIDs(of: unlisted) else { return false }
+            touched.formUnion(parents.intersection(loadedIDs))
+        }
+        if !touched.isEmpty {
+            let parents = loaded.filter(touched.contains)
+            let read = store.doneLogTasks(withIDs: parents)
+            if let failure = read.failure {
+                doneLogHasMore = true
+                doneLogFailure = failure
+                return true
+            }
+            guard read.tasks.count == parents.count else { return false }
+            let fresh = Dictionary(read.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let families = store.doneLogSubtasks(ofParents: parents)
+            for parent in parents {
+                for child in doneLogChildren[parent] ?? [] where doneLogParentByChild[child.id] == parent {
+                    doneLogParentByChild[child.id] = nil
+                }
+                doneLogChildren[parent] = families[parent]
+                for child in families[parent] ?? [] { doneLogParentByChild[child.id] = parent }
+                removeRowProjection(parent, from: .done)
+            }
+            doneLogTasks = doneLogTasks.map { fresh[$0.id] ?? $0 }.sorted(by: TaskStore.doneLogOrder)
+        }
+        doneCountCache = nil
+        markDoneLogRead()
+        // Set even when unchanged: it tells the Done list to draw the saves,
+        // as reading the pages again did.
+        doneLogHasMore = loaded.count < index.total
+        #if DEBUG
+        doneLogInPlaceRefreshCount += 1
+        if Self.checksDoneLogInPlace { checkDoneLogInPlace(query: query, tag: tag) }
+        #endif
+        return true
+    }
+
+    /// The loaded pages match the store now.
+    private func markDoneLogRead() {
+        doneLogRevision = store.revision
+        doneLogNeedsRead = false
+        doneLogChangedIDs = []
+        doneLogContextGeneration = store.contextGeneration
+    }
+
+    /// A store revision while pages are loaded: what it named, for
+    /// `refreshLoadedDoneLog`.
+    private func noteDoneLogChanged(_ ids: Set<UUID>?) {
+        guard doneLogRevision != nil else { return }
+        if let ids, doneLogChangedIDs != nil {
+            doneLogChangedIDs?.formUnion(ids)
+        } else {
+            doneLogChangedIDs = nil
+        }
+    }
+
+    #if DEBUG
+    /// How many times the loaded pages were brought up to date in place.
+    private(set) var doneLogInPlaceRefreshCount = 0
+    /// Test seam (the oracle): after each in-place update, read the loaded
+    /// pages again in full and count any difference.
+    static var checksDoneLogInPlace = false
+    private(set) var doneLogInPlaceMismatches: [String] = []
+
+    private func checkDoneLogInPlace(query: String, tag: TagPicks) {
+        let page = store.indexedDoneLogPage(limit: doneLogTasks.count, matching: query, tags: tag)
+        let full = page.tasks.sorted(by: TaskStore.doneLogOrder)
+        let families = store.doneLogSubtasks(ofParents: full.map(\.id))
+        func describe(_ task: TaskItem) -> String {
+            "\(task.id) \(task.title) \(task.status) \(task.priority) \(task.tags) \(task.completedAt?.timeIntervalSince1970 ?? 0)"
+        }
+        if full.map(\.id) != doneLogTasks.map(\.id) {
+            doneLogInPlaceMismatches.append("order: in place \(doneLogTasks.map(\.title)) read \(full.map(\.title))")
+        }
+        for (mine, theirs) in zip(doneLogTasks, full) where describe(mine) != describe(theirs) {
+            doneLogInPlaceMismatches.append("row: in place \(describe(mine)) read \(describe(theirs))")
+        }
+        for task in full {
+            let mine = (doneLogChildren[task.id] ?? []).map(describe)
+            let theirs = (families[task.id] ?? []).map(describe)
+            if mine != theirs { doneLogInPlaceMismatches.append("family \(task.title): in place \(mine) read \(theirs)") }
+        }
+        if page.hasMore != doneLogHasMore {
+            doneLogInPlaceMismatches.append("more: in place \(doneLogHasMore) read \(page.hasMore)")
+        }
+    }
+    #endif
 
     /// The next page, when the last loaded row comes on screen. The cursor
     /// walks canonical matching IDs, so duplicate replicas never stop it.
@@ -1291,7 +1431,7 @@ final class TasksPageModel: ObservableObject {
         guard doneLogHasMore, doneLogFailure == nil else { return }
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         if doneLogQuery != query || doneLogTag != tagPicks { loadDoneLogIfNeeded(); return }
-        if doneLogRevision != store.revision {
+        if !doneLogIsCurrent {
             loadDoneLogIfNeeded()
             guard doneLogHasMore, doneLogFailure == nil else { return }
         }
@@ -1300,7 +1440,9 @@ final class TasksPageModel: ObservableObject {
         // The indexed cursor supplies canonical IDs in completion order.
         // Existing families remain valid for this store revision.
         doneLogTasks.append(contentsOf: page.tasks)
-        doneLogChildren.merge(store.doneLogSubtasks(ofParents: page.tasks.map(\.id))) { _, new in new }
+        let families = store.doneLogSubtasks(ofParents: page.tasks.map(\.id))
+        doneLogChildren.merge(families) { _, new in new }
+        for (parent, children) in families { for child in children { doneLogParentByChild[child.id] = parent } }
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
         doneLogFailure = page.failure
@@ -1316,7 +1458,7 @@ final class TasksPageModel: ObservableObject {
     func retryDoneLog() {
         doneLogFailure = nil
         if doneLogQuery != doneSearch.trimmingCharacters(in: .whitespacesAndNewlines) || doneLogTag != tagPicks
-            || doneLogRevision != store.revision {
+            || !doneLogIsCurrent {
             loadDoneLogIfNeeded()
         } else {
             loadMoreDoneLog()
@@ -1332,6 +1474,12 @@ final class TasksPageModel: ObservableObject {
         doneCountCache = nil
         doneLogTasks = tasks.sorted(by: TaskStore.doneLogOrder)
         doneLogChildren = store.doneLogSubtasks(ofParents: doneLogTasks.map(\.id))
+        doneLogParentByChild = [:]
+        for (parent, children) in doneLogChildren { for child in children { doneLogParentByChild[child.id] = parent } }
+        // Read in full, the rows are projected again: a read that replaced
+        // a family in the same objects must not reuse their old rows.
+        rowProjections[.done] = nil
+        rowProjectionParentByChild[.done] = nil
     }
 
     // MARK: - Tabs
@@ -2301,7 +2449,7 @@ final class TasksPageModel: ObservableObject {
 
     /// The Done log's loaded pages after a change to a task in it.
     func reloadDoneLogAfterEdit() {
-        doneLogRevision = nil
+        doneLogNeedsRead = true
         loadDoneLogIfNeeded()
     }
 
@@ -2313,7 +2461,7 @@ final class TasksPageModel: ObservableObject {
     /// The Done log's loaded pages after a task left it.
     private func reloadDoneLogAfterChange() {
         guard doneLogQuery != nil else { return }
-        doneLogRevision = nil
+        doneLogNeedsRead = true
         loadDoneLogIfNeeded()
     }
 
@@ -2440,7 +2588,7 @@ final class TasksPageModel: ObservableObject {
         if tab == .done {
             showToast(ids.count == 1 ? String(localized: "Restored to Now") : String(localized: "Restored \(ids.count) tasks to Now"))
         }
-        doneLogRevision = nil
+        doneLogNeedsRead = true
         loadDoneLogIfNeeded()
         pruneInvisibleSelection(on: tab)
         return outcome
