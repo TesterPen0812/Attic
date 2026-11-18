@@ -51,7 +51,7 @@ final class TasksBreadthGuardTests: XCTestCase {
         XCTExpectFailure("tasks-breadth-1b: the release still reaches every drawn wrapper through the cell broadcast") {
             assertOnlyChanged(release, "release", delivered: false)
         }
-        XCTAssertNil(pointer.frame(for: TasksRowID(tab: .now, id: tick)), "the released row left the list")
+        XCTAssertFalse(model.listSnapshot(for: .now).sections.open.contains { $0.id == tick }, "the released row left the open rows")
 
         let edited = rows[5].id
         let priority = turn(hosting, pointer, rows.map(\.id), target: edited) {
