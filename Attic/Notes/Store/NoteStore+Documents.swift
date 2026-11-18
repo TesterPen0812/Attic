@@ -427,6 +427,7 @@ extension NoteStore {
     /// says which happened so history records the actual result.
     @discardableResult
     func setPinnedOutcome(_ pinned: Bool, noteID: UUID) -> PinResult {
+        guard prepareNoteEdit() else { return .failed }
         let retainedEdits = RetainedNoteEdits()
         do {
             let replicas = try liveReplicas(of: noteID)
@@ -550,6 +551,7 @@ extension NoteStore {
         creatingTask: TaskDraft? = nil,
         pinned: Bool = false
     ) -> Result<(noteID: UUID, revisionID: UUID), NoteDocumentStoreError> {
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let context = modelContext
         if let existing = try? replicasIncludingDeleted(of: id), !existing.isEmpty {
             if existing.contains(where: { $0.deletedAt != nil }) { return .failure(.noteMissing(id)) }
@@ -672,6 +674,7 @@ extension NoteStore {
         prepared: PreparedNoteDocument? = nil,
         tags: [String]? = nil
     ) -> Result<UUID, NoteDocumentStoreError> {
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let preflight: NoteMutationPreflight
         do {
             preflight = try noteMutationPreflight(noteID, format: .document)
@@ -1020,6 +1023,7 @@ extension NoteStore {
     /// already holds this exact revision.
     @discardableResult
     func recordVersion(noteID: UUID, reason: NoteVersionReason) -> Bool {
+        guard prepareNoteEdit() else { return false }
         guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { return false }
         let inserted: Int
         do { inserted = try stageDisplacedReplicas(preflight.replicas, reason: reason, timestamp: currentDate) }
@@ -1035,6 +1039,7 @@ extension NoteStore {
     /// remain until their owner is gone. Safety versions taken at exactly the
     /// same instant are kept together so divergent replicas are not collapsed.
     func thinVersions(noteID: UUID) {
+        guard prepareNoteEdit() else { return }
         let day: TimeInterval = 86_400
         let now = currentDate
         let targetID = noteID
@@ -1146,6 +1151,7 @@ extension NoteStore {
     /// first, in the same save: Restore succeeds only when both commit.
     func restoreVersion(_ versionID: UUID, noteID: UUID, expectedRevisionID: UUID? = nil,
                         preservationID: UUID? = nil) -> Result<String, NoteDocumentStoreError> {
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let preflight: NoteMutationPreflight
         do {
             preflight = try noteMutationPreflight(noteID, format: .editable)
@@ -1328,6 +1334,7 @@ extension NoteStore {
         disposition: NoteAgentWriteDisposition,
         requiresReview: Bool = false
     ) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
         let preflight: NoteMutationPreflight
         do {
@@ -1457,6 +1464,7 @@ extension NoteStore {
     /// Returns how many applied.
     @discardableResult
     func applyPendingEdits(noteID: UUID) -> Int {
+        guard prepareNoteEdit() else { return 0 }
         var applied = 0
         for edit in pendingEdits(noteID: noteID) {
             guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { break }
@@ -1509,6 +1517,7 @@ extension NoteStore {
     /// All outside surfaces use these same revision and presence rules.
     func agentDelete(noteID: UUID, baseRevisionToken: String, agentName: String,
                      disposition: NoteAgentWriteDisposition) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
         let retainedEdits = RetainedNoteEdits()
         do {
@@ -1565,6 +1574,7 @@ extension NoteStore {
 
     @discardableResult
     func acknowledgeExternalEdit(noteID: UUID) -> Bool {
+        guard prepareNoteEdit() else { return false }
         guard let rows = try? liveReplicas(of: noteID), !rows.isEmpty else { return false }
         let retainedEdits = RetainedNoteEdits()
         retainedEdits.capture(rows)
@@ -1591,6 +1601,7 @@ extension NoteStore {
                              expectedSavedContent: Data?, expectedProposal: NoteProposalSignature,
                              preserving current: NoteDocument, merged: NoteDocument? = nil,
                              preservationID: UUID = UUID()) -> Result<String, NoteDocumentStoreError> {
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         guard expectedProposal.workspaceOperation == nil else { return .failure(.saveFailed("Review and apply the whole workspace operation.")) }
         let retainedEdits = RetainedNoteEdits()
         do {

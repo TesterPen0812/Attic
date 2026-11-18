@@ -159,6 +159,9 @@ final class NoteStore: ObservableObject {
     func resetFullNoteReloadCount() { fullNoteReloadCount = 0 }
     /// Test seam: the next N presentation reloads throw before reading (board id undo-unresolved-staging, Notes side).
     var reloadFailures = 0
+    /// What the last spent context replaced at the staging entry still held that was not durable (build condition
+    /// 5). Empty: replacing it discarded nothing.
+    private(set) var lastSpentContextUnsaved: [String]?
     #endif
 
     /// Warm suggestions read values only, without revisiting the library's
@@ -624,6 +627,7 @@ final class NoteStore: ObservableObject {
     /// newest-first list (its `updatedAt` is kept), on every replica.
     @discardableResult
     func setTags(_ tags: [String], for note: NoteItem) -> Bool {
+        guard prepareNoteEdit() else { return false }
         guard let note = notes.first(where: { $0.id == note.id }) else { return false }
         let encoded = AtticTag.encode(tags)
         let retainedEdits = RetainedNoteEdits()
@@ -648,6 +652,7 @@ final class NoteStore: ObservableObject {
     /// this note is refused when it finishes, as before.
     @discardableResult
     func delete(_ note: NoteItem) -> Bool {
+        guard prepareNoteEdit() else { return false }
         guard let note = notes.first(where: { $0.id == note.id }) else { return false }
         let release: () -> Void
         do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: note.id, container: container) }
@@ -675,6 +680,7 @@ final class NoteStore: ObservableObject {
     /// Exact inverse of restoring a pre-group independent note deletion.
     /// This is not a user Delete route; it must not hide the surviving task.
     func deleteRestoredLegacyNote(noteID: UUID) -> Bool {
+        guard prepareNoteEdit() else { return false }
         do {
             let rows = try storedNotesIncludingDeleted(matching: noteID)
             guard rows.contains(where: { $0.deletedAt == nil }) else { return false }
@@ -734,6 +740,7 @@ final class NoteStore: ObservableObject {
     /// save. Its place in the list is where it was (its `updatedAt` is kept).
     @discardableResult
     func restoreDeleted(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> Bool {
+        guard prepareNoteEdit() else { return false }
         lastRestoreWasSeparate = false
         let retainedEdits = RetainedNoteEdits()
         var separated = false
@@ -843,6 +850,7 @@ final class NoteStore: ObservableObject {
     /// save. Refused when the task has no other live own note.
     @discardableResult
     func keepAsSeparateNote(noteID: UUID) -> Bool {
+        guard prepareNoteEdit() else { return false }
         do {
             let replicas = try storedNotesIncludingDeleted(matching: noteID)
             guard !replicas.isEmpty, replicas.allSatisfy({ $0.deletedAt == nil }) else {
@@ -881,6 +889,7 @@ final class NoteStore: ObservableObject {
         confirmed: [UUID: Date]? = nil,
         alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
     ) -> Set<UUID> {
+        guard prepareNoteEdit() else { return [] }
         var purgedIDs = Set<UUID>()
 #if os(macOS)
         var references: [AttachmentFileReference] = []
@@ -992,6 +1001,7 @@ final class NoteStore: ObservableObject {
     }
 
     func removeAttachment(_ attachment: NoteAttachment) -> Bool {
+        guard prepareNoteEdit() else { return false }
         let replicas: [NoteAttachment]
         do {
             replicas = try storedAttachments(matching: attachment.id)
@@ -1098,6 +1108,7 @@ final class NoteStore: ObservableObject {
     /// Brings a removed attachment back to its note, every replica, in one save.
     @discardableResult
     func restoreAttachment(_ attachmentID: UUID) -> Bool {
+        guard prepareNoteEdit() else { return false }
         let family = attachmentFamily(attachmentID)
         guard let row = family.first,
               family.allSatisfy({ $0.noteID == row.noteID }),
@@ -1113,6 +1124,7 @@ final class NoteStore: ObservableObject {
     /// (attachment id and removal time).
     @discardableResult
     func purgeRemovedAttachments(before cutoff: Date, confirmed: [UUID: Date]? = nil) -> Int {
+        guard prepareNoteEdit() else { return 0 }
         var references: [AttachmentFileReference] = []
         do {
             let removed = try context.fetch(FetchDescriptor<NoteAttachment>(
@@ -1477,6 +1489,7 @@ final class NoteStore: ObservableObject {
     /// Refuse a changed physical note or association before staging anything.
     @discardableResult
     func undoAgentCreatedNote(_ id: UUID, revision: String, metadata: String) -> Bool {
+        guard prepareNoteEdit() else { return false }
         guard agentCreatedNoteIsUnchanged(id, revision: revision, metadata: metadata) else { return false }
         let release: () -> Void
         do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: id, container: container) }
@@ -1585,6 +1598,25 @@ final class NoteStore: ObservableObject {
         }
     }
     var currentDate: Date { now() }
+
+    /// The store's one staging entry (board id undo-unresolved-staging): every command that stages on `context`
+    /// passes it first. A journaled commit leaves the context spent (it still holds what was committed); when the
+    /// reload after it failed, the spent context is still installed, and staging on it would propose the committed
+    /// inserts again. Replace it with a fresh read, or refuse. The fact is the bridge's, read here; Notes keeps no
+    /// flag of its own.
+    func prepareNoteEdit() -> Bool {
+        guard WorkspaceLegacyBridge.isSpent(context) else { return true }
+        #if DEBUG
+        lastSpentContextUnsaved = (try? WorkspaceLegacyBridge.unsavedChanges(in: context)) ?? ["unreadable"]
+        #endif
+        do {
+            try reloadModels(preservingAttachmentProofs: true)
+            return true
+        } catch {
+            lastErrorMessage = "Not saved: Attic could not refresh this note. Try again. \(error.localizedDescription)"
+            return false
+        }
+    }
 
     /// Saves staged changes; on failure rolls back, reloads and records the
     /// error (the same rule every mutation here follows).

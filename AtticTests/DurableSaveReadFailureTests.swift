@@ -334,6 +334,9 @@ final class DurableSaveReadFailureTests: XCTestCase {
         print("C3_REUSE \(label) command=\(commandResult) next=\(next) preservation_rows=\(records.count) "
             + "preservation_ids=\(Set(records.map(\.id)).count) dupes_after_command=\(afterCommand) dupes_after_next=\(afterNext) "
             + "error=\(rig.tasks.lastErrorMessage ?? "nil")")
+        // Build condition 5: the command's staging entry replaced the spent context, and it held nothing unsaved.
+        print("C5_SPENT \(label) replaced=\(rig.tasks.lastSpentContextUnsaved != nil) unsaved=\(rig.tasks.lastSpentContextUnsaved ?? [])")
+        XCTAssertEqual(rig.tasks.lastSpentContextUnsaved, [], "\(label): the spent context is replaced, discarding nothing unsaved")
         XCTAssertEqual(afterCommand, [], "\(label): one physical row per id after the command")
         XCTAssertEqual(afterNext, [], "\(label): one physical row per id after the next save")
         XCTAssertEqual(records.count, 1, "\(label): the delete's preservation record is one row")
@@ -597,6 +600,8 @@ final class DurableSaveReadFailureTests: XCTestCase {
                 + "renamed=\(renamed) note_rows=\(noteRows) file_rows=\(fileRows) error=\(rig.notes.lastErrorMessage ?? "nil") "
                 + "duplicates=\(try duplicateRows(rig.container) + attachmentDupes)")
             XCTAssertEqual(reloadsFailed, failures, "\(label): every reload after the inserting commit failed")
+            XCTAssertTrue(renamed, "\(label): the next command works")
+            XCTAssertEqual(rig.notes.lastSpentContextUnsaved, [], "\(label): the spent context is replaced, discarding nothing unsaved")
             XCTAssertEqual(noteRows, 1, "\(label): the inserted note is one row")
             if withFile { XCTAssertEqual(fileRows, 1, "\(label): the inserted file is one row") }
             XCTAssertEqual(try duplicateRows(rig.container) + attachmentDupes, [], "\(label): one physical row per id after the next command")

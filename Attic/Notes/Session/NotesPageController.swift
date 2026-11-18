@@ -1206,7 +1206,7 @@ final class NotesPageController: ObservableObject {
               canLeaveComposition(in: session) else { return false }
         return await performAfterRecovery {
             guard self.isReviewSessionCurrent(session), !session.isImporting, self.canLeaveComposition(in: session),
-                  self.preserve(session),
+                  self.preserve(session), self.store.prepareNoteEdit(),
                   let edit = self.store.pendingEdits(noteID: session.noteID).first(where: { id == nil || $0.id == id }),
                   let family = try? self.store.pendingEditRows(edit.id),
                   NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [session.noteID]) else { return false }

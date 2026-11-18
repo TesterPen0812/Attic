@@ -1079,8 +1079,17 @@ final class TaskStore: ObservableObject {
 
     /// Command entry points recover once before collecting Undo snapshots
     /// or deriving a family scope. UI and snapshot lookups stay read-only.
+    ///
+    /// This is the store's one staging entry (board id undo-unresolved-staging): every command that stages on
+    /// `context` passes it first. The context also needs replacing when the bridge has marked it spent, which a
+    /// journaled commit does (the context still holds what was committed): that is the bridge's fact, read here,
+    /// not a second flag beside `taskEditNeedsReload`.
     func prepareTaskEdit(owner: UUID? = nil) -> Bool {
-        guard taskEditNeedsReload else { return true }
+        let spent = WorkspaceLegacyBridge.isSpent(context)
+        guard taskEditNeedsReload || spent else { return true }
+        #if DEBUG
+        if spent { lastSpentContextUnsaved = (try? WorkspaceLegacyBridge.unsavedChanges(in: context)) ?? ["unreadable"] }
+        #endif
         do {
             try reloadTasks()
             return true
@@ -1625,6 +1634,7 @@ final class TaskStore: ObservableObject {
         // and a family panel is not opened for a failed import, so reporting
         // there would leave nothing on screen.
         let errorOwner = familyOwner(forTaskID: taskID)
+        guard prepareTaskEdit(owner: errorOwner) else { return nil }
         guard let ownerID = attachmentOwnerID(for: taskID),
               let initial = tasks.first(where: { $0.id == ownerID }) else {
             report("Couldn’t attach files. The task is no longer available.", owner: errorOwner)
@@ -1642,6 +1652,8 @@ final class TaskStore: ObservableObject {
             // The post-import read below still revalidates across the await.
             for replica in try storedTasks(matching: ownerID) { _ = try Self.attachmentLists(of: replica) }
             imported = try await importing(ownerID, initial.attachments)
+            // The context may have been spent by a commit during the await: pass the staging entry again.
+            guard prepareTaskEdit(owner: errorOwner) else { await taskImageFiles.remove(imported); return nil }
             guard let current = tasks.first(where: { $0.id == ownerID }) else {
                 await taskImageFiles.remove(imported)
                 report("Couldn’t attach files. The task was deleted while they were copied.", owner: errorOwner)
@@ -1755,6 +1767,7 @@ final class TaskStore: ObservableObject {
     /// can't be read refuses the removal.
     @discardableResult
     func removeAttachment(_ attachmentID: UUID, from taskID: UUID) -> Bool {
+        guard prepareTaskEdit(owner: familyOwner(forTaskID: taskID)) else { return false }
         guard let task = tasks.first(where: { $0.id == taskID }),
               let removed = task.attachments.first(where: { $0.id == attachmentID }) else { return false }
         // Attachments are reached from the family panel — a parent’s through
@@ -1849,6 +1862,7 @@ final class TaskStore: ObservableObject {
     /// changed from its own lists, so references only a duplicate holds stay.
     @discardableResult
     func restoreAttachment(_ attachmentID: UUID) -> Bool {
+        guard prepareTaskEdit() else { return false }
         let owners: [TaskItem]
         do { owners = try attachmentRecoveryOwners() }
         catch { report(error.localizedDescription, owner: nil); return false }
@@ -1890,6 +1904,7 @@ final class TaskStore: ObservableObject {
     /// (attachment id and removal time), as for `purgeDeleted`.
     @discardableResult
     func purgeRemovedAttachments(before cutoff: Date, confirmed: [UUID: Date]? = nil) -> Int {
+        guard prepareTaskEdit() else { return 0 }
         var expired: [TaskImageReference] = []
         do {
             let rows = try context.fetch(FetchDescriptor<TaskItem>(
@@ -2231,9 +2246,12 @@ final class TaskStore: ObservableObject {
     @discardableResult
     func restoreDeleted(taskIDs: [UUID]) -> Bool {
         guard !taskIDs.isEmpty else { return false }
+        guard prepareTaskEdit() else { return false }
         // Restore preflight consumes the current physical family, including
-        // replicas saved by another context since the previous refusal.
-        if !context.hasChanges { context = Self.makeStoreContext(container) }
+        // replicas saved by another context since the previous refusal. After
+        // the staging entry the context is neither spent nor holding staged
+        // edits, so it is replaced by a fresh one unconditionally.
+        context = Self.makeStoreContext(container)
         do {
             let retired = try Self.circleRemovedRoots(in: context)
             let requested = try context.fetch(WholeTableRead.all(TaskItem.self)).filter { taskIDs.contains($0.id) }
@@ -2431,7 +2449,9 @@ final class TaskStore: ObservableObject {
         confirmed: [UUID: Date]? = nil,
         alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
     ) -> Set<UUID> {
-        if !context.hasChanges { context = Self.makeStoreContext(container) }
+        guard prepareTaskEdit() else { return [] }
+        // The current physical family, as for a restore: a fresh context after the staging entry.
+        context = Self.makeStoreContext(container)
         let rootsByID: [UUID: [TaskItem]]
         let storedByID: [UUID: [TaskItem]]
         do {
@@ -2510,6 +2530,7 @@ final class TaskStore: ObservableObject {
     /// repeated wake, clock or time-zone change can never log twice.
     @discardableResult
     func moveCompletedToDoneLog(before cutoff: Date) -> Int {
+        guard prepareTaskEdit() else { return 0 }
         // Fetch done rows and parent-linked rows in batches, then retain the
         // expiry candidates and their immediate families. Every candidate's
         // replicas participate so divergent duplicates still refuse cleanup.
@@ -3344,6 +3365,7 @@ final class TaskStore: ObservableObject {
     /// the whole command.
     @discardableResult
     func restoreToNow(taskIDs: [UUID]) -> Bool {
+        guard prepareTaskEdit() else { return false }
         guard !taskIDs.isEmpty else { return true }
         let timestamp = now()
         var returning = Set<UUID>()
@@ -3466,6 +3488,7 @@ final class TaskStore: ObservableObject {
     /// refused or not saved (reported).
     @discardableResult
     func reopen(taskIDs: [UUID]) -> Bool {
+        guard prepareTaskEdit(owner: taskIDs.count == 1 ? familyOwner(forTaskID: taskIDs[0]) : nil) else { return false }
         guard !taskIDs.isEmpty else { return true }
         let owner = taskIDs.count == 1 ? familyOwner(forTaskID: taskIDs[0]) : nil
         var returning = Set<UUID>()
@@ -3592,6 +3615,7 @@ final class TaskStore: ObservableObject {
     /// state fields are written, on every replica.
     @discardableResult
     func completeFamily(taskID: UUID) -> Bool {
+        guard prepareTaskEdit(owner: familyOwner(forTaskID: taskID)) else { return false }
         guard let task = task(withID: taskID) else { return false }
         guard task.status != .done else { return true }
         let owner = familyOwner(of: task)
@@ -3675,6 +3699,7 @@ final class TaskStore: ObservableObject {
     /// Returns the new main tasks, in the order asked.
     @discardableResult
     func duplicate(taskIDs: [UUID]) -> [TaskItem]? {
+        guard prepareTaskEdit() else { return nil }
         let sources = taskIDs.compactMap { listedTask(withID: $0) }
         guard !sources.isEmpty, sources.count == taskIDs.count,
               sources.allSatisfy({ $0.parentID == nil || listedTask(withID: $0.parentID!) == nil }) else {
@@ -3774,6 +3799,7 @@ final class TaskStore: ObservableObject {
     /// them in one order.
     @discardableResult
     func moveSubtask(taskID: UUID, by offset: Int) -> Bool {
+        guard prepareTaskEdit(owner: familyOwner(forTaskID: taskID)) else { return false }
         // The family index's instance: the same one `subtasks(of:)` sorts
         // and filters (CU 2a: after a plain-commit rebind, the first row in
         // `tasks` with this id could still read the old state, so a ticked
@@ -4206,6 +4232,7 @@ final class TaskStore: ObservableObject {
     /// shown one take the new time.
     @discardableResult
     func move(taskID: UUID, toIndex index: Int) -> Bool {
+        guard prepareTaskEdit(owner: familyOwner(forTaskID: taskID)) else { return false }
         guard let task = tasks.first(where: { $0.id == taskID }) else { return false }
         let owner = familyOwner(of: task)
         var group = orderGroup(of: task)
@@ -4466,6 +4493,9 @@ final class TaskStore: ObservableObject {
     #if DEBUG
     /// Test seam for a failed presentation refresh after a durable save.
     var listRefreshFailures = 0
+    /// What the last spent context replaced at the staging entry still held that was not durable (build condition
+    /// 5). Empty: replacing it discarded nothing.
+    private(set) var lastSpentContextUnsaved: [String]?
     private(set) var fullTaskReloadCount = 0
 
     func resetFullTaskReloadCount() { fullTaskReloadCount = 0 }
