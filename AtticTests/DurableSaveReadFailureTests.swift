@@ -276,4 +276,172 @@ final class DurableSaveReadFailureTests: XCTestCase {
         XCTAssertEqual(try duplicateRows(rig.container), [])
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
     }
+
+    // MARK: Condition 3: every TaskStore site that stages on the spent context
+
+    /// One unresolved delete (three failed presentation reads after the durable save), then one command that stages on
+    /// the store's context without a prepare step, then the next save. Every id keeps one physical row, and the
+    /// delete's preservation record stays one row.
+    private func afterUnresolvedDelete(_ label: String, setup: (Rig) throws -> Void = { _ in },
+                                       command: (Rig) throws -> Bool) async throws {
+        let rig = try await makeRig()
+        try setup(rig)
+        let id = rig.ids[3]
+        rig.tasks.listRefreshFailures = 3
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied, label)
+        XCTAssertTrue(rig.tasks.hasUnresolvedTaskReload, label)
+        let commandResult = try command(rig)
+        let afterCommand = try duplicateRows(rig.container)
+        let next = rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[20])), to: "The next save after \(label)")
+        let afterNext = try duplicateRows(rig.container)
+        let records = try ModelContext(rig.container).fetch(
+            FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.rootID == id }))
+        print("C3_REUSE \(label) command=\(commandResult) next=\(next) preservation_rows=\(records.count) "
+            + "preservation_ids=\(Set(records.map(\.id)).count) dupes_after_command=\(afterCommand) dupes_after_next=\(afterNext) "
+            + "error=\(rig.tasks.lastErrorMessage ?? "nil")")
+        XCTAssertEqual(afterCommand, [], "\(label): one physical row per id after the command")
+        XCTAssertEqual(afterNext, [], "\(label): one physical row per id after the next save")
+        XCTAssertEqual(records.count, 1, "\(label): the delete's preservation record is one row")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    func testC3RestoreDeletedOnTheSpentContext() async throws {
+        try await afterUnresolvedDelete("restoreDeleted") { $0.tasks.restoreDeleted(taskIDs: [$0.ids[3]]) }
+    }
+
+    func testC3PurgeDeletedOnTheSpentContext() async throws {
+        try await afterUnresolvedDelete("purgeDeleted") { rig in
+            !rig.tasks.purgeDeleted(before: .distantFuture).isEmpty
+        }
+    }
+
+    func testC3DuplicateOnTheSpentContext() async throws {
+        try await afterUnresolvedDelete("duplicate") { $0.tasks.duplicate(taskIDs: [$0.ids[7]]) != nil }
+    }
+
+    func testC3MoveOnTheSpentContext() async throws {
+        try await afterUnresolvedDelete("move") { $0.tasks.move(taskID: $0.ids[7], toIndex: 0) }
+    }
+
+    func testC3CompleteFamilyOnTheSpentContext() async throws {
+        try await afterUnresolvedDelete("completeFamily") { $0.tasks.completeFamily(taskID: $0.ids[7]) }
+    }
+
+    func testC3MoveSubtaskOnTheSpentContext() async throws {
+        var subtask: UUID?
+        try await afterUnresolvedDelete("moveSubtask", setup: { rig in
+            _ = try XCTUnwrap(rig.tasks.create(title: "First subtask", parentID: rig.ids[8]))
+            subtask = try XCTUnwrap(rig.tasks.create(title: "Second subtask", parentID: rig.ids[8])).id
+        }) { rig in rig.tasks.moveSubtask(taskID: try XCTUnwrap(subtask), by: -1) }
+    }
+
+    func testC3MoveCompletedToDoneLogOnTheSpentContext() async throws {
+        try await afterUnresolvedDelete("moveCompletedToDoneLog", setup: { rig in
+            XCTAssertTrue(rig.tasks.setStatus(.done, for: try XCTUnwrap(rig.tasks.task(withID: rig.ids[10]))))
+        }) { $0.tasks.moveCompletedToDoneLog(before: .distantFuture) > 0 }
+    }
+
+    func testC3ReopenOnTheSpentContext() async throws {
+        try await afterUnresolvedDelete("reopen", setup: { rig in
+            XCTAssertTrue(rig.tasks.setStatus(.done, for: try XCTUnwrap(rig.tasks.task(withID: rig.ids[11]))))
+        }) { $0.tasks.reopen(taskIDs: [$0.ids[11]]) }
+    }
+
+    func testC3RestoreToNowOnTheSpentContext() async throws {
+        try await afterUnresolvedDelete("restoreToNow", setup: { rig in
+            XCTAssertTrue(rig.tasks.setStatus(.done, for: try XCTUnwrap(rig.tasks.task(withID: rig.ids[12]))))
+            XCTAssertGreaterThan(rig.tasks.moveCompletedToDoneLog(before: .distantFuture), 0)
+        }) { $0.tasks.restoreToNow(taskIDs: [$0.ids[12]]) }
+    }
+
+    // MARK: Condition 2 and the Notes side
+
+    /// A new note written through the editor session, whose journaled save commits and whose post-commit owner read
+    /// throws. The note is durable once. The session must end saved: not a false conflict, not unsaved work that a
+    /// later save writes again. One physical row after the session's own retries.
+    func testC2NewNoteWhoseOwnerReadFailsIsSavedOnceAndNotRetried() async throws {
+        let rig = try await makeRig()
+        XCTAssertTrue(rig.controller.newNote())
+        let session = try XCTUnwrap(rig.controller.active)
+        var document = session.engine.checkpointDocument()
+        document.blocks.append(.text("Written once"))
+        WorkspaceLegacyBridge.postCommitOwnerReadFailures = 1
+        let first = rig.controller.save(session, snapshot: document)
+        let seamUsed = WorkspaceLegacyBridge.postCommitOwnerReadFailures == 0
+        WorkspaceLegacyBridge.postCommitOwnerReadFailures = 0
+        let stateAfterFirst = "\(session.state)"
+        let preserved = rig.controller.preserve(session)
+        let noteID = session.noteID
+        let rows = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+        print("C2_NOTE persisted=\(session.isPersisted) seam_used=\(seamUsed) first=\(first) state_after_first=\(stateAfterFirst) preserved=\(preserved) "
+            + "state=\(session.state) rows=\(rows.count) error=\(rig.notes.lastErrorMessage ?? "nil") "
+            + "duplicates=\(try duplicateRows(rig.container))")
+        XCTAssertTrue(seamUsed)
+        XCTAssertEqual(rows.count, 1, "The note is durable once")
+        XCTAssertTrue(first, "A durable note save is reported as saved")
+        XCTAssertEqual(try duplicateRows(rig.container), [])
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// The Notes side of R-2: a journaled note save commits, and the store's presentation reload fails, so `save`
+    /// returns true and keeps its staging context. The next note command stages on it. Every id keeps one row.
+    func testC3NoteCommandAfterAFailedReloadWritesOneRowPerID() async throws {
+        let rig = try await makeRig()
+        let note = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 0" })
+        rig.notes.reloadFailures = 1
+        let deleted = rig.notes.delete(note)
+        let reloadFailed = rig.notes.reloadFailures == 0
+        rig.notes.reloadFailures = 0
+        let other = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 1" })
+        let renamed = rig.notes.update(other, title: "Note 1 after a failed reload")
+        print("C3_NOTE reload_failed=\(reloadFailed) deleted=\(deleted) renamed=\(renamed) "
+            + "error=\(rig.notes.lastErrorMessage ?? "nil") duplicates=\(try duplicateRows(rig.container))")
+        XCTAssertTrue(reloadFailed)
+        XCTAssertEqual(try duplicateRows(rig.container), [], "One physical row per id after the next note command")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    // MARK: Condition 8: a store that already holds two preservation rows
+
+    /// Generated data: a durable delete, then a second physical copy of its preservation record (same id), as R-2
+    /// leaves it. Restore (Undo) and purge, each on its own store. A characterization: it records what each does and
+    /// requires only that a refusal changes no row. No repair; repairing real data is the owner's decision.
+    func testC8RestoreAndPurgeOnAStoreThatHoldsTwoPreservationRows() async throws {
+        for command in ["undo", "purge"] {
+            let rig = try await makeRig()
+            let id = rig.ids[3]
+            XCTAssertTrue(rig.library.deleteTasks([id]).isApplied)
+            let seed = ModelContext(rig.container)
+            let original = try XCTUnwrap(try seed.fetch(
+                FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.rootID == id })).first)
+            seed.insert(TaskDeletionPreservation(id: original.id, rootID: original.rootID, deletedAt: original.deletedAt,
+                capturedAt: original.capturedAt, provenance: original.provenance, snapshot: original.snapshot))
+            try seed.save()
+            func facts() throws -> String {
+                let context = ModelContext(rig.container)
+                let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.rootID == id }))
+                let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+                return "records=\(records.count) retired=\(records.filter { $0.retiredAt != nil }.count) "
+                    + "purged=\(records.filter { $0.purgedAt != nil }.count) task_rows=\(rows.count) "
+                    + "task_live=\(rows.filter { $0.deletedAt == nil }.count)"
+            }
+            let before = try facts()
+            let result: String
+            let refused: Bool
+            if command == "undo" {
+                let outcome = rig.library.undo(in: .tasks)
+                result = "\(outcome)"; refused = !outcome.isApplied
+            } else {
+                let purged = rig.tasks.purgeDeleted(before: .distantFuture)
+                result = "\(purged.count)"; refused = purged.isEmpty
+            }
+            let after = try facts()
+            print("C8_TWO_ROWS \(command) result=\(result) before[\(before)] after[\(after)] "
+                + "error=\(rig.tasks.lastErrorMessage ?? "nil") duplicates=\(try duplicateRows(rig.container))")
+            if refused {
+                XCTAssertEqual(after, before, "\(command): a refusal changes no row")
+            }
+            await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+        }
+    }
 }

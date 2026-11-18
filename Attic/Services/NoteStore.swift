@@ -157,6 +157,8 @@ final class NoteStore: ObservableObject {
     /// Whole-store reloads (`reloadModels`): every note and attachment read into a fresh context.
     private(set) var fullNoteReloadCount = 0
     func resetFullNoteReloadCount() { fullNoteReloadCount = 0 }
+    /// Test seam: the next N presentation reloads throw before reading (board id undo-unresolved-staging, Notes side).
+    var reloadFailures = 0
     #endif
 
     /// Warm suggestions read values only, without revisiting the library's
@@ -1776,6 +1778,7 @@ final class NoteStore: ObservableObject {
     /// the inventory as it was.
     private func reloadModels(preservingAttachmentProofs: Bool = false) throws {
         #if DEBUG
+        if reloadFailures > 0 { reloadFailures -= 1; throw WorkspaceFoundationError.unknown }
         fullNoteReloadCount += 1
         #endif
         do {
