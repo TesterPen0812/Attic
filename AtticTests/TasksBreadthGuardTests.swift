@@ -16,6 +16,8 @@ final class TasksBreadthGuardTests: XCTestCase {
     override func tearDown() async throws {
         window?.close()
         window = nil
+        TasksCellBodyCounts.recordsDragGroups = false
+        TasksCellBodyCounts.dragGroups = [:]
         try await super.tearDown()
     }
 
@@ -98,6 +100,7 @@ final class TasksBreadthGuardTests: XCTestCase {
     /// group as it is now, not as it was when the wrapper last ran: a task
     /// added to the group, the dragged row itself unchanged.
     func testAWrapperStartsADragWithItsCurrentGroup() throws {
+        TasksCellBodyCounts.recordsDragGroups = true
         let store = try makeStore(open: 6)
         let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
         let pointer = TasksPointer()
@@ -111,6 +114,51 @@ final class TasksBreadthGuardTests: XCTestCase {
         let group = try XCTUnwrap(TasksCellBodyCounts.dragGroups[row]?(), "the row's wrapper was never built")
         XCTAssertEqual(Set(group), Set(model.rows(for: .now).map(\.id)), "the drag group is the one the wrapper last saw")
         XCTAssertTrue(group.contains(added.id))
+    }
+
+    /// The wrappers' closures hold copies of the page, and a wrapper a pass
+    /// skips keeps them: a page that leaves its window still lets its model
+    /// go (an earlier 1a draft kept the page in a host object and leaked it).
+    func testAHostedPageThatLeavesLetsItsModelGo() throws {
+        weak var released: TasksPageModel?
+        try autoreleasepool {
+            let store = try makeStore(open: 12)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+            released = model
+            let pointer = TasksPointer()
+            let hosting = page(model, store, pointer: pointer)
+            XCTAssertFalse(drawnRows(pointer, model.rows(for: .now).map(\.id)).isEmpty)
+            window?.contentView = nil
+            window?.close()
+            window = nil
+            settle(hosting)
+        }
+        for _ in 0..<20 where released != nil { drain() }
+        XCTAssertNil(released, "the page's model outlived the page")
+    }
+
+    /// A page that leaves its window and comes back draws every row and
+    /// shows a change made while it was away (no wrapper is left empty).
+    func testAPageThatLeavesAndComesBackDrawsItsRowsAndTheirChanges() throws {
+        let store = try makeStore(open: 12)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        let ids = model.rows(for: .now).map(\.id)
+        let before = drawnRows(pointer, ids)
+        let window = try XCTUnwrap(window)
+        window.contentView = NSView(frame: hosting.frame)
+        drain()
+        let edited = ids[1]
+        XCTAssertTrue(model.setPriority(.high, for: [edited]).isApplied)
+        drain()
+        let leaves = AtticTaskRow.evaluations[edited, default: 0]
+        window.contentView = hosting
+        settle(hosting)
+        settle(hosting)
+        XCTAssertEqual(drawnRows(pointer, ids), before, "a row came back undrawn")
+        XCTAssertEqual(model.rows(for: .now).first { $0.id == edited }?.model.priority, .high)
+        XCTAssertGreaterThan(AtticTaskRow.evaluations[edited, default: 0], leaves, "the changed row was not redrawn on return")
     }
 
     // MARK: - Turns
@@ -195,12 +243,16 @@ final class TasksBreadthGuardTests: XCTestCase {
         return hosting
     }
 
-    /// The main queue drains (an expectation, no fixed wait), then the page
-    /// lays out and draws.
-    private func settle(_ hosting: NSView) {
+    /// The main queue drains (an expectation, no fixed wait).
+    private func drain() {
         let drained = expectation(description: "main queue drained")
         DispatchQueue.main.async { drained.fulfill() }
         wait(for: [drained], timeout: 5)
+    }
+
+    /// The main queue drains, then the page lays out and draws.
+    private func settle(_ hosting: NSView) {
+        drain()
         hosting.layoutSubtreeIfNeeded()
         hosting.window?.displayIfNeeded()
     }

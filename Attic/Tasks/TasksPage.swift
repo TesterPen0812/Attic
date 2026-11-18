@@ -76,8 +76,6 @@ struct TasksPage: View {
     @State private var dragOutRow: TasksRowID?
     /// A row's date or tag list that is open (owner fix 5 C and D).
     @State private var metaPopover: TasksMetaPopover?
-    /// The page as it last drew, for its rows' wrappers (`TasksCellHost`).
-    @State private var cellHost = TasksCellHost()
     /// The selection bar's Date or Tags picker (round 10).
     @State private var selectionPicker: SelectionPicker?
     /// The add bar's strip has a picker open.
@@ -199,8 +197,6 @@ struct TasksPage: View {
         // The focus owner alone redraws for focusable views coming and
         // going, and the content again only when the focused row changes.
         let generation = TasksRowFocusLink.nextGeneration()
-        // The rows' wrappers act through the page as it is now (slice 1a).
-        let _ = cellHost.page = self
         TasksRowFocusOwner { [rowFocus] focus in
             let _ = rowFocus.binding = focus
             TasksPageFocusedContent(generation: generation, focusedRow: focus.wrappedValue) {
@@ -293,8 +289,6 @@ struct TasksPage: View {
         .onDisappear {
             cancelTransientState()
             eventMonitors.stop()
-            // The host holds a copy of the page: let it go with the page.
-            cellHost.page = nil
         }
         // The page's own view, so a press is placed from its event (its
         // window, its location), never from a remembered hover point.
@@ -1894,38 +1888,40 @@ struct TasksPage: View {
     @ViewBuilder
     private func cell(_ row: TasksListRow, tab: TasksTab, run: AtticSelectionRun, drawn: Bool = true) -> some View {
         let id = row.id
-        let host = cellHost
         let editing = model.editingTitleID == id
         // The wrapper is skipped by a page pass that changes nothing in its
-        // key (slice 1a): the key holds what the row shows, and every
-        // closure reaches the page through `host`, as it is now, never as
-        // it was when the wrapper last ran.
+        // key (slice 1a), and then keeps the closures of the pass that last
+        // built it. So they read only what that page copy still reads as it
+        // is now (its model, its state, its pointer and drag session), or
+        // what is in the key; nothing they use is worked out when the
+        // wrapper is built. The drag group is read when a drag starts.
         TasksReorderCell(
             key: TasksCellKey(row: row, tab: tab, run: run, drawn: drawn, isActive: model.tab == tab && model.isPageShown,
                               isSelected: model.selection.contains(id), isExpanded: model.expanded.contains(id) && row.status != .done,
                               isEditing: editing, opensTaskNotes: opensTaskNotes, chromeInsets: layout.chromeInsets,
+                              reduceMotion: design.reduceMotion, hapticsEnabled: design.hapticsEnabled,
                               isLive: editing || metaPopover?.id == id || (tab == .done && model.doneDetailID == id),
-                              references: [ObjectIdentifier(model), ObjectIdentifier(dragSession), ObjectIdentifier(pointer),
-                                           ObjectIdentifier(host)]),
+                              references: [ObjectIdentifier(model), ObjectIdentifier(store), ObjectIdentifier(dragSession),
+                                           ObjectIdentifier(pointer)]),
             model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, focus: rowFocus.binding,
-            id: id, tab: tab, group: { [host] in host.page?.dragGroup(of: id, in: tab) ?? [id] },
+            id: id, tab: tab, group: { dragGroup(of: id, in: tab) },
             drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow, dragOutRow: $dragOutRow,
             enabled: !editing,
             session: dragSession,
             pointer: pointer,
-            allowsStart: { [host] point in host.page?.allowsDragStart(at: point, of: id, in: tab) ?? false },
-            heights: { [host] in host.page?.rowHeight($0, in: tab) ?? AtticLayout.rowPitch },
-            onBegin: { [host] in host.page?.beginRowDrag(id, in: tab) },
+            allowsStart: { point in allowsDragStart(at: point, of: id, in: tab) },
+            heights: { rowHeight($0, in: tab) },
+            onBegin: { beginRowDrag(id, in: tab) },
             onMove: { [pointer, dragSession] translation in
                 pointer.liftedCard.follow(translation, horizontal: dragSession.horizontalTranslation)
             },
-            onEnd: { [host] in host.page?.finishDrag($0) },
-            onPushPastGroup: { [host] in host.page?.pushedPastGroup(in: tab) },
-            crossDay: { [host] location in host.page?.updateDayDrop(for: id, in: tab, at: location) ?? false }
-        ) { [host] live in
-            if let page = host.page { page.cellRow(row, tab: tab, run: run, live: live) }
-        } below: { [host] live in
-            if let page = host.page { page.cellBelow(row, tab: tab, live: live) }
+            onEnd: finishDrag,
+            onPushPastGroup: { pushedPastGroup(in: tab) },
+            crossDay: { location in updateDayDrop(for: id, in: tab, at: location) }
+        ) { live in
+            cellRow(row, tab: tab, run: run, live: live)
+        } below: { live in
+            cellBelow(row, tab: tab, live: live)
         }
         .equatable()
         // Files dropped on a row: one drop destination for the page
@@ -3848,8 +3844,11 @@ struct TasksCellKey: Equatable {
     let isEditing: Bool
     let opensTaskNotes: Bool
     let chromeInsets: EdgeInsets
+    /// The design settings the row's transitions and haptics read.
+    let reduceMotion: Bool
+    let hapticsEnabled: Bool
     let isLive: Bool
-    /// The model, the drag session, the pointer and the host.
+    /// The model, the store, the drag session and the pointer.
     let references: [ObjectIdentifier]
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -3857,17 +3856,9 @@ struct TasksCellKey: Equatable {
             && lhs.drawn == rhs.drawn && lhs.isActive == rhs.isActive && lhs.isSelected == rhs.isSelected
             && lhs.isExpanded == rhs.isExpanded && lhs.isEditing == rhs.isEditing
             && lhs.opensTaskNotes == rhs.opensTaskNotes && lhs.chromeInsets == rhs.chromeInsets
+            && lhs.reduceMotion == rhs.reduceMotion && lhs.hapticsEnabled == rhs.hapticsEnabled
             && lhs.references == rhs.references
     }
-}
-
-/// The page as it last drew, for its rows' wrappers (slice 1a). A wrapper
-/// that a page pass skipped keeps its closures; they reach the page
-/// through this, so they act on the page as it is now. A plain reference:
-/// setting it publishes nothing and redraws nothing. The page clears it
-/// when it goes, so the copy it holds never keeps the page's model alive.
-@MainActor final class TasksCellHost {
-    var page: TasksPage?
 }
 
 /// Where the page reaches its rows' focus state, which `TasksRowFocusOwner`
@@ -4550,11 +4541,13 @@ final class TasksDragSession {
 /// A generic view cannot keep its own static state.
 @MainActor enum TasksCellBodyCounts {
     static var evaluations: [TasksRowID: Int] = [:]
+    /// Off unless a test reads them: the closures hold the page.
+    static var recordsDragGroups = false
     static var dragGroups: [TasksRowID: () -> [UUID]] = [:]
 
     static func note(_ row: TasksRowID, dragGroup: @escaping () -> [UUID]) {
         evaluations[row, default: 0] += 1
-        dragGroups[row] = dragGroup
+        if recordsDragGroups { dragGroups[row] = dragGroup }
     }
 }
 #endif
