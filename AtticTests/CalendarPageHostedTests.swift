@@ -1283,6 +1283,99 @@ private struct TrunkCalendarDayMarks: View {
     }
 }
 
+/// SwiftUI's attribute graph, read through AttributeGraph's own JSON archive
+/// (`AGGraphArchiveJSON`, test only): each graph's total attribute updates
+/// and its nodes' descriptions. A `ForEach`'s evictor is a node that SwiftUI
+/// re-runs on every update of its graph; no view body sees that work, so a
+/// body counter cannot.
+@MainActor
+private enum AttributeGraphArchive {
+    private typealias Archive = @convention(c) (UnsafePointer<CChar>) -> Void
+    private static let archive: Archive? = {
+        guard let handle = dlopen("/System/Library/PrivateFrameworks/AttributeGraph.framework/AttributeGraph", RTLD_NOW),
+              let symbol = dlsym(handle, "AGGraphArchiveJSON") else { return nil }
+        return unsafeBitCast(symbol, to: Archive.self)
+    }()
+
+    struct Reading {
+        var updates: Int
+        var descriptions: [String]
+    }
+
+    /// The graph holding a node whose description contains `marker`.
+    static func read(marker: String) throws -> Reading {
+        let archive = try XCTUnwrap(Self.archive, "AttributeGraph's AGGraphArchiveJSON")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attic-graph-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        url.path.withCString { archive($0) }
+        let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        for graph in try XCTUnwrap(root["graphs"] as? [[String: Any]]) {
+            let descriptions = (graph["nodes"] as? [[String: Any]] ?? []).compactMap { $0["desc"] as? String }
+            if descriptions.contains(where: { $0.contains(marker) }) {
+                return Reading(updates: try XCTUnwrap(graph["update_count"] as? Int), descriptions: descriptions)
+            }
+        }
+        throw NSError(domain: "AttributeGraphArchive", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "no graph holds a node named \(marker)"])
+    }
+}
+
+/// A ticker view whose type names its graph in the archive.
+private struct GraphProbeTicker: View {
+    @ObservedObject var ticker: HostTicker
+    let renders: RenderCount
+
+    var body: some View {
+        let _ = renders.value += 1
+        Text(verbatim: String(ticker.value)).frame(width: 40, height: 12)
+    }
+}
+
+@MainActor
+private final class RenderCount {
+    var value = 0
+}
+
+/// A month's 49 day marks, hidden, in fixed stacks (no `ForEach` of its
+/// own), beside the ticker: 0–3 colours, a ring on every third day.
+private struct HiddenMarksGrid<Marks: View>: View {
+    let ticker: HostTicker
+    let renders: RenderCount
+    let marks: (CalendarDayMarks) -> Marks
+
+    static func dayMarks(_ index: Int) -> CalendarDayMarks {
+        let colours = [CalendarEventColour(red: 0.2, green: 0.5, blue: 0.9), CalendarEventColour(red: 0.9, green: 0.3, blue: 0.2),
+                       CalendarEventColour(red: 0.3, green: 0.7, blue: 0.3)]
+        return CalendarDayMarks(eventColours: Array(colours.prefix(index % 4)), hasOpenTasks: index % 3 == 0)
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 2) {
+                week(0); week(7); week(14); week(21); week(28); week(35); week(42)
+            }
+            .opacity(0)
+            GraphProbeTicker(ticker: ticker, renders: renders)
+        }
+        .frame(width: 320, height: 200)
+        .atticDesign(AtticDesignContext(mode: .light))
+    }
+
+    private func week(_ first: Int) -> some View {
+        HStack(spacing: 2) {
+            marks(Self.dayMarks(first)); marks(Self.dayMarks(first + 1)); marks(Self.dayMarks(first + 2))
+            marks(Self.dayMarks(first + 3)); marks(Self.dayMarks(first + 4)); marks(Self.dayMarks(first + 5))
+            marks(Self.dayMarks(first + 6))
+        }
+    }
+}
+
+/// A month-grid read of the dots' evictor: the hidden Calendar's
+/// `CalendarEventColour` evictor nodes.
+private func dotsEvictors(_ descriptions: [String]) -> Int {
+    descriptions.filter { $0.contains("Evictor") && $0.contains("CalendarEventColour") }.count
+}
+
 /// A Tasks scroll traced with the Calendar built and hidden (18 Nov,
 /// `write-path-causegraph/READOUT-scroll.md`): the dots' `ForEach`
 /// evictor ran on every frame, 49 of them (one per day key), driven by
@@ -1350,7 +1443,71 @@ final class CalendarDayMarksTests: XCTestCase {
         XCTAssertEqual(HostTickerText.bodyEvaluations - tickerBefore, 60, "the host updated once per tick")
         XCTAssertEqual(CalendarDayMarksView.bodyEvaluations - dotsBefore, 0,
                        "a hidden Calendar's dots stay still while the rest of the panel updates")
+        // Red on trunk (49): the hidden month's dots own no evictor for the
+        // panel's updates to re-run.
+        let graph = try AttributeGraphArchive.read(marker: "HostTickerText")
+        XCTAssertEqual(dotsEvictors(graph.descriptions), 0, "the hidden month's dots own no ForEach evictor")
     }
+
+    /// Red on trunk: the work the fix removes, counted in the attribute
+    /// graph's updates. Each panel update (a tick of a sibling view) re-runs
+    /// every `ForEach` evictor in the graph. A hidden month of trunk's dots
+    /// (the positive control) owns 49 evictors and runs them on every tick;
+    /// the shipped dots own none and skip that work.
+    func testHiddenDotsAddNoGraphUpdatesPerPanelUpdate() throws {
+        // Hosting views share one attribute graph and a host may outlive its
+        // window, so the scenarios run from fewest evictors to most: the
+        // baseline owns none (and checks none are left from earlier tests),
+        // and the control runs last.
+        let baseline = try updatesPerTick { ticker, renders in
+            HiddenMarksGrid(ticker: ticker, renders: renders) { _ in EmptyView() }
+        }
+        XCTAssertEqual(baseline.evictors, 0, "no dots evictors left from an earlier host")
+        let shipped = try updatesPerTick { ticker, renders in
+            HiddenMarksGrid(ticker: ticker, renders: renders) { CalendarDayMarksView(marks: $0, isPast: false) }
+        }
+        let control = try updatesPerTick { ticker, renders in
+            HiddenMarksGrid(ticker: ticker, renders: renders) { TrunkCalendarDayMarks(marks: $0, isPast: false) }
+        }
+        print("DOTS_GRAPH updates per tick: baseline \(baseline.updates), trunk dots \(control.updates), "
+              + "shipped dots \(shipped.updates); evictors \(control.evictors) and \(shipped.evictors)")
+        XCTAssertGreaterThanOrEqual(control.evictors, 49, "positive control: one evictor per day of trunk's dots")
+        XCTAssertGreaterThanOrEqual(control.updates - baseline.updates, 49, "positive control: the count sees the evictors' work")
+        XCTAssertEqual(shipped.evictors, 0, "the shipped dots own no evictor")
+        // The evictors' own work: about one update per day per tick (49 on
+        // the Air). The rest of a hidden month's per-tick updates is shared by
+        // both versions and is not this fix's. On trunk the two read the same.
+        XCTAssertGreaterThanOrEqual(control.updates - shipped.updates, 30,
+                                    "the shipped dots skip the evictor updates trunk's dots run on every panel update")
+    }
+
+    /// Mounts `content` beside nothing else, ticks it 30 times and reads the
+    /// graph's updates per tick and its dots' evictor nodes.
+    private func updatesPerTick<V: View>(_ content: (HostTicker, RenderCount) -> V) throws -> (updates: Double, evictors: Int) {
+        let ticker = HostTicker()
+        let renders = RenderCount()
+        let host = NSHostingView(rootView: content(ticker, renders))
+        let window = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 320, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        XCTAssertTrue(turns(host, window) { renders.value > 0 }, "mounted")
+        ticker.value = -1
+        XCTAssertTrue(turns(host, window) { renders.value > 1 }, "first tick")
+        let before = try AttributeGraphArchive.read(marker: "GraphProbeTicker")
+        let rendersBefore = renders.value
+        for value in 1...30 {
+            ticker.value = value
+            XCTAssertTrue(turns(host, window) { renders.value - rendersBefore >= value }, "tick \(value)")
+        }
+        let after = try AttributeGraphArchive.read(marker: "GraphProbeTicker")
+        XCTAssertEqual(renders.value - rendersBefore, 30, "one render per tick")
+        return (Double(after.updates - before.updates) / 30, CalendarDayMarksTests.evictors(after.descriptions))
+    }
+
+    private static func evictors(_ descriptions: [String]) -> Int { dotsEvictors(descriptions) }
 
     /// The fixed slots draw what the `ForEach` drew: 0–3 colours, the ring
     /// on and off, past and not past, light and dark.
