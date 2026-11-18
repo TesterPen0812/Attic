@@ -283,6 +283,23 @@ final class TaskPerformanceGateTests: XCTestCase {
         print("PF2_COUNTS journaled_deletion_full_reloads=\(store.fullTaskReloadCount)")
     }
 
+    /// R-4, round 2 (Astra): the workspace bridge's inventory reads whole tables too, and the ledger counts them there.
+    /// One inventory of the task, note and attachment tables records one read of each, under the inventory's name.
+    func testF2BridgeInventoryRecordsOneReadPerModel() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let seed = ModelContext(container)
+        seed.insert(TaskItem(title: "One task", createdAt: Date(timeIntervalSince1970: 1_700_000_000)))
+        seed.insert(NoteItem(title: "One note", body: "Body", createdAt: Date(timeIntervalSince1970: 1_700_000_000)))
+        try seed.save()
+        WholeTableRead.ledger.reset()
+        _ = try WorkspaceLegacyBridge.inventory(in: ModelContext(container), includeCanvas: false,
+                                                entities: [.task, .note, .attachment])
+        let site = "WorkspaceLegacyBridge.inventory(in:includeCanvas:entities:)"
+        print("F2_INVENTORY \(WholeTableRead.ledger.bySite.sorted { $0.key < $1.key })")
+        XCTAssertEqual(WholeTableRead.ledger.bySite,
+                       ["TaskItem \(site)": 1, "NoteItem \(site)": 1, "NoteAttachment \(site)": 1])
+    }
+
     /// Fix order item 1 (lead, 18 Nov 2026; audits F2 and TA-01). One Delete of a live task and its Undo, through
     /// the panel's wiring: the library, and the Notes lifecycle controller registered for whole-item lifecycle.
     /// A journaled delete or restore replaces the task store's staging context with one fresh read (the stale-context
@@ -460,11 +477,25 @@ final class TaskPerformanceGateTests: XCTestCase {
                 try context.fetchCount(FetchDescriptor<OperationReceipt>()))
     }
 
+    /// The presented tasks a delete of `id` must leave alone: every listed id except `id` and its subtasks.
+    private func f2Unaffected(_ tasks: TaskStore, _ id: UUID) -> Set<UUID> {
+        Set(tasks.tasks.filter { $0.id != id && $0.parentID != id }.map(\.id))
+    }
+
+    /// The emissions (by index) whose ids leave out any of `unaffected`, as "index: missing count".
+    private func f2LostUnaffected(_ log: F2EmissionLog, _ unaffected: Set<UUID>) -> [String] {
+        log.arrays.enumerated().compactMap { index, ids in
+            let missing = unaffected.subtracting(ids)
+            return missing.isEmpty ? nil : "\(index): \(missing.count) missing"
+        }
+    }
+
     /// Every `tasks` and `revision` emission of the task store, with the ids it carried at the moment it was emitted.
     private func f2RecordEmissions(_ tasks: TaskStore, _ id: UUID, into log: F2EmissionLog) -> Set<AnyCancellable> {
         var bag = Set<AnyCancellable>()
         tasks.$tasks.dropFirst().sink { [weak log] rows in
             log?.events.append("tasks present=\(rows.contains { $0.id == id }) count=\(rows.count)")
+            log?.arrays.append(Set(rows.map(\.id)))
         }.store(in: &bag)
         tasks.$revision.dropFirst().sink { [weak log, weak tasks] _ in
             let changed = tasks?.revisionChangedTaskIDs
@@ -481,6 +512,8 @@ final class TaskPerformanceGateTests: XCTestCase {
         let rig = try await makeF2Rig()
         let id = rig.ids[3]
         let before = try f2DeletionFacts(rig.container, id)
+        let unaffected = f2Unaffected(rig.tasks, id)
+        XCTAssertFalse(unaffected.isEmpty)
         let log = F2EmissionLog()
         var bag = f2RecordEmissions(rig.tasks, id, into: log)
         rig.tasks.listRefreshFailures = 3
@@ -489,15 +522,21 @@ final class TaskPerformanceGateTests: XCTestCase {
         XCTAssertTrue(rig.tasks.hasUnresolvedTaskReload, "Three failed reads leave the presentation unresolved")
         let afterDelete = try f2DeletionFacts(rig.container, id)
         let deleteEvents = log.events.count
+        let deleteArrays = log.arrays.count
 
         let repeated = rig.library.deleteTasks([id])
         let afterRepeat = try f2DeletionFacts(rig.container, id)
         bag.removeAll()
+        let lost = f2LostUnaffected(log, unaffected)
         print("F2R5_REPEAT delete_events=\(log.events[..<deleteEvents].joined(separator: " | ")) "
             + "repeat_applied=\(repeated.isApplied) repeat_events=\(log.events[deleteEvents...].joined(separator: " | ")) "
             + "receipts=\(before.receipts)->\(afterDelete.receipts)->\(afterRepeat.receipts) "
-            + "preservations=\(afterRepeat.preservations.count) groups=\(afterRepeat.groups.count)")
+            + "preservations=\(afterRepeat.preservations.count) groups=\(afterRepeat.groups.count) "
+            + "array_emissions=\(log.arrays.count) delete_boundary=\(deleteArrays) lost_unaffected=\(lost)")
 
+        XCTAssertEqual(repeated, .failed(.taskGone), "The repeat Delete reports the task as gone")
+        XCTAssertGreaterThan(log.arrays.count, 0)
+        XCTAssertEqual(lost, [], "Every other task survives every emission of the delete and the repeat Delete")
         XCTAssertEqual(log.namedIt, 0, "No revision names the unconfirmed delete as a narrow change")
         XCTAssertEqual(afterDelete.rows, before.rows, "Delete inserts no task row")
         XCTAssertEqual(afterDelete.live, 0); XCTAssertEqual(afterDelete.groups.count, 1, "One deletion group")
@@ -526,6 +565,8 @@ final class TaskPerformanceGateTests: XCTestCase {
         let rig = try await makeF2Rig()
         let id = rig.ids[3]
         let before = try f2DeletionFacts(rig.container, id)
+        let unaffected = f2Unaffected(rig.tasks, id)
+        XCTAssertFalse(unaffected.isEmpty)
         let log = F2EmissionLog()
         var bag = f2RecordEmissions(rig.tasks, id, into: log)
         rig.tasks.listRefreshFailures = 3
@@ -534,16 +575,21 @@ final class TaskPerformanceGateTests: XCTestCase {
         let afterDelete = try f2DeletionFacts(rig.container, id)
         let namedDuringDelete = log.namedIt
         let deleteEvents = log.events.count
+        let deleteArrays = log.arrays.count
 
         let undone = rig.library.undo(in: .tasks)
         let afterUndo = try f2DeletionFacts(rig.container, id)
         bag.removeAll()
+        let lost = f2LostUnaffected(log, unaffected)
         print("F2R5_UNDO delete_events=\(log.events[..<deleteEvents].joined(separator: " | ")) "
             + "undo_applied=\(undone.isApplied) undo_events=\(log.events[deleteEvents...].joined(separator: " | ")) "
             + "receipts=\(before.receipts)->\(afterDelete.receipts)->\(afterUndo.receipts) "
             + "preservations=\(afterDelete.preservations.count)->\(afterUndo.preservations.count) retired=\(afterUndo.retired) "
-            + "rows=\(before.rows)->\(afterUndo.rows) live=\(afterUndo.live)")
+            + "rows=\(before.rows)->\(afterUndo.rows) live=\(afterUndo.live) "
+            + "array_emissions=\(log.arrays.count) delete_boundary=\(deleteArrays) lost_unaffected=\(lost)")
 
+        XCTAssertGreaterThan(log.arrays.count, 0)
+        XCTAssertEqual(lost, [], "Every other task survives every emission of the delete and the Undo")
         XCTAssertEqual(namedDuringDelete, 0, "No revision names the unconfirmed delete as a narrow change")
         XCTAssertEqual(afterDelete.preservations.count, 1)
         XCTAssertEqual(afterDelete.receipts, before.receipts + 1)
@@ -552,13 +598,19 @@ final class TaskPerformanceGateTests: XCTestCase {
         XCTAssertEqual(afterUndo.live, before.rows, "Every physical row is live again")
         XCTAssertEqual(afterUndo.receipts, afterDelete.receipts + 1, "One inverse receipt")
         XCTAssertFalse(rig.library.undo.canUndo(in: .tasks)); XCTAssertTrue(rig.library.undo.canRedo(in: .tasks))
+        // The original preservation record is kept: same id, nothing lost or replaced, and every row of it retired.
+        XCTAssertFalse(afterDelete.preservations.isEmpty)
+        XCTAssertEqual(Set(afterUndo.preservations), Set(afterDelete.preservations),
+                       "The preservation record keeps its original id; none is lost or replaced")
+        XCTAssertEqual(afterUndo.retired, afterUndo.preservations.count, "Every row of the record is retired by the restore")
         // Pre-existing on trunk 67ef5edf (Air, 18 Nov): the restore stages on the unresolved context and writes the
         // delete's preservation record a second time, as a second physical row with the same id. Board id
-        // undo-unresolved-staging (P1); its fix is its own pull request. Strict, so the fix must remove this.
+        // undo-unresolved-staging (P1); its fix is its own pull request. Strict, so the fix must remove this. Only
+        // the row count is expected to fail here.
         XCTExpectFailure("undo-unresolved-staging: Undo on an unresolved staging context duplicates the preservation row",
                          strict: true) {
-            XCTAssertEqual(afterUndo.preservations, afterDelete.preservations, "The one preservation record, by its original id, and no other")
-            XCTAssertEqual(afterUndo.retired, 1, "Retired by the restore")
+            XCTAssertEqual(afterUndo.preservations.count, afterDelete.preservations.count,
+                           "One physical row for the preservation record")
         }
         XCTAssertNotNil(rig.tasks.task(withID: id))
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
@@ -2048,6 +2100,8 @@ extension TaskPerformanceGateTests {
 final class F2EmissionLog {
     var events: [String] = []
     var namedIt = 0
+    /// Every `tasks` emission's ids, kept by value in order.
+    var arrays: [Set<UUID>] = []
 }
 
 /// The true whole-table reads of one Delete and one Undo, from call to return, by production site

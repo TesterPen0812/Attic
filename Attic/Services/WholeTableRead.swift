@@ -1,10 +1,12 @@
 import Foundation
 import SwiftData
 
-/// Every unfiltered read of a whole task, note or attachment table is built here, so a test can count those reads at
-/// the production sites that make them (by file and function), not at a store's reload entry point. In release this is
-/// exactly `FetchDescriptor<T>()`. The descriptor is built immediately before its fetch, so a read that fails before
-/// the fetch is not counted.
+/// Every unfiltered read of a whole task, note or attachment table in the app is built here, so a test can count those
+/// reads at the production sites that make them (by file and function), not at a store's reload entry point. That
+/// includes the workspace bridge's inventory, which also counts the other tables it reads. Outside it: row counts
+/// (`fetchCount`) in the performance seed, and the operation-crash fixture, which is compiled only into its own test
+/// target. In release this is exactly `FetchDescriptor<T>()`. The descriptor is built immediately before its fetch, so
+/// a read that fails before the fetch is not counted.
 enum WholeTableRead {
     static func all<T: PersistentModel>(_ type: T.Type, fileID: StaticString = #fileID,
                                         function: StaticString = #function) -> FetchDescriptor<T> {
