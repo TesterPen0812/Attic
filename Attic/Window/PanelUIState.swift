@@ -452,10 +452,24 @@ final class PanelUIState: ObservableObject {
         editingDraftTitle = ""
     }
 
-    /// DEBUG count of the task IDs `reconcileTaskIDs` examined.
-    private(set) var reconciledTaskIDCount = 0
+    #if DEBUG
+    /// DEBUG count of the task rows read on the reconcile's behalf: one per
+    /// task ID it asks about, one per row read to build a set of live IDs,
+    /// and one per row of a store index its lookups had to build (reported
+    /// by the revision observer). The same count for any way of answering.
+    private(set) var reconciledTaskRowCount = 0
+
+    /// The rows of the store's ID index that this reconcile's lookups built.
+    func noteReconcileIndexRows(_ rows: Int) {
+        reconciledTaskRowCount += rows
+    }
+    #endif
 
     func reconcileTaskIDs(_ availableIDs: Set<UUID>) {
+        #if DEBUG
+        // The caller read one task row per member to build the set.
+        reconciledTaskRowCount += availableIDs.count
+        #endif
         reconcileTaskIDs(isLive: availableIDs.contains)
     }
 
@@ -467,7 +481,7 @@ final class PanelUIState: ObservableObject {
     func reconcileTaskIDs(isLive: (UUID) -> Bool) {
         func gone(_ id: UUID) -> Bool {
             #if DEBUG
-            reconciledTaskIDCount += 1
+            reconciledTaskRowCount += 1
             #endif
             return !isLive(id)
         }
