@@ -1115,11 +1115,17 @@ final class AtticLibrary {
         return ownedMembers(of: [ref.id], kind: ref.kind)
     }
 
+    /// DEBUG count of task and note records `itemOwnership` read.
+    private(set) var ownershipRecordsRead = 0
+
     func itemOwnership(_ members: Set<UUID>, deleted: Bool, noteID: UUID? = nil) -> FamilyOwnership {
         let owned = FamilyOwnership(members), context = ModelContext(container)
         guard let rows = try? context.fetch(FetchDescriptor<TaskItem>()) else { return owned }
         let schemaHasNotes = WorkspaceItemLifecycle.has("NoteItem", in: context)
         guard let notes = schemaHasNotes ? (try? context.fetch(FetchDescriptor<NoteItem>())) : [] else { return owned }
+        #if DEBUG
+        ownershipRecordsRead += rows.count + notes.count
+        #endif
         if deleted {
             for id in members {
                 if let group = rows.filter({ $0.id == id }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID { owned.groups.insert(group) }

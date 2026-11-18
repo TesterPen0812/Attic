@@ -860,8 +860,8 @@ struct AtticPanelView: View {
 }
 
 /// Store revisions still reconcile task-route IDs, without subscribing the
-/// entire panel surface to every task mutation.
-private struct PanelStoreRevisionObserver: View {
+/// entire panel surface to every task mutation. Internal for its count guard.
+struct PanelStoreRevisionObserver: View {
     @ObservedObject var store: TaskStore
     let uiState: PanelUIState
 
