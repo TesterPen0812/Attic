@@ -237,13 +237,14 @@ jobs:
     # functional unit suite, so the seeds get their own required runner: one
     # build, then one test process per seed. Every seed runs even when an
     # earlier one fails, and the job fails if any seed failed. Each seed has
-    # its own 75-minute limit (one old per-seed job's test step), so a hung
-    # seed fails alone instead of starving the seeds after it.
-    timeout-minutes: 330
+    # its own 20-minute limit (the slowest seed took 6 min in run 43976364570),
+    # so a hung seed fails alone instead of starving the seeds after it.
+    timeout-minutes: 120
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       NOTES_SEEDS: 11012 11013 11014 11015
-      NOTES_SEED_TIMEOUT_SECONDS: 4500
+      NOTES_SEED_TIMEOUT_SECONDS: 1200
+      NOTES_SEED_HOST: AtticUnitTestHost
     steps:
       - uses: actions/checkout@v5
       - name: Build local-only Notes editor test host
@@ -254,7 +255,7 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
           Scripts/sign_crash_harness.zsh "$RUNNER_TEMP/AtticNotesSeed/Build/Products/Local/AtticUnitTestHost.app"
       - name: Verify every complete generated Notes editor seed
-        timeout-minutes: 315
+        timeout-minutes: 95
         run: |
           # Job control gives each seed and its watchdog their own process
           # group, so a timeout stops the whole xcodebuild tree by exact group id.
@@ -286,6 +287,18 @@ jobs:
             wait "$pid" || status=$?
             if [ -e "$out/timed-out" ]; then
               wait "$watchdog" || true
+              # The test host is launched outside this process group, so stop
+              # any copy still running, by exact process name and PID.
+              hosts=$(pgrep -x -U "$(id -u)" "$NOTES_SEED_HOST" || true)
+              for host in $hosts; do
+                echo "::warning::Seed $seed timed out: stopping $NOTES_SEED_HOST pid $host"
+                kill -TERM "$host" 2>/dev/null || true
+              done
+              for host in $hosts; do
+                waited=0
+                while [ "$waited" -lt 10 ] && kill -0 "$host" 2>/dev/null; do sleep 1; waited=$((waited + 1)); done
+                if kill -KILL "$host" 2>/dev/null; then echo "::warning::Seed $seed: killed $NOTES_SEED_HOST pid $host"; fi
+              done
             else
               kill -- "-$watchdog" 2>/dev/null || true
               wait "$watchdog" 2>/dev/null || true
