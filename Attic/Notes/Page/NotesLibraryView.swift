@@ -10,6 +10,10 @@ import SwiftUI
 /// search, then goes back to the note.
 struct NotesLibraryView: View {
     #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
+    #if DEBUG
     static var lifetimeProbe: ((NotesLibraryKeys) -> Void)?
     #endif
     @ObservedObject var model: NotesLibraryModel
@@ -90,6 +94,9 @@ struct NotesLibraryView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let groups = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         let selected = controller.librarySelectionID
         // A15 (owner, 2026-10-04): the rows run under the label line and the
