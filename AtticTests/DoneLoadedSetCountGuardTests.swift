@@ -183,28 +183,7 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
     /// Run with an empty log too (the first task logged).
     func testShortDoneLogShowsARowLoggedBelowItWithoutLoadingRows() throws {
         for logged in [10, 0] {
-            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-            let context = ModelContext(container)
-            let now = Date()
-            var order: Int64 = 10_000_000
-            for index in 0..<logged {
-                order -= 1_024
-                let completed = now.addingTimeInterval(-86_400 - Double(index + 1) * 3_600)
-                let task = TaskItem(title: "Finished task \(index)", status: .done, createdAt: now, completedAt: completed, manualOrder: order)
-                task.listOrderVersion = TaskItem.currentListOrderVersion
-                task.doneLoggedAt = completed
-                context.insert(task)
-            }
-            // Finished a month ago and still in the list: logging it puts it
-            // below every loaded row.
-            order -= 1_024
-            let late = TaskItem(title: "Finished long ago", status: .done, createdAt: now.addingTimeInterval(-40 * 86_400),
-                                completedAt: now.addingTimeInterval(-30 * 86_400), manualOrder: order)
-            late.listOrderVersion = TaskItem.currentListOrderVersion
-            context.insert(late)
-            try context.save()
-            let lateID = late.id
-            let store = TaskStore(container: container)
+            let (store, lateID, now) = try makeDoneLog(logged: logged)
             let model = TasksPageModel(library: AtticLibrary(tasks: store))
             model.select(tab: .done)
             model.loadDoneLogIfNeeded()
@@ -272,6 +251,42 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
                        "R-2: the next page is not the rows after the loaded ones")
     }
 
+    /// The in-place update asks where a named task that is neither loaded
+    /// nor listed belongs (`savedParentIDs`). That read goes through the
+    /// Done log's reads, so an injected failure reaches it: the update falls
+    /// back to a full read, nothing is shown as failed, and the rows are the
+    /// log's, page after page.
+    func testDoneLogInPlaceParentReadFailureFallsBackToAFullRead() throws {
+        let (store, lateID, now) = try makeDoneLog(logged: 100)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        let pageSize = TasksPageModel.doneLogPageSize
+        XCTAssertEqual(model.doneLogTasks.count, pageSize)
+
+        // The daily cleanup logs a task below the loaded page; it is not
+        // listed, so the update reads where it belongs, and that read fails.
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: Calendar.current.startOfDay(for: now)), 1)
+        XCTAssertEqual(store.revisionChangedTaskIDs?.contains(lateID), true, "the save named the task")
+        store.doneLogReadFailures = 1
+        let inPlace = model.doneLogInPlaceRefreshCount
+        model.loadDoneLogIfNeeded()
+        print("GUARD_DONE_PARENT_READ_FAILURE pending_failures=\(store.doneLogReadFailures) "
+              + "in_place=\(model.doneLogInPlaceRefreshCount - inPlace) loaded=\(model.doneLogTasks.count)")
+        XCTAssertEqual(store.doneLogReadFailures, 0, "the injected failure reached the parent read")
+        XCTAssertEqual(model.doneLogInPlaceRefreshCount, inPlace, "a failed parent read falls back to a full read")
+        XCTAssertNil(model.doneLogFailure, "the full read succeeded: nothing is shown as failed")
+        XCTAssertEqual(model.doneLogTasks.map(\.id), store.indexedDoneLogIDs(limit: pageSize).ids)
+        XCTAssertTrue(model.doneLogHasMore)
+
+        while model.doneLogHasMore, model.doneLogFailure == nil { model.loadMoreDoneLog() }
+        let ids = model.doneLogTasks.map(\.id)
+        XCTAssertNil(model.doneLogFailure)
+        XCTAssertEqual(ids, store.indexedDoneLogIDs(limit: 200).ids, "every row of the log, in its order")
+        XCTAssertEqual(ids.count, 101)
+        XCTAssertEqual(ids.last, lateID)
+    }
+
     // MARK: - Rig
 
     private static let size = CGSize(width: 344, height: 520)
@@ -300,6 +315,31 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
         for index in 0..<notes { context.insert(NoteItem(title: "Note \(index)", body: "Unrelated note \(index)")) }
         try context.save()
         return TaskStore(container: container)
+    }
+
+    /// `logged` tasks in the Done log, finished before today, and one task
+    /// finished a month ago and still in the list: the daily cleanup logs it
+    /// below every logged row. Returns its ID and the time the rows count from.
+    private func makeDoneLog(logged: Int) throws -> (TaskStore, UUID, Date) {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let context = ModelContext(container)
+        let now = Date()
+        var order: Int64 = 10_000_000
+        for index in 0..<logged {
+            order -= 1_024
+            let completed = now.addingTimeInterval(-86_400 - Double(index + 1) * 3_600)
+            let task = TaskItem(title: "Finished task \(index)", status: .done, createdAt: now, completedAt: completed, manualOrder: order)
+            task.listOrderVersion = TaskItem.currentListOrderVersion
+            task.doneLoggedAt = completed
+            context.insert(task)
+        }
+        order -= 1_024
+        let late = TaskItem(title: "Finished long ago", status: .done, createdAt: now.addingTimeInterval(-40 * 86_400),
+                            completedAt: now.addingTimeInterval(-30 * 86_400), manualOrder: order)
+        late.listOrderVersion = TaskItem.currentListOrderVersion
+        context.insert(late)
+        try context.save()
+        return (TaskStore(container: container), late.id, now)
     }
 
     /// The Tasks page with Done drawn and `loadedPages` pages of its log loaded.
