@@ -4784,6 +4784,9 @@ final class TasksPointer {
         }
     }
     func setCompletedTodayFrame(_ frame: CGRect?, for tab: TasksTab) {
+        #if DEBUG
+        noteReport(old: localCompletedTodayFrames[tab], new: frame)
+        #endif
         localCompletedTodayFrames[tab] = frame
     }
     /// Now's day headers' frames in the page, by group key (a row dragged
@@ -4794,6 +4797,9 @@ final class TasksPointer {
         set { localHeaderFrames = newValue.mapValues { $0.offsetBy(dx: -pageOffset(.now), dy: 0) } }
     }
     func setHeaderFrame(_ frame: CGRect?, for key: String) {
+        #if DEBUG
+        noteReport(old: localHeaderFrames[key], new: frame)
+        #endif
         localHeaderFrames[key] = frame
     }
     func headerFrame(for key: String) -> CGRect? {
@@ -4826,6 +4832,18 @@ final class TasksPointer {
 
     func noteDrawnFocus(_ row: TasksRowID, _ focused: Bool) {
         if focused { drawnFocus.insert(row) } else { drawnFocus.remove(row) }
+    }
+
+    /// Tests (S2, the scroll's row frames): reports that move a frame the
+    /// pointer already holds, for a row, a day header or the Completed
+    /// today line. A steady scroll moves none of them.
+    private(set) var frameMoveReports = 0
+    /// Every report of a frame (new ones included).
+    private(set) var frameReports = 0
+    private func noteReport(old: CGRect?, new: CGRect?) {
+        guard let new else { return }
+        frameReports += 1
+        if let old, old != new { frameMoveReports += 1 }
     }
     #endif
 
@@ -4895,6 +4913,9 @@ final class TasksPointer {
     private var frameOwners: [TasksRowID: ObjectIdentifier] = [:]
 
     func setFrame(_ frame: CGRect, for row: TasksRowID, from cell: TasksCellReports) {
+        #if DEBUG
+        noteReport(old: localFrames[row], new: frame)
+        #endif
         localFrames[row] = frame
         frameOwners[row] = ObjectIdentifier(cell)
     }
