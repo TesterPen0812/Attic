@@ -1613,7 +1613,7 @@ final class NoteStore: ObservableObject {
             try reloadModels(preservingAttachmentProofs: true)
             return true
         } catch {
-            lastErrorMessage = "Not saved: Attic could not refresh this note. Try again. \(error.localizedDescription)"
+            lastErrorMessage = error.localizedDescription
             return false
         }
     }
