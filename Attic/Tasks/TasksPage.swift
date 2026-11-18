@@ -1888,6 +1888,9 @@ struct TasksPage: View {
     @ViewBuilder
     private func cell(_ row: TasksListRow, tab: TasksTab, run: AtticSelectionRun, drawn: Bool = true) -> some View {
         let id = row.id
+        #if DEBUG
+        let _ = TasksCellBodyCounts.passPalettes[TasksRowID(tab: tab, id: id)] = tagColouring.palette
+        #endif
         let editing = model.editingTitleID == id
         // The wrapper is skipped by a page pass that changes nothing in its
         // key (slice 1a), and then keeps the closures of the pass that last
@@ -1939,6 +1942,7 @@ struct TasksPage: View {
         // copy a kept page draws of the same task shows none (round 12).
         let editing = model.editingTitleID == id && live.isActive
         #if DEBUG
+        let _ = TasksCellBodyCounts.noteBuilder(TasksRowID(tab: tab, id: id), palette: tagColouring.palette)
         let _ = pointer.noteDrawnFocus(TasksRowID(tab: tab, id: id), live.focus.isFocused)
         #endif
         // The row redraws only when what it shows changed (round 11):
@@ -1948,6 +1952,9 @@ struct TasksPage: View {
         TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
                                           isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
                                           layout: layout, isLive: editing || live.metaPopover != nil)) {
+            #if DEBUG
+            let _ = TasksCellBodyCounts.noteLeaf(TasksRowID(tab: tab, id: id), model: row.model)
+            #endif
             let drawRow = {
                 AtticTaskRow(
                     model: row.model,
@@ -2086,6 +2093,9 @@ struct TasksPage: View {
     /// date group, Completed today's rows, or the row alone where the list
     /// has no order to drag to (a sorted view, Done).
     func dragGroup(of id: UUID, in tab: TasksTab) -> [UUID] {
+        #if DEBUG
+        TasksCellBodyCounts.groupLookups += 1
+        #endif
         guard Self.reorders(tab: tab, manual: model.reorders(on: tab)) else { return [id] }
         let list = model.listSnapshot(for: tab)
         if let entry = list.entries.first(where: { $0.row?.id == id }) { return entry.reorderIDs }
@@ -4544,6 +4554,23 @@ final class TasksDragSession {
     /// Off unless a test reads them: the closures hold the page.
     static var recordsDragGroups = false
     static var dragGroups: [TasksRowID: () -> [UUID]] = [:]
+
+    /// The page copy's palette each time a wrapper's row builder runs (the
+    /// palette its menus read), and each leaf build with what it drew.
+    static var builderPalettes: [TasksRowID: AtticTagPalette] = [:]
+    /// The palette each pass that builds a row's wrapper reads.
+    static var passPalettes: [TasksRowID: AtticTagPalette] = [:]
+    static var leaves: [TasksRowID: Int] = [:]
+    static var leafModels: [TasksRowID: AtticTaskRowModel] = [:]
+    /// How many times a row's drag group was worked out.
+    static var groupLookups = 0
+
+    static func noteBuilder(_ row: TasksRowID, palette: AtticTagPalette) { builderPalettes[row] = palette }
+
+    static func noteLeaf(_ row: TasksRowID, model: AtticTaskRowModel) {
+        leaves[row, default: 0] += 1
+        leafModels[row] = model
+    }
 
     static func note(_ row: TasksRowID, dragGroup: @escaping () -> [UUID]) {
         evaluations[row, default: 0] += 1
