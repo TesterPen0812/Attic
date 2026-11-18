@@ -147,10 +147,10 @@ final class TasksRound11Tests: XCTestCase {
         XCTAssertNil(hosted.pointer.frame(for: TasksRowID(tab: .backlog, id: newTask.id)),
                      "the hidden page must defer laying out its newly added row")
 
-        let hiddenOld = TasksKeptPage(frozen: old) { Text("old") }
-        let hiddenNew = TasksKeptPage(frozen: changed) { Text("new") }
+        let hiddenOld = TasksKeptPage(frozen: true) { Text("old") }
+        let hiddenNew = TasksKeptPage(frozen: true) { Text("new") }
         XCTAssertEqual(hiddenOld, hiddenNew, "a hidden tab must not pay to lay out new rows")
-        let revealed = TasksKeptPage(frozen: nil) { Text("shown") }
+        let revealed = TasksKeptPage(frozen: false) { Text("shown") }
         XCTAssertNotEqual(hiddenNew, revealed, "showing it must rebuild its current contents")
 
         hosted.go(to: .backlog)

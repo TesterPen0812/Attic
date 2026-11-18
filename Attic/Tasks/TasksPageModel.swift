@@ -767,9 +767,11 @@ final class TasksPageModel: ObservableObject {
         let dayDrag: Bool
     }
 
-    /// What a page kept built but not drawn shows (round 11): while it is
-    /// the same, the page is not redrawn when the model changes elsewhere (a
-    /// selection, a keystroke), only when its own rows could have.
+    /// What a page shows (round 11): it changes when the page's own rows
+    /// could have, not when the model changes elsewhere (a selection, a
+    /// keystroke). Tests read it to check what a change touches. The pager
+    /// does not build it: a page kept built but not drawn is frozen whatever
+    /// changed, and catches up when it is drawn again (`TasksKeptPage`).
     struct PageToken: Equatable {
         let tab: TasksTab
         let revision: UInt64
