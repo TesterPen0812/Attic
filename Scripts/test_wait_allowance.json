@@ -1,0 +1,551 @@
+{
+  "files": {
+    "AtticMobileUITests/AtticMobileUITests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/AdaptiveCalendarEventTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/AdaptiveFindTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/AdaptiveFormatTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/AdaptiveTagsTests.swift": {
+      "runloop": 1,
+      "skip": 1
+    },
+    "AtticTests/AdaptiveTasksTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/AgentActionsTests.swift": {
+      "sleep": 2
+    },
+    "AtticTests/AgentChatTests.swift": {
+      "runloop": 9,
+      "skip": 1,
+      "sleep": 5
+    },
+    "AtticTests/AgentHelperLaunchTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/AgentRunHostedTests.swift": {
+      "skip": 1,
+      "sleep": 3
+    },
+    "AtticTests/AgentServerIntegrationTests.swift": {
+      "skip": 1,
+      "sleep": 4
+    },
+    "AtticTests/AppSettingsTests.swift": {
+      "sleep": 4
+    },
+    "AtticTests/AttachmentRecentlyDeletedTests.swift": {
+      "sleep": 2
+    },
+    "AtticTests/AtticAppearanceMatrixTests.swift": {
+      "skip": 1
+    },
+    "AtticTests/AtticDesignSystemHostedTests.swift": {
+      "runloop": 1,
+      "skip": 1
+    },
+    "AtticTests/AtticDropdownTests.swift": {
+      "runloop": 2,
+      "skip": 5,
+      "sleep": 1
+    },
+    "AtticTests/AtticGlassMenuTests.swift": {
+      "runloop": 18,
+      "skip": 1
+    },
+    "AtticTests/AtticHeaderTitleRoomTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/CalendarPageHostedTests.swift": {
+      "runloop": 5
+    },
+    "AtticTests/CalendarPageTests.swift": {
+      "runloop": 3,
+      "sleep": 1
+    },
+    "AtticTests/CalendarProBugTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/CanvasDomainTests.swift": {
+      "runloop": 5,
+      "sleep": 2
+    },
+    "AtticTests/CanvasImageTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/CanvasPerformanceGateTests.swift": {
+      "skip": 1
+    },
+    "AtticTests/CanvasRenderCacheTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/CanvasStoreTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/CombinedFixRoundTests.swift": {
+      "runloop": 1,
+      "skip": 1,
+      "sleep": 4
+    },
+    "AtticTests/ComposerTests.swift": {
+      "runloop": 2,
+      "sleep": 7
+    },
+    "AtticTests/CornerGlassTests.swift": {
+      "runloop": 5
+    },
+    "AtticTests/CornerHoverStateMachineTests.swift": {
+      "skip": 1
+    },
+    "AtticTests/CornerRevealSettingsTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/DailyCleanupServiceTests.swift": {
+      "sleep": 2
+    },
+    "AtticTests/DeepReviewFixTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/DoneSearchCostTests.swift": {
+      "runloop": 6,
+      "skip": 6,
+      "sleep": 3
+    },
+    "AtticTests/Draw3PageTests.swift": {
+      "runloop": 4,
+      "sleep": 14
+    },
+    "AtticTests/DrawBoardViewTests.swift": {
+      "runloop": 6,
+      "skip": 1,
+      "sleep": 1
+    },
+    "AtticTests/DrawInputTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/DrawPersistenceTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/DrawThumbnailAppearanceTests.swift": {
+      "runloop": 2
+    },
+    "AtticTests/EventKitCalendarEventSourceTests.swift": {
+      "sleep": 2
+    },
+    "AtticTests/FirstClickGuardTests.swift": {
+      "runloop": 3,
+      "skip": 5
+    },
+    "AtticTests/FirstTouchLogTests.swift": {
+      "skip": 2,
+      "sleep": 2
+    },
+    "AtticTests/FloatingControlsTests.swift": {
+      "runloop": 3,
+      "skip": 1
+    },
+    "AtticTests/GlassLiftToggleTests.swift": {
+      "runloop": 3
+    },
+    "AtticTests/IslandTopRowRefineTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/LeaksHuntTests.swift": {
+      "runloop": 1,
+      "skip": 2,
+      "sleep": 7
+    },
+    "AtticTests/LoamMotionTests.swift": {
+      "runloop": 5
+    },
+    "AtticTests/MarqueeInteractionTests.swift": {
+      "runloop": 4
+    },
+    "AtticTests/NoteAttachmentFrameTests.swift": {
+      "runloop": 3
+    },
+    "AtticTests/NoteBlockDragTests.swift": {
+      "runloop": 6
+    },
+    "AtticTests/NoteEditorEngineTests.swift": {
+      "runloop": 3,
+      "skip": 1,
+      "sleep": 8
+    },
+    "AtticTests/NoteHistoryBrowserTests.swift": {
+      "sleep": 3
+    },
+    "AtticTests/NoteSlice3bTests.swift": {
+      "sleep": 17
+    },
+    "AtticTests/NoteStoreTests.swift": {
+      "sleep": 3
+    },
+    "AtticTests/NotesBoardTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/NotesChromeTests.swift": {
+      "runloop": 1,
+      "skip": 1
+    },
+    "AtticTests/NotesFormatControlsTests.swift": {
+      "runloop": 16,
+      "skip": 2,
+      "sleep": 2
+    },
+    "AtticTests/NotesKeyboardUndoTests.swift": {
+      "runloop": 1,
+      "skip": 2
+    },
+    "AtticTests/NotesLibraryOrganizeTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/NotesLibraryRowsDesignTests.swift": {
+      "runloop": 1,
+      "sleep": 1
+    },
+    "AtticTests/NotesOwnerFeedbackTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/NotesPageControllerTests.swift": {
+      "sleep": 34
+    },
+    "AtticTests/NotesPageRenderTests.swift": {
+      "runloop": 2
+    },
+    "AtticTests/NotesSlice2FixRoundTests.swift": {
+      "sleep": 9
+    },
+    "AtticTests/NotesSlice2Tests.swift": {
+      "sleep": 4
+    },
+    "AtticTests/NotesSlice3bUITests.swift": {
+      "runloop": 2,
+      "sleep": 1
+    },
+    "AtticTests/NotesTypingCostTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/NotesV2ChromeTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/NotesV2TablesFeatureTests.swift": {
+      "runloop": 4
+    },
+    "AtticTests/NotesV2TablesTests.swift": {
+      "runloop": 1,
+      "sleep": 1
+    },
+    "AtticTests/NotesV2TypographyTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/OperationCrashHarnessTests.swift": {
+      "long_timeout": 2
+    },
+    "AtticTests/OwnerFindings1001Tests.swift": {
+      "runloop": 5
+    },
+    "AtticTests/OwnerTasks1010Tests.swift": {
+      "runloop": 2
+    },
+    "AtticTests/PanelActivationTests.swift": {
+      "skip": 1,
+      "sleep": 9
+    },
+    "AtticTests/PanelBackgroundInputTests.swift": {
+      "runloop": 6,
+      "skip": 3
+    },
+    "AtticTests/PanelChromeTests.swift": {
+      "runloop": 4
+    },
+    "AtticTests/PanelGeometryTests.swift": {
+      "runloop": 5,
+      "skip": 3
+    },
+    "AtticTests/PanelHideMotionTests.swift": {
+      "runloop": 19,
+      "skip": 11
+    },
+    "AtticTests/PanelIntegrationTests.swift": {
+      "runloop": 2,
+      "skip": 1,
+      "sleep": 4
+    },
+    "AtticTests/PanelIslandImprovedTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/PanelIslandPositionTests.swift": {
+      "runloop": 2
+    },
+    "AtticTests/PanelIslandTests.swift": {
+      "runloop": 5,
+      "skip": 6
+    },
+    "AtticTests/PanelPullOutTests.swift": {
+      "runloop": 2,
+      "skip": 5
+    },
+    "AtticTests/PanelSharedChromeTests.swift": {
+      "runloop": 2,
+      "sleep": 1
+    },
+    "AtticTests/PanelShellTests.swift": {
+      "runloop": 14,
+      "skip": 2
+    },
+    "AtticTests/PanelSwipeTakeoverTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/PhaseXColourDataTests.swift": {
+      "runloop": 2
+    },
+    "AtticTests/PhaseXHunt15Tests.swift": {
+      "runloop": 4
+    },
+    "AtticTests/PhaseXHunt1ReproTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/PhaseXHunt1bTests.swift": {
+      "sleep": 6
+    },
+    "AtticTests/PhaseXHunt8Tests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/PhaseXHunt9Tests.swift": {
+      "runloop": 1,
+      "sleep": 1
+    },
+    "AtticTests/PhaseXPicksTests.swift": {
+      "skip": 1
+    },
+    "AtticTests/RecentlyDeletedSelectionTests.swift": {
+      "runloop": 2,
+      "sleep": 2
+    },
+    "AtticTests/RecentlyDeletedTests.swift": {
+      "sleep": 2
+    },
+    "AtticTests/ReviewFixes1001Tests.swift": {
+      "runloop": 2
+    },
+    "AtticTests/RoundD2DiagnosisTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/RoundD3CaretGeometryTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/RoundF3Harness.swift": {
+      "runloop": 1
+    },
+    "AtticTests/RoundF3RenderTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/RoundF3ScrollTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/RoundFHPasteTests.swift": {
+      "sleep": 3
+    },
+    "AtticTests/RoundFX4Tests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/RoundNLeaksTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/RoundO1RenderTests.swift": {
+      "runloop": 2,
+      "skip": 1
+    },
+    "AtticTests/RoundO1Tests.swift": {
+      "runloop": 1,
+      "sleep": 1
+    },
+    "AtticTests/RoundO3ControlsTests.swift": {
+      "runloop": 1,
+      "skip": 1
+    },
+    "AtticTests/RoundUContentTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/ScrollEdgeHangTests.swift": {
+      "runloop": 1,
+      "sleep": 1
+    },
+    "AtticTests/SettingsWindowHostedTests.swift": {
+      "runloop": 4,
+      "skip": 2
+    },
+    "AtticTests/TagInventoryLifeTests.swift": {
+      "skip": 1
+    },
+    "AtticTests/TaskAttachmentDropTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/TaskFilesSliceTests.swift": {
+      "runloop": 2,
+      "sleep": 7
+    },
+    "AtticTests/TaskImageTests.swift": {
+      "sleep": 4
+    },
+    "AtticTests/TaskLifecycleSliceTests.swift": {
+      "runloop": 3,
+      "sleep": 25
+    },
+    "AtticTests/TaskNoteComposedHostTests.swift": {
+      "runloop": 6,
+      "sleep": 7
+    },
+    "AtticTests/TaskPageSliceTests.swift": {
+      "runloop": 1,
+      "sleep": 5
+    },
+    "AtticTests/TaskPerformanceGateTests.swift": {
+      "sleep": 17
+    },
+    "AtticTests/TaskStoreTests.swift": {
+      "skip": 1,
+      "sleep": 2
+    },
+    "AtticTests/TasksCrossDayDragTests.swift": {
+      "runloop": 2
+    },
+    "AtticTests/TasksDragOutTests.swift": {
+      "runloop": 8
+    },
+    "AtticTests/TasksFiltersTests.swift": {
+      "runloop": 5,
+      "sleep": 1
+    },
+    "AtticTests/TasksFrameCostTests.swift": {
+      "runloop": 4,
+      "skip": 2
+    },
+    "AtticTests/TasksGoingInTests.swift": {
+      "runloop": 6,
+      "skip": 1
+    },
+    "AtticTests/TasksKeystrokeCostTests.swift": {
+      "runloop": 7,
+      "skip": 1
+    },
+    "AtticTests/TasksNoPaperclipTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/TasksPageModelTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/TasksPageSwitchCostTests.swift": {
+      "runloop": 3
+    },
+    "AtticTests/TasksPanelDesignRenderTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/TasksPanelDesignSmoothnessTests.swift": {
+      "runloop": 4
+    },
+    "AtticTests/TasksPanelDesignTests.swift": {
+      "runloop": 5
+    },
+    "AtticTests/TasksReviewFixTests.swift": {
+      "runloop": 2
+    },
+    "AtticTests/TasksRound10PagerTests.swift": {
+      "runloop": 3
+    },
+    "AtticTests/TasksRound11Tests.swift": {
+      "runloop": 4
+    },
+    "AtticTests/TasksRound12Tests.swift": {
+      "runloop": 4,
+      "skip": 5,
+      "sleep": 6
+    },
+    "AtticTests/TasksRound13Tests.swift": {
+      "skip": 2
+    },
+    "AtticTests/TasksRound3StoreTests.swift": {
+      "runloop": 2
+    },
+    "AtticTests/TasksRound5Tests.swift": {
+      "sleep": 3
+    },
+    "AtticTests/TasksRound6Tests.swift": {
+      "runloop": 2
+    },
+    "AtticTests/TasksRound7Tests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/TasksRowBuildCostTests.swift": {
+      "runloop": 3
+    },
+    "AtticTests/TasksSubtaskTypingCostTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/TestSupport.swift": {
+      "runloop": 1,
+      "skip": 1,
+      "sleep": 1
+    },
+    "AtticTests/UXAuditFixTests.swift": {
+      "runloop": 15,
+      "sleep": 6
+    },
+    "AtticTests/WorkspaceCommitTests.swift": {
+      "sleep": 1
+    },
+    "AtticTests/WorkspaceHistoryTests.swift": {
+      "sleep": 6
+    },
+    "AtticUITests/AtticUITests.swift": {
+      "runloop": 1
+    },
+    "AtticUITests/NotesFormatUITests.swift": {
+      "runloop": 8
+    },
+    "AtticUITests/NotesPageUITests.swift": {
+      "runloop": 2,
+      "skip": 1
+    },
+    "AtticUITests/PanelShellUITests.swift": {
+      "runloop": 2,
+      "sleep": 3
+    },
+    "AtticUITests/PerformanceUITests.swift": {
+      "long_timeout": 4,
+      "runloop": 1,
+      "sleep": 3
+    },
+    "AtticUITests/ScrollEdgeUITests.swift": {
+      "runloop": 7
+    },
+    "AtticUITests/TasksDragOutUITests.swift": {
+      "runloop": 1
+    },
+    "AtticUITests/TasksPageUITests.swift": {
+      "runloop": 11
+    },
+    "AtticUITests/TasksPanelUITests.swift": {
+      "runloop": 2
+    },
+    "AtticUITests/TasksRound12UITests.swift": {
+      "runloop": 1
+    },
+    "AtticUITests/TasksRound13UITests.swift": {
+      "runloop": 1
+    },
+    "CanvasLab/Tests/main.swift": {
+      "sleep": 1
+    }
+  },
+  "retry_flags": [],
+  "version": 1
+}
