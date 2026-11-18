@@ -760,6 +760,12 @@ final class WorkspaceOperationCoordinator {
             let stagedModels = inserted.isEmpty ? [] : try WorkspaceModelToken.stagedModels(owners: writes, before: stagedTokens, in: context)
             do {
                 try gatedSave(context, before: previous, using: writer)
+                #if DEBUG
+                if WorkspaceLegacyBridge.postSaveCaptureFailures > 0 {
+                    WorkspaceLegacyBridge.postSaveCaptureFailures -= 1
+                    throw WorkspaceFoundationError.unknown
+                }
+                #endif
                 // Existing rows keep their physical identifiers through save.
                 // Their already-computed after tokens are the confirmed baseline;
                 // only inserts need their permanent identifiers captured now.

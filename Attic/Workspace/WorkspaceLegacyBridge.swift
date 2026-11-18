@@ -10,6 +10,12 @@ enum WorkspaceLegacyBridge {
     /// Test seam (board ids delete-postcommit-owner-read, undo-unresolved-staging): the next N reads of the written
     /// owners that follow a journaled commit throw, after the writer has already committed.
     static var postCommitOwnerReadFailures = 0
+    /// Test seam: the next N plain saves throw after `commitInPlace` returned `.committed`, where the bridge updates
+    /// its scope guards and baseline.
+    static var postCommitPlainFailures = 0
+    /// Test seam: the next N in-place saves throw after `gatedSave` returned, where the coordinator captures the
+    /// permanent identifiers of inserted rows.
+    static var postSaveCaptureFailures = 0
     #endif
     private final class WeakCoordinator {
         weak var value: WorkspaceOperationCoordinator?
@@ -476,6 +482,9 @@ enum WorkspaceLegacyBridge {
                 if result == .notCommitted, let writeError { throw writeError }
                 throw result == .conflict ? WorkspaceFoundationError.conflict : WorkspaceFoundationError.unknown
             }
+            #if DEBUG
+            if postCommitPlainFailures > 0 { postCommitPlainFailures -= 1; throw WorkspaceFoundationError.unknown }
+            #endif
             try updateScopeGuards(confirmed, state: state, in: source)
             state.baseline.merge(confirmed) { _, saved in saved }
             try state.scopeBaseline?.replace(confirmed)

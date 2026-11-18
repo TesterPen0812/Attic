@@ -10,6 +10,8 @@ import XCTest
 final class DurableSaveReadFailureTests: XCTestCase {
     override func tearDown() {
         WorkspaceLegacyBridge.postCommitOwnerReadFailures = 0
+        WorkspaceLegacyBridge.postCommitPlainFailures = 0
+        WorkspaceLegacyBridge.postSaveCaptureFailures = 0
         super.tearDown()
     }
 
@@ -25,7 +27,10 @@ final class DurableSaveReadFailureTests: XCTestCase {
 
     /// The panel's wiring: library plus a registered Notes lifecycle controller, 30 tasks, task 3 with writing,
     /// six other notes. One physical row per id.
-    private func makeRig() async throws -> Rig {
+    /// Fails the next N writer calls (the save itself, before anything is durable).
+    private final class WriterFailures { var remaining = 0 }
+
+    private func makeRig(writerFailures: WriterFailures? = nil) async throws -> Rig {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
         let date = Date(timeIntervalSince1970: 1_700_000_000)
@@ -43,7 +48,13 @@ final class DurableSaveReadFailureTests: XCTestCase {
         for index in 0..<6 { seed.insert(NoteItem(title: "Note \(index)", body: "Body", createdAt: date)) }
         try seed.save()
         let files = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("R12Rig-\(UUID())"))
-        let tasks = TaskStore(container: container, now: { date }, taskImageFiles: files)
+        let tasks = TaskStore(container: container, now: { date }, persist: { context in
+            if let failures = writerFailures, failures.remaining > 0 {
+                failures.remaining -= 1
+                throw WorkspaceFoundationError.unknown
+            }
+            try context.save()
+        }, taskImageFiles: files)
         let notes = NoteStore(container: container, now: { date }, attachmentFileStore: makeTestAttachmentFileStore())
         let library = AtticLibrary(tasks: tasks, notes: notes)
         let controller = NotesPageController(store: notes, journal: coordinator.journal)
@@ -156,6 +167,113 @@ final class DurableSaveReadFailureTests: XCTestCase {
         XCTAssertEqual(afterNext.retired, 1, "Retired by the restore")
         XCTAssertEqual(afterNext.taskDeleted, 0, "The task stays restored")
         XCTAssertEqual(afterUndo.receipts, afterDelete.receipts + 1, "Undo writes exactly one inverse receipt")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    private func durableTitles(_ container: ModelContainer, _ title: String) throws -> Int {
+        try ModelContext(container).fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.title == title }))
+    }
+
+    /// Condition 1, plain branch of `persist`: the in-place save commits, then the bridge's update of its scope guards
+    /// and baseline throws. The rename is durable, so it is reported as done and presented, and the next save works.
+    func testC1PlainEditWhoseBaselineUpdateFailsIsRecordedAsDone() async throws {
+        let rig = try await makeRig()
+        let task = try XCTUnwrap(rig.tasks.task(withID: rig.ids[7]))
+        WorkspaceLegacyBridge.postCommitPlainFailures = 1
+        let renamed = rig.tasks.rename(task, to: "Renamed after a plain commit")
+        let seamUsed = WorkspaceLegacyBridge.postCommitPlainFailures == 0
+        WorkspaceLegacyBridge.postCommitPlainFailures = 0
+        let durable = try durableTitles(rig.container, "Renamed after a plain commit")
+        let presented = rig.tasks.task(withID: rig.ids[7])?.title
+        let next = rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[8])), to: "The next plain save")
+        print("C1_PLAIN seam_used=\(seamUsed) renamed=\(renamed) durable=\(durable) presented=\(presented ?? "nil") "
+            + "next=\(next) next_durable=\(try durableTitles(rig.container, "The next plain save")) "
+            + "duplicates=\(try duplicateRows(rig.container))")
+        XCTAssertTrue(seamUsed)
+        XCTAssertEqual(durable, 1, "The rename is durable")
+        XCTAssertTrue(renamed, "A durable rename is reported as done")
+        XCTAssertEqual(presented, "Renamed after a plain commit")
+        XCTAssertTrue(next, "The next save works")
+        XCTAssertEqual(try durableTitles(rig.container, "The next plain save"), 1)
+        XCTAssertEqual(try duplicateRows(rig.container), [])
+    }
+
+    /// Condition 1, `commitInPlace`: `gatedSave` commits an insert, then capturing the inserted row's permanent
+    /// identifiers throws. The new task is durable once, reported as created, presented, and the next save writes it
+    /// no second time.
+    func testC1PlainInsertWhoseCaptureFailsIsWrittenOnceAndReported() async throws {
+        let rig = try await makeRig()
+        WorkspaceLegacyBridge.postSaveCaptureFailures = 1
+        let created = rig.tasks.create(title: "Created before a failed capture")
+        let seamUsed = WorkspaceLegacyBridge.postSaveCaptureFailures == 0
+        WorkspaceLegacyBridge.postSaveCaptureFailures = 0
+        let durable = try durableTitles(rig.container, "Created before a failed capture")
+        let presented = rig.tasks.tasks.filter { $0.title == "Created before a failed capture" }.count
+        let next = rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[8])), to: "The next plain save")
+        let durableAfterNext = try durableTitles(rig.container, "Created before a failed capture")
+        print("C1_CAPTURE seam_used=\(seamUsed) created=\(created != nil) durable=\(durable) presented=\(presented) "
+            + "next=\(next) durable_after_next=\(durableAfterNext) error=\(rig.tasks.lastErrorMessage ?? "nil") "
+            + "duplicates=\(try duplicateRows(rig.container))")
+        XCTAssertTrue(seamUsed)
+        XCTAssertEqual(durable, 1, "The insert is durable once")
+        XCTAssertNotNil(created, "A durable insert is reported as created")
+        XCTAssertEqual(presented, 1)
+        XCTAssertTrue(next, "The next save works")
+        XCTAssertEqual(durableAfterNext, 1, "The next save does not write the insert again")
+        XCTAssertEqual(try duplicateRows(rig.container), [])
+    }
+
+    /// Condition 6: an Undo whose save fails before anything is durable is refused, and keeps its history step, so
+    /// the owner can press Undo again.
+    func testC6RefusedUndoKeepsItsHistoryStep() async throws {
+        let failures = WriterFailures()
+        let rig = try await makeRig(writerFailures: failures)
+        let id = rig.ids[5]
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied)
+        failures.remaining = 1
+        let refused = rig.library.undo(in: .tasks)
+        let failureUsed = failures.remaining == 0
+        failures.remaining = 0
+        let canUndo = rig.library.undo.canUndo(in: .tasks)
+        let presentedAfterRefusal = rig.tasks.task(withID: id) != nil
+        let again = rig.library.undo(in: .tasks)
+        print("C6_UNDO failure_used=\(failureUsed) refused=\(refused) can_undo_after=\(canUndo) "
+            + "presented_after_refusal=\(presentedAfterRefusal) again=\(again) presented=\(rig.tasks.task(withID: id) != nil) "
+            + "duplicates=\(try duplicateRows(rig.container))")
+        XCTAssertTrue(failureUsed)
+        XCTAssertFalse(refused.isApplied, "The failed save refuses the Undo")
+        XCTAssertTrue(canUndo, "A refused Undo keeps its step")
+        XCTAssertFalse(presentedAfterRefusal, "Nothing was restored")
+        XCTAssertTrue(again.isApplied, "Undo again restores")
+        XCTAssertNotNil(rig.tasks.task(withID: id))
+        XCTAssertEqual(try duplicateRows(rig.container), [])
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// Condition 7: after a failed post-commit owner read the store is not wedged. The next plain save and the next
+    /// journaled save both work, each recorded once.
+    func testC7AfterAFailedOwnerReadTheNextSavesWork() async throws {
+        let rig = try await makeRig()
+        WorkspaceLegacyBridge.postCommitOwnerReadFailures = 1
+        let first = rig.library.deleteTasks([rig.ids[5]])
+        WorkspaceLegacyBridge.postCommitOwnerReadFailures = 0
+        let renamed = rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[7])), to: "Saved after a failed read")
+        let renameDurable = try durableTitles(rig.container, "Saved after a failed read")
+        let second = rig.library.deleteTasks([rig.ids[9]])
+        let secondID = rig.ids[9]
+        let secondDurable = try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == secondID }))
+            .allSatisfy { $0.deletedAt != nil }
+        print("C7_NEXT first=\(first) renamed=\(renamed) rename_durable=\(renameDurable) second=\(second) "
+            + "second_durable=\(secondDurable) can_undo=\(rig.library.undo.canUndo(in: .tasks)) "
+            + "error=\(rig.tasks.lastErrorMessage ?? "nil") duplicates=\(try duplicateRows(rig.container))")
+        XCTAssertTrue(renamed, "The next plain save works")
+        XCTAssertEqual(renameDurable, 1)
+        XCTAssertTrue(second.isApplied, "The next journaled save works")
+        XCTAssertTrue(secondDurable)
+        XCTAssertNil(rig.tasks.task(withID: rig.ids[9]))
+        XCTAssertTrue(rig.library.undo(in: .tasks).isApplied, "The second delete has its Undo step")
+        XCTAssertNotNil(rig.tasks.task(withID: rig.ids[9]))
+        XCTAssertEqual(try duplicateRows(rig.container), [])
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
     }
 }
