@@ -6,6 +6,11 @@ import SwiftData
 /// fresh-context envelope/receipt path and full publication refresh.
 @MainActor
 enum WorkspaceLegacyBridge {
+    #if DEBUG
+    /// Test seam (board ids delete-postcommit-owner-read, undo-unresolved-staging): the next N reads of the written
+    /// owners that follow a journaled commit throw, after the writer has already committed.
+    static var postCommitOwnerReadFailures = 0
+    #endif
     private final class WeakCoordinator {
         weak var value: WorkspaceOperationCoordinator?
         init(_ value: WorkspaceOperationCoordinator) { self.value = value }
@@ -539,6 +544,12 @@ enum WorkspaceLegacyBridge {
         // An ambiguous-save reconciliation or journaled operation still
         // confirms from disk. Successful plain saves already returned guards
         // of every saved instance, including its now-permanent physical ID.
+        #if DEBUG
+        if confirmed == nil, postCommitOwnerReadFailures > 0 {
+            postCommitOwnerReadFailures -= 1
+            throw WorkspaceFoundationError.unknown
+        }
+        #endif
         let updates = try confirmed ?? WorkspaceModelToken.read(owners: writes, in: state.coordinator.freshContext())
         state.baseline = updates
         state.scopes.removeAll()
