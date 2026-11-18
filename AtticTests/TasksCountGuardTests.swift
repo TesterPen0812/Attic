@@ -395,6 +395,86 @@ final class TasksCountGuardTests: XCTestCase {
         XCTAssertFalse(model.rows(for: .now).contains { $0.id == id }, "the released row leaves")
     }
 
+    /// `rowsBuiltOrder` (PR 30 ruling, condition 1): each full build
+    /// replaces it with the rows it built, so a deleted task's id, held or
+    /// not, is gone from it after the next build.
+    func testBuiltOrderHoldsOnlyTheRowsLastBuilt() throws {
+        let (model, _) = try makeDatedModel([("K", nil, nil), ("D", nil, nil), ("E", 0, nil), ("F", nil, nil)])
+        func task(_ title: String) throws -> UUID { try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id) }
+        let deleted = try task("D"), held = try task("F")
+        XCTAssertTrue(try XCTUnwrap(model.rowsBuiltOrderForTesting[.now]).contains(deleted))
+        model.completeAcknowledged(held) { _ in }
+        XCTAssertNotNil(model.held[held])
+        _ = model.rows(for: .now)
+        XCTAssertTrue(model.library.deleteTasks([deleted, held]).isApplied)
+        let built = model.rows(for: .now).map(\.id)
+        XCTAssertFalse(built.contains(deleted))
+        XCTAssertFalse(built.contains(held))
+        let order = try XCTUnwrap(model.rowsBuiltOrderForTesting[.now])
+        XCTAssertFalse(order.contains(deleted), "a deleted task's id stays in the built order")
+        XCTAssertFalse(order.contains(held), "a deleted held task's id stays in the built order")
+        XCTAssertEqual(Set(order), Set(built), "the built order holds exactly the rows built")
+    }
+
+    /// PR 30 ruling, condition 3 (a): a row held in Find, with Find cleared
+    /// during its hold. Its index is a place in the Find list, so the list
+    /// without Find shows it as the trunk's full build does, at every step.
+    /// The trunk's lists are traced from 2715d5da's `buildRows`: the held
+    /// task goes back at its index in the ungrouped list (Q A, so H Q A),
+    /// and Overdue then orders day -2's rows by clock in that day's places.
+    func testRowHeldInFindShowsAsTheTrunkDoesOnceFindIsCleared() throws {
+        let (model, store) = try makeDatedModel([("Q", -1, nil), ("H", -2, 600), ("A", -2, 540)])
+        func check(_ trunk: [String], _ step: String) {
+            XCTAssertEqual(model.rows(for: .now).map(\.model.title), trunk, "\(step): the rows shown")
+            model.toggleCompletedToday()
+            XCTAssertEqual(model.rows(for: .now).map(\.model.title), trunk, "\(step): a full build")
+            model.toggleCompletedToday()
+        }
+        check(["Q", "A", "H"], "start")
+        model.setSearchQuery("H", for: .now)
+        check(["H"], "Find")
+        let id = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "H" }?.id)
+        model.completeAcknowledged(id) { _ in }
+        XCTAssertNotNil(model.held[id])
+        check(["H"], "the press, in Find")
+        model.setSearchQuery("", for: .now)
+        check(["A", "Q", "H"], "Find cleared during the hold")
+        model.settlePendingCompletionAcknowledgements(through: id)
+        XCTAssertEqual(store.task(withID: id)?.status, .done)
+        check(["A", "Q", "H"], "the save")
+        model.releaseHold(id)
+        check(["Q", "A"], "the release")
+    }
+
+    /// PR 30 ruling, condition 3 (b): the task before the held task in the
+    /// order (P) moves during the hold (to in progress, which goes first).
+    /// The rows show as the trunk's full build gives them, at every step.
+    /// The trunk's lists are traced from 2715d5da's `buildRows`: the held
+    /// task goes back at its index (2) in the ungrouped list, and Overdue
+    /// orders day -2's rows by clock in that day's places.
+    func testHeldRowWhoseNeighbourMovesShowsAsTheTrunkDoes() throws {
+        let (model, store) = try makeDatedModel([("Q", -1, nil), ("P", nil, nil), ("H", -2, 600), ("A", -2, 540)])
+        func check(_ trunk: [String], _ step: String) {
+            XCTAssertEqual(model.rows(for: .now).map(\.model.title), trunk, "\(step): the rows shown")
+            model.toggleCompletedToday()
+            XCTAssertEqual(model.rows(for: .now).map(\.model.title), trunk, "\(step): a full build")
+            model.toggleCompletedToday()
+        }
+        check(["Q", "A", "H", "P"], "start")
+        func task(_ title: String) throws -> UUID { try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id) }
+        let id = try task("H"), before = try task("P")
+        model.completeAcknowledged(id) { _ in }
+        XCTAssertNotNil(model.held[id])
+        check(["Q", "A", "H", "P"], "the press")
+        XCTAssertTrue(model.library.updateTask(before, status: .inProgress).isApplied)
+        check(["Q", "A", "H", "P"], "the task before the held one moved")
+        model.settlePendingCompletionAcknowledgements(through: id)
+        XCTAssertEqual(store.task(withID: id)?.status, .done)
+        check(["Q", "A", "H", "P"], "the save")
+        model.releaseHold(id)
+        check(["Q", "A", "P"], "the release")
+    }
+
     // MARK: - Rig
 
     private static let size = CGSize(width: 344, height: 520)

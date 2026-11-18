@@ -930,6 +930,8 @@ final class TasksPageModel: ObservableObject {
     private(set) var rowsRestateMismatches = 0
 
     func resetRowProjectionBuildCount() { rowProjectionBuildCount = 0 }
+    /// Tests only: the order each tab's rows were last built in.
+    var rowsBuiltOrderForTesting: [TasksTab: [UUID]] { rowsBuiltOrder }
     #endif
 
     /// The rows a list shows, in order (the keyboard walks them): Now's
