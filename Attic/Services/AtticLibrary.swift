@@ -1131,7 +1131,7 @@ final class AtticLibrary {
         guard deleted else {
             // TA-03: what a create's (or a restore's) step owns is the live
             // writing of its own tasks, read by owner id, so the read does
-            // not grow with the library. A failed read records nothing.
+            // not grow with the library. Nil only when every read failed.
             owned.writing = liveWriting(ownedBy: members, in: context)
             #if DEBUG
             lastCapturedWriting = owned.writing
@@ -1153,27 +1153,32 @@ final class AtticLibrary {
 
     /// The live notes (deletedAt nil, any physical replica) whose owner is
     /// one of `members`: the writing a step that made or brought back these
-    /// tasks owns. One fetch by owner id, in the given context; nil when the
-    /// read failed. A runtime that rejects the optional membership test gets
-    /// one small fetch per task instead.
+    /// tasks owns. One fetch of live notes by owner id, in the given context.
+    /// A runtime that rejects the optional membership test gets one small
+    /// fetch per task instead. If that fails too, the whole note table is
+    /// read and filtered here, as the capture did before TA-03, so a failed
+    /// narrowed read never records less than that read would (review R-1).
+    /// Nil only when the whole table can't be read either.
     func liveWriting(ownedBy members: Set<UUID>, in context: ModelContext) -> Set<UUID>? {
         guard WorkspaceItemLifecycle.has("NoteItem", in: context) else { return [] }
+        if let notes = liveNotes(ownedBy: members, in: context) { return Set(notes.map(\.id)) }
+        guard let all = try? ownershipNotes(FetchDescriptor<NoteItem>(), byOwner: false, in: context) else { return nil }
+        return Set(all.filter { $0.taskID.map(members.contains) == true && $0.deletedAt == nil }.map(\.id))
+    }
+
+    /// The live notes owned by `members`, read by owner id; nil when a read failed.
+    private func liveNotes(ownedBy members: Set<UUID>, in context: ModelContext) -> [NoteItem]? {
         let owners: [UUID?] = members.map { $0 }
-        let notes: [NoteItem]
-        if let all = try? ownershipNotes(FetchDescriptor<NoteItem>(predicate: #Predicate { owners.contains($0.taskID) }), byOwner: true, in: context) {
-            notes = all
-        } else {
-            var each: [NoteItem] = []
-            for member in members {
-                let owner: UUID? = member
-                guard let rows = try? ownershipNotes(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == owner }), byOwner: true, in: context) else {
-                    return nil
-                }
-                each += rows
-            }
-            notes = each
+        let bulk = FetchDescriptor<NoteItem>(predicate: #Predicate { owners.contains($0.taskID) && $0.deletedAt == nil })
+        if let all = try? ownershipNotes(bulk, byOwner: true, in: context) { return all }
+        var each: [NoteItem] = []
+        for member in members {
+            let owner: UUID? = member
+            let one = FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == owner && $0.deletedAt == nil })
+            guard let rows = try? ownershipNotes(one, byOwner: true, in: context) else { return nil }
+            each += rows
         }
-        return Set(notes.filter { $0.deletedAt == nil }.map(\.id))
+        return each
     }
 
     /// The ownership capture's one fetch boundary: every note fetch it makes
