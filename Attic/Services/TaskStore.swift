@@ -3065,11 +3065,12 @@ final class TaskStore: ObservableObject {
     }
 
     /// The parent of every saved replica of `ids` (a subtask's, wherever it
-    /// is: listed, logged or deleted); nil when the read failed.
+    /// is: listed, logged or deleted); nil when the read failed. A Done log
+    /// read, so a test can make it fail (`doneLogReadFailures`).
     func savedParentIDs(of ids: Set<UUID>) -> Set<UUID>? {
         guard !ids.isEmpty else { return [] }
         let wanted = Array(ids)
-        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { wanted.contains($0.id) })) else {
+        guard let rows = try? readDoneLog(FetchDescriptor<TaskItem>(predicate: #Predicate { wanted.contains($0.id) })) else {
             return nil
         }
         return Set(rows.compactMap(\.parentID))
