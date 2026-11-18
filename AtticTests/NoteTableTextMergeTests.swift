@@ -337,7 +337,8 @@ final class NoteTableTextMergeTests: XCTestCase {
         var truth = plain
         truth.rows.swapAt(1, 3)
         swapColumns(&truth, 0, 2)
-        edit(&truth, 2, 1, "b edited [date:2026-12-05]")
+        // The agent's text carries a real date token (a literal one would be escaped).
+        truth.rows[2].cells[1] = NoteTable.Cell("b edited \u{FFFC}", inlines: [NoteInline(id: UUID(), kind: .date(NoteDay(isoString: "2026-12-05")!))])
         truth.columns[1].align = .center
         truth.rows.append(NoteTable.Row(cells: [NoteTable.Cell("new"), NoteTable.Cell(""), NoteTable.Cell("")]))
         let actual = try rewrite(plain, to: truth)

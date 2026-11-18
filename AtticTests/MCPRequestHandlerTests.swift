@@ -629,6 +629,249 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(saved, .table(expected, id: tableID), "ids, the width, row extras and c's bold are where they started")
     }
 
+    // MARK: The agent text is an exact round trip (brief notes-agent-text-roundtrip)
+
+    private func listedNote(_ handler: MCPRequestHandler, _ id: UUID) throws -> [String: Any] {
+        let notes = try XCTUnwrap(try callNoteTool(handler, "list_notes", [:])["notes"] as? [[String: Any]])
+        return try XCTUnwrap(notes.first { $0["id"] as? String == id.uuidString })
+    }
+
+    /// Astra R-2 = Opus R-1 (r2): a line with a `|` right after a table.
+    func testATitleOnlyUpdateKeepsATableAndTheLinesWithAPipeAfterIt() throws {
+        for (columns, formatted) in [(2, true), (2, false), (3, false)] {
+            for sendsBody in [false, true] {
+                let context = "\(columns) columns, \(formatted ? "formatted" : "plain"), \(sendsBody ? "body sent back" : "title only")"
+                let (noteStore, handler) = try makeNoteHandler()
+                var table = NoteTable(texts: [Array(["H", "V", "W"].prefix(columns)), Array(["a", "b", "c"].prefix(columns))])
+                if formatted { table.columns[0].width = 150 }
+                let base = NoteDocument(blocks: [.text("T"), .table(table), .text("left | right"), .checklist("x | y")])
+                guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+                let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+                let listed = try listedNote(handler, id)
+                var arguments: [String: Any] = ["id": id.uuidString, "base_revision": try XCTUnwrap(listed["revision"] as? String), "title": "T2"]
+                if sendsBody { arguments["body"] = try XCTUnwrap(listed["body"] as? String) }
+                let result = try callNoteTool(handler, "update_note", arguments)
+                XCTAssertEqual(result["status"] as? String, "applied", context)
+                let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+                XCTAssertEqual(saved.blocks.first?.text, "T2", context)
+                XCTAssertEqual(Array(saved.blocks.dropFirst()), Array(stored.blocks.dropFirst()),
+                               "\(context): the table is whole, the paragraph and the item stay lines")
+            }
+        }
+    }
+
+    /// Opus R-5 (r2): literal date text in a cell of a plain table.
+    func testALiteralDateInACellStaysTextWhenAnAgentChangesAnotherCell() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let tableID = UUID()
+        let base = NoteDocument(blocks: [.text("T"), .table(NoteTable(texts: [["When", "What"], ["[date:2026-01-01]", "b"]]), id: tableID)])
+        guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+        let listed = try listedNote(handler, id)
+        let body = try XCTUnwrap(listed["body"] as? String)
+        XCTAssertTrue(body.contains(" b |"), body)
+        let result = try callNoteTool(handler, "update_note", ["id": id.uuidString, "base_revision": try XCTUnwrap(listed["revision"] as? String),
+                                                               "body": body.replacingOccurrences(of: " b |", with: " b2 |")])
+        XCTAssertEqual(result["status"] as? String, "applied")
+        let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.last?.table)
+        XCTAssertEqual(saved.rows[1].cells[0], NoteTable.Cell("[date:2026-01-01]"), "the literal is still text, not a date")
+        XCTAssertEqual(saved.rows[1].cells[1], NoteTable.Cell("b2"))
+    }
+
+    /// `delete_table` is how an agent deletes a table, formatted or not; the
+    /// rest of the note is left byte for byte.
+    func testDeleteTableRemovesTheTableAndLeavesTheRestOfTheNoteAsItWas() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        var table = NoteTable(texts: [["H", "V"], ["a", "b"]])
+        table.columns[1].width = 150
+        table.rows[1].cells[0].marks = [NoteMark(.bold, offset: 0, length: 1)]
+        let tableID = UUID()
+        var heading = NoteBlock.text("Plan", style: "heading"); heading.level = 2
+        let base = NoteDocument(blocks: [.text("T"), heading, .table(table, id: tableID), .text("after | x"), .checklist("item")])
+        guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+        let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        let revision = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        let arguments: [String: Any] = ["id": id.uuidString, "base_revision": revision, "table_id": tableID.uuidString]
+        // The text route refuses, and says how.
+        var withoutTable = stored
+        withoutTable.blocks.remove(at: 2)
+        let refusal = try noteToolError(handler, ["id": id.uuidString, "base_revision": revision, "body": NoteTextExport.agentBody(withoutTable)])
+        XCTAssertTrue(refusal.contains("delete_table"), refusal)
+        // A last row or column says how, and delete_table goes alone.
+        var oneRow = arguments
+        oneRow["operations"] = [["op": "delete_row", "row_id": table.rows[1].id.uuidString],
+                                ["op": "delete_row", "row_id": table.rows[0].id.uuidString]]
+        XCTAssertTrue(try noteTableToolError(handler, oneRow).contains("{\"op\": \"delete_table\"}"))
+        var mixed = arguments
+        mixed["operations"] = [["op": "delete_table"], ["op": "set_header_row", "value": false]]
+        XCTAssertEqual(try noteTableToolError(handler, mixed), NoteTableAgentEdit.deleteAlone)
+        XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, stored, "nothing was written")
+        // Deleted.
+        var deletion = arguments
+        deletion["operations"] = [["op": "delete_table"]]
+        let result = try callNoteTool(handler, "update_note_table", deletion)
+        XCTAssertEqual(result["status"] as? String, "applied")
+        XCTAssertEqual(result["deleted_table"] as? String, tableID.uuidString)
+        let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        XCTAssertEqual(saved.blocks, withoutTable.blocks)
+        XCTAssertEqual(saved.blocks.map(NoteContentCodec.encodeBlock), withoutTable.blocks.map(NoteContentCodec.encodeBlock),
+                       "every other block is byte for byte as it was")
+        XCTAssertFalse(saved.requires.contains("table-v1"), "the note no longer needs tables")
+        // A table that is the whole note can't be deleted this way.
+        let only = UUID()
+        guard case let .success((onlyID, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text(""), .table(NoteTable(texts: [["x"]]), id: only)])) else { return XCTFail() }
+        let message = try noteTableToolError(handler, ["id": onlyID.uuidString, "table_id": only.uuidString,
+            "base_revision": try XCTUnwrap(noteStore.note(withID: onlyID)?.revisionToken), "operations": [["op": "delete_table"]]])
+        XCTAssertTrue(message.contains("delete_note"), message)
+    }
+
+    /// Astra R-1, Dot R-1 (agent text r1): text sent without escapes means
+    /// what it did on trunk: a cell's entities are decoded, then its tokens read.
+    func testAnEntityWrittenDateInACellIsStillADate() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let tableID = UUID()
+        let day = NoteDay(isoString: "2026-01-02")!
+        var table = NoteTable(texts: [["H", "V"], ["", "x"]])
+        table.rows[1].cells[0] = NoteTable.Cell("\u{FFFC}", inlines: [NoteInline(id: UUID(), kind: .date(day))])
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("T"), .table(table, id: tableID)])) else { return XCTFail() }
+        let body = "<!-- attic:table id=\(tableID.uuidString) -->\n| H | V |\n| --- | --- |\n| &#91;date:2026-01-02&#93; | &#38;#65; |"
+        let result = try callNoteTool(handler, "update_note", [
+            "id": id.uuidString, "base_revision": try XCTUnwrap(noteStore.note(withID: id)?.revisionToken), "body": body])
+        XCTAssertEqual(result["status"] as? String, "applied")
+        let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.last?.table)
+        XCTAssertEqual(saved.rows[1].cells[0].text, "\u{FFFC}")
+        XCTAssertEqual(saved.rows[1].cells[0].inlines.map(\.kind), [.date(day)], "still a date")
+        XCTAssertEqual(saved.rows[1].cells[1].text, "A", "numeric references decode as before")
+    }
+
+    /// Astra R-2 (agent text r1): a cell's own text, sent without escapes,
+    /// is no change: the cell keeps its bold and nothing is reported cleared.
+    func testSetCellWithACellsOwnUnescapedTextKeepsItWhole() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        var table = NoteTable(texts: [["H"], ["[unsupported]"]])
+        table.rows[1].cells[0].marks = [NoteMark(.bold, offset: 0, length: 13)]
+        let tableID = UUID()
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("T"), .table(table, id: tableID)])) else { return XCTFail() }
+        let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.last?.table)
+        let result = try callNoteTool(handler, "update_note_table", [
+            "id": id.uuidString, "base_revision": try XCTUnwrap(noteStore.note(withID: id)?.revisionToken), "table_id": tableID.uuidString,
+            "operations": [["op": "set_cell", "row_id": table.rows[1].id.uuidString,
+                            "column_id": table.columns[0].id.uuidString, "text": "[unsupported]"]]])
+        XCTAssertEqual(result["status"] as? String, "applied")
+        XCTAssertTrue((result["notices"] as? [String] ?? []).isEmpty, "\(result)")
+        let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.last?.table)
+        XCTAssertEqual(saved.rows[1].cells[0], stored.rows[1].cells[0])
+    }
+
+    /// Astra R-3 (agent text r1): a carriage return kept in a line survives
+    /// the writer's own round trip (a title-only update, and its body echoed).
+    func testACarriageReturnInALineSurvivesATitleOnlyUpdateAndItsOwnBody() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let created = try callNoteTool(handler, "create_note", ["title": "T", "body": "end\r\r\nmid\rdle\nspace \t"])
+        let id = try XCTUnwrap(((created["note"] as? [String: Any])?["id"] as? String).flatMap(UUID.init(uuidString:)), "\(created)")
+        let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        XCTAssertEqual(stored.blocks.dropFirst().map(\.text), ["end\r", "mid\rdle", "space \t"], "a body's own CR before LF goes, as before")
+        let titled = try callNoteTool(handler, "update_note", [
+            "id": id.uuidString, "base_revision": try XCTUnwrap(noteStore.note(withID: id)?.revisionToken), "title": "T2"])
+        XCTAssertEqual(titled["status"] as? String, "applied")
+        var saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        XCTAssertEqual(Array(saved.blocks.dropFirst()), Array(stored.blocks.dropFirst()))
+        let listed = try listedNote(handler, id)
+        let echoed = try callNoteTool(handler, "update_note", [
+            "id": id.uuidString, "base_revision": try XCTUnwrap(listed["revision"] as? String),
+            "body": try XCTUnwrap(listed["body"] as? String) + "\nadded"])
+        XCTAssertEqual(echoed["status"] as? String, "applied")
+        saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+        XCTAssertEqual(saved.blocks.dropFirst().map(\.text), ["end\r", "mid\rdle", "space \t", "added"])
+    }
+
+    /// Dot R-1 (agent text r2): a delimiter row written with entities is
+    /// still a delimiter, as on trunk. Sent back without its token, a plain
+    /// table keeps its identity and cells; with its token, a plain or a
+    /// formatted table is kept whole.
+    func testADelimiterRowWrittenWithEntitiesStillKeepsTheTable() throws {
+        for delimiter in ["| &#45;&#45;&#45; |", "| -&#x2D;- |", "| ---&#32; |"] {
+            for (formatted, token) in [(false, false), (false, true), (true, true)] {
+                let context = "\(delimiter), \(formatted ? "formatted" : "plain"), \(token ? "with" : "without") its token"
+                let (noteStore, handler) = try makeNoteHandler()
+                var table = NoteTable(texts: [["h"], ["x"]])
+                if formatted { table.columns[0].width = 150 }
+                let base = NoteDocument(blocks: [.text("T"), .table(table)])
+                guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail(context) }
+                let stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+                let listed = try listedNote(handler, id)
+                var lines = try XCTUnwrap(listed["body"] as? String).components(separatedBy: "\n")
+                XCTAssertEqual(lines.filter { $0 == "| --- |" }.count, 1, "\(context): \(lines)")
+                lines = lines.map { $0 == "| --- |" ? delimiter : $0 }
+                if !token { lines.removeAll { $0.hasPrefix("<!-- attic:table") } }
+                XCTAssertEqual(lines.contains { $0.hasPrefix("<!-- attic:table") }, token, "\(context): \(lines)")
+                let result = try callNoteTool(handler, "update_note", [
+                    "id": id.uuidString, "base_revision": try XCTUnwrap(listed["revision"] as? String),
+                    "body": lines.joined(separator: "\n")])
+                XCTAssertEqual(result["status"] as? String, "applied", "\(context): \(result)")
+                let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+                XCTAssertEqual(saved.blocks, stored.blocks, "\(context): the same table, by id and cells")
+            }
+        }
+    }
+
+    /// Capy (agent text r1): the tool that can delete a table says so, and
+    /// its operations are described by a schema.
+    func testUpdateNoteTableIsMarkedDestructiveAndDescribesItsOperations() throws {
+        let (_, handler) = try makeNoteHandler()
+        let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"])
+        let result = try XCTUnwrap(try decode(handler.handle(body: body))["result"] as? [String: Any])
+        let tool = try XCTUnwrap((result["tools"] as? [[String: Any]])?.first { $0["name"] as? String == "update_note_table" })
+        XCTAssertEqual((tool["annotations"] as? [String: Any])?["destructiveHint"] as? Bool, true)
+        let properties = try XCTUnwrap((tool["inputSchema"] as? [String: Any])?["properties"] as? [String: Any])
+        let items = try XCTUnwrap((properties["operations"] as? [String: Any])?["items"] as? [String: Any])
+        let op = try XCTUnwrap((items["properties"] as? [String: Any])?["op"] as? [String: Any])
+        XCTAssertEqual(op["enum"] as? [String], ["set_cell", "insert_row", "insert_column", "move_row", "move_column",
+                                                 "delete_row", "delete_column", "set_header_row", "set_alignment", "delete_table"])
+        XCTAssertEqual(items["required"] as? [String], ["op"])
+    }
+
+    private func noteTableToolError(_ handler: MCPRequestHandler, _ arguments: [String: Any]) throws -> String {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "update_note_table", "arguments": arguments]
+        ])
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: body).body)) as? [String: Any])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        return try XCTUnwrap((result["content"] as? [[String: Any]])?.first?["text"] as? String)
+    }
+
+    /// Dot R-1 and Opus R-5 (r2): `set_cell` on a cell holding literal date
+    /// text beside a real date of the same day with extras.
+    func testSetCellKeepsALiteralDateAsTextAndTheRealDateWhole() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let real = NoteInline(id: UUID(), kind: .date(NoteDay(isoString: "2026-12-01")!), extras: ["hint": .string("start")])
+        let o = String(NoteDocument.objectCharacter)
+        for text in ["[date:2026-12-01] then \(o)", "\(o) then [date:2026-12-01]"] {
+            var table = NoteTable(texts: [["When"], ["x"]])
+            table.rows[1].cells[0] = NoteTable.Cell(text, inlines: [real])
+            let tableID = UUID()
+            guard case let .success((id, _)) = noteStore.createDocumentNote(
+                id: UUID(), document: NoteDocument(blocks: [.text("T"), .table(table, id: tableID)])) else { return XCTFail() }
+            let listed = try listedNote(handler, id)
+            let tables = try XCTUnwrap(listed["tables"] as? [[String: Any]])
+            let rows = try XCTUnwrap(tables.first?["rows"] as? [[String: Any]])
+            let cellText = try XCTUnwrap((rows[1]["cells"] as? [String])?.first)
+            let result = try callNoteTool(handler, "update_note_table", [
+                "id": id.uuidString, "base_revision": try XCTUnwrap(listed["revision"] as? String), "table_id": tableID.uuidString,
+                "operations": [["op": "set_cell", "row_id": table.rows[1].id.uuidString,
+                                "column_id": table.columns[0].id.uuidString, "text": cellText + " more"]]
+            ])
+            XCTAssertEqual(result["status"] as? String, "applied")
+            let saved = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.last?.table)
+            XCTAssertEqual(saved.rows[1].cells[0], NoteTable.Cell(text + " more", inlines: [real]),
+                           "the literal stays text where it was; the real date keeps its place, id and extras")
+        }
+    }
+
     func testUpdateNoteCanAddAndRemoveChecklistLinesInPlainAndRichNotes() throws {
         for rich in [false, true] {
             for removing in [false, true] {

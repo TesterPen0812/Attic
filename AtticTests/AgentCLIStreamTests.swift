@@ -296,6 +296,16 @@ final class AgentCLIStreamTests: XCTestCase {
             response: #"{"status":"applied","note":{"title":"Launch notes"}}"#,
             targets: [.init(page: .notes, title: "Launch notes")], previousNoteBody: "Draft outline")
         XCTAssertEqual(note, "Added a checklist to Launch notes")
+        // Opus R-3 (agent text r1): a deleted table reads as a deletion.
+        let deletion: [String: Any] = ["operations": [["op": "delete_table"]]]
+        XCTAssertEqual(AgentActionWords.running("update_note_table", deletion.merging(["title": "Plan"]) { a, _ in a }),
+                       "Deleting a table from Plan")
+        XCTAssertEqual(AgentActionWords.completed("update_note_table", deletion, response: #"{"status":"applied"}"#,
+                                                  targets: [.init(page: .notes, title: "Plan")]), "Deleted a table from Plan")
+        XCTAssertEqual(AgentActionWords.completed("update_note_table", deletion, response: #"{"status":"pending"}"#,
+                                                  targets: [.init(page: .notes, title: "Plan")]), "Proposed deleting a table from Plan")
+        XCTAssertEqual(AgentActionWords.completed("update_note_table", ["operations": [["op": "set_cell"]]], response: #"{"status":"applied"}"#,
+                                                  targets: [.init(page: .notes, title: "Plan")]), "Updated a table in Plan")
     }
 
     func testClaudeStreamingInputsRewordTheRunningStep() throws {

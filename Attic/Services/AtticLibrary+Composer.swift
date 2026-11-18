@@ -19,7 +19,7 @@ extension AtticLibrary {
         undo.perform(in: history) {
             // One save for the task, its writing and their association: a
             // failed save leaves no rows, no Recently Deleted entry and no step.
-            guard let document = try? NoteAgentTextParser.document(title: draft.title, body: body, base: .blank)
+            guard let document = try? NoteAgentTextParser.document(title: draft.title, body: body, base: .blank, typed: true)
                     .taskSnapshot(title: draft.title),
                   case .success = notes.createDocumentNote(id: UUID(), document: document, taskOwner: taskID, creatingTask: draft)
             else { return nil }
@@ -65,7 +65,7 @@ extension AtticLibrary {
         guard !trimmedTitle.isEmpty || !trimmedBody.isEmpty else { return nil }
         var created: UUID?
         undo.perform(in: history) {
-            guard let document = try? NoteAgentTextParser.document(title: trimmedTitle, body: trimmedBody, base: .blank),
+            guard let document = try? NoteAgentTextParser.document(title: trimmedTitle, body: trimmedBody, base: .blank, typed: true),
                   case let .success((noteID, _)) = notes.createDocumentNote(
                     id: UUID(), document: document, tags: tags.isEmpty ? nil : AtticTag.normalizedSet(tags),
                     pinned: pinned) else { return nil }
