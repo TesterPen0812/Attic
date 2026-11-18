@@ -53,6 +53,21 @@ final class NotesLibrarySummaryCache {
 
 @MainActor
 final class NotesLibraryModel: ObservableObject {
+    #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): what the task store's
+    /// `$revision` sink did with each new revision. `taskSinkSends` counts
+    /// only that sink's own `objectWillChange.send()`, apart from the
+    /// model's other publishers.
+    struct TaskSinkCounts: Equatable {
+        /// Changed task IDs owned no note and the owner set was unchanged.
+        var skippedDisjoint = 0
+        /// Re-read the owners' metadata and found it unchanged.
+        var unchanged = 0
+        /// Re-read the owners' metadata, found it changed, and sent.
+        var sends = 0
+    }
+    var taskSinkCounts = TaskSinkCounts()
+    #endif
     /// The laid-out rows and cards (the keyboard's reveal, and where a note
     /// grows from). Not observed.
     let reveal = NotesLibraryReveal()
@@ -249,12 +264,23 @@ final class NotesLibraryModel: ObservableObject {
                 // The published change cannot affect a displayed task note.
                 // Advance the cache key so subsequent view passes stay cheap.
                 self.taskMetadataKey = (revision, owners)
+                #if DEBUG
+                self.taskSinkCounts.skippedDisjoint += 1
+                #endif
                 return
             }
             let previous = self.taskMetadata
             self.taskMetadata = self.readTaskMetadata(store)
-            guard self.taskMetadata != previous else { return }
+            guard self.taskMetadata != previous else {
+                #if DEBUG
+                self.taskSinkCounts.unchanged += 1
+                #endif
+                return
+            }
             self.cache = nil
+            #if DEBUG
+            self.taskSinkCounts.sends += 1
+            #endif
             self.objectWillChange.send()
             if self.isSearching { self.scheduleSearch() }
         }

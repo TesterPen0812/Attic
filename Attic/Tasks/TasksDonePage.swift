@@ -160,6 +160,8 @@ struct TasksDonePage<Cell: View>: View {
             // The log's place is kept while its page is not built (round 10).
             .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, pointer: pointer,
                 focusSelection: focusSelection, drawn: drawn).accessibilityHidden(true))
+            // Rows hold their hover while the log scrolls (the tint hold).
+            .environment(\.atticRowHoverGate, proxies?.hoverGate(for: .done))
         }
         .tasksListEdges(top: viewportTop, listTop: listTop, bottomInset: bottomInset,
                         bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: bottomStack)
