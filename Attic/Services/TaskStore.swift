@@ -2916,7 +2916,19 @@ final class TaskStore: ObservableObject {
         Set(itemTaskTerms.keys).union(itemWritingTerms.keys).filter { additionalItemMatch($0, query: query) }
     }
 
-    private var doneSearchEntries: [DoneSearchEntry] = []
+    /// The Done log index's entries. Change them here; walk them only
+    /// through `doneSearchEntries`, which counts the walk. Read directly only
+    /// for the O(1) `count` and by the test oracle `walkedDoneLogTags`.
+    private var doneSearchEntryStorage: [DoneSearchEntry] = []
+    /// Every read of the Done log index's entries. DEBUG counts each read as
+    /// a walk of the whole log (`doneLogEntryVisits`), so an edit that walks
+    /// the log anywhere shows up in the count guards (TA-05).
+    private var doneSearchEntries: [DoneSearchEntry] {
+        #if DEBUG
+        doneLogEntryVisits += doneSearchEntryStorage.count
+        #endif
+        return doneSearchEntryStorage
+    }
     private var doneSearchEntryIDs = Set<UUID>()
     /// TA-05: how many Done log entries carry each tag, kept with the
     /// entries, so the tag bar lists the log's tags without walking it.
@@ -2927,6 +2939,8 @@ final class TaskStore: ObservableObject {
     private var doneTagMatches: (tags: TagPicks, locale: String, ids: [UUID])?
     #if DEBUG
     private(set) var doneSearchFullScanVisits = 0
+    /// Done log index entries visited, by any walk of the log (TA-05).
+    private(set) var doneLogEntryVisits = 0
     var doneSearchLocaleOverrideForTesting: String?
 
     func resetDoneSearchFullScanVisits() { doneSearchFullScanVisits = 0 }
@@ -2947,21 +2961,27 @@ final class TaskStore: ObservableObject {
                 #endif
                 return doneSearchEntryIDs.contains(id)
             }) else { return }
-            doneSearchEntries.removeAll { entry in
+            #if DEBUG
+            doneLogEntryVisits += doneSearchEntryStorage.count
+            #endif
+            doneSearchEntryStorage.removeAll { entry in
                 guard ids.contains(entry.id) else { return false }
                 countDoneSearchTags(of: entry, by: -1)
                 return true
             }
             doneSearchEntryIDs.subtract(ids)
         } else {
-            doneSearchEntries.removeAll(keepingCapacity: true)
+            doneSearchEntryStorage.removeAll(keepingCapacity: true)
             doneSearchEntryIDs.removeAll(keepingCapacity: true)
             doneSearchTagCounts.removeAll(keepingCapacity: true)
         }
-        doneSearchEntries += entries
+        doneSearchEntryStorage += entries
         doneSearchEntryIDs.formUnion(entries.map(\.id))
         for entry in entries { countDoneSearchTags(of: entry, by: 1) }
-        doneSearchEntries.sort {
+        #if DEBUG
+        doneLogEntryVisits += doneSearchEntryStorage.count
+        #endif
+        doneSearchEntryStorage.sort {
             if $0.completed != $1.completed { return $0.completed > $1.completed }
             if $0.created != $1.created { return $0.created > $1.created }
             return $0.id.uuidString < $1.id.uuidString
@@ -3006,7 +3026,7 @@ final class TaskStore: ObservableObject {
     /// `tags`: the tag bar's picks (several since 13 Nov, Any or All).
     func indexedDoneLogCount(matching query: String = "", tags: TagPicks = .none) -> Int {
         query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && tags.isEmpty
-            ? doneSearchEntries.count : doneSearchIDs(matching: query, tags: tags).count
+            ? doneSearchEntryStorage.count : doneSearchIDs(matching: query, tags: tags).count
     }
 
     /// Every tag on a task in the Done log, from the index's tag counts (no
@@ -3026,11 +3046,11 @@ final class TaskStore: ObservableObject {
 
     #if DEBUG
     /// The oracle: the log's tags by walking every entry, as the tag bar
-    /// did before TA-05. Counted in `doneLogTagEntryVisits`.
+    /// did before TA-05. It reads the storage, so the walk is not counted
+    /// in `doneLogEntryVisits`, which counts production walks only.
     func walkedDoneLogTags() -> Set<String> {
-        doneLogTagEntryVisits += doneSearchEntries.count
         var tags = Set<String>()
-        for entry in doneSearchEntries { tags.formUnion(entry.tags) }
+        for entry in doneSearchEntryStorage { tags.formUnion(entry.tags) }
         return tags
     }
     #endif
@@ -3097,8 +3117,6 @@ final class TaskStore: ObservableObject {
     private(set) var doneFamilyReadCount = 0
     private(set) var doneFamilyRowsReadCount = 0
     private(set) var donePageReadCount = 0
-    /// DEBUG count of Done log index entries visited for the tag bar's chips.
-    private(set) var doneLogTagEntryVisits = 0
     func doneLogSubtasks(ofParents parentIDs: [UUID]) -> [UUID: [TaskItem]] {
         doneFamilyParentReadCount += parentIDs.count
         guard !parentIDs.isEmpty else { return [:] }

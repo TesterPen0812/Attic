@@ -8,7 +8,11 @@ import XCTest
 /// `reports/perf-audit/tasks-actions.astra.md` TA-05): an edit on Now must
 /// not visit every Done log entry to list the tag chips. It runs the same
 /// edit with a longer log and fails when the count grows with it, and
-/// prints a `GUARD_` line with its count.
+/// prints a `GUARD_` line with its count. The count is
+/// `TaskStore.doneLogEntryVisits`, raised by every production walk of the
+/// Done log index (every read of `doneSearchEntries`, and the index's own
+/// re-sort and removal), not only the tag bar's, so a walk anywhere an edit
+/// reaches turns it red. The test oracle `walkedDoneLogTags` is not counted.
 ///
 /// The page is the real `TasksPage`, hosted in a borderless window that is
 /// never shown. A step is settled by letting the main queue drain (an
@@ -33,15 +37,21 @@ final class DoneLogTagsCountGuardTests: XCTestCase {
             let model = TasksPageModel(library: AtticLibrary(tasks: store))
             let hosting = page(model, store)
             let id = try XCTUnwrap(model.rows(for: .now).first?.id)
-            let before = store.doneLogTagEntryVisits
+            let before = store.doneLogEntryVisits, scansBefore = store.doneSearchFullScanVisits
             XCTAssertTrue(model.setPriority(.high, for: [id]).isApplied)
             settle(hosting)
             settle(hosting)
-            let visits = store.doneLogTagEntryVisits - before
-            print("GUARD_TAG_BAR open=20 done_log=\(logged) done_log_entries_visited=\(visits)")
+            let visits = store.doneLogEntryVisits - before
+            let scans = store.doneSearchFullScanVisits - scansBefore
+            print("GUARD_TAG_BAR open=20 done_log=\(logged) done_log_entries_visited=\(visits) of_them_search_scan=\(scans)")
             bySize[logged] = visits
+            // The counter is live: a tag filter not asked for yet walks
+            // every entry, and the walk is counted.
+            let live = store.doneLogEntryVisits
+            XCTAssertEqual(store.indexedDoneLogCount(tags: TagPicks(["done1"])), (logged + 5) / 7)
+            XCTAssertGreaterThanOrEqual(store.doneLogEntryVisits - live, logged, "the walk counter counts no walk")
         }
-        XCTAssertEqual(bySize[50], bySize[500], "TA-05: a priority edit's tag bar walk grew with the Done log")
+        XCTAssertEqual(bySize[50], bySize[500], "TA-05: a priority edit's walk of the Done log grew with it")
     }
 
     /// The fix's own check: the tags the index counts are the tags a walk
