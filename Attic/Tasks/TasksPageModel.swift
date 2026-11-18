@@ -840,6 +840,10 @@ final class TasksPageModel: ObservableObject {
     /// publication without its ids. Read by `restated(_:to:)`.
     private var rowsChangedSinceBuild: [TasksTab: Set<UUID>] = [:]
     private var rowsChangeUnknown: Set<TasksTab> = []
+    /// The order `buildRows` last gave each tab, held tasks where they were
+    /// kept: where a held task stays in it (kept apart from the rows cache,
+    /// which other changes drop).
+    private var rowsBuiltOrder: [TasksTab: [UUID]] = [:]
     private struct CachedRowProjection {
         let task: TaskItem
         let row: TasksListRow
@@ -1012,10 +1016,11 @@ final class TasksPageModel: ObservableObject {
     /// built, every held row is at the place its hold names, and every
     /// changed row is held here (a held row stays where it is whatever its
     /// state) with its date and clock as they were. The result is then the
-    /// full build's (`builtRows` puts held rows back at their places).
-    /// Find, a view filter and tag picks (which keep what they showed), an
-    /// acknowledged command, a change without ids, a released hold, and a
-    /// save that may reorder Overdue (`overdueOrderMayShift`) all rebuild.
+    /// full build's: `buildRows` keeps a held task's place in the order and
+    /// `builtRows` puts held rows back at their places. Find, a view filter
+    /// and tag picks (which keep what they showed), an acknowledged command,
+    /// a change without ids, a released hold and a held row off its place
+    /// (after a rebuild during its hold) all rebuild.
     private func restated(_ old: RowsSnapshot, to key: RowsKey) -> RowsSnapshot? {
         let tab = key.tab
         guard old.key.sameList(as: key), key.search.isEmpty, key.tag.isEmpty, key.view.isDefault,
@@ -1025,8 +1030,7 @@ final class TasksPageModel: ObservableObject {
         // The full build puts every held row back at its index, so the list
         // is that build only while every held row is at its index (one put
         // back at the end of a shorter group after a rebuild is not).
-        let saved = rowsChangedSinceBuild[tab] ?? []
-        var changed = saved
+        var changed = rowsChangedSinceBuild[tab] ?? []
         for (id, place) in key.held {
             guard old.rows.indices.contains(place.index), old.rows[place.index].id == id else { return nil }
             if old.key.held[id] == nil { changed.insert(id) }
@@ -1037,7 +1041,6 @@ final class TasksPageModel: ObservableObject {
             guard key.held[id] != nil, let task = store.task(withID: id), task.parentID == nil,
                   let was = old.rows.first(where: { $0.id == id }), was.due == task.dueDay,
                   old.dueTimes[id] == task.dueTimeMinutes else { return nil }
-            if saved.contains(id), overdueOrderMayShift(around: id, due: was.due, in: old) { return nil }
             let row = projectedRow(for: task, tab: tab, match: nil)
             var model = row.model
             model.hidesDue = was.model.hidesDue
@@ -1061,25 +1064,9 @@ final class TasksPageModel: ObservableObject {
         return snapshot
     }
 
-    /// Whether a save of held row `id` may reorder the other rows of the
-    /// Overdue group, so only a full build has them right. Overdue orders
-    /// each day's rows by clock within the slots that day holds in the
-    /// store's order (`TasksPanelDesign.groups`), and a save moves the row's
-    /// slot (a finished task sorts after the open ones). That changes the
-    /// other rows only with another day in the group, another row on this
-    /// day, and a clock on this day. Every other group orders its rows by
-    /// clock, then by the store's order, which the row's own slot does not
-    /// change.
-    private func overdueOrderMayShift(around id: UUID, due: DueDay?, in old: RowsSnapshot) -> Bool {
-        guard let due, let group = old.sections.groups.first(where: { $0.kind == .overdue }),
-              group.ids.contains(id) else { return false }
-        let rows = old.sections.groupRows[group.key] ?? []
-        let sameDay = rows.filter { $0.due == due }
-        return sameDay.count > 1 && rows.contains { $0.due != due } && sameDay.contains { old.dueTimes[$0.id] != nil }
-    }
-
     private func builtRows(_ tab: TasksTab, key: RowsKey) -> RowsSnapshot {
         let all = IdleLatencyTrace.span("task_rows_build") { buildRows(for: tab) }
+        rowsBuiltOrder[tab] = all.map(\.id)
         IdleLatencyTrace.count("task_rows", all.count)
         var sections = TasksSections()
         var open: [TasksListRow] = []
@@ -1244,12 +1231,40 @@ final class TasksPageModel: ObservableObject {
             filterHidden[tab] = nil
         }
         let holding = held.filter { $0.value.tab == tab }.sorted { $0.value.index < $1.value.index }
-        // A task finished on Later has left the backlog list: the held row
-        // is the task as it is now. A held task in the list keeps its place
-        // in this order; `builtRows` puts every held row back where it was
-        // drawn, inside its date group.
-        for (id, place) in holding where !tasks.contains(where: { $0.id == id }) {
-            if let task = store.task(withID: id) { tasks.insert(task, at: min(place.index, tasks.count)) }
+        if !holding.isEmpty {
+            // A held task keeps its place in this order for its whole hold
+            // (PR 30 review): right after the task before it in the last
+            // build's order. A save moves a finished task to the end of the
+            // store's order, and the date groups order each day's rows by
+            // clock within that day's places in this order, so moving it
+            // could reorder the rows around it before the release. A task
+            // gone from the list, or finished and not held (it has moved),
+            // is passed over. `builtRows` then puts every held row back where
+            // it was drawn, inside its date group. A task finished on Later
+            // has left the backlog list: the held row is the task as it is now.
+            let last = rowsBuiltOrder[tab] ?? []
+            let lastIndex = Dictionary(last.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+            let kept = holding.map(\.key).filter { lastIndex[$0] != nil }.sorted { lastIndex[$0, default: 0] < lastIndex[$1, default: 0] }
+            let keptTasks = kept.compactMap { id in tasks.first { $0.id == id } ?? store.task(withID: id) }
+            let keptIDs = Set(kept)
+            tasks.removeAll { keptIDs.contains($0.id) }
+            for task in keptTasks {
+                let positions = Dictionary(tasks.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+                var at = 0
+                var before = lastIndex[task.id, default: 0] - 1
+                while before >= 0 {
+                    let id = last[before]
+                    if let index = positions[id], held[id]?.tab == tab || tasks[index].listedStatus != .done {
+                        at = index + 1
+                        break
+                    }
+                    before -= 1
+                }
+                tasks.insert(task, at: at)
+            }
+            for (id, place) in holding where !tasks.contains(where: { $0.id == id }) {
+                if let task = store.task(withID: id) { tasks.insert(task, at: min(place.index, tasks.count)) }
+            }
         }
         return tasks.map { projectedRow(for: $0, tab: tab, match: query.isEmpty ? nil : query) }
     }
