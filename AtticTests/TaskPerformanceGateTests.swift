@@ -287,13 +287,13 @@ final class TaskPerformanceGateTests: XCTestCase {
     /// the panel's wiring: the library, and the Notes lifecycle controller registered for whole-item lifecycle.
     /// A journaled delete or restore replaces the task store's staging context with one fresh read (the stale-context
     /// rule, pinned above in testPF2ConfirmedMembershipChangesDoNotReloadUnrelatedArchive); a second reload of the
-    /// same store after it protects nothing new. Red on the trunk: a delete and its Undo each reload the task store
-    /// twice and the note store twice.
+    /// same store after it protects nothing new.
     ///
-    /// Scope: this counts whole reloads of each store's presentation (`fullTaskReloadCount`, `fullNoteReloadCount`),
-    /// not every whole-table fetch. After the save, the Notes controller's editor scan still fetches every task and
-    /// note, and Undo ownership still reads both tables; those are other pull requests' targets (B, and TA-03).
-    func testF2OneDeleteAndItsUndoReloadEachStoreOnce() async throws {
+    /// The guard counts every whole-table read of tasks, notes and attachments at the production site that makes it
+    /// (`WholeTableRead`), from the command's call to its return, and states the true number at each site. The store
+    /// reloads are one site each; the reads that remain are listed as what they are (the Notes controller's editor
+    /// scan, B's target; Undo ownership, TA-03's). Red on the trunk: each store's reload site reads its tables twice.
+    func testF2DeleteAndUndoWholeTableReadsBySite() async throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
         let date = Date(timeIntervalSince1970: 1_700_000_000)
@@ -320,17 +320,27 @@ final class TaskPerformanceGateTests: XCTestCase {
         XCTAssertTrue(coordinator.lifecycleLibrary === library)
 
         var counts: [String] = []
+        var reads: [String] = []
+        func sites() -> String {
+            WholeTableRead.ledger.bySite.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+        }
         // A bare task, then a task that has writing (its note goes to Recently Deleted with it).
         for (label, id) in [("bare", ids[5]), ("writing", ids[3])] {
-            tasks.resetFullTaskReloadCount(); notes.resetFullNoteReloadCount()
+            tasks.resetFullTaskReloadCount(); notes.resetFullNoteReloadCount(); WholeTableRead.ledger.reset()
             XCTAssertTrue(library.deleteTasks([id]).isApplied)
             XCTAssertNil(tasks.task(withID: id))
             let deleteCounts = (tasks.fullTaskReloadCount, notes.fullNoteReloadCount)
+            let deleteReads = WholeTableRead.ledger.bySite
+            reads.append("\(label)_delete[\(sites())]")
 
-            tasks.resetFullTaskReloadCount(); notes.resetFullNoteReloadCount()
+            tasks.resetFullTaskReloadCount(); notes.resetFullNoteReloadCount(); WholeTableRead.ledger.reset()
             XCTAssertTrue(library.undo(in: .tasks).isApplied)
             XCTAssertNotNil(tasks.task(withID: id))
             let undoCounts = (tasks.fullTaskReloadCount, notes.fullNoteReloadCount)
+            let undoReads = WholeTableRead.ledger.bySite
+            reads.append("\(label)_undo[\(sites())]")
+            XCTAssertEqual(deleteReads, F2WholeTableReads.delete[label], "\(label) delete: whole-table reads by site")
+            XCTAssertEqual(undoReads, F2WholeTableReads.undo[label], "\(label) Undo: whole-table reads by site")
             counts.append("\(label)_delete_task_reloads=\(deleteCounts.0) \(label)_delete_note_reloads=\(deleteCounts.1) "
                 + "\(label)_undo_task_reloads=\(undoCounts.0) \(label)_undo_note_reloads=\(undoCounts.1)")
 
@@ -345,6 +355,7 @@ final class TaskPerformanceGateTests: XCTestCase {
         XCTAssertTrue(durable.allSatisfy { $0.deletedAt == nil })
         XCTAssertNotNil(notes.note(withID: writingID))
         print("F2_COUNTS " + counts.joined(separator: " "))
+        print("F2_READS " + reads.joined(separator: " "))
         await controller.waitForRecoveryWork()
         await notes.waitForAttachmentReconciliation()
     }
@@ -2030,4 +2041,11 @@ extension TaskPerformanceGateTests {
 final class F2EmissionLog {
     var events: [String] = []
     var namedIt = 0
+}
+
+/// The true whole-table reads of one Delete and one Undo, from call to return, by production site
+/// ("<Model> <File>.<function>"). Filled from the guard's own F2_READS output at this head.
+enum F2WholeTableReads {
+    static let delete: [String: [String: Int]] = ["bare": [:], "writing": [:]]
+    static let undo: [String: [String: Int]] = ["bare": [:], "writing": [:]]
 }

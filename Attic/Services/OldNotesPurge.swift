@@ -14,14 +14,14 @@ enum OldNotesPurge {
         context.autosaveEnabled = false
         guard try context.fetch(FetchDescriptor<StoreMaintenance>()).allSatisfy({ $0.key != key }) else { return Counts() }
         do {
-            let notes = try context.fetch(FetchDescriptor<NoteItem>())
+            let notes = try context.fetch(WholeTableRead.all(NoteItem.self))
             // A UUID owns shared dependents: every physical row must be old.
             // A modern or future-format sibling protects the whole family.
             let ids = Set(Dictionary(grouping: notes, by: \.id).compactMap { id, rows in
                 rows.allSatisfy { $0.contentFormat == 0 } ? id : nil
             })
             let removed = notes.filter { ids.contains($0.id) }
-            let attachments = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { ids.contains($0.noteID) }
+            let attachments = try context.fetch(WholeTableRead.all(NoteAttachment.self)).filter { ids.contains($0.noteID) }
             let versions = try context.fetch(FetchDescriptor<NoteVersion>()).filter { ids.contains($0.noteID) }
             let proposals = try context.fetch(FetchDescriptor<NotePendingEdit>()).filter { ids.contains($0.noteID) }
             _ = try LinkStore.stagePurge(touching: Set(ids.map { AtticItemRef(.note, $0) }), in: context)
@@ -140,7 +140,7 @@ enum OldNotesPurge {
             }
         }
         if let attachmentRoot {
-            var retained = Set(try context.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
+            var retained = Set(try context.fetch(WholeTableRead.all(NoteAttachment.self)).map(\.id))
             retained.formUnion(recoveryAttachments)
             // Unknown/newer ownership conservatively keeps materialized bytes.
             if recoveryOwnershipKnown, let documentIDs = try? NoteDocumentRetentionSnapshot.read(in: context).attachmentIDs() {

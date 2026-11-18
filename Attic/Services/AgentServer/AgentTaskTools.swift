@@ -1446,7 +1446,7 @@ final class AgentTaskTools {
     private func requireWholeItemRoute(taskID: UUID) throws {
         let context = ModelContext(store.container)
         guard WorkspaceItemLifecycle.has("NoteItem", in: context) else { return }
-        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        let all = try context.fetch(WholeTableRead.all(TaskItem.self))
         let ids = Set(all.filter { $0.id == taskID || $0.parentID == taskID }.map(\.id)).union([taskID])
         if !(try WorkspaceItemLifecycle.writing(taskIDs: ids, in: context)).isEmpty {
             throw AgentToolError.invalidArguments("This changes the whole item. Use base_workspace_token from get_task_workspace or list_deleted with include_workspace_token: true through the workspace lifecycle route.")
@@ -1473,9 +1473,9 @@ final class AgentTaskTools {
         if ref.kind == .task { try requireWholeItemRoute(taskID: ref.id) }
         if ref.kind == .note {
             let context = ModelContext(store.container)
-            let rows = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == ref.id }
+            let rows = try context.fetch(WholeTableRead.all(NoteItem.self)).filter { $0.id == ref.id }
             let groups = Set(rows.compactMap(\.deletionGroupID))
-            let tasks = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletionGroupID.map(groups.contains) == true }
+            let tasks = try context.fetch(WholeTableRead.all(TaskItem.self)).filter { $0.deletionGroupID.map(groups.contains) == true }
             for id in Set(tasks.map(\.id)) { try requireWholeItemRoute(taskID: id) }
         }
     }

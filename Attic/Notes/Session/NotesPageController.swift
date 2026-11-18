@@ -4800,8 +4800,8 @@ extension NotesPageController {
     func publishWholeItemLifecycle(notesReadInThisCommit: NoteStore? = nil) {
         if notesReadInThisCommit !== store { store.refresh() }
         let context = ModelContext(store.container)
-        guard let rows = try? context.fetch(FetchDescriptor<NoteItem>()),
-              let tasks = try? context.fetch(FetchDescriptor<TaskItem>()) else { return }
+        guard let rows = try? context.fetch(WholeTableRead.all(NoteItem.self)),
+              let tasks = try? context.fetch(WholeTableRead.all(TaskItem.self)) else { return }
         let notesByID = Dictionary(grouping: rows, by: \.id)
         let deletedTaskIDs = Set(tasks.filter { $0.deletedAt != nil && $0.deletionGroupID != nil }.map(\.id))
         let liveTaskIDs = Set(tasks.filter { $0.deletedAt == nil }.map(\.id))

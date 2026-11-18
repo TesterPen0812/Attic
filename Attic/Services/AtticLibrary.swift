@@ -738,8 +738,8 @@ final class AtticLibrary {
     /// Everything in Recently Deleted, newest deletion first.
     func recentlyDeleted() -> [DeletedItemSummary] {
         let context = ModelContext(container)
-        let taskRows = (try? context.fetch(FetchDescriptor<TaskItem>())) ?? []
-        let noteRows = WorkspaceItemLifecycle.has("NoteItem", in: context) ? ((try? context.fetch(FetchDescriptor<NoteItem>())) ?? []) : []
+        let taskRows = (try? context.fetch(WholeTableRead.all(TaskItem.self))) ?? []
+        let noteRows = WorkspaceItemLifecycle.has("NoteItem", in: context) ? ((try? context.fetch(WholeTableRead.all(NoteItem.self))) ?? []) : []
         let tasksByID = Dictionary(grouping: taskRows, by: \.id)
         let notesByID = Dictionary(grouping: noteRows, by: \.id)
         let candidates = tasks.recentlyDeletedTasks() + (notes?.recentlyDeletedNotes() ?? []) + (canvases?.recentlyDeletedCanvases() ?? [])
@@ -1118,9 +1118,9 @@ final class AtticLibrary {
     func ownedMembers(of ref: AtticItemRef) -> Set<UUID> {
         if ref.kind == .note {
             let context = ModelContext(container)
-            guard let notes = try? context.fetch(FetchDescriptor<NoteItem>()),
+            guard let notes = try? context.fetch(WholeTableRead.all(NoteItem.self)),
                   let group = notes.filter({ $0.id == ref.id }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID,
-                  let rows = try? context.fetch(FetchDescriptor<TaskItem>()) else { return [] }
+                  let rows = try? context.fetch(WholeTableRead.all(TaskItem.self)) else { return [] }
             return Set(rows.filter { $0.deletionGroupID == group }.map(\.id))
         }
         return ownedMembers(of: [ref.id], kind: ref.kind)
@@ -1138,9 +1138,9 @@ final class AtticLibrary {
             #endif
             return owned
         }
-        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>()) else { return owned }
+        guard let rows = try? context.fetch(WholeTableRead.all(TaskItem.self)) else { return owned }
         let schemaHasNotes = WorkspaceItemLifecycle.has("NoteItem", in: context)
-        guard let notes = schemaHasNotes ? (try? context.fetch(FetchDescriptor<NoteItem>())) : [] else { return owned }
+        guard let notes = schemaHasNotes ? (try? context.fetch(WholeTableRead.all(NoteItem.self))) : [] else { return owned }
         if deleted {
             for id in members {
                 if let group = rows.filter({ $0.id == id }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID { owned.groups.insert(group) }
@@ -1239,8 +1239,8 @@ final class AtticLibrary {
         guard !owned.groups.isEmpty else { return nil } // pre-group history
         do {
             let context = ModelContext(container)
-            let tasks = try context.fetch(FetchDescriptor<TaskItem>())
-            let notes = WorkspaceItemLifecycle.has("NoteItem", in: context) ? try context.fetch(FetchDescriptor<NoteItem>()) : []
+            let tasks = try context.fetch(WholeTableRead.all(TaskItem.self))
+            let notes = WorkspaceItemLifecycle.has("NoteItem", in: context) ? try context.fetch(WholeTableRead.all(NoteItem.self)) : []
             var groups = Set<UUID>()
             for ref in refs {
                 let group: UUID?
