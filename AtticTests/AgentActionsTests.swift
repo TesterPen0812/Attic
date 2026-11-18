@@ -960,6 +960,35 @@ final class AgentActionsTests: XCTestCase {
         XCTAssertEqual(notes.note(withID: try XCTUnwrap(UUID(uuidString: id)))?.title, "Original")
     }
 
+    /// `delete_table` asks first, and the chat's Undo brings the table back
+    /// whole (an outside agent's write has no Undo; its previous text is kept
+    /// as a version).
+    func testDeleteTableNeedsApprovalAndUndoBringsTheTableBack() async throws {
+        let tasks = try makeTestStore()
+        let notes = NoteStore(container: tasks.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: library)
+        let actions = AgentActions(tasks: tools)
+        var table = NoteTable(texts: [["H"], ["a"]])
+        table.rows[1].cells[0].marks = [NoteMark(.bold, offset: 0, length: 1)]
+        let tableID = UUID()
+        guard case let .success((id, _)) = notes.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("Plan"), .text("intro"), .table(table, id: tableID)])) else { return XCTFail() }
+        let before = try XCTUnwrap(notes.loadDocument(noteID: id)?.content.document)
+        let arguments: [String: Any] = ["id": id.uuidString, "base_revision": try XCTUnwrap(notes.note(withID: id)?.revisionToken),
+                                        "table_id": tableID.uuidString, "operations": [["op": "delete_table"]]]
+        XCTAssertEqual(AgentApprovalWords.title("update_note_table", arguments: arguments, targets: [.init(page: .notes, title: "Plan")]),
+                       "Delete a table from Plan?")
+        let request = actions.beginRequest(title: "Delete the table")
+        let pending = try approval(await actions.call(name: "update_note_table", arguments: arguments, watching: false, requestID: request))
+        _ = try await actions.resolve(approval: pending.id, allow: true)
+        XCTAssertEqual(notes.loadDocument(noteID: id)?.content.document?.blocks, Array(before.blocks.prefix(2)))
+        let undone = await actions.undo(changeSet: request)
+        XCTAssertEqual(undone.undone, 1)
+        XCTAssertTrue(undone.failures.isEmpty, "\(undone.failures)")
+        XCTAssertEqual(notes.loadDocument(noteID: id)?.content.document, before, "the table is back with its id and bold")
+    }
+
     #if !ATTIC_GENERATED_TESTS
     func testUndoCreatedNoteRefusesToDeleteARevisionEditedByTheOwner() async throws {
         let tasks = try makeTestStore()

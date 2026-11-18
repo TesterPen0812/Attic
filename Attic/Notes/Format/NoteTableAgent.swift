@@ -18,14 +18,18 @@ enum NoteAgentTableText {
         var id: UUID?
         var headerOff: Bool
         var hasToken: Bool
-        var rows: [[String]]
+        var rows: [[[NoteAgentText.Piece]]]
         var alignments: [NoteTable.Alignment]
         var consumed: Int
     }
 
     /// The table starting at `start` (a token line, or a pipe row followed
-    /// by a delimiter row), or nil. A ragged table throws.
-    static func parse(lines: [String], from start: Int) throws -> Parsed? {
+    /// by a delimiter row), or nil. A ragged table throws. A row is a line
+    /// with an unescaped `|`: a following line whose pipes are all escaped
+    /// is not one, so a table ends where the export's next line begins.
+    /// `typed`: a table a person typed reads as it always did (any line with
+    /// a pipe is a row; only `\|` and `\\` are escapes in its cells).
+    static func parse(lines: [String], from start: Int, typed: Bool = false) throws -> Parsed? {
         var index = start
         var id: UUID?
         var headerOff = false
@@ -36,21 +40,77 @@ enum NoteAgentTableText {
             headerOff = fields["headerRow"] == "false"
             index += 1
         }
-        guard index + 1 < lines.count, let header = NoteTableText.pipeCells(lines[index]),
-              let alignments = NoteTableText.delimiterAlignments(lines[index + 1]) else {
+        guard index + 1 < lines.count, let header = cells(lines[index], typed: typed),
+              let alignments = alignments(lines[index + 1]) else {
             if hasToken { throw NoteAgentTextError.invalidTableEdit("A table token must be followed by its pipe table.") }
             return nil
         }
         guard alignments.count == header.count else { throw NoteAgentTextError.raggedTable }
         var rows = [header]
         var end = index + 2
-        while end < lines.count, let cells = NoteTableText.pipeCells(lines[end]) {
+        while end < lines.count, let cells = cells(lines[end], typed: typed) {
             guard cells.count == header.count else { throw NoteAgentTextError.raggedTable }
             rows.append(cells)
             end += 1
         }
         guard header.count <= NoteTable.maxColumns, rows.count <= NoteTable.maxRows else { throw NoteAgentTextError.tableTooLarge }
-        return Parsed(id: id, headerOff: headerOff, hasToken: hasToken, rows: rows, alignments: alignments, consumed: end - start)
+        return Parsed(id: id, headerOff: headerOff, hasToken: hasToken,
+                      rows: rows.map { $0.map { NoteAgentText.read($0, in: typed ? .typedCell : .cell) } }, alignments: alignments, consumed: end - start)
+    }
+
+    /// A row's cells, still escaped, split at unescaped pipes and trimmed of
+    /// unescaped padding; nil without an unescaped pipe. A leading and a
+    /// trailing pipe enclose the row. Typed, any pipe makes a row and all
+    /// padding is trimmed, as before.
+    private static func cells(_ line: String, typed: Bool = false) -> [String]? {
+        var cells: [String] = []
+        var current = ""
+        var escaped = false
+        var piped = false
+        for character in line {
+            if escaped {
+                current.append(character); escaped = false
+            } else if character == "\\" {
+                current.append(character); escaped = true
+            } else if character == "|" {
+                cells.append(current); current = ""; piped = true
+            } else {
+                current.append(character)
+            }
+        }
+        cells.append(current)
+        guard piped || typed && line.contains("|") else { return nil }
+        let blank: (String) -> Bool = { $0.allSatisfy(NoteAgentText.isPadding) }
+        if blank(cells[0]) { cells.removeFirst() }
+        if let last = cells.last, blank(last) { cells.removeLast() }
+        guard !cells.isEmpty else { return nil }
+        return cells.map { cell in
+            // Trailing padding goes unless a backslash escapes it.
+            var kept = 0, escaping = false
+            for (offset, character) in cell.enumerated() {
+                if escaping && !typed || !NoteAgentText.isPadding(character) { kept = offset + 1 }
+                escaping = !escaping && character == "\\"
+            }
+            return String(cell.prefix(kept).drop(while: NoteAgentText.isPadding))
+        }
+    }
+
+    /// A delimiter row's alignments (`| --- | :-: |`), or nil. Each cell is
+    /// decoded as cell text is (`NoteAgentText.decodeCell`), as trunk did, so
+    /// `| &#45;&#45;&#45; |` is still a delimiter. A backslash makes a cell
+    /// text: an escaped character is literal, and an unescaped backslash is
+    /// itself (trunk's check failed on it too).
+    private static func alignments(_ line: String) -> [NoteTable.Alignment]? {
+        guard let cells = cells(line) else { return nil }
+        var result: [NoteTable.Alignment] = []
+        for cell in cells {
+            guard !cell.contains("\\") else { return nil }
+            let value = NoteAgentText.decodeCell(cell).replacingOccurrences(of: " ", with: "")
+            guard value.allSatisfy({ $0 == "-" || $0 == ":" }), value.contains("-") else { return nil }
+            let left = value.hasPrefix(":"), right = value.hasSuffix(":")
+            result.append(left && right ? .center : (right ? .right : .left))
+        }
+        return result
     }
 
     /// The table block an agent's table becomes: the base table it names
@@ -109,42 +169,35 @@ enum NoteAgentTableText {
             }
     }
 
-    /// An agent's cell text. `[date:YYYY-MM-DD]` becomes a date and
-    /// `[unsupported]` the next object this build can't read, each keeping
-    /// the whole inline `reusing` had for it (a date by its day, others in
-    /// order); a token the text removes takes its object with it. Text can't
-    /// tell apart objects of one kind that differ (unreadable ones, or dates on
-    /// one day with different details), so keeping some of them is refused.
-    /// Other text is kept as typed, without marks.
-    static func cell(_ text: String, reusing: NoteTable.Cell?) throws -> NoteTable.Cell {
+    /// An agent's cell, read (`NoteAgentText.read`). A date and an
+    /// `[unsupported]` keep the whole inline `reusing` had for it (a date by
+    /// its day, others in order); a token the text removes takes its object
+    /// with it. Text can't tell apart objects of one kind that differ
+    /// (unreadable ones, or dates on one day with different details), so
+    /// keeping some of them is refused. Literal text is kept as typed,
+    /// without marks; an `[unsupported]` with nothing behind it is text.
+    static func cell(_ pieces: [NoteAgentText.Piece], reusing: NoteTable.Cell?) throws -> NoteTable.Cell {
         var output = ""
         var inlines: [NoteInline] = []
         var dates = reusing?.inlines.filter { if case .date = $0.kind { true } else { false } } ?? []
         var unreadable = reusing?.inlines.filter { if case .opaque = $0.kind { true } else { false } } ?? []
         var kept: [NoteInline] = []
-        var remainder = Substring(text.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: ""))
-        while let start = remainder.firstIndex(of: "[") {
-            output += remainder[remainder.startIndex..<start]
-            let token = remainder[start...]
-            if token.hasPrefix("[unsupported]"), !unreadable.isEmpty {
+        for piece in pieces {
+            switch piece {
+            case let .text(literal): output += literal
+            case .unsupported:
+                guard !unreadable.isEmpty else { output += "[unsupported]"; continue }
                 let reused = unreadable.removeFirst()
                 kept.append(reused)
                 inlines.append(reused)
                 output.append(NoteDocument.objectCharacter)
-                remainder = token.dropFirst("[unsupported]".count)
-            } else if token.hasPrefix("[date:"), let close = token.firstIndex(of: "]"),
-                      let day = NoteDay(isoString: String(token[token.index(start, offsetBy: 6)..<close])) {
+            case let .date(day):
                 let reused = dates.firstIndex { $0.kind == .date(day) }.map { dates.remove(at: $0) }
                 if let reused { kept.append(reused) }
                 inlines.append(reused ?? NoteInline(id: UUID(), kind: .date(day)))
                 output.append(NoteDocument.objectCharacter)
-                remainder = token[token.index(after: close)...]
-            } else {
-                output += "["
-                remainder = token.dropFirst()
             }
         }
-        output += remainder
         for removed in dates + unreadable {
             guard kept.allSatisfy({ !sameGroup($0, removed) || ($0.kind == removed.kind && $0.extras == removed.extras) }) else {
                 throw NoteAgentTextError.invalidTableEdit("This cell has several [unsupported] objects or dates on one day that differ in ways the text can't show; keep all of their tokens or remove all of them.")
@@ -175,7 +228,18 @@ enum NoteAgentTableText {
 ///   the line keeps its id, cells, marks, width and extras.
 /// - `{"op": "delete_row", "row_id"}`, `{"op": "delete_column", "column_id"}`
 /// - `{"op": "set_header_row", "value": bool}`, `{"op": "set_alignment", "column_id", "align": "left|center|right"}`
+/// - `{"op": "delete_table"}`, alone: the call's table goes (`deletesTable`;
+///   the only way an agent deletes a formatted table).
 enum NoteTableAgentEdit {
+    static let deleteAlone = "delete_table deletes the whole table: send it as the only operation."
+
+    /// The operations delete the table. `delete_table` must be the only one.
+    static func deletesTable(_ operations: [[String: Any]]) throws -> Bool {
+        guard operations.contains(where: { $0["op"] as? String == "delete_table" }) else { return false }
+        guard operations.count == 1 else { throw NoteAgentTextError.invalidTableEdit(deleteAlone) }
+        return true
+    }
+
     static func apply(_ operations: [[String: Any]], to original: NoteTable) throws -> NoteTable {
         var notices: [String] = []
         return try apply(operations, to: original, notices: &notices)
@@ -238,8 +302,10 @@ enum NoteTableAgentEdit {
                 let r = try row(operation["row_id"]), c = try column(operation["column_id"])
                 guard let text = operation["text"] as? String else { throw NoteAgentTextError.invalidTableEdit("set_cell needs text.") }
                 let original = table.rows[r].cells[c]
-                guard try inlineOnly(text) != NoteTextExport.agentInlineText(original.block) else { break }
-                table.rows[r].cells[c] = try NoteAgentTableText.cell(text, reusing: original)
+                let pieces = NoteAgentText.read(try inlineOnly(text), in: .field)
+                guard NoteAgentText.resolved(pieces, objects: NoteAgentText.opaqueCount(original.inlines))
+                        != NoteAgentText.pieces(original.text, inlines: original.inlines) else { break }
+                table.rows[r].cells[c] = try NoteAgentTableText.cell(pieces, reusing: original)
                 let kinds = NoteMark.Kind.allCases.filter { kind in original.marks.contains { $0.kind == kind } }.map(\.rawValue)
                 if let last = kinds.last {
                     let named = kinds.count > 1 ? kinds.dropLast().joined(separator: ", ") + " and " + last : last
@@ -250,14 +316,14 @@ enum NoteTableAgentEdit {
                 let at = try operation["after_row_id"].flatMap { $0 is NSNull ? nil : $0 }.map { try row($0) + 1 } ?? 0
                 let cells = try texts(operation["cells"], count: table.columnCount)
                 table.insertRow(at: at)
-                table.rows[at].cells = try cells.map { try NoteAgentTableText.cell(try inlineOnly($0), reusing: nil) }
+                table.rows[at].cells = try cells.map { try NoteAgentTableText.cell(NoteAgentText.read(try inlineOnly($0), in: .field), reusing: nil) }
             case "insert_column":
                 let at = try operation["after_column_id"].flatMap { $0 is NSNull ? nil : $0 }.map { try column($0) + 1 } ?? 0
                 let cells = try texts(operation["cells"], count: table.rowCount)
                 let align = (operation["align"] as? String).flatMap(NoteTable.Alignment.init(rawValue:)) ?? .left
                 table.insertColumn(at: at, align: align)
                 for (index, text) in cells.enumerated() {
-                    table.rows[index].cells[at] = try NoteAgentTableText.cell(try inlineOnly(text), reusing: nil)
+                    table.rows[index].cells[at] = try NoteAgentTableText.cell(NoteAgentText.read(try inlineOnly(text), in: .field), reusing: nil)
                 }
             case "move_row":
                 let source = try row(operation["row_id"])
@@ -272,11 +338,11 @@ enum NoteTableAgentEdit {
                 for index in table.rows.indices { table.rows[index].cells.insert(cells[index], at: at) }
             case "delete_row":
                 guard table.removeRow(at: try row(operation["row_id"])) else {
-                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one row. To delete a plain table, remove it from the body with update_note; a table with formatting the text can't show is deleted in Attic.")
+                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one row. To delete the table, send {\"op\": \"delete_table\"} alone.")
                 }
             case "delete_column":
                 guard table.removeColumn(at: try column(operation["column_id"])) else {
-                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one column. To delete a plain table, remove it from the body with update_note; a table with formatting the text can't show is deleted in Attic.")
+                    throw NoteAgentTextError.invalidTableEdit("A table keeps at least one column. To delete the table, send {\"op\": \"delete_table\"} alone.")
                 }
             case "set_header_row":
                 guard let value = operation["value"] as? Bool else { throw NoteAgentTextError.invalidTableEdit("set_header_row needs a boolean value.") }
@@ -287,6 +353,8 @@ enum NoteTableAgentEdit {
                     throw NoteAgentTextError.invalidTableEdit("align must be left, center or right.")
                 }
                 table.columns[c].align = align
+            case "delete_table":
+                throw NoteAgentTextError.invalidTableEdit(deleteAlone)
             default:
                 throw NoteAgentTextError.invalidTableEdit("Unknown operation \"\(op)\".")
             }
