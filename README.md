@@ -194,6 +194,7 @@ Scripts/run_local_ui_tests.zsh
 The heavy retention soaks are skipped locally unless
 `TEST_RUNNER_ATTIC_SOAK_TESTS=1` is set. The full appearance matrix and its
 contact sheets run locally with `Scripts/run_appearance_matrix.zsh`.
+Run the test wait, skip, and retry guard locally with `python3 Scripts/check_test_waits.py`.
 
 ## Agent access (MCP)
 
