@@ -135,13 +135,18 @@ final class LibraryDeleteRefreshTests: XCTestCase {
     func testCanvasDeleteStillRefreshesTheOtherStores() throws {
         let board = try XCTUnwrap(canvases.createCanvas(name: "Board"))
         _ = try XCTUnwrap(canvases.createCanvas(name: "Spare"))
-        var taskRefreshes = 0
-        tasks.objectWillChange.sink { taskRefreshes += 1 }.store(in: &bag)
+        // TaskStore's whole reload (what `refresh()` runs) publishes `revision`
+        // with no changed task IDs; an incremental task commit names its IDs.
+        var taskReloads = 0
+        let store: TaskStore = tasks
+        store.$revision.dropFirst().sink { _ in
+            if store.revisionChangedTaskIDs == nil { taskReloads += 1 }
+        }.store(in: &bag)
         let deleted = revisionPublishes { XCTAssertTrue(library.delete(AtticItemRef(.canvas, board.id))) }
         // A canvas store has no commit step of its own: the library's
         // refresh is the only one that reaches Tasks and Notes.
         XCTAssertEqual(deleted, 1, "a canvas delete still refreshes Notes once")
-        XCTAssertGreaterThan(taskRefreshes, 0, "a canvas delete still refreshes Tasks")
+        XCTAssertEqual(taskReloads, 1, "a canvas delete still reloads Tasks once")
         XCTAssertFalse(canvases.canvases.contains { $0.id == board.id })
     }
 
