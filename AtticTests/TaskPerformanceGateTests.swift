@@ -403,7 +403,11 @@ final class TaskPerformanceGateTests: XCTestCase {
         XCTAssertEqual(rig.tasks.listRefreshFailures, 0)
         XCTAssertEqual(rig.tasks.fullTaskReloadCount, 3, "No read was skipped after a failed one")
         XCTAssertNotNil(rig.tasks.errorNotice, "The unresolved presentation is reported")
-        XCTAssertNil(rig.tasks.revisionChangedTaskIDs, "An unconfirmed state is never published as a narrow change")
+        // The task's writing still refreshes the writing search, which publishes `[]` (no task row changed): true,
+        // since the rows shown are the last confirmed ones. What must never be published is the unconfirmed delete
+        // itself as a narrow change to this task.
+        XCTAssertFalse(rig.tasks.revisionChangedTaskIDs?.contains(id) ?? false,
+                       "An unconfirmed state is never published as a narrow change")
         XCTAssertTrue(rig.library.undo.canUndo(in: .tasks))
 
         // Retry: one fresh read presents the durable state.
