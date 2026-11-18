@@ -154,7 +154,7 @@ class RequiredChecksTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
         validation = workflow.split('  validate-inputs:', 1)[1].split('\n  fka:', 1)[0]
         script = textwrap.dedent(validation.split('        run: |\n', 1)[1])
-        for lane in ['', 'full', 'fast', 'costs', 'fka']:
+        for lane in ['', 'full', 'fast', 'costs', 'performance', 'fka']:
             for headless in ['true', 'false', '']:
                 with self.subTest(lane=lane, headless=headless):
                     result = subprocess.run(['/bin/bash', '-e', '-c', script],
@@ -224,7 +224,7 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertNotIn('continue-on-error', continuation)
         self.assertIn('UNIT_CONTINUATION: ${{ needs.unit-continuation.result }}', required)
 
-    def test_all_notes_hunt_generated_seeds_have_one_dedicated_required_runner(self):
+    def test_all_notes_hunt_generated_seeds_share_one_required_runner_with_one_process_each(self):
         import re
         root = Path(__file__).resolve().parent.parent
         source = (root / 'AtticTests/NotesEditorHuntTests.swift').read_text()
@@ -237,10 +237,16 @@ class RequiredChecksTests(unittest.TestCase):
         required = workflow.split('  required:', 1)[1].split('\n  ui:', 1)[0]
         for seed in seeds:
             self.assertIn(f'-skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed{seed}', unit)
-        self.assertIn('seed: [' + ', '.join(seeds) + ']', job)
-        self.assertIn('-only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed${{ matrix.seed }}', job)
+        self.assertIn('NOTES_SEEDS: ' + ' '.join(seeds) + '\n', job)
+        self.assertEqual(job.count('build-for-testing'), 1)
+        self.assertIn('for seed in $NOTES_SEEDS; do', job)
+        self.assertIn('test-without-building', job)
+        self.assertIn('-only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed$seed', job)
+        self.assertIn('failed="$failed $seed"', job)
+        self.assertIn('if [ -n "$failed" ]; then', job)
+        for seed in seeds:
+            self.assertIn(f'name: notes-editor-seed-{seed}-${{{{ github.sha }}}}', job)
         self.assertIn('timeout-minutes: 90', job)
-        self.assertIn('fail-fast: false', job)
         self.assertNotIn('continue-on-error', job)
         self.assertIn('s["passedTests"]==1', job)
         self.assertIn('s["skippedTests"]==0', job)

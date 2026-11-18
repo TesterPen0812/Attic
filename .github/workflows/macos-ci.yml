@@ -1,4 +1,4 @@
-# Dispatch fka for the focused native keyboard gate; costs for optimized costs; fast for build/analyzer/unit; full for milestones.
+# Dispatch fka for the focused native keyboard gate; costs for optimized costs; performance for seeded performance on a fresh runner; fast for build/analyzer/unit; full for milestones.
 name: Attic CI
 
 on:
@@ -21,11 +21,11 @@ on:
   workflow_dispatch:
     inputs:
       lane:
-        description: Verification scope (full, fast, costs, or focused FKA)
+        description: Verification scope (full, fast, costs, performance, or focused FKA)
         required: false
         default: full
         type: choice
-        options: [full, fast, costs, fka]
+        options: [full, fast, costs, performance, fka]
       headless_costs:
         description: Run integration costs without key-window or UI fixtures (lane=costs)
         required: false
@@ -179,7 +179,7 @@ jobs:
 
   round-trips:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Generated models, matrices, stress, and Notes round trips
     runs-on: macos-26
     # The complete successful generated suite plus compilation exceeded the
@@ -227,19 +227,18 @@ jobs:
 
   notes-seeds:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
-    name: Notes editor generated seed ${{ matrix.seed }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
+    name: Notes editor generated seeds
     runs-on: macos-26
     # Each seed replays the complete history after every generated command.
     # That quadratic, deliberately checked behavior is independent of the
-    # functional unit suite, so give each full seed its own required runner.
+    # functional unit suite, so the seeds get their own required runner: one
+    # build, then one test process per seed. Every seed runs even when an
+    # earlier one fails, and the job fails if any seed failed.
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        seed: [11012, 11013, 11014, 11015]
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      NOTES_SEEDS: 11012 11013 11014 11015
     steps:
       - uses: actions/checkout@v5
       - name: Build local-only Notes editor test host
@@ -249,32 +248,74 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
           Scripts/sign_crash_harness.zsh "$RUNNER_TEMP/AtticNotesSeed/Build/Products/Local/AtticUnitTestHost.app"
-      - name: Verify complete generated Notes editor seed
+      - name: Verify every complete generated Notes editor seed
         timeout-minutes: 75
         run: |
-          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
-            -configuration Local -destination 'platform=macOS' \
-            -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
-            -resultBundlePath "$RUNNER_TEMP/AtticNotesSeed.xcresult" \
-            CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
-            -only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed${{ matrix.seed }}
-          xcrun xcresulttool get test-results summary \
-            --path "$RUNNER_TEMP/AtticNotesSeed.xcresult" --format json > "$RUNNER_TEMP/notes-seed-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==1 and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/notes-seed-summary.json"
-      - name: Upload Notes editor generated-seed evidence
+          failed=''
+          for seed in $NOTES_SEEDS; do
+            echo "::group::Notes editor generated seed $seed"
+            out="$RUNNER_TEMP/notes-seed-$seed"
+            mkdir -p "$out"
+            Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+              -configuration Local -destination 'platform=macOS' \
+              -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
+              -resultBundlePath "$out/AtticNotesSeed.xcresult" \
+              CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
+              -only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed$seed \
+            && xcrun xcresulttool get test-results summary \
+              --path "$out/AtticNotesSeed.xcresult" --format json > "$out/notes-seed-summary.json" \
+            && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==1 and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$out/notes-seed-summary.json" \
+            || { failed="$failed $seed"; echo "::error::Notes editor generated seed $seed failed"; }
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::Failed Notes editor generated seeds:$failed"
+            exit 1
+          fi
+      - name: Upload Notes editor generated seed 11012 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: notes-editor-seed-${{ matrix.seed }}-${{ github.sha }}
+          name: notes-editor-seed-11012-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/AtticNotesSeed.xcresult
-            ${{ runner.temp }}/notes-seed-summary.json
+            ${{ runner.temp }}/notes-seed-11012/AtticNotesSeed.xcresult
+            ${{ runner.temp }}/notes-seed-11012/notes-seed-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload Notes editor generated seed 11013 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-editor-seed-11013-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/notes-seed-11013/AtticNotesSeed.xcresult
+            ${{ runner.temp }}/notes-seed-11013/notes-seed-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload Notes editor generated seed 11014 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-editor-seed-11014-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/notes-seed-11014/AtticNotesSeed.xcresult
+            ${{ runner.temp }}/notes-seed-11014/notes-seed-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload Notes editor generated seed 11015 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-editor-seed-11015-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/notes-seed-11015/AtticNotesSeed.xcresult
+            ${{ runner.temp }}/notes-seed-11015/notes-seed-summary.json
           if-no-files-found: ignore
           retention-days: 7
 
   macos:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Build, test, and analyze Attic for macOS
     runs-on: macos-26
     timeout-minutes: 180
@@ -672,7 +713,7 @@ jobs:
 
   unit-continuation:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Required macOS unit continuation (P-Z and exhaustive first mouse)
     runs-on: macos-26
     timeout-minutes: 75
@@ -730,7 +771,7 @@ jobs:
 
   required:
     needs: [validate-inputs, macos, round-trips, notes-seeds, unit-continuation]
-    if: ${{ always() && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ always() && inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Require macOS and generated coverage
     runs-on: ubuntu-latest
     steps:
@@ -747,7 +788,7 @@ jobs:
 
   ui:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' }}
     name: macOS UI tests (${{ matrix.shard }} of 3)
     runs-on: macos-26
     timeout-minutes: 50
@@ -853,7 +894,7 @@ jobs:
 
   costs:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.lane == 'costs') && !inputs.ui_tests }}
     name: Optimized costs and opt-in soak retention gates
     runs-on: macos-26
     timeout-minutes: 90
@@ -1090,7 +1131,7 @@ jobs:
 
   performance:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.lane == 'performance') && !inputs.ui_tests }}
     name: Observe seeded performance on a fresh macOS runner
     runs-on: macos-26
     timeout-minutes: 180
@@ -1178,7 +1219,7 @@ jobs:
 
   appearance:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Design system appearance matrix (${{ matrix.shard }} of 4)
     runs-on: macos-26
     timeout-minutes: 45
@@ -1239,7 +1280,7 @@ jobs:
   iphone:
     needs: validate-inputs
     name: Build Attic for iPhone Simulator
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -1356,7 +1397,7 @@ jobs:
 
   canvas-lab:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Canvas lab headless renderer and analysis
     runs-on: macos-26
     timeout-minutes: 15
