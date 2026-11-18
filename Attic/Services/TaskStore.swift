@@ -2045,7 +2045,7 @@ final class TaskStore: ObservableObject {
         }
         tasks.removeAll { deletedIDs.contains($0.id) }
         guard save(owner: owner) else { return false }
-        WorkspaceItemLifecycle.didCommit(in: container)
+        WorkspaceItemLifecycle.didCommit(in: container, freshTasks: freshAfterSave)
         return true
     }
 
@@ -2248,7 +2248,7 @@ final class TaskStore: ObservableObject {
             return false
         }
         guard save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed") else { return false }
-        WorkspaceItemLifecycle.didCommit(in: container)
+        WorkspaceItemLifecycle.didCommit(in: container, freshTasks: freshAfterSave)
         return true
     }
 
@@ -4295,6 +4295,15 @@ final class TaskStore: ObservableObject {
         return changed ? save(owner: owner, retaining: retainedEdits) : true
     }
 
+    /// Set by `save` when the save presented itself from one successful fresh
+    /// read of every task row (a journaled commit's reload). A failed read, a
+    /// recovery retry or an incremental publish leaves it false.
+    private var savePresentedFromFreshRead = false
+
+    /// This store, when its last save already presented from a fresh read;
+    /// passed to `WorkspaceItemLifecycle.didCommit` so it is not read twice.
+    private var freshAfterSave: TaskStore? { savePresentedFromFreshRead ? self : nil }
+
     func refresh() {
         defer { tagInventoryRefreshed() }
         do {
@@ -4315,6 +4324,7 @@ final class TaskStore: ObservableObject {
         // in this context (a reload would abandon it), so save it as before
         // and publish through a full reload instead of an incremental commit.
         let listNeedsReload = taskEditNeedsReload
+        savePresentedFromFreshRead = false
         tagInventoryWillSave(context)
         do {
             let removedRows = context.deletedModelsArray.contains { $0 is TaskItem }
@@ -4419,7 +4429,11 @@ final class TaskStore: ObservableObject {
                 // state. Do not notify subscribers of an unconfirmed change.
                 taskEditNeedsReload = true
                 refresh()
-            } else if !presentationReloaded {
+            } else if presentationReloaded {
+                // A fact for the lifecycle commit that follows: this save's
+                // own fresh read of every row succeeded and is presented.
+                savePresentedFromFreshRead = true
+            } else {
                 // reloadTasks already published one coherent revision when it
                 // was required. Plain commits publish here, exactly once.
                 revisionChangedTaskIDs = changedIDs

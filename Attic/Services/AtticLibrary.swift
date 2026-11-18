@@ -1484,12 +1484,20 @@ final class AtticLibrary {
     /// One pass: each store's reload reconciles the kind it read, and the
     /// shared tag inventory reads any kind no store reloaded once the pass
     /// ends (`TagService.refreshing`).
-    func refreshItemStores() {
+    ///
+    /// `freshTasks`: the task store already presented this commit from a fresh read of every row (its own save's
+    /// reload succeeded), so it is not read again; the tag pass still counts the task kind as read, because that
+    /// reload reconciled it. Returns the note store when its reload in this pass succeeded, so the Notes controller
+    /// presenting from that same object does not read it again.
+    @discardableResult
+    func refreshItemStores(freshTasks: TaskStore? = nil) -> NoteStore? {
+        var notesRead: NoteStore?
         tags.refreshing {
-            tasks.refresh()
-            notes?.refresh()
+            if let freshTasks, freshTasks === tasks { tasks.tagInventoryRefreshed() } else { tasks.refresh() }
+            if let notes, notes.refresh() { notesRead = notes }
             canvases?.refresh()
         }
+        return notesRead
     }
 
     /// Always false, so failures read `return store.op() || fail(...)`.

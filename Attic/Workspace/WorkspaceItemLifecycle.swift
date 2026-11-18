@@ -571,10 +571,13 @@ extension WorkspaceItemLifecycle {
         if let noteID { notes.insert(noteID) }
         return try controller.prepareWholeItemDeletion(noteIDs: notes, taskIDs: ids)
     }
-    static func didCommit(in container: ModelContainer) {
+    /// A whole-item commit reached every store and open note session. `freshTasks` is the task store whose own
+    /// save made this commit and has already presented it from one fresh read of every task row (the stale-context
+    /// rule); only that store, only then, skips its second read. A note-side commit passes nil.
+    static func didCommit(in container: ModelContainer, freshTasks: TaskStore? = nil) {
         guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) else { return }
-        coordinator.lifecycleLibrary?.refreshItemStores()
-        coordinator.lifecycleNotes?.publishWholeItemLifecycle()
+        let freshNotes = coordinator.lifecycleLibrary?.refreshItemStores(freshTasks: freshTasks)
+        coordinator.lifecycleNotes?.publishWholeItemLifecycle(notesReadInThisCommit: freshNotes)
     }
 }
 

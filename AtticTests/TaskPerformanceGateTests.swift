@@ -344,6 +344,95 @@ final class TaskPerformanceGateTests: XCTestCase {
         await notes.waitForAttachmentReconciliation()
     }
 
+    /// The panel's wiring for the F2 tests: library plus a registered Notes lifecycle controller, 30 tagged tasks,
+    /// one with writing, and six standalone notes.
+    private func makeF2Rig() async throws -> (container: ModelContainer, tasks: TaskStore, notes: NoteStore, library: AtticLibrary,
+                                               controller: NotesPageController, ids: [UUID], writingID: UUID) {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let seed = ModelContext(container)
+        var ids: [UUID] = []
+        for index in 0..<30 {
+            let task = TaskItem(title: "Open task \(index)", createdAt: date)
+            task.tags = ["tag\(index % 7)"]
+            seed.insert(task); ids.append(task.id)
+        }
+        let writing = NoteItem(title: "Open task 3", body: "Writing", createdAt: date)
+        writing.taskID = ids[3]
+        writing.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Open task 3"), .text("Writing")], requires: ["taskNote"]))
+        seed.insert(writing)
+        for index in 0..<6 { seed.insert(NoteItem(title: "Note \(index)", body: "Body", createdAt: date)) }
+        try seed.save()
+        let files = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("F2Rig-\(UUID())"))
+        let tasks = TaskStore(container: container, now: { date }, taskImageFiles: files)
+        let notes = NoteStore(container: container, now: { date }, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        let controller = NotesPageController(store: notes, journal: coordinator.journal)
+        await notes.waitForAttachmentReconciliation()
+        XCTAssertTrue(coordinator.lifecycleNotes === controller)
+        return (container, tasks, notes, library, controller, ids, writing.id)
+    }
+
+    /// F2 (lead, 13:20): a failed fresh read after the journaled save is not a fact the commit can skip on.
+    func testF2FailedSaveReadSkipsNothing() async throws {
+        let rig = try await makeF2Rig()
+        let id = rig.ids[5]
+        rig.tasks.resetFullTaskReloadCount(); rig.notes.resetFullNoteReloadCount()
+        rig.tasks.listRefreshFailures = 1
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied, "The durable save cannot be refused by a presentation read")
+        // The failed read, the save's own recovery read, then the commit's read: nothing skipped.
+        XCTAssertEqual(rig.tasks.fullTaskReloadCount, 3)
+        XCTAssertEqual(rig.notes.fullNoteReloadCount, 1)
+        XCTAssertNil(rig.tasks.task(withID: id))
+        XCTAssertNotNil(rig.tasks.create(title: "Safe follow-up"), "Later writes use the refreshed context")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// F2: a commit made on the note side (deleting a task's writing takes its task) still reads the task store.
+    func testF2NoteSideCommitStillRefreshesTasks() async throws {
+        let rig = try await makeF2Rig()
+        let owner = rig.ids[3]
+        XCTAssertNotNil(rig.tasks.task(withID: owner))
+        rig.tasks.resetFullTaskReloadCount(); rig.notes.resetFullNoteReloadCount()
+        XCTAssertTrue(rig.library.delete(AtticItemRef(.note, rig.writingID)))
+        XCTAssertGreaterThanOrEqual(rig.tasks.fullTaskReloadCount, 1, "The task store did not make this commit")
+        XCTAssertNil(rig.tasks.task(withID: owner), "The task went with its writing")
+        XCTAssertFalse(rig.notes.notes.contains { $0.id == rig.writingID })
+        XCTAssertTrue(rig.library.undo.undo(in: .note(rig.writingID)))
+        XCTAssertNotNil(rig.tasks.task(withID: owner))
+        XCTAssertTrue(rig.notes.notes.contains { $0.id == rig.writingID })
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// F2: what the reloads exist for. After Delete the task is gone from Tasks and its writing is in Recently
+    /// Deleted; after Undo both are back, presented and durable.
+    func testF2DeleteAndUndoPresentTasksAndWriting() async throws {
+        let rig = try await makeF2Rig()
+        let id = rig.ids[3]
+        let before = rig.tasks.tasks.count
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied)
+        XCTAssertNil(rig.tasks.task(withID: id))
+        XCTAssertEqual(rig.tasks.tasks.count, before - 1)
+        XCTAssertFalse(rig.notes.notes.contains { $0.id == rig.writingID }, "The writing left Notes with its task")
+        let deleted = rig.library.recentlyDeleted()
+        XCTAssertTrue(deleted.contains { $0.ref == AtticItemRef(.task, id) }, "The item is in Recently Deleted")
+        let writingID = rig.writingID
+        let durable = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == writingID }))
+        XCTAssertTrue(!durable.isEmpty && durable.allSatisfy { $0.deletedAt != nil }, "Its writing is in Recently Deleted")
+
+        XCTAssertTrue(rig.library.undo(in: .tasks).isApplied)
+        XCTAssertNotNil(rig.tasks.task(withID: id))
+        XCTAssertEqual(rig.tasks.tasks.count, before)
+        XCTAssertTrue(rig.notes.notes.contains { $0.id == rig.writingID })
+        XCTAssertFalse(rig.library.recentlyDeleted().contains { $0.ref == AtticItemRef(.task, id) })
+        let restored = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == writingID }))
+        XCTAssertTrue(restored.allSatisfy { $0.deletedAt == nil })
+        // A follow-up write uses the context the save installed.
+        XCTAssertNotNil(rig.tasks.create(title: "After Undo"))
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
     func testPF2JournaledPresentationReadFailureRecoversFromFreshContext() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let store = TaskStore(container: container)

@@ -4795,8 +4795,10 @@ extension NotesPageController {
     func retireWholeItemRecovery(_ session: NoteSession) -> Bool {
         retireRecoveryCopy(noteID: session.noteID, session: session)
     }
-    func publishWholeItemLifecycle() {
-        store.refresh()
+    /// `notesReadInThisCommit`: the note store `didCommit` has just read again, successfully, in this same commit.
+    /// Only when that is the store this controller presents from is the read not repeated.
+    func publishWholeItemLifecycle(notesReadInThisCommit: NoteStore? = nil) {
+        if notesReadInThisCommit !== store { store.refresh() }
         let context = ModelContext(store.container)
         guard let rows = try? context.fetch(FetchDescriptor<NoteItem>()),
               let tasks = try? context.fetch(FetchDescriptor<TaskItem>()) else { return }

@@ -1523,13 +1523,17 @@ final class NoteStore: ObservableObject {
         return index
     }
 
-    func refresh() {
+    /// True when every note was read again from a fresh context and presented.
+    @discardableResult
+    func refresh() -> Bool {
         defer { tagInventoryRefreshed() }
         do {
             try reloadModels()
             lastErrorMessage = nil
+            return true
         } catch {
             lastErrorMessage = error.localizedDescription
+            return false
         }
     }
 
