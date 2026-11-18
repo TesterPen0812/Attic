@@ -652,4 +652,41 @@ final class DurableSaveReadFailureTests: XCTestCase {
             await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
         }
     }
+
+    /// Generated data: one note id with two identical physical rows, as R-2 leaves a re-proposed insert. A
+    /// characterization of what such a note does (lead, 21:18): it is listed once, opens, a rename reaches every
+    /// replica, and a delete reaches every replica. No repair.
+    func testC8NoteWithTwoPhysicalRowsOpensEditsAndDeletes() async throws {
+        let twinID = UUID()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let rig = try await makeRig(seed: { seed in
+            for _ in 0..<2 {
+                let twin = NoteItem(id: twinID, title: "Twin", body: "Body", createdAt: date)
+                twin.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Twin"), .text("Body")]))
+                seed.insert(twin)
+            }
+        })
+        func rows() throws -> [NoteItem] {
+            try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == twinID }))
+        }
+        let listed = rig.notes.notes.filter { $0.id == twinID }.count
+        let opened = rig.controller.open(noteID: twinID)
+        let note = try XCTUnwrap(rig.notes.notes.first { $0.id == twinID })
+        let renamed = rig.notes.update(note, title: "Twin renamed")
+        let titles = try rows().map(\.title).sorted()
+        let toDelete = try XCTUnwrap(rig.notes.notes.first { $0.id == twinID })
+        let deleted = rig.notes.delete(toDelete)
+        let afterDelete = try rows()
+        print("C8_TWO_NOTE_ROWS rows=\(afterDelete.count) listed=\(listed) opened=\(opened) renamed=\(renamed) "
+            + "titles=\(titles) deleted=\(deleted) deleted_rows=\(afterDelete.filter { $0.deletedAt != nil }.count) "
+            + "error=\(rig.notes.lastErrorMessage ?? "nil")")
+        XCTAssertEqual(afterDelete.count, 2, "Characterization only: both physical rows remain")
+        XCTAssertEqual(listed, 1, "Listed once")
+        XCTAssertTrue(opened, "Opens")
+        XCTAssertTrue(renamed)
+        XCTAssertEqual(titles, ["Twin renamed", "Twin renamed"], "A rename reaches every replica")
+        XCTAssertTrue(deleted)
+        XCTAssertEqual(afterDelete.filter { $0.deletedAt != nil }.count, 2, "A delete reaches every replica")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
 }
