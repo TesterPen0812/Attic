@@ -430,12 +430,13 @@ final class TasksPageModel: ObservableObject {
         var list: HeldList? = nil
     }
 
-    /// What decides which rows a page lists, and in what order: its view,
-    /// its Find query and its tag picks.
+    /// What decides which rows a page draws, and in what order: its view,
+    /// its Find query, its tag picks and its folded groups.
     struct HeldList: Equatable {
         let view: TasksViewOptions
         let search: String
         let tag: TagPicks
+        let folded: Set<String>
     }
 
     /// Whether Now's "Completed today" shows its rows (remembered for the
@@ -851,6 +852,11 @@ final class TasksPageModel: ObservableObject {
     /// publication without its ids. Read by `restated(_:to:)`.
     private var rowsChangedSinceBuild: [TasksTab: Set<UUID>] = [:]
     private var rowsChangeUnknown: Set<TasksTab> = []
+    /// The store's data revision `noteRowsChanged` last ran for. The store
+    /// moves its data revision before `$revision` subscribers run, in an
+    /// order Combine does not promise, so a rows read in between must not
+    /// take the change set as complete (PR 30 R-2).
+    private var rowsChangesNotedRevision: UInt64?
     /// The order `buildRows` last gave each tab, held tasks where they were
     /// kept, and the list it was built for: where a held task stays in it.
     /// Kept apart from the rows cache, which other changes drop. Each build
@@ -884,6 +890,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     private func noteRowsChanged(_ changedIDs: Set<UUID>?) {
+        rowsChangesNotedRevision = store.taskDataRevision
         for (tab, snapshot) in rowsCache {
             guard let changedIDs else { rowsChangeUnknown.insert(tab); continue }
             var rows: Set<UUID> = []
@@ -1038,17 +1045,20 @@ final class TasksPageModel: ObservableObject {
     /// full build's: `buildRows` keeps a held task's place in the order and
     /// `builtRows` puts held rows back at their places. Find, a view filter
     /// and tag picks (which keep what they showed), an acknowledged command,
-    /// a change without ids, a released hold, a row held in another list
-    /// and a held row off its place (after a rebuild during its hold) all
-    /// rebuild.
+    /// a change without ids, a change not yet noted, a released hold, a row
+    /// held in another list (another view, Find, tag picks or folds) and a
+    /// held row off its place (after a rebuild during its hold) all rebuild.
     private func restated(_ old: RowsSnapshot, to key: RowsKey) -> RowsSnapshot? {
         let tab = key.tab
         guard old.key.sameList(as: key), key.search.isEmpty, key.tag.isEmpty, key.view.isDefault,
               acknowledgedRows.isEmpty, acknowledgedDeleted.isEmpty, acknowledgedCreated.isEmpty,
               !rowsChangeUnknown.contains(tab) else { return nil }
         guard old.key.held.allSatisfy({ key.held[$0.key] == $0.value }) else { return nil }
-        let list = HeldList(view: key.view, search: key.search, tag: key.tag)
+        let list = HeldList(view: key.view, search: key.search, tag: key.tag, folded: key.folded)
         guard key.held.values.allSatisfy({ $0.list == nil || $0.list == list }) else { return nil }
+        // A store change this model has not yet noted (a read from a
+        // subscriber that runs before its own): only a full build is right.
+        guard old.key.revision == key.revision || rowsChangesNotedRevision == key.revision else { return nil }
         // The full build puts every held row back at its index, so the list
         // is that build only while every held row is at its index (one put
         // back at the end of a shorter group after a rebuild is not).
@@ -1125,7 +1135,7 @@ final class TasksPageModel: ObservableObject {
         // A row held in another list (Find or the view changed during its
         // hold) has no place in this one: it stays where the store's order
         // puts it, as on the trunk.
-        let list = HeldList(view: key.view, search: key.search, tag: key.tag)
+        let list = HeldList(view: key.view, search: key.search, tag: key.tag, folded: key.folded)
         var heldGroup: [UUID: Int] = [:]
         for (index, group) in groups.enumerated() where !key.folded.contains(group.key) {
             for id in group.ids {
@@ -1259,7 +1269,7 @@ final class TasksPageModel: ObservableObject {
             filterHidden[tab] = nil
         }
         let holding = held.filter { $0.value.tab == tab }.sorted { $0.value.index < $1.value.index }
-        let list = HeldList(view: view, search: query, tag: picks)
+        let list = HeldList(view: view, search: query, tag: picks, folded: folded(on: tab))
         if !holding.isEmpty {
             // A held task keeps its place in this order for its whole hold
             // (PR 30 review): right after the task before it in the last
@@ -2549,7 +2559,8 @@ final class TasksPageModel: ObservableObject {
 
     private func hold(_ id: UUID, tab: TasksTab, at index: Int) {
         held[id] = HeldPlace(tab: tab, index: index,
-                             list: HeldList(view: viewOptions(for: tab), search: trimmedQuery(for: tab), tag: tagPicks(on: tab)))
+                             list: HeldList(view: viewOptions(for: tab), search: trimmedQuery(for: tab), tag: tagPicks(on: tab),
+                                            folded: folded(on: tab)))
         holdTasks[id]?.cancel()
         let delay = services.doneHold
         holdTasks[id] = Task { @MainActor [weak self] in
