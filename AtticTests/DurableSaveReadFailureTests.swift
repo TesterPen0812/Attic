@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftData
 import XCTest
 @testable import Attic
@@ -21,6 +22,7 @@ final class DurableSaveReadFailureTests: XCTestCase {
         let notes: NoteStore
         let library: AtticLibrary
         let controller: NotesPageController
+        let files: AttachmentFileStore
         let ids: [UUID]
         let writingID: UUID
     }
@@ -30,7 +32,8 @@ final class DurableSaveReadFailureTests: XCTestCase {
     /// Fails the next N writer calls (the save itself, before anything is durable).
     private final class WriterFailures { var remaining = 0 }
 
-    private func makeRig(writerFailures: WriterFailures? = nil) async throws -> Rig {
+    private func makeRig(writerFailures: WriterFailures? = nil,
+                         seed extra: ((ModelContext) throws -> Void)? = nil) async throws -> Rig {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
         let date = Date(timeIntervalSince1970: 1_700_000_000)
@@ -46,6 +49,7 @@ final class DurableSaveReadFailureTests: XCTestCase {
         writing.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Open task 3"), .text("Writing")], requires: ["taskNote"]))
         seed.insert(writing)
         for index in 0..<6 { seed.insert(NoteItem(title: "Note \(index)", body: "Body", createdAt: date)) }
+        try extra?(seed)
         try seed.save()
         let files = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("R12Rig-\(UUID())"))
         let tasks = TaskStore(container: container, now: { date }, persist: { context in
@@ -55,13 +59,14 @@ final class DurableSaveReadFailureTests: XCTestCase {
             }
             try context.save()
         }, taskImageFiles: files)
-        let notes = NoteStore(container: container, now: { date }, attachmentFileStore: makeTestAttachmentFileStore())
+        let attachmentFiles = makeTestAttachmentFileStore()
+        let notes = NoteStore(container: container, now: { date }, attachmentFileStore: attachmentFiles)
         let library = AtticLibrary(tasks: tasks, notes: notes)
         let controller = NotesPageController(store: notes, journal: coordinator.journal)
         await notes.waitForAttachmentReconciliation()
         XCTAssertTrue(coordinator.lifecycleNotes === controller)
         return Rig(container: container, tasks: tasks, notes: notes, library: library, controller: controller,
-                   ids: ids, writingID: writing.id)
+                   files: attachmentFiles, ids: ids, writingID: writing.id)
     }
 
     /// Physical rows per id, read from a fresh context: every id with more than one row, by model.
@@ -469,6 +474,134 @@ final class DurableSaveReadFailureTests: XCTestCase {
         XCTAssertTrue(reloadFailed)
         XCTAssertEqual(try duplicateRows(rig.container), [], "One physical row per id after the next note command")
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    // MARK: Condition 3 of the build: a durable import whose step after the commit throws
+
+    /// A note whose one file placement has a stored row without its bytes: what Locate repairs.
+    private struct MissingFile { let noteID: UUID; let attachmentID: UUID; let bytes: Data; let source: URL }
+
+    private func seedMissingFile() throws -> (MissingFile, (ModelContext) throws -> Void) {
+        let bytes = Data(repeating: 0x42, count: 4_096)
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let noteID = UUID(), attachmentID = UUID()
+        let source = try ownedTemporaryFile(named: "original.pdf", prefix: "DurableImport")
+        try bytes.write(to: source)
+        let file = MissingFile(noteID: noteID, attachmentID: attachmentID, bytes: bytes, source: source)
+        return (file, { context in
+            let note = NoteItem(id: noteID, title: "Attached", body: "Attached", createdAt: Date(timeIntervalSince1970: 1_700_000_000))
+            note.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Attached"),
+                .file(attachmentID: attachmentID, filename: "original.pdf", contentTypeIdentifier: "com.adobe.pdf",
+                      byteCount: Int64(bytes.count))]))
+            context.insert(note)
+            context.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "original.pdf",
+                contentTypeIdentifier: "com.adobe.pdf", byteCount: Int64(bytes.count), sortIndex: 0,
+                contentDigest: digest, createdAt: Date(timeIntervalSince1970: 1_700_000_000), payload: nil))
+        })
+    }
+
+    /// Runs one import entry with one seam armed ("none" is the control: an ordinary successful import), then reads
+    /// what is durable, whether the file store holds its file (read directly, never through a repair), and what the
+    /// store reports. Returns whether the file is on disk, for comparison with the control.
+    @discardableResult
+    private func durableImport(_ entry: String, seam: String, control: Bool? = nil,
+                               run: (Rig, MissingFile) async throws -> Bool) async throws -> Bool {
+        let (file, seed) = try seedMissingFile()
+        let rig = try await makeRig(seed: seed)
+        if seam == "owner" { WorkspaceLegacyBridge.postCommitOwnerReadFailures = 1 }
+        if seam == "plain" { WorkspaceLegacyBridge.postCommitPlainFailures = 1 }
+        let reported = try await run(rig, file)
+        let seamUsed = seam == "owner" ? WorkspaceLegacyBridge.postCommitOwnerReadFailures == 0
+            : seam == "plain" ? WorkspaceLegacyBridge.postCommitPlainFailures == 0 : true
+        WorkspaceLegacyBridge.postCommitOwnerReadFailures = 0
+        WorkspaceLegacyBridge.postCommitPlainFailures = 0
+        await rig.notes.waitForAttachmentReconciliation()
+        let id = file.attachmentID
+        let rows = try ModelContext(rig.container).fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == id }))
+        let durable = rows.filter { $0.payload == file.bytes }.count
+        let digest = SHA256.hash(data: file.bytes).map { String(format: "%02x", $0) }.joined()
+        let url = try? await rig.files.verifiedMaterializedURL(
+            for: AttachmentFileReference(id: id, digest: digest, filename: "original.pdf", payload: nil))
+        let onDisk = url.flatMap { try? Data(contentsOf: $0) } == file.bytes
+        print("C3_IMPORT \(entry) seam=\(seam) seam_used=\(seamUsed) reported=\(reported) rows=\(rows.count) durable=\(durable) "
+            + "file_on_disk=\(onDisk) control_file_on_disk=\(control.map(String.init) ?? "-") "
+            + "failure=\(rig.notes.attachmentFailures[id] ?? "nil") error=\(rig.notes.lastErrorMessage ?? "nil")")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+        if !seamUsed { print("C3_IMPORT \(entry) seam=\(seam) SEAM_UNUSED: this entry does not reach that save path") }
+        guard seamUsed else { return onDisk }
+        XCTAssertEqual(durable, 1, "\(entry), \(seam): the import is durable once")
+        if let control { XCTAssertEqual(onDisk, control, "\(entry), \(seam): its file is on disk as after a normal import") }
+        XCTAssertTrue(reported, "\(entry), \(seam): a durable import is reported as done")
+        return onDisk
+    }
+
+    private func durableImportCases(_ entry: String, run: (Rig, MissingFile) async throws -> Bool) async throws {
+        let control = try await durableImport(entry, seam: "none", run: run)
+        for seam in ["owner", "plain"] { try await durableImport(entry, seam: seam, control: control, run: run) }
+    }
+
+    func testC3DurableLocateAttachmentKeepsItsFileAndIsReportedDone() async throws {
+        try await durableImportCases("locateAttachment") { rig, file in
+            let shown = try XCTUnwrap(rig.notes.attachments(for: file.noteID).first { $0.id == file.attachmentID })
+            return await rig.notes.locateAttachment(shown, at: file.source)
+        }
+    }
+
+    func testC3DurableLocatePlacementKeepsItsFileAndIsReportedDone() async throws {
+        try await durableImportCases("locatePlacement") { rig, file in
+            let load = try XCTUnwrap(rig.notes.loadDocument(noteID: file.noteID))
+            let block = try XCTUnwrap(load.content.document?.blocks.first { $0.attachmentID == file.attachmentID })
+            return await rig.notes.locatePlacement(block, noteID: file.noteID, at: file.source) { true }
+        }
+    }
+
+    // MARK: Condition 4 of the build: a journaled Notes commit that inserts rows, its reload failing, then another command
+
+    /// The insert-bearing Notes pair: the editor saves a new note (a `NoteItem` insert, `createDocumentNote`), with or
+    /// without one imported file (a `NoteAttachment` insert), journaled through `NotesPageController.save`. Every reload
+    /// after the commit fails (the store's own, and `refreshAfterDocumentSave`'s when a file was inserted), so the
+    /// store's staging context keeps the inserts. Then a rename of another note stages on the store. One row per id.
+    func testC4NotesInsertingCommitThenAnotherNoteCommandWritesOneRowPerID() async throws {
+        for withFile in [false, true] {
+            let rig = try await makeRig()
+            XCTAssertTrue(rig.controller.newNote())
+            let session = try XCTUnwrap(rig.controller.active)
+            XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0),
+                                                     with: NSAttributedString(string: "Inserted once"), name: "Typing"))
+            var itemID: UUID?
+            if withFile {
+                let data = Data(repeating: 0x42, count: 2_048)
+                let item = StagedNoteAttachment(id: UUID(), filename: "inserted.pdf", contentTypeIdentifier: "com.adobe.pdf",
+                    byteCount: Int64(data.count), digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+                    data: data)
+                session.engine.beginImageImport()
+                XCTAssertTrue(session.engine.insertImportedObjects([.init(staged: item, pixelSize: nil)]))
+                itemID = item.id
+            }
+            let failures = withFile ? 2 : 1
+            rig.notes.reloadFailures = failures
+            let saved = rig.controller.save(session)
+            let reloadsFailed = failures - rig.notes.reloadFailures
+            rig.notes.reloadFailures = 0
+            let noteID = session.noteID
+            let other = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 1" })
+            let renamed = rig.notes.update(other, title: "Note 1 after an inserting commit")
+            let context = ModelContext(rig.container)
+            let noteRows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).count
+            let fileRows = try itemID.map { id in
+                try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == id })).count } ?? 0
+            let attachmentDupes = Dictionary(grouping: try context.fetch(FetchDescriptor<NoteAttachment>()), by: \.id)
+                .filter { $0.value.count > 1 }.map { "attachment \($0.key) x\($0.value.count)" }
+            let label = withFile ? "note+file" : "note"
+            print("C4_NOTES_INSERT \(label) reloads_failed=\(reloadsFailed)/\(failures) saved=\(saved) state=\(session.state) "
+                + "renamed=\(renamed) note_rows=\(noteRows) file_rows=\(fileRows) error=\(rig.notes.lastErrorMessage ?? "nil") "
+                + "duplicates=\(try duplicateRows(rig.container) + attachmentDupes)")
+            XCTAssertEqual(reloadsFailed, failures, "\(label): every reload after the inserting commit failed")
+            XCTAssertEqual(noteRows, 1, "\(label): the inserted note is one row")
+            if withFile { XCTAssertEqual(fileRows, 1, "\(label): the inserted file is one row") }
+            XCTAssertEqual(try duplicateRows(rig.container) + attachmentDupes, [], "\(label): one physical row per id after the next command")
+            await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+        }
     }
 
     // MARK: Condition 8: a store that already holds two preservation rows
