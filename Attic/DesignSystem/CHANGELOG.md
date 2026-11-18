@@ -11,9 +11,12 @@ start of a live scroll to its end. The row reads it from the environment
 (`atticRowHoverGate`). Selected, pressed and keyboard-focused rows, rows
 outside a Tasks list, and the ring's and the tag line's own hover are
 unchanged. The gate also lets go when the list is hidden or undrawn, its
-window closes or is put away, or the app hides. A scroll that AppKit does not
-report as a live scroll is not held; whether a plain mouse wheel's notches
-are is not checked.
+window closes or is put away, or the app hides, and when a sideways swipe the
+pager took from the list ends (the list saw the swipe's start but not its
+moves or momentum, so it may never hear its live scroll end). A scroll that
+AppKit does not report as a live scroll is not held: a plain mouse wheel's
+notches, and the list's own scrolls (a reveal's glide, the composer's room,
+a restored place and a marquee's autoscroll).
 
 ## 2026-11-17 · Grey details on a selected or pressed row (1A, faint spots on Solid)
 

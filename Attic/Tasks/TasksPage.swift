@@ -336,6 +336,7 @@ struct TasksPage: View {
             // After the navigation that cancelled it has chosen its tab.
             DispatchQueue.main.async { model?.showPagerPage() }
         }
+        swipe.onListGestureTaken = { [listProxies] in listProxies.releaseRowHover() }
         chrome.bottomControlsHeight(footerZone)
         // After the first frame: the parser's and the date words' first
         // use (formatters, calendars) happens here, not in the first
@@ -5492,6 +5493,12 @@ final class TasksListProxies {
         let gate = AtticRowHoverGate()
         hoverGates[tab] = gate
         return gate
+    }
+
+    /// Lets every list's rows hover again (a gesture the pager took from a
+    /// list ended: the list may never hear its live scroll end).
+    func releaseRowHover() {
+        hoverGates.values.forEach { $0.release() }
     }
 
     // MARK: Scrollers (owner, 2026-10-01)

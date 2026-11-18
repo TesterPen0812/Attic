@@ -724,6 +724,74 @@ final class TasksGoingInHostedTests: XCTestCase {
         XCTAssertEqual(AtticTaskRow.drawsOpen[row.key.id], true, "the held change landed when the panel was put away")
     }
 
+    /// PR 25 review r1 (R-1): a sideways swipe on Now that snaps back is the
+    /// pager's. The list sees the gesture's still first event and its end,
+    /// but the pager keeps its moves and its momentum, so the list may hear
+    /// a live scroll start and never its end. When a gesture the pager owned
+    /// ends, the rows' hover is let go: the pointer moved onto a row hovers it.
+    func testASidewaysSwipeThatSnapsBackLetsItsRowsHoverAgain() throws {
+        var services = TasksPageServices()
+        services.openTaskNote = { _ in }
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false, services: services)
+        defer { hosted.close() }
+        let model = hosted.model
+        model.clearSelection()
+        try hover(hosted, at: nil)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let scroll = try XCTUnwrap(hosted.lists(in: content).first { list in
+            let frame = list.convert(list.bounds, to: nil)
+            return frame.height > content.bounds.height / 2 && frame.minX > -1 && frame.minX < content.bounds.width / 2
+        })
+        let rows = hosted.pointer.frames.filter { $0.key.tab == .now && $0.value.minY > 140 }.sorted { $0.value.minY < $1.value.minY }
+        XCTAssertGreaterThanOrEqual(rows.count, 2, "two Now rows below the top")
+        let first = try XCTUnwrap(rows.first), second = rows[1]
+        func point(on row: CGRect) -> CGPoint {
+            CGPoint(x: row.minX + TasksDesignMetrics.textX + 30, y: row.minY + TasksRowDesign.paddingY + TasksRowDesign.line / 2)
+        }
+
+        // The swipe, through the pager: the still first event goes on to the
+        // list, which starts its live scroll (as AppKit may), ...
+        var time: TimeInterval = 0
+        func send(_ phase: TasksPagerSwipe.Sample.Phase, momentum: Bool = false, dx: CGFloat = 0, dy: CGFloat = 0,
+                  after: TimeInterval = 1.0 / 120) -> Bool {
+            time += after
+            return model.pagerScrolled(.init(phase: phase, momentum: momentum, dx: dx, dy: dy, time: time), allowed: true)
+        }
+        XCTAssertFalse(send(.began), "the still first event goes on to the list")
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        try hover(hosted, at: point(on: first.value), settle: 0.3)
+        XCTAssertNotEqual(AtticTaskRow.drawsOpen[first.key.id], true, "held while the list's live scroll is on")
+        // ... a short sideways move the pager keeps, a slow lift, and its
+        // momentum, kept too. The list hears no end of its live scroll.
+        for _ in 0..<5 { XCTAssertTrue(send(.changed, dx: -4), "the pager keeps a sideways move") }
+        XCTAssertEqual(model.pagerSwipe.axis, .horizontal)
+        _ = send(.ended, after: 0.4)
+        for _ in 0..<6 { XCTAssertTrue(send(.none, momentum: true, dx: -1), "the pager keeps the swipe's momentum") }
+        hosted.spin(0.8)
+        XCTAssertEqual(model.tab, .now, "the swipe snapped back to Now")
+
+        // The pointer moves onto another row: it takes hover.
+        try hover(hosted, at: point(on: second.value))
+        XCTAssertEqual(AtticTaskRow.drawsOpen[second.key.id], true, "a row hovers again after a swipe that snapped back")
+        XCTAssertNotEqual(AtticTaskRow.drawsOpen[first.key.id], true, "the row the pointer left is not hovered")
+
+        // A vertical scroll through the same pager is still held to its end:
+        // the pager lets go only of gestures it took.
+        XCTAssertFalse(send(.began, after: 0.5), "a vertical gesture goes on to the list")
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        for _ in 0..<5 { XCTAssertFalse(send(.changed, dy: -6), "a vertical move goes on to the list") }
+        XCTAssertEqual(model.pagerSwipe.axis, .vertical)
+        XCTAssertFalse(send(.ended))
+        for _ in 0..<6 { XCTAssertFalse(send(.none, momentum: true, dy: -2), "a vertical momentum goes on to the list") }
+        try hover(hosted, at: point(on: first.value), settle: 0.3)
+        XCTAssertNotEqual(AtticTaskRow.drawsOpen[first.key.id], true, "held while the vertical live scroll is on")
+        XCTAssertEqual(AtticTaskRow.drawsOpen[second.key.id], true, "the row the pointer left keeps its hover until the end")
+        NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        hosted.spin(0.4)
+        XCTAssertEqual(AtticTaskRow.drawsOpen[first.key.id], true, "at the end the row under the pointer takes hover")
+        XCTAssertNotEqual(AtticTaskRow.drawsOpen[second.key.id], true)
+    }
+
     /// The lead, 18 Nov (PR 25): a plain mouse wheel, notches with no phase,
     /// counted. AppKit's scroll view scrolls for it but reports no live
     /// scroll, so the gate does not hold: with the list moved as such a
@@ -795,9 +863,11 @@ final class TasksGoingInHostedTests: XCTestCase {
             changes += now.symmetricDifference(last).count
             last = now
         }
-        print("WHEEL_COUNT plainMoved=\(plainMoved) plainLiveScrolls=\(plainLive.value) changes=\(changes)")
         XCTAssertGreaterThan(plainMoved, 30, "AppKit scrolled for the plain wheel")
         XCTAssertEqual(plainLive.value, 0, "and reported no live scroll for it")
+        // The evidence that a wheel is not held is the bare scroll view above
+        // (no live scroll for its notches). This half shows only that the
+        // Tasks list, moved with no live scroll, does not hold its rows.
         XCTAssertGreaterThan(changes, 0, "not held: rows change hover under a still pointer, as on the trunk")
     }
 
