@@ -94,7 +94,14 @@ final class TasksCountGuardTests: XCTestCase {
         func task(_ title: String) throws -> UUID { try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id) }
         func misses() -> Int { model.rowsCacheMissCount[.now, default: 0] }
         func press(_ id: UUID) { model.completeAcknowledged(id) { _ in }; settle(hosting) }
-        func save(_ id: UUID) { model.settlePendingCompletionAcknowledgements(through: id); settle(hosting) }
+        // The save reads Now's rows itself, so a rebuild at the save is
+        // counted there even if the page did not read them (a restate is not
+        // a miss).
+        func save(_ id: UUID) {
+            model.settlePendingCompletionAcknowledgements(through: id)
+            settle(hosting)
+            _ = model.rows(for: .now)
+        }
         func release(_ id: UUID) { model.releaseHold(id); settle(hosting); settle(hosting) }
 
         // H: Overdue over two days, a clock on its day. X: Tomorrow, behind
@@ -334,7 +341,8 @@ final class TasksCountGuardTests: XCTestCase {
     /// of the list keeps the held row where it was drawn when the manual
     /// order mixes date groups. Only full builds are read (each read toggles
     /// "Completed today", which changes the list's key; Now draws no done
-    /// rows), and only APIs the trunk has, so it runs on the trunk too.
+    /// rows). It uses no API the PR added, so it can be copied onto the
+    /// trunk (this file is new in the PR).
     func testFullBuildKeepsAHeldRowInPlaceAtThePressWhenManualOrderMixesDateGroups() throws {
         // Manual order X Y Z W V U, drawn Today (Y W V) · Tomorrow (X Z) · No date (U).
         let (model, store) = try makeDatedModel([("X", 1, nil), ("Y", 0, nil), ("Z", 1, nil), ("W", 0, nil), ("V", 0, nil), ("U", nil, nil)])
