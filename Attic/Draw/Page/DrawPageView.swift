@@ -12,6 +12,10 @@ extension PanelBottomBarLook {
 /// page"): the board under everything, the top row (Pin, the title capsule,
 /// ••• and Search), the tool capsule and the shared "+".
 struct DrawPageHost: View {
+    #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
     @ObservedObject var model: DrawPageModel
     /// Read for its hide and reveal counts only (not observed).
     let uiState: PanelUIState
@@ -32,6 +36,9 @@ struct DrawPageHost: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let dim = model.isDrawingLive ? DrawPageMetrics.dimmed : 1
         let dimAnimation = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionScale.easeOut(AtticMotionScale.fast)
         ZStack(alignment: .topLeading) {

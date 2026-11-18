@@ -156,7 +156,7 @@ struct CalendarPage: View {
     private func scroller(_ snapshot: CalendarPageSnapshot, viewport: CGFloat) -> some View {
         let (weeks, pinnedIndex) = gridWeeks(snapshot)
         let rowTop = pinnedIndex.map { CGFloat($0) * CalendarDesign.weekPitch }
-        return PanelComposerClearance { extra in
+        return PanelComposerClearance(.calendarGrid) { extra in
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
                     // Flat days (Accepted 2026-10-30): no glass in the grid.

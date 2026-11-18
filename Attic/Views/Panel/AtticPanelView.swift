@@ -938,7 +938,11 @@ private struct PanelCurrentNoticeOverlay: View {
 
 /// The legacy Canvas's error clearance follows notices without redrawing the
 /// shared panel on every toast, save or decode notification.
-private struct PanelCanvasNoticeAwareHost: View {
+struct PanelCanvasNoticeAwareHost: View {
+    #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
     @ObservedObject var canvasSession: CanvasSession
     @ObservedObject var toasts: PanelToastCenter
     @ObservedObject var drawPage: DrawPageModel = .shared
@@ -949,6 +953,9 @@ private struct PanelCanvasNoticeAwareHost: View {
     let headerBottom: CGFloat
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let hasNotice = AtticDraw.isEnabled ? drawPage.saveNotice != nil : canvasSession.lastErrorMessage != nil
         CanvasPageHost(canvasSession: canvasSession, uiState: uiState, layout: layout,
                        errorBannerHeight: hasNotice || toasts.current != nil ? noticeHeight : 0,

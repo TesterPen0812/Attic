@@ -595,7 +595,7 @@ final class TasksGoingInHostedTests: XCTestCase {
     /// The pointer over a point of the page (nil: off every row): each
     /// tracking area's owner hears it enter, move and leave, as AppKit
     /// tells them when the real pointer moves.
-    private func hover(_ hosted: Hosted, at point: CGPoint?) throws {
+    private func hover(_ hosted: Hosted, at point: CGPoint?, settle: TimeInterval = 0.6) throws {
         let content = try XCTUnwrap(hosted.window.contentView)
         content.layoutSubtreeIfNeeded()
         let location = point.map { CGPoint(x: $0.x, y: hosted.height - $0.y) } ?? CGPoint(x: -40, y: -40)
@@ -624,7 +624,7 @@ final class TasksGoingInHostedTests: XCTestCase {
                 if inside, area.options.contains(.mouseMoved) { owner.mouseMoved(with: moved) }
             }
         }
-        hosted.spin(0.6)
+        hosted.spin(settle)
     }
 
     /// Review 6: the › appears with the selection: it is drawn (one), its
@@ -681,6 +681,249 @@ final class TasksGoingInHostedTests: XCTestCase {
         XCTAssertTrue(left.filter { $0.key != id }.values.allSatisfy { $0 == 0 }, "no other row: \(left)")
         hosted.spin(0.6)
         XCTAssertEqual(AtticTaskRow.evaluations, left, "exit settles")
+    }
+
+    /// 17 Nov (owner's pick, the tint hold): while a list scrolls under a
+    /// still pointer (its live scroll, momentum included), no row changes
+    /// hover: no tint, no ›, no slide. When the scroll ends, the row under
+    /// the pointer takes hover at once. On Now and on Done.
+    func testRowsHoldTheirHoverWhileTheListScrollsAndTheRowUnderThePointerTakesItAtTheEnd() throws {
+        var services = TasksPageServices()
+        services.openTaskNote = { _ in }
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false, services: services)
+        defer { hosted.close() }
+        try scrollUnderAStillPointer(hosted, tab: .now)
+        hosted.go(to: .done)
+        try scrollUnderAStillPointer(hosted, tab: .done)
+    }
+
+    /// A panel put away mid-scroll may never hear the scroll's end: the
+    /// list lets its rows' hover go then, so they can hover again.
+    func testAPanelPutAwayMidScrollLetsItsRowsHoverAgain() throws {
+        var services = TasksPageServices()
+        services.openTaskNote = { _ in }
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false, services: services)
+        defer { hosted.close() }
+        hosted.model.clearSelection()
+        try hover(hosted, at: nil)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let scroll = try XCTUnwrap(hosted.lists(in: content).first { list in
+            let frame = list.convert(list.bounds, to: nil)
+            return frame.height > content.bounds.height / 2 && frame.minX > -1 && frame.minX < content.bounds.width / 2
+        })
+        let row = try XCTUnwrap(hosted.pointer.frames.filter { $0.key.tab == .now && $0.value.minY > 140 }.min { $0.value.minY < $1.value.minY })
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        try hover(hosted, at: CGPoint(x: row.value.minX + TasksDesignMetrics.textX + 30,
+                                      y: row.value.minY + TasksRowDesign.paddingY + TasksRowDesign.line / 2), settle: 0.3)
+        XCTAssertNotEqual(AtticTaskRow.drawsOpen[row.key.id], true, "held while the list scrolls")
+        // Put away with no end of the scroll.
+        hosted.window.orderOut(nil)
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: hosted.window)
+        hosted.window.orderFront(nil)
+        hosted.spin(0.4)
+        XCTAssertEqual(AtticTaskRow.drawsOpen[row.key.id], true, "the held change landed when the panel was put away")
+    }
+
+    /// PR 25 review r1 (R-1): a sideways swipe on Now that snaps back is the
+    /// pager's. The list sees the gesture's still first event and its end,
+    /// but the pager keeps its moves and its momentum, so the list may hear
+    /// a live scroll start and never its end. When a gesture the pager owned
+    /// ends, the rows' hover is let go: the pointer moved onto a row hovers it.
+    func testASidewaysSwipeThatSnapsBackLetsItsRowsHoverAgain() throws {
+        var services = TasksPageServices()
+        services.openTaskNote = { _ in }
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false, services: services)
+        defer { hosted.close() }
+        let model = hosted.model
+        model.clearSelection()
+        try hover(hosted, at: nil)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let scroll = try XCTUnwrap(hosted.lists(in: content).first { list in
+            let frame = list.convert(list.bounds, to: nil)
+            return frame.height > content.bounds.height / 2 && frame.minX > -1 && frame.minX < content.bounds.width / 2
+        })
+        let rows = hosted.pointer.frames.filter { $0.key.tab == .now && $0.value.minY > 140 }.sorted { $0.value.minY < $1.value.minY }
+        XCTAssertGreaterThanOrEqual(rows.count, 2, "two Now rows below the top")
+        let first = try XCTUnwrap(rows.first), second = rows[1]
+        func point(on row: CGRect) -> CGPoint {
+            CGPoint(x: row.minX + TasksDesignMetrics.textX + 30, y: row.minY + TasksRowDesign.paddingY + TasksRowDesign.line / 2)
+        }
+
+        // The swipe, through the pager: the still first event goes on to the
+        // list, which starts its live scroll (as AppKit may), ...
+        var time: TimeInterval = 0
+        func send(_ phase: TasksPagerSwipe.Sample.Phase, momentum: Bool = false, dx: CGFloat = 0, dy: CGFloat = 0,
+                  after: TimeInterval = 1.0 / 120) -> Bool {
+            time += after
+            return model.pagerScrolled(.init(phase: phase, momentum: momentum, dx: dx, dy: dy, time: time), allowed: true)
+        }
+        XCTAssertFalse(send(.began), "the still first event goes on to the list")
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        try hover(hosted, at: point(on: first.value), settle: 0.3)
+        XCTAssertNotEqual(AtticTaskRow.drawsOpen[first.key.id], true, "held while the list's live scroll is on")
+        // ... a short sideways move the pager keeps, a slow lift, and its
+        // momentum, kept too. The list hears no end of its live scroll.
+        for _ in 0..<5 { XCTAssertTrue(send(.changed, dx: -4), "the pager keeps a sideways move") }
+        XCTAssertEqual(model.pagerSwipe.axis, .horizontal)
+        _ = send(.ended, after: 0.4)
+        for _ in 0..<6 { XCTAssertTrue(send(.none, momentum: true, dx: -1), "the pager keeps the swipe's momentum") }
+        hosted.spin(0.8)
+        XCTAssertEqual(model.tab, .now, "the swipe snapped back to Now")
+
+        // The pointer moves onto another row: it takes hover.
+        try hover(hosted, at: point(on: second.value))
+        XCTAssertEqual(AtticTaskRow.drawsOpen[second.key.id], true, "a row hovers again after a swipe that snapped back")
+        XCTAssertNotEqual(AtticTaskRow.drawsOpen[first.key.id], true, "the row the pointer left is not hovered")
+
+        // A vertical scroll through the same pager is still held to its end:
+        // the pager lets go only of gestures it took.
+        XCTAssertFalse(send(.began, after: 0.5), "a vertical gesture goes on to the list")
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        for _ in 0..<5 { XCTAssertFalse(send(.changed, dy: -6), "a vertical move goes on to the list") }
+        XCTAssertEqual(model.pagerSwipe.axis, .vertical)
+        XCTAssertFalse(send(.ended))
+        for _ in 0..<6 { XCTAssertFalse(send(.none, momentum: true, dy: -2), "a vertical momentum goes on to the list") }
+        try hover(hosted, at: point(on: first.value), settle: 0.3)
+        XCTAssertNotEqual(AtticTaskRow.drawsOpen[first.key.id], true, "held while the vertical live scroll is on")
+        XCTAssertEqual(AtticTaskRow.drawsOpen[second.key.id], true, "the row the pointer left keeps its hover until the end")
+        NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        hosted.spin(0.4)
+        XCTAssertEqual(AtticTaskRow.drawsOpen[first.key.id], true, "at the end the row under the pointer takes hover")
+        XCTAssertNotEqual(AtticTaskRow.drawsOpen[second.key.id], true)
+    }
+
+    /// The lead, 18 Nov (PR 25): a plain mouse wheel, notches with no phase,
+    /// counted. AppKit's scroll view scrolls for it but reports no live
+    /// scroll, so the gate does not hold: with the list moved as such a
+    /// wheel moves it (an off-screen test window does not route a wheel
+    /// event to SwiftUI's list), rows under a still pointer change hover as
+    /// on the trunk.
+    func testAPlainMouseWheelIsNotHeldItsRowsChangeHoverAsOnTheTrunk() throws {
+        final class Count: @unchecked Sendable { var value = 0 }
+        func notch() throws -> NSEvent {
+            let wheel = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -1, wheel2: 0, wheel3: 0))
+            let event = try XCTUnwrap(NSEvent(cgEvent: wheel))
+            XCTAssertEqual(event.phase, [], "no phase")
+            XCTAssertEqual(event.momentumPhase, [], "no momentum")
+            return event
+        }
+        // AppKit: a plain scroll view scrolls for eight notches and posts no
+        // live scroll.
+        let plain = NSScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        plain.documentView = Flipped(frame: CGRect(x: 0, y: 0, width: 200, height: 4_000))
+        plain.hasVerticalScroller = true
+        let plainLive = Count()
+        let plainObserver = NotificationCenter.default.addObserver(forName: NSScrollView.willStartLiveScrollNotification, object: plain,
+                                                                   queue: nil) { _ in plainLive.value += 1 }
+        defer { NotificationCenter.default.removeObserver(plainObserver) }
+        let plainTop = plain.contentView.bounds.origin.y
+        let plainWindow = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 200, height: 200), styleMask: [.borderless],
+                                   backing: .buffered, defer: false)
+        plainWindow.isReleasedWhenClosed = false
+        defer { plainWindow.close() }
+        plainWindow.contentView = plain
+        for _ in 0..<8 { plain.scrollWheel(with: try notch()); RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        let plainMoved = abs(plain.contentView.bounds.origin.y - plainTop)
+
+        // The Now list, moved as that wheel moves it, with no live scroll.
+        var services = TasksPageServices()
+        services.openTaskNote = { _ in }
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false, services: services)
+        defer { hosted.close() }
+        hosted.model.clearSelection()
+        try hover(hosted, at: nil)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let scroll = try XCTUnwrap(hosted.lists(in: content).first { list in
+            let frame = list.convert(list.bounds, to: nil)
+            return frame.height > content.bounds.height / 2 && frame.minX > -1 && frame.minX < content.bounds.width / 2
+        })
+        let rows = hosted.pointer.frames.filter { $0.key.tab == .now }
+        let start = try XCTUnwrap(rows.filter { $0.value.minY > 140 }.min { $0.value.minY < $1.value.minY })
+        let point = CGPoint(x: start.value.minX + TasksDesignMetrics.textX + 30,
+                            y: start.value.minY + TasksRowDesign.paddingY + TasksRowDesign.line / 2)
+        try hover(hosted, at: point)
+        let ids = Set(rows.keys.map(\.id))
+        func hovered() -> Set<UUID> { Set(AtticTaskRow.drawsOpen.filter { ids.contains($0.key) && $0.value }.map(\.key)) }
+        XCTAssertEqual(hovered(), [start.key.id], "at rest the row under the pointer is hovered")
+        let step = plainMoved / 8
+        var changes = 0
+        var last = hovered()
+        for _ in 0..<8 {
+            // Through the window first; an off-screen window may not route it.
+            let before = scroll.contentView.bounds.origin.y
+            hosted.window.sendEvent(try notch())
+            if abs(scroll.contentView.bounds.origin.y - before) < 0.5 {
+                scroll.contentView.scroll(to: CGPoint(x: 0, y: before + step))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            try hover(hosted, at: point, settle: 0.12)
+            let now = hovered()
+            changes += now.symmetricDifference(last).count
+            last = now
+        }
+        XCTAssertGreaterThan(plainMoved, 30, "AppKit scrolled for the plain wheel")
+        XCTAssertEqual(plainLive.value, 0, "and reported no live scroll for it")
+        // The evidence that a wheel is not held is the bare scroll view above
+        // (no live scroll for its notches). This half shows only that the
+        // Tasks list, moved with no live scroll, does not hold its rows.
+        XCTAssertGreaterThan(changes, 0, "not held: rows change hover under a still pointer, as on the trunk")
+    }
+
+    /// The pointer rests on a row of `tab`; the tab's list scrolls under it
+    /// in steps, as a live scroll does (AppKit's start and end
+    /// notifications on the list's own scroll view, the pointer's tracking
+    /// areas told after each step); the rows drawing their › (hover, with
+    /// no selection) are read after every step.
+    private func scrollUnderAStillPointer(_ hosted: Hosted, tab: TasksTab) throws {
+        hosted.model.clearSelection()
+        try hover(hosted, at: nil)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        content.layoutSubtreeIfNeeded()
+        // The tab's list: the vertical list on the page.
+        let scroll = try XCTUnwrap(hosted.lists(in: content).first { list in
+            let frame = list.convert(list.bounds, to: nil)
+            return frame.height > content.bounds.height / 2 && frame.minX > -1 && frame.minX < content.bounds.width / 2
+        }, "the \(tab) list is on the page")
+        let clip = scroll.contentView
+        func rows() -> [(id: UUID, frame: CGRect)] {
+            hosted.pointer.frames.filter { $0.key.tab == tab }.map { ($0.key.id, $0.value) }.sorted { $0.frame.minY < $1.frame.minY }
+        }
+        // A row well inside the list, with rows below it to scroll past.
+        let start = try XCTUnwrap(rows().first { $0.frame.minY > 140 }, "a \(tab) row below the top")
+        XCTAssertGreaterThanOrEqual(rows().filter { $0.frame.minY > start.frame.minY }.count, 2, "rows to scroll past on \(tab)")
+        let point = CGPoint(x: start.frame.minX + TasksDesignMetrics.textX + 30,
+                            y: start.frame.minY + TasksRowDesign.paddingY + TasksRowDesign.line / 2)
+        try hover(hosted, at: point)
+        let ids = Set(rows().map(\.id))
+        func hovered() -> Set<UUID> { Set(AtticTaskRow.drawsOpen.filter { ids.contains($0.key) && $0.value }.map(\.key)) }
+        XCTAssertEqual(hovered(), [start.id], "at rest the row under the pointer is hovered (\(tab))")
+
+        // The live scroll: 14 steps of 12 pt, the pointer still.
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        var changes = 0
+        var last = hovered()
+        for _ in 0..<14 {
+            var origin = clip.bounds.origin
+            origin.y += 12
+            clip.scroll(to: origin)
+            scroll.reflectScrolledClipView(clip)
+            NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+            try hover(hosted, at: point, settle: 0.12)
+            let now = hovered()
+            changes += now.symmetricDifference(last).count
+            last = now
+        }
+        XCTAssertEqual(changes, 0, "no row changes hover while \(tab) scrolls")
+        NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+        hosted.spin(0.4)
+
+        // The row under the pointer once the list rests.
+        content.layoutSubtreeIfNeeded()
+        let under = try XCTUnwrap(rows().first { $0.frame.minY <= point.y && point.y < $0.frame.maxY }, "a \(tab) row under the pointer")
+        XCTAssertNotEqual(under.id, start.id, "the list scrolled past the first row (\(tab))")
+        XCTAssertEqual(hovered(), [under.id], "at the end the row under the pointer takes hover at once (\(tab))")
     }
 
     // MARK: - Done (review 3)

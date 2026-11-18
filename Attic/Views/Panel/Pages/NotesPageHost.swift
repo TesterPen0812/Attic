@@ -4,6 +4,10 @@ import SwiftUI
 /// The document editor is the only Notes page. A task's page opened from
 /// Notes replaces it until Back (`TaskNoteRouteHost`).
 struct NotesPageHost: View {
+    #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
     @ObservedObject var noteStore: NoteStore
     let taskStore: TaskStore
     @ObservedObject var noteDraft: NoteDraftController
@@ -14,6 +18,9 @@ struct NotesPageHost: View {
     @State private var routeStateRevision = 0
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let _ = routeStateRevision
         #if ATTIC_LOCAL_ONLY
         let _ = PanelInvalidationProbe.notesHost?()
