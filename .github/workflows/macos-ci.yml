@@ -53,7 +53,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: attic-ci-${{ github.workflow }}-${{ github.ref }}
+  # The lane is part of the group, so lanes dispatched on one ref (for example
+  # performance and costs on the trunk) don't cancel each other.
+  group: attic-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.lane }}
   cancel-in-progress: true
 
 env:
@@ -234,11 +236,14 @@ jobs:
     # That quadratic, deliberately checked behavior is independent of the
     # functional unit suite, so the seeds get their own required runner: one
     # build, then one test process per seed. Every seed runs even when an
-    # earlier one fails, and the job fails if any seed failed.
-    timeout-minutes: 90
+    # earlier one fails, and the job fails if any seed failed. Each seed has
+    # its own 75-minute limit (one old per-seed job's test step), so a hung
+    # seed fails alone instead of starving the seeds after it.
+    timeout-minutes: 330
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       NOTES_SEEDS: 11012 11013 11014 11015
+      NOTES_SEED_TIMEOUT_SECONDS: 4500
     steps:
       - uses: actions/checkout@v5
       - name: Build local-only Notes editor test host
@@ -249,8 +254,11 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
           Scripts/sign_crash_harness.zsh "$RUNNER_TEMP/AtticNotesSeed/Build/Products/Local/AtticUnitTestHost.app"
       - name: Verify every complete generated Notes editor seed
-        timeout-minutes: 75
+        timeout-minutes: 315
         run: |
+          # Job control gives each seed and its watchdog their own process
+          # group, so a timeout stops the whole xcodebuild tree by exact group id.
+          set -m
           failed=''
           for seed in $NOTES_SEEDS; do
             echo "::group::Notes editor generated seed $seed"
@@ -261,11 +269,36 @@ jobs:
               -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
               -resultBundlePath "$out/AtticNotesSeed.xcresult" \
               CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
-              -only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed$seed \
-            && xcrun xcresulttool get test-results summary \
-              --path "$out/AtticNotesSeed.xcresult" --format json > "$out/notes-seed-summary.json" \
-            && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==1 and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$out/notes-seed-summary.json" \
-            || { failed="$failed $seed"; echo "::error::Notes editor generated seed $seed failed"; }
+              -only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed$seed < /dev/null &
+            pid=$!
+            (
+              sleep "$NOTES_SEED_TIMEOUT_SECONDS"
+              : > "$out/timed-out"
+              echo "::error::Notes editor generated seed $seed timed out after $NOTES_SEED_TIMEOUT_SECONDS s"
+              kill -INT -- "-$pid" 2>/dev/null
+              waited=0
+              while [ "$waited" -lt 60 ] && kill -0 -- "-$pid" 2>/dev/null; do sleep 1; waited=$((waited + 1)); done
+              kill -KILL -- "-$pid" 2>/dev/null
+              exit 0
+            ) &
+            watchdog=$!
+            status=0
+            wait "$pid" || status=$?
+            if [ -e "$out/timed-out" ]; then
+              wait "$watchdog" || true
+            else
+              kill -- "-$watchdog" 2>/dev/null || true
+              wait "$watchdog" 2>/dev/null || true
+            fi
+            if [ "$status" -eq 0 ] && [ ! -e "$out/timed-out" ] \
+              && xcrun xcresulttool get test-results summary \
+                --path "$out/AtticNotesSeed.xcresult" --format json > "$out/notes-seed-summary.json" \
+              && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==1 and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$out/notes-seed-summary.json"; then
+              echo "Notes editor generated seed $seed passed"
+            else
+              failed="$failed $seed"
+              echo "::error::Notes editor generated seed $seed failed"
+            fi
             echo "::endgroup::"
           done
           if [ -n "$failed" ]; then

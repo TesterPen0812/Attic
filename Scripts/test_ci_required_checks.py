@@ -244,9 +244,12 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn('-only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed$seed', job)
         self.assertIn('failed="$failed $seed"', job)
         self.assertIn('if [ -n "$failed" ]; then', job)
+        self.assertIn('NOTES_SEED_TIMEOUT_SECONDS: 4500\n', job)
+        self.assertIn('kill -INT -- "-$pid"', job)
+        self.assertIn('kill -KILL -- "-$pid"', job)
         for seed in seeds:
             self.assertIn(f'name: notes-editor-seed-{seed}-${{{{ github.sha }}}}', job)
-        self.assertIn('timeout-minutes: 90', job)
+        self.assertIn('timeout-minutes: 330', job)
         self.assertNotIn('continue-on-error', job)
         self.assertIn('s["passedTests"]==1', job)
         self.assertIn('s["skippedTests"]==0', job)
