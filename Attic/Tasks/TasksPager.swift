@@ -850,6 +850,12 @@ final class TasksPagerSwipe {
     /// Called when another way chooses a page during a swipe or a burst
     /// (the page is then brought to the model's tab).
     var onCancel: (() -> Void)?
+    /// Called when a gesture the pager took from the list ends, and for each
+    /// of its momentum events the pager keeps (PR 25 review r1, R-1). The
+    /// list saw the gesture's still first event but not its moves or its
+    /// momentum, so it may never hear its live scroll end: the page lets its
+    /// rows' hover go here. Never called for a vertical scroll.
+    var onListGestureTaken: (() -> Void)?
     /// The corner the panel lives in: a swipe toward that edge with no page
     /// left that way is the panel's (the shell keeps it current; none, as
     /// in a gallery, leaves it to the pager).
@@ -885,7 +891,9 @@ final class TasksPagerSwipe {
     /// shell shows (it decides only where a gesture or wheel event starts).
     func handle(_ sample: Sample, shown: Int, allowed: Bool) -> Output {
         if sample.momentum {
-            return ownsMomentum ? .consume : .pass
+            guard ownsMomentum else { return .pass }
+            onListGestureTaken?()
+            return .consume
         }
         switch sample.phase {
         case .none:
@@ -1022,6 +1030,7 @@ final class TasksPagerSwipe {
             travel = 0
             recent = []
         }
+        if axis == .horizontal || axis == .turned || axis == .cancelled { onListGestureTaken?() }
         switch axis {
         case .horizontal?:
             ownsMomentum = true
