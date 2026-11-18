@@ -724,6 +724,83 @@ final class TasksGoingInHostedTests: XCTestCase {
         XCTAssertEqual(AtticTaskRow.drawsOpen[row.key.id], true, "the held change landed when the panel was put away")
     }
 
+    /// The lead, 18 Nov (PR 25): a plain mouse wheel, notches with no phase,
+    /// counted. AppKit's scroll view scrolls for it but reports no live
+    /// scroll, so the gate does not hold: with the list moved as such a
+    /// wheel moves it (an off-screen test window does not route a wheel
+    /// event to SwiftUI's list), rows under a still pointer change hover as
+    /// on the trunk.
+    func testAPlainMouseWheelIsNotHeldItsRowsChangeHoverAsOnTheTrunk() throws {
+        final class Count: @unchecked Sendable { var value = 0 }
+        func notch() throws -> NSEvent {
+            let wheel = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -1, wheel2: 0, wheel3: 0))
+            let event = try XCTUnwrap(NSEvent(cgEvent: wheel))
+            XCTAssertEqual(event.phase, [], "no phase")
+            XCTAssertEqual(event.momentumPhase, [], "no momentum")
+            return event
+        }
+        // AppKit: a plain scroll view scrolls for eight notches and posts no
+        // live scroll.
+        let plain = NSScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        plain.documentView = Flipped(frame: CGRect(x: 0, y: 0, width: 200, height: 4_000))
+        plain.hasVerticalScroller = true
+        let plainLive = Count()
+        let plainObserver = NotificationCenter.default.addObserver(forName: NSScrollView.willStartLiveScrollNotification, object: plain,
+                                                                   queue: nil) { _ in plainLive.value += 1 }
+        defer { NotificationCenter.default.removeObserver(plainObserver) }
+        let plainTop = plain.contentView.bounds.origin.y
+        let plainWindow = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 200, height: 200), styleMask: [.borderless],
+                                   backing: .buffered, defer: false)
+        plainWindow.isReleasedWhenClosed = false
+        defer { plainWindow.close() }
+        plainWindow.contentView = plain
+        for _ in 0..<8 { plain.scrollWheel(with: try notch()); RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        let plainMoved = abs(plain.contentView.bounds.origin.y - plainTop)
+
+        // The Now list, moved as that wheel moves it, with no live scroll.
+        var services = TasksPageServices()
+        services.openTaskNote = { _ in }
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false, services: services)
+        defer { hosted.close() }
+        hosted.model.clearSelection()
+        try hover(hosted, at: nil)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let scroll = try XCTUnwrap(hosted.lists(in: content).first { list in
+            let frame = list.convert(list.bounds, to: nil)
+            return frame.height > content.bounds.height / 2 && frame.minX > -1 && frame.minX < content.bounds.width / 2
+        })
+        let rows = hosted.pointer.frames.filter { $0.key.tab == .now }
+        let start = try XCTUnwrap(rows.filter { $0.value.minY > 140 }.min { $0.value.minY < $1.value.minY })
+        let point = CGPoint(x: start.value.minX + TasksDesignMetrics.textX + 30,
+                            y: start.value.minY + TasksRowDesign.paddingY + TasksRowDesign.line / 2)
+        try hover(hosted, at: point)
+        let ids = Set(rows.keys.map(\.id))
+        func hovered() -> Set<UUID> { Set(AtticTaskRow.drawsOpen.filter { ids.contains($0.key) && $0.value }.map(\.key)) }
+        XCTAssertEqual(hovered(), [start.key.id], "at rest the row under the pointer is hovered")
+        let step = plainMoved / 8
+        var changes = 0
+        var last = hovered()
+        for _ in 0..<8 {
+            // Through the window first; an off-screen window may not route it.
+            let before = scroll.contentView.bounds.origin.y
+            hosted.window.sendEvent(try notch())
+            if abs(scroll.contentView.bounds.origin.y - before) < 0.5 {
+                scroll.contentView.scroll(to: CGPoint(x: 0, y: before + step))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            try hover(hosted, at: point, settle: 0.12)
+            let now = hovered()
+            changes += now.symmetricDifference(last).count
+            last = now
+        }
+        print("WHEEL_COUNT plainMoved=\(plainMoved) plainLiveScrolls=\(plainLive.value) changes=\(changes)")
+        XCTAssertGreaterThan(plainMoved, 30, "AppKit scrolled for the plain wheel")
+        XCTAssertEqual(plainLive.value, 0, "and reported no live scroll for it")
+        XCTAssertGreaterThan(changes, 0, "not held: rows change hover under a still pointer, as on the trunk")
+    }
+
     /// The pointer rests on a row of `tab`; the tab's list scrolls under it
     /// in steps, as a live scroll does (AppKit's start and end
     /// notifications on the list's own scroll view, the pointer's tracking
