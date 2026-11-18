@@ -3003,6 +3003,9 @@ final class TaskStore: ObservableObject {
     /// Every tag on a task in the Done log, from the index (no read).
     func indexedDoneLogTags() -> Set<String> {
         var tags = Set<String>()
+        #if DEBUG
+        doneLogTagEntryVisits += doneSearchEntries.count
+        #endif
         for entry in doneSearchEntries { tags.formUnion(entry.tags) }
         return tags
     }
@@ -3069,6 +3072,8 @@ final class TaskStore: ObservableObject {
     private(set) var doneFamilyReadCount = 0
     private(set) var doneFamilyRowsReadCount = 0
     private(set) var donePageReadCount = 0
+    /// DEBUG count of Done log index entries visited for the tag bar's chips.
+    private(set) var doneLogTagEntryVisits = 0
     func doneLogSubtasks(ofParents parentIDs: [UUID]) -> [UUID: [TaskItem]] {
         doneFamilyParentReadCount += parentIDs.count
         guard !parentIDs.isEmpty else { return [:] }
