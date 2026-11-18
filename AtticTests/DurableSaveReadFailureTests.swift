@@ -654,8 +654,8 @@ final class DurableSaveReadFailureTests: XCTestCase {
     }
 
     /// Generated data: one note id with two identical physical rows, as R-2 leaves a re-proposed insert. A
-    /// characterization of what such a note does (lead, 21:18): it is listed once, opens, a rename reaches every
-    /// replica, and a delete reaches every replica. No repair.
+    /// characterization of what such a note does (lead, 21:18): it is listed once, a rename reaches every replica, it
+    /// opens, and Delete Note reaches every replica. No repair.
     func testC8NoteWithTwoPhysicalRowsOpensEditsAndDeletes() async throws {
         let twinID = UUID()
         let date = Date(timeIntervalSince1970: 1_700_000_000)
@@ -670,12 +670,12 @@ final class DurableSaveReadFailureTests: XCTestCase {
             try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == twinID }))
         }
         let listed = rig.notes.notes.filter { $0.id == twinID }.count
-        let opened = rig.controller.open(noteID: twinID)
         let note = try XCTUnwrap(rig.notes.notes.first { $0.id == twinID })
         let renamed = rig.notes.update(note, title: "Twin renamed")
         let titles = try rows().map(\.title).sorted()
-        let toDelete = try XCTUnwrap(rig.notes.notes.first { $0.id == twinID })
-        let deleted = rig.notes.delete(toDelete)
+        // As in the app: the note is opened, then deleted from the page (Delete Note), which leaves the editor first.
+        let opened = rig.controller.open(noteID: twinID)
+        let deleted = rig.controller.deleteNote(noteID: twinID)
         let afterDelete = try rows()
         print("C8_TWO_NOTE_ROWS rows=\(afterDelete.count) listed=\(listed) opened=\(opened) renamed=\(renamed) "
             + "titles=\(titles) deleted=\(deleted) deleted_rows=\(afterDelete.filter { $0.deletedAt != nil }.count) "
