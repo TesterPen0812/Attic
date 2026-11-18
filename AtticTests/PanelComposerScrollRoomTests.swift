@@ -52,8 +52,11 @@ final class PanelComposerScrollRoomTests: XCTestCase {
     /// Notes' library and Calendar's grid, built behind Tasks with the card
     /// closed, take the room while hidden in one layout; Calendar's day,
     /// first built while hidden with the card open, has it on its first
-    /// layout. On the first layout after each switch the margin matches the
-    /// room at that instant.
+    /// layout. Those hidden reads are the strict check: the scroll view a
+    /// switch shows is the same object, so its first shown margin is the
+    /// hidden one. The read right after a switch is looser: the switch
+    /// closes the card, so it only checks that the margin is the open or
+    /// the closed one (`assertShownMargin`).
     func testHiddenPagesCarryTheCardsRoomInTheirScrollMarginForTheirFirstFrame() throws {
         XCTAssertGreaterThan(extra, 0, "the card is taller than the bar's row")
         try withRig { rig in
@@ -204,7 +207,8 @@ final class PanelComposerScrollRoomTests: XCTestCase {
     /// On the first layout after a switch, the card closing with the switch
     /// may not have reached the margin yet: with the room still open the
     /// shown margin has it; once the room has folded, either the open or
-    /// the closed margin, never anything else.
+    /// the closed margin, never anything else. This branch alone does not
+    /// prove the room was there on the first frame; the hidden reads do.
     private func assertShownMargin(_ added: CGFloat, roomAtRead: CGFloat, _ what: String,
                                    file: StaticString = #filePath, line: UInt = #line) {
         if abs(roomAtRead - cardHeight) < 0.5 {

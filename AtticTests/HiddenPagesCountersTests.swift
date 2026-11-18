@@ -379,11 +379,33 @@ final class HiddenPagesCountersTests: XCTestCase {
 
     // MARK: - C1: the card's room per "+"
 
+    /// Mechanism 2's guard (lead's rule in `ops/design/hidden-pages.md`, "The guard for all four"): the card's room reaches a
+    /// hidden page only as its scroll view's bottom margin. On "+" or the add bar, no hidden page's clearance closure runs: Notes'
+    /// page-wide one and Calendar's grid and day ones are gone. On "+", Notes' hidden library list does not run either.
+    private static let roomClearanceSites = ["notesPage", "calendarGrid", "calendarDay"]
+
+    private static func clearanceCalls(_ counts: [String: Int], _ site: String) -> Int {
+        counts["clear." + site, default: 0] + counts["clear0." + site, default: 0]
+    }
+
+    private func assertRoomChangeReachesNoHiddenPage(_ counts: [String: Int], _ label: String, libraryList: Bool,
+                                                     file: StaticString = #filePath, line: UInt = #line) {
+        for site in Self.roomClearanceSites {
+            XCTAssertEqual(Self.clearanceCalls(counts, site), 0,
+                           "\(label): the \(site) clearance closure ran on the card's room change", file: file, line: line)
+        }
+        if libraryList {
+            XCTAssertEqual(counts["NotesLibraryView", default: 0], 0,
+                           "\(label): the hidden Notes library list ran on the card's room change", file: file, line: line)
+        }
+    }
+
     func testC1RoomPublishesAndClosureCallsPerPlus() throws {
         try withRig { rig in
             for round in 1...3 {
                 closeCard(rig)
-                measure(rig, "C1 library plus round=\(round)") { openCard(rig) }
+                let counts = measure(rig, "C1 library plus round=\(round)") { openCard(rig) }
+                assertRoomChangeReachesNoHiddenPage(counts, "C1 library plus round=\(round)", libraryList: true)
                 XCTAssertTrue(rig.composer.isOpen, "harness: \"+\" opened the card")
                 XCTAssertGreaterThan(rig.composerState.room.height, 0, "harness: the open card set the room")
             }
@@ -402,7 +424,12 @@ final class HiddenPagesCountersTests: XCTestCase {
                                  "harness: the note editor's clearance counter is live")
             for round in 1...3 {
                 closeCard(rig)
-                measure(rig, "C1 openNote plus round=\(round)") { openCard(rig) }
+                let counts = measure(rig, "C1 openNote plus round=\(round)") { openCard(rig) }
+                // Only the open note's leaf takes the room: it runs, and no other clearance does.
+                assertRoomChangeReachesNoHiddenPage(counts, "C1 openNote plus round=\(round)", libraryList: false)
+                XCTAssertEqual(Self.clearanceCalls(counts, "unnamed"), 0, "C1 openNote plus round=\(round): an unnamed clearance ran")
+                XCTAssertGreaterThan(Self.clearanceCalls(counts, "notesLeaf"), 0,
+                                     "C1 openNote plus round=\(round): the open note's editor leaf did not take the room")
                 XCTAssertTrue(rig.composer.isOpen, "harness: \"+\" opened the card")
                 XCTAssertGreaterThan(rig.composerState.room.height, 0, "harness: the open card set the room")
             }
@@ -525,6 +552,13 @@ final class HiddenPagesCountersTests: XCTestCase {
             print("HIDDEN_TABLE " + (["control"] + shown).joined(separator: "\t"))
             for (name, counts) in table {
                 print("HIDDEN_TABLE " + ([name] + shown.map { String(counts[$0, default: 0]) }).joined(separator: "\t"))
+            }
+
+            // Asserted only for the triggers a merged fix owns; the rest of the table is recorded. Mechanism 2 owns "+" and the
+            // add bar's room change. The add bar's own task creation still re-runs Notes' list (mechanism 1's trigger, not
+            // owned yet), so on the add bar only the clearance closures are asserted.
+            for (name, counts) in table where name == "plus" || name == "add-bar" {
+                assertRoomChangeReachesNoHiddenPage(counts, "C4 \(name)", libraryList: name == "plus")
             }
         }
     }
