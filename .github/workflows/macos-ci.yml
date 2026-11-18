@@ -244,7 +244,9 @@ jobs:
     # earlier one fails, and the job fails unless every named seed passed.
     # Each seed's test has its own 20-minute limit (the slowest seed took
     # 6 min in run 43976364570) and its result reader 2 minutes, so a hung seed
-    # fails alone instead of starving the seeds after it.
+    # fails without starving the seeds after it. The seeds share one runner
+    # and its test infrastructure, so after a timeout the later seeds'
+    # results are logged as suspect.
     timeout-minutes: 120
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
@@ -267,7 +269,11 @@ jobs:
           # Job control gives each bounded command and its watchdog their own
           # process group, so a timeout stops the whole tree by exact group id.
           set -m
-          host_suffix="/AtticNotesSeed/Build/Products/Local/$NOTES_SEED_HOST.app/Contents/MacOS/$NOTES_SEED_HOST"
+          # This job's own build of the test host, by full path (and its
+          # symlink-free form, in case the host is launched by that).
+          host_rel="AtticNotesSeed/Build/Products/Local/$NOTES_SEED_HOST.app/Contents/MacOS/$NOTES_SEED_HOST"
+          host_path="$RUNNER_TEMP/$host_rel"
+          host_path_physical="$(cd "$RUNNER_TEMP" && pwd -P)/$host_rel"
 
           # run_bounded LABEL SECONDS COMMAND...: returns the command's status,
           # or 124 after interrupting (then killing) its process group on timeout.
@@ -301,28 +307,59 @@ jobs:
           }
 
           # Test hosts are launched outside the seed's process group. Stop any
-          # that this seed started: new since its start, at this job's build path.
+          # that this seed started: running this job's host build, and not
+          # running when the seed began. NOTES_PROCESS_TABLE and NOTES_SIGNAL
+          # replace ps and kill only in the script tests, which simulate both.
+          process_table() {
+            if [ -n "${NOTES_PROCESS_TABLE:-}" ]; then "$NOTES_PROCESS_TABLE"
+            else ps -x -U "$(id -u)" -o pid= -o comm=; fi
+          }
+          send_signal() {
+            if [ -n "${NOTES_SIGNAL:-}" ]; then "$NOTES_SIGNAL" "$@"
+            else kill "$@"; fi
+          }
+          host_pids() {
+            local pid path
+            process_table | while read -r pid path; do
+              if [ "$path" = "$host_path" ] || [ "$path" = "$host_path_physical" ]; then echo "$pid"; fi
+            done
+          }
+          is_host_pid() {
+            host_pids | grep -qx "$1"
+          }
           seed_hosts() {
-            local host
-            for host in $(pgrep -x -U "$(id -u)" "$NOTES_SEED_HOST" || true); do
-              case " $hosts_before " in *" $host "*) continue ;; esac
-              case "$(ps -o comm= -p "$host" 2>/dev/null)" in *"$host_suffix") echo "$host" ;; esac
+            local pid
+            for pid in $(host_pids); do
+              printf '%s\n' "$hosts_before" | grep -qx "$pid" || echo "$pid"
             done
           }
           stop_seed_hosts() {
             local host hosts waited=0
             # A host that is already exiting gets 5 s to finish on its own.
             while [ "$waited" -lt 5 ] && [ -n "$(seed_hosts)" ]; do sleep 1; waited=$((waited + 1)); done
-            waited=0
             hosts=$(seed_hosts)
             [ -n "$hosts" ] || return 0
             for host in $hosts; do
-              echo "::warning::Seed $seed left $NOTES_SEED_HOST pid $host running: stopping it"
-              kill -TERM "$host" 2>/dev/null || true
+              if is_host_pid "$host"; then
+                echo "::warning::Seed $seed left $NOTES_SEED_HOST pid $host running: sending TERM"
+                send_signal -TERM "$host" 2>/dev/null || true
+              fi
             done
-            while [ "$waited" -lt 10 ] && [ -n "$(seed_hosts)" ]; do sleep 1; waited=$((waited + 1)); done
-            for host in $(seed_hosts); do
-              kill -KILL "$host" 2>/dev/null && echo "::warning::Seed $seed: killed $NOTES_SEED_HOST pid $host" || true
+            for host in $hosts; do
+              waited=0
+              while [ "$waited" -lt 10 ] && is_host_pid "$host"; do sleep 1; waited=$((waited + 1)); done
+              if ! is_host_pid "$host"; then
+                echo "Seed $seed: $NOTES_SEED_HOST pid $host is gone"
+                continue
+              fi
+              echo "::warning::Seed $seed: $NOTES_SEED_HOST pid $host ignored TERM: sending KILL"
+              send_signal -KILL "$host" 2>/dev/null || true
+              sleep 1
+              if is_host_pid "$host"; then
+                echo "::error::Seed $seed: $NOTES_SEED_HOST pid $host is still running after KILL"
+              else
+                echo "Seed $seed: $NOTES_SEED_HOST pid $host is gone after KILL"
+              fi
             done
           }
 
@@ -341,7 +378,7 @@ jobs:
             if [ -n "$timed_out_seed" ]; then
               echo "::warning::Seed $seed runs after seed $timed_out_seed timed out; its result may be affected by test infrastructure that timeout left behind"
             fi
-            hosts_before=$(pgrep -x -U "$(id -u)" "$NOTES_SEED_HOST" || true)
+            hosts_before=$(host_pids)
             status=0
             case "$seed" in
               *[!0-9]*) echo "::error::Notes editor generated seed '$seed' is not a number"; status=2 ;;

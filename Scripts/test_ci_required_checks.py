@@ -254,7 +254,8 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn('kill -INT -- "-$pid"', job)
         self.assertIn('kill -KILL -- "-$pid"', job)
         self.assertIn('NOTES_SEED_HOST: AtticUnitTestHost\n', job)
-        self.assertIn('pgrep -x -U "$(id -u)" "$NOTES_SEED_HOST"', job)
+        self.assertIn('else ps -x -U "$(id -u)" -o pid= -o comm=; fi', job)
+        self.assertIn('else kill "$@"; fi', job)
         for seed in seeds:
             upload = job.split(f'      - name: Upload Notes editor generated seed {seed} evidence\n', 1)[1].split('\n      - ', 1)[0]
             self.assertIn(f'name: notes-editor-seed-{seed}-${{{{ github.sha }}}}', upload)
@@ -281,6 +282,30 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn("inputs.lane == 'fka' || inputs.lane == 'full'", conditions['fka'])
         self.assertIn('group: attic-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.lane }}\n', workflow)
 
+    def test_lane_routing_runs_only_the_named_dedicated_lane(self):
+        import re
+        workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
+        conditions = dict(re.findall(r'\n  ([a-z-]+):\n    needs: [^\n]+\n(?:    [a-z-]+: [^\n]+\n)?    if: \$\{\{ ([^\n]+) \}\}\n', workflow))
+        def runs(condition, event, lane, ui_tests='', run_iphone=False):
+            expression = (condition.replace('&&', ' and ').replace('||', ' or ').replace('always()', 'True')
+                          .replace('!inputs.', 'not inputs.').replace('github.event_name', 'event')
+                          .replace('inputs.lane', 'lane').replace('inputs.ui_tests', 'ui_tests')
+                          .replace('inputs.run_iphone', 'run_iphone'))
+            return eval(expression, {}, dict(event=event, lane=lane, ui_tests=ui_tests, run_iphone=run_iphone))
+        everything = set(conditions)
+        expected = {
+            'performance': {'performance'},
+            'costs': {'costs'},
+            'fka': {'fka'},
+            'fast': {'round-trips', 'notes-seeds', 'macos', 'unit-continuation', 'required', 'canvas-lab'},
+            'full': everything - {'costs', 'performance', 'iphone'},
+        }
+        for lane, jobs in expected.items():
+            with self.subTest(lane=lane):
+                self.assertEqual({job for job, condition in conditions.items() if runs(condition, 'workflow_dispatch', lane)}, jobs)
+        self.assertFalse(runs(conditions['fka'], 'workflow_dispatch', 'performance'))
+        self.assertEqual({job for job, condition in conditions.items() if runs(condition, 'push', '')}, everything - {'iphone'})
+
     def test_notes_seed_loop_runs_every_seed_and_fails_unless_all_named_seeds_pass(self):
         import os
         import stat
@@ -289,40 +314,68 @@ class RequiredChecksTests(unittest.TestCase):
         job = workflow.split('  notes-seeds:', 1)[1].split('\n  macos:', 1)[0]
         step = job.split('      - name: Verify every complete generated Notes editor seed\n', 1)[1].split('\n      - name:', 1)[0]
         script = '\n'.join(line[10:] for line in step.split('        run: |\n', 1)[1].splitlines())
+        host_rel = 'AtticNotesSeed/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost'
+        # The process table and signals are simulated: the loop never looks up
+        # or signals a live process other than the stubs it starts itself.
+        # 101 and 202 run this job's host path before the step; 303 runs the
+        # same suffix under another root. The stub test adds 9000+n for a seed
+        # that leaves its host running.
         stub_test = ('#!/bin/bash\nseed=$(printf "%s\\n" "$@" | sed -n "s/.*testGeneratedSeed//p")\n'
                      'echo "test $seed" >> "$CALLS"\n'
-                     '[ "$seed" = "$FAIL_SEED" ] && [ "$MODE" = fail ] && exit 65\n'
-                     '[ "$seed" = "$FAIL_SEED" ] && [ "$MODE" = hang ] && sleep 30\nexit 0\n')
+                     'if [ "$seed" = "$FAIL_SEED" ]; then\n'
+                     '  case "$MODE" in\n'
+                     '    fail) exit 65 ;;\n'
+                     '    leave-host|leave-stubborn-host) echo "9001 $RUNNER_TEMP/' + host_rel + '" >> "$TABLE"; exit 65 ;;\n'
+                     '    hang) sleep 30 ;;\n'
+                     '  esac\n'
+                     'fi\nexit 0\n')
         stub_xcrun = ('#!/bin/bash\necho "read" >> "$CALLS"\n'
                       'case "$*" in *notes-seed-$FAIL_SEED/*) [ "$MODE" = reader-hang ] && sleep 30 ;; esac\n'
                       'echo \'{"passedTests":1,"failedTests":0,"skippedTests":0,"expectedFailures":0}\'\n')
-        cases = [  # (seeds, fail seed, mode, exit code, test runs)
-            ('11012 11013 11014 11015', '', 'pass', 0, 4),
-            ('11012 11013 11014 11015', '11013', 'fail', 1, 4),
-            ('11012 11013 11014 11015', '11013', 'hang', 1, 4),
-            ('11012 11013 11014 11015', '11012', 'reader-hang', 1, 4),
-            ('', '', 'pass', 1, 0),
-            ('11012 1101x 11014 11015', '', 'pass', 1, 3),
+        stub_table = '#!/bin/bash\ncat "$TABLE"\n'
+        stub_signal = ('#!/bin/bash\necho "$1 $2" >> "$SIGNALS"\n'
+                       'if [ "$1" = -KILL ] || [ "$MODE" != leave-stubborn-host ]; then\n'
+                       '  grep -v "^$2 " "$TABLE" > "$TABLE.new"; mv "$TABLE.new" "$TABLE"\nfi\n')
+        cases = [  # (seeds, fail seed, mode, exit code, test runs, signals)
+            ('11012 11013 11014 11015', '', 'pass', 0, 4, []),
+            ('11012 11013 11014 11015', '11013', 'fail', 1, 4, []),
+            ('11012 11013 11014 11015', '11013', 'leave-host', 1, 4, ['-TERM 9001']),
+            ('11012 11013 11014 11015', '11013', 'leave-stubborn-host', 1, 4, ['-TERM 9001', '-KILL 9001']),
+            ('11012 11013 11014 11015', '11013', 'hang', 1, 4, []),
+            ('11012 11013 11014 11015', '11012', 'reader-hang', 1, 4, []),
+            ('', '', 'pass', 1, 0, []),
+            ('11012 1101x 11014 11015', '', 'pass', 1, 3, []),
         ]
-        for seeds, fail_seed, mode, code, runs in cases:
+        for seeds, fail_seed, mode, code, runs, signals in cases:
             with self.subTest(seeds=seeds, fail_seed=fail_seed, mode=mode), tempfile.TemporaryDirectory() as tmp:
                 tmp = Path(tmp)
                 (tmp / 'Scripts').mkdir()
                 (tmp / 'bin').mkdir()
-                for path, body in [(tmp / 'Scripts/xcodebuild_locked.sh', stub_test), (tmp / 'bin/xcrun', stub_xcrun)]:
+                for path, body in [(tmp / 'Scripts/xcodebuild_locked.sh', stub_test), (tmp / 'bin/xcrun', stub_xcrun),
+                                   (tmp / 'bin/table', stub_table), (tmp / 'bin/signal', stub_signal)]:
                     path.write_text(body)
                     path.chmod(path.stat().st_mode | stat.S_IEXEC)
+                (tmp / 'table').write_text(f'101 {tmp}/{host_rel}\n202 {tmp}/{host_rel}\n303 {tmp}/other-root/{host_rel}\n')
                 env = dict(os.environ, PATH=f"{tmp / 'bin'}:{os.environ['PATH']}", RUNNER_TEMP=str(tmp),
                            CALLS=str(tmp / 'calls'), FAIL_SEED=fail_seed, MODE=mode, NOTES_SEEDS=seeds,
+                           TABLE=str(tmp / 'table'), SIGNALS=str(tmp / 'signals'),
+                           NOTES_PROCESS_TABLE=str(tmp / 'bin/table'), NOTES_SIGNAL=str(tmp / 'bin/signal'),
                            NOTES_SEED_HOST='AtticUnitTestHost', NOTES_SEED_TIMEOUT_SECONDS='2',
                            NOTES_RESULT_TIMEOUT_SECONDS='2')
                 result = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-e', '-c', script], cwd=tmp, env=env,
                                         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
                 calls = (tmp / 'calls').read_text().split('\n') if (tmp / 'calls').exists() else []
+                sent = (tmp / 'signals').read_text().splitlines() if (tmp / 'signals').exists() else []
                 self.assertEqual(result.returncode, code, result.stdout + result.stderr)
                 self.assertEqual(sum(line.startswith('test ') for line in calls), runs, calls)
+                self.assertEqual(sent, signals, result.stdout)
+                table = (tmp / 'table').read_text()
+                for survivor in ['101 ', '202 ', '303 ']:
+                    self.assertIn(survivor, table)
                 if mode in ('hang', 'reader-hang'):
                     self.assertIn('timed out after 2 s', result.stdout)
+                if signals:
+                    self.assertIn('pid 9001 is gone' + (' after KILL' if '-KILL 9001' in signals else ''), result.stdout)
 
     def test_generated_methods_compile_in_exactly_one_lane(self):
         import json
