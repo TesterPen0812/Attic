@@ -52,6 +52,7 @@ final class TasksCountGuardTests: XCTestCase {
             let broadcasts = model.cellUpdates.objectWillChange.sink { cellBroadcasts += 1 }
             defer { sends.cancel(); broadcasts.cancel() }
             let misses = model.rowsCacheMissCount, passes = TasksPage.tabsEvaluations
+            let restates = model.rowsRestateCount[.now, default: 0]
 
             model.completeAcknowledged(id) { _ in }  // press: the row is held, ticked
             settle(hosting)
@@ -69,12 +70,136 @@ final class TasksCountGuardTests: XCTestCase {
                 .map { model.rowsCacheMissCount[$0, default: 0] - misses[$0, default: 0] }.reduce(0, +)
             let pagePasses = TasksPage.tabsEvaluations - passes
             print("GUARD_TICK size=\(size) now_rows_cache_misses=\(nowMisses) other_tab_misses=\(otherMisses) "
+                  + "now_rows_restated=\(model.rowsRestateCount[.now, default: 0] - restates) "
                   + "page_passes=\(pagePasses) model_sends=\(modelSends) cell_broadcasts=\(cellBroadcasts)")
             XCTAssertGreaterThan(pagePasses, 0, "the hosted page did not update, so its count proves nothing")
             XCTAssertLessThanOrEqual(nowMisses, 1, "F3/TA-02: one tick rebuilt Now's rows \(nowMisses) times (size \(size))")
             bySize[size] = nowMisses
         }
         XCTAssertEqual(bySize[40], bySize[400], "F3/TA-02: a tick's row rebuilds grew with the store")
+    }
+
+    /// The tick's restated rows are the rows a full build gives (the oracle
+    /// builds every restated list in full as well), on a Now with every kind
+    /// of date group and clock, a folded group, a family, two holds at once,
+    /// on Later, after a failed save and after Undo during a hold.
+    func testTickRestatesHeldRowsAsAFullBuildWould() throws {
+        TasksPageModel.checksRowsRestate = true
+        defer { TasksPageModel.checksRowsRestate = false }
+        struct Rejected: Error {}
+        var fail = false
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let context = ModelContext(container)
+        let calendar = Calendar.autoupdatingCurrent, now = Date()
+        func day(_ offset: Int) -> DueDay { DueDay(date: calendar.date(byAdding: .day, value: offset, to: now)!, calendar: calendar) }
+        var order: Int64 = 10_000_000
+        var family: UUID?
+        for index in 0..<30 {
+            order -= 1_024
+            let item = TaskItem(title: "Task \(index)", status: index % 10 == 9 ? .backlog : (index % 7 == 3 ? .inProgress : .todo),
+                                createdAt: now, manualOrder: order)
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            switch index % 5 {
+            case 0: item.dueDay = day(-2)
+            case 1: item.dueDay = day(0); item.dueTimeMinutes = index % 2 == 0 ? 9 * 60 : nil
+            case 2: item.dueDay = day(1)
+            case 3: item.dueDay = day(4); item.dueTimeMinutes = 18 * 60 + index
+            default: break
+            }
+            context.insert(item)
+            if index == 6 {
+                family = item.id
+                for child in 0..<2 { context.insert(TaskItem(title: "Subtask \(child)", manualOrder: Int64(child), parentID: item.id)) }
+            }
+        }
+        try context.save()
+        let store = TaskStore(container: container, persist: { context in
+            if fail { throw Rejected() }
+            try context.save()
+        })
+        var services = TasksPageServices()
+        services.acknowledgementDelay = .seconds(25)
+        services.doneHold = .seconds(25)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+
+        func press(_ id: UUID) -> [UUID] {
+            let before = model.rows(for: model.tab).map(\.id)
+            model.completeAcknowledged(id) { _ in }
+            XCTAssertNotNil(model.held[id])
+            XCTAssertEqual(model.rows(for: model.tab).map(\.id), before, "a press keeps every row in place")
+            XCTAssertEqual(model.rows(for: model.tab).first { $0.id == id }?.model.state, .done)
+            return before
+        }
+        func save(_ id: UUID, keeping before: [UUID]) {
+            model.settlePendingCompletionAcknowledgements(through: id)
+            XCTAssertEqual(model.rows(for: model.tab).map(\.id), before, "a save keeps the held row in place")
+        }
+        func release(_ id: UUID) {
+            model.releaseHold(id)
+            XCTAssertFalse(model.rows(for: model.tab).contains { $0.id == id }, "the released row leaves")
+        }
+        let rows = model.rows(for: .now)
+        XCTAssertGreaterThan(model.sections(for: .now).groups.count, 3)
+        // The first, a middle, the last row, the family's parent and a dated row with a clock.
+        var picks = [rows.first!.id, rows[rows.count / 2].id, rows.last!.id, try XCTUnwrap(family)]
+        if let clocked = store.tasks.first(where: { $0.dueTimeMinutes != nil && $0.status != .backlog && $0.parentID == nil }) {
+            picks.append(clocked.id)
+        }
+        var seen = Set<UUID>()
+        picks = picks.filter { seen.insert($0).inserted }
+        for id in picks {
+            let before = press(id)
+            save(id, keeping: before)
+            XCTAssertEqual(store.task(withID: id)?.status, .done)
+            release(id)
+        }
+        // Two holds at once.
+        let pair = Array(model.rows(for: .now).prefix(3).map(\.id).suffix(2))
+        let first = press(pair[0])
+        _ = press(pair[1])
+        save(pair[0], keeping: first)
+        save(pair[1], keeping: first)
+        release(pair[0])
+        release(pair[1])
+        // A folded group: the press and save restate around it.
+        let group = try XCTUnwrap(model.sections(for: .now).groups.first?.key)
+        model.toggleGroup(group, on: .now)
+        if let id = model.rows(for: .now).first?.id {
+            let before = press(id)
+            save(id, keeping: before)
+            release(id)
+        }
+        model.toggleGroup(group, on: .now)
+        // A failed save: the row comes back unticked, in place.
+        let failing = try XCTUnwrap(model.rows(for: .now).first?.id)
+        let unticked = model.rows(for: .now).map(\.id)
+        fail = true
+        _ = press(failing)
+        model.settlePendingCompletionAcknowledgements(through: failing)
+        fail = false
+        XCTAssertNil(model.held[failing])
+        XCTAssertEqual(model.rows(for: .now).map(\.id), unticked)
+        XCTAssertNotEqual(model.rows(for: .now).first { $0.id == failing }?.model.state, .done)
+        // Undo during the hold: the row is open again.
+        let undone = try XCTUnwrap(model.rows(for: .now).first?.id)
+        let held = press(undone)
+        save(undone, keeping: held)
+        XCTAssertTrue(model.undo().isApplied)
+        XCTAssertNil(model.held[undone])
+        XCTAssertNotEqual(store.task(withID: undone)?.status, .done)
+        XCTAssertTrue(model.rows(for: .now).contains { $0.id == undone })
+        // Later.
+        model.select(tab: .backlog)
+        let later = try XCTUnwrap(model.rows(for: .backlog).first?.id)
+        let laterBefore = press(later)
+        save(later, keeping: laterBefore)
+        release(later)
+
+        print("TICK_RESTATE now_restated=\(model.rowsRestateCount[.now, default: 0]) later_restated=\(model.rowsRestateCount[.backlog, default: 0]) "
+              + "mismatches=\(model.rowsRestateMismatches) now_misses=\(model.rowsCacheMissCount[.now, default: 0])")
+        XCTAssertEqual(model.rowsRestateMismatches, 0, "a restated list differs from its full build")
+        XCTAssertGreaterThan(model.rowsRestateCount[.now, default: 0], 0)
+        XCTAssertGreaterThan(model.rowsRestateCount[.backlog, default: 0], 0)
     }
 
     // MARK: - Rig

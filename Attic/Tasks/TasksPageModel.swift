@@ -654,6 +654,7 @@ final class TasksPageModel: ObservableObject {
         library.tasks.$revision.dropFirst()
             .sink { [weak self] _ in
                 guard let self else { return }
+                self.noteRowsChanged(self.store.revisionChangedTaskIDs)
                 self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
                 self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
             }
@@ -765,6 +766,14 @@ final class TasksPageModel: ObservableObject {
         let nextEvent: TasksNextEvent?
         /// A row is being dragged on Now: Today and Tomorrow show.
         let dayDrag: Bool
+
+        /// Everything but the store's data and the holds is the same.
+        func sameList(as other: RowsKey) -> Bool {
+            tab == other.tab && acknowledgementRevision == other.acknowledgementRevision && noteOwners == other.noteOwners
+                && expanded == other.expanded && completedExpanded == other.completedExpanded && today == other.today
+                && dateEnvironment == other.dateEnvironment && view == other.view && search == other.search && tag == other.tag
+                && folded == other.folded && nextEvent == other.nextEvent && dayDrag == other.dayDrag
+        }
     }
 
     /// What a page kept built but not drawn shows (round 11): while it is
@@ -817,12 +826,20 @@ final class TasksPageModel: ObservableObject {
         let ids: [UUID]
         let idsByStatus: [TaskStatus: [UUID]]
         let eligibleIDs: Set<UUID>
+        /// The clocks the date groups were ordered with (every task's).
+        let dueTimes: [UUID: Int]
         var selectedForRuns: Set<UUID>?
         var expandedForRuns: Set<UUID>?
         var selectionRuns: [UUID: AtticSelectionRun] = [:]
     }
 
     private var rowsCache: [TasksTab: RowsSnapshot] = [:]
+    /// The rows of each built list that store publications changed since
+    /// it was built: a changed row, a changed task that may join it, and
+    /// the row of a changed subtask. A list in `rowsChangeUnknown` had a
+    /// publication without its ids. Read by `restated(_:to:)`.
+    private var rowsChangedSinceBuild: [TasksTab: Set<UUID>] = [:]
+    private var rowsChangeUnknown: Set<TasksTab> = []
     private struct CachedRowProjection {
         let task: TaskItem
         let row: TasksListRow
@@ -842,6 +859,20 @@ final class TasksPageModel: ObservableObject {
         guard let removed = rowProjections[tab]?.removeValue(forKey: id) else { return }
         for child in removed.childIDs where rowProjectionParentByChild[tab]?[child] == id {
             rowProjectionParentByChild[tab]?[child] = nil
+        }
+    }
+
+    private func noteRowsChanged(_ changedIDs: Set<UUID>?) {
+        for (tab, snapshot) in rowsCache {
+            guard let changedIDs else { rowsChangeUnknown.insert(tab); continue }
+            var rows: Set<UUID> = []
+            for id in changedIDs {
+                let parent = store.task(withID: id)?.parentID
+                if parent == nil || snapshot.eligibleIDs.contains(id) { rows.insert(id) }
+                if let parent { rows.insert(parent) }
+                if let oldParent = rowProjectionParentByChild[tab]?[id] { rows.insert(oldParent) }
+            }
+            rowsChangedSinceBuild[tab, default: []].formUnion(rows)
         }
     }
 
@@ -887,6 +918,12 @@ final class TasksPageModel: ObservableObject {
     /// DEBUG count of row-list rebuilds (rows-cache misses) per tab, for the
     /// count guards in `TasksCountGuardTests`.
     private(set) var rowsCacheMissCount: [TasksTab: Int] = [:]
+    /// Lists brought up to date by restating held rows in place.
+    private(set) var rowsRestateCount: [TasksTab: Int] = [:]
+    /// Test oracle: build every restated list in full as well and count
+    /// any difference (the full build is then kept).
+    static var checksRowsRestate = false
+    private(set) var rowsRestateMismatches = 0
 
     func resetRowProjectionBuildCount() { rowProjectionBuildCount = 0 }
     #endif
@@ -932,14 +969,92 @@ final class TasksPageModel: ObservableObject {
                           completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagPicks(on: tab),
                           folded: folded(on: tab), nextEvent: nextEvent(on: tab), dayDrag: tab == .now && dayDragLive)
-        if let cached = rowsCache[tab], cached.key == key {
-            IdleLatencyTrace.count("task_rows_cache_hit", 1)
-            return cached
+        if let cached = rowsCache[tab] {
+            if cached.key == key {
+                IdleLatencyTrace.count("task_rows_cache_hit", 1)
+                return cached
+            }
+            if let restated = restated(cached, to: key) {
+                IdleLatencyTrace.count("task_rows_restated", 1)
+                #if DEBUG
+                rowsRestateCount[tab, default: 0] += 1
+                if Self.checksRowsRestate {
+                    let built = builtRows(tab, key: key)
+                    if built.rows != restated.rows || built.sections != restated.sections || built.ids != restated.ids
+                        || built.idsByStatus != restated.idsByStatus
+                        || built.entries.map(\.id) != restated.entries.map(\.id)
+                        || built.entries.map(\.reorderIDs) != restated.entries.map(\.reorderIDs) {
+                        rowsRestateMismatches += 1
+                        return keep(built, for: tab)
+                    }
+                }
+                #endif
+                return keep(restated, for: tab)
+            }
         }
         IdleLatencyTrace.count("task_rows_cache_miss", 1)
         #if DEBUG
         rowsCacheMissCount[tab, default: 0] += 1
         #endif
+        return keep(builtRows(tab, key: key), for: tab)
+    }
+
+    private func keep(_ snapshot: RowsSnapshot, for tab: TasksTab) -> RowsSnapshot {
+        rowsCache[tab] = snapshot
+        rowsChangedSinceBuild[tab] = nil
+        rowsChangeUnknown.remove(tab)
+        return snapshot
+    }
+
+    /// A tick's press and save, without rebuilding the list (F3): the list
+    /// is the one built, with the rows a hold or a save changed restated in
+    /// place. Only when nothing but holds and saves changed since it was
+    /// built, every new hold is at the place its row has, and every changed
+    /// row is held here (a held row stays where it is whatever its state)
+    /// with its date and clock as they were. Find, a view filter and tag
+    /// picks (which keep what they showed), an acknowledged command, a
+    /// change without ids and a released hold all rebuild.
+    private func restated(_ old: RowsSnapshot, to key: RowsKey) -> RowsSnapshot? {
+        let tab = key.tab
+        guard old.key.sameList(as: key), key.search.isEmpty, key.tag.isEmpty, key.view.isDefault,
+              acknowledgedRows.isEmpty, acknowledgedDeleted.isEmpty, acknowledgedCreated.isEmpty,
+              !rowsChangeUnknown.contains(tab) else { return nil }
+        guard old.key.held.allSatisfy({ key.held[$0.key] == $0.value }) else { return nil }
+        var changed = rowsChangedSinceBuild[tab] ?? []
+        for (id, place) in key.held where old.key.held[id] == nil {
+            guard old.rows.indices.contains(place.index), old.rows[place.index].id == id else { return nil }
+            changed.insert(id)
+        }
+        guard !changed.isEmpty else { return nil }
+        var replacements: [UUID: TasksListRow] = [:]
+        for id in changed {
+            guard key.held[id] != nil, let task = store.task(withID: id), task.parentID == nil,
+                  let was = old.rows.first(where: { $0.id == id }), was.due == task.dueDay,
+                  old.dueTimes[id] == task.dueTimeMinutes else { return nil }
+            let row = projectedRow(for: task, tab: tab, match: nil)
+            var model = row.model
+            model.hidesDue = was.model.hidesDue
+            replacements[id] = TasksListRow(id: id, model: model, status: row.status, subtasks: row.subtasks, due: row.due)
+        }
+        func swap(_ rows: [TasksListRow]) -> [TasksListRow] { rows.map { replacements[$0.id] ?? $0 } }
+        var sections = old.sections
+        sections.open = swap(sections.open)
+        sections.done = swap(sections.done)
+        for (group, rows) in sections.groupRows where rows.contains(where: { replacements[$0.id] != nil }) {
+            sections.groupRows[group] = swap(rows)
+        }
+        let rows = swap(old.rows)
+        var snapshot = RowsSnapshot(key: key, sections: sections, rows: rows, entries: TasksDateListEntry.entries(sections),
+                                    ids: old.ids, idsByStatus: Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) },
+                                    eligibleIDs: old.eligibleIDs, dueTimes: old.dueTimes)
+        // The ids and their order are the built list's, so its selection runs hold.
+        snapshot.selectedForRuns = old.selectedForRuns
+        snapshot.expandedForRuns = old.expandedForRuns
+        snapshot.selectionRuns = old.selectionRuns
+        return snapshot
+    }
+
+    private func builtRows(_ tab: TasksTab, key: RowsKey) -> RowsSnapshot {
         let all = IdleLatencyTrace.span("task_rows_build") { buildRows(for: tab) }
         IdleLatencyTrace.count("task_rows", all.count)
         var sections = TasksSections()
@@ -989,8 +1104,7 @@ final class TasksPageModel: ObservableObject {
         let ids = rows.map(\.id)
         let entry = RowsSnapshot(key: key, sections: sections, rows: rows, entries: TasksDateListEntry.entries(sections),
                                  ids: ids, idsByStatus: Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) },
-                                 eligibleIDs: Set(ids))
-        rowsCache[tab] = entry
+                                 eligibleIDs: Set(ids), dueTimes: times)
         return entry
     }
 
