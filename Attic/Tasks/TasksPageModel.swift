@@ -798,8 +798,17 @@ final class TasksPageModel: ObservableObject {
         let owner: Bool
     }
 
+    #if DEBUG
+    /// How many page tokens were built (the pager's warm-page guard).
+    private(set) var pageTokenBuildCount = 0
+    func resetPageTokenBuildCount() { pageTokenBuildCount = 0 }
+    #endif
+
     func pageToken(_ tab: TasksTab) -> PageToken {
-        PageToken(tab: tab, revision: searchQuery(for: tab).isEmpty ? store.taskDataRevision : store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        #if DEBUG
+        pageTokenBuildCount += 1
+        #endif
+        return PageToken(tab: tab, revision: searchQuery(for: tab).isEmpty ? store.taskDataRevision : store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), tag: self.tab == tab ? tagPicks(on: tab) : .none,

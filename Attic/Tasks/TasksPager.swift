@@ -652,7 +652,10 @@ struct TasksPagerPages<Page: View>: View {
     }
 
     private func pages(drawsDeparting: Bool) -> some View {
-        ZStack(alignment: .topLeading) {
+        #if DEBUG
+        let _ = TasksPagerPassCount.passes += 1
+        #endif
+        return ZStack(alignment: .topLeading) {
             // Every slot stays (removing one left its neighbour's list
             // drawn where the last swipe had it); only its content comes
             // and goes.
@@ -680,6 +683,13 @@ struct TasksPagerPages<Page: View>: View {
         }
     }
 }
+
+#if DEBUG
+/// How many times the pager laid out its pages (tests count its passes).
+@MainActor enum TasksPagerPassCount {
+    static var passes = 0
+}
+#endif
 
 /// Observe only the slide's start/end; the retained Tasks page can remain
 /// visually complete after it has released its keyboard and input monitors.

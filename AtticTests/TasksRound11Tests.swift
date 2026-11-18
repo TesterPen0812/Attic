@@ -162,6 +162,40 @@ final class TasksRound11Tests: XCTestCase {
                        "revealing a changed hidden page must preserve its native scroll hosts")
     }
 
+    /// The kept pages' freeze compares only whether a page is frozen, so
+    /// the pager builds nothing for a warm hidden page on a pass: no page
+    /// token (design/tasks-breadth.md, slice 6).
+    func testThePagerBuildsNoPageTokenForItsWarmHiddenPages() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let span = hosted.model.pagerSwipe.span
+        let warmed = expectation(description: "Later and Done kept built")
+        let warming = span.$warm.first { $0 == 0...2 }.sink { _ in warmed.fulfill() }
+        wait(for: [warmed], timeout: 5)
+        warming.cancel()
+        XCTAssertEqual(span.pages, 0...0, "only Now drawn; Later and Done kept built and hidden")
+        hosted.model.resetPageTokenBuildCount()
+        let passesBefore = TasksPagerPassCount.passes
+        // A store save and a model change on the page shown: each reaches
+        // the pager (it observes both), with Later and Done frozen.
+        let added = try XCTUnwrap(hosted.store.create(title: "Pager pass task"))
+        hosted.model.selectOnly(added.id)
+        for _ in 0..<2 {
+            // The main queue drains (no fixed wait), then the page lays out and draws.
+            let drained = expectation(description: "main queue drained")
+            DispatchQueue.main.async { drained.fulfill() }
+            wait(for: [drained], timeout: 2)
+            hosted.window.contentView?.layoutSubtreeIfNeeded()
+            hosted.window.displayIfNeeded()
+        }
+        XCTAssertEqual(hosted.model.selection, [added.id])
+        let passes = TasksPagerPassCount.passes - passesBefore
+        print("PAGER_TOKENS passes=\(passes) tokens=\(hosted.model.pageTokenBuildCount) warm=\(String(describing: span.warm))")
+        XCTAssertGreaterThan(passes, 0, "the pager ran, so its count means something")
+        XCTAssertEqual(span.warm, 0...2, "Later and Done stayed kept built")
+        XCTAssertEqual(hosted.model.pageTokenBuildCount, 0, "a pager pass built a page token for a frozen page")
+    }
+
     func testBugs4SwitchingShellPagesRetainsTheWarmTaskTabsAcrossHide() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
