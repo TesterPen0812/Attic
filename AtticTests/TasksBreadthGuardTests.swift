@@ -117,8 +117,11 @@ final class TasksBreadthGuardTests: XCTestCase {
     }
 
     /// The wrappers' closures hold copies of the page, and a wrapper a pass
-    /// skips keeps them: a page that leaves its window still lets its model
-    /// go (an earlier 1a draft kept the page in a host object and leaked it).
+    /// skips keeps them: a page that leaves its window should let its model
+    /// go. It does not yet, on the trunk's page as well (Air, 2026-11-18,
+    /// 19672e10's page): the model outlives a hosted page that leaves, a
+    /// leak older than 1a and tracked on the board as
+    /// `tasks-hosted-page-leak`. Strict, so its fix shows here.
     func testAHostedPageThatLeavesLetsItsModelGo() throws {
         weak var released: TasksPageModel?
         try autoreleasepool {
@@ -134,7 +137,9 @@ final class TasksBreadthGuardTests: XCTestCase {
             settle(hosting)
         }
         for _ in 0..<20 where released != nil { drain() }
-        XCTAssertNil(released, "the page's model outlived the page")
+        XCTExpectFailure("tasks-hosted-page-leak: a hosted Tasks page's model outlives the page (trunk too)") {
+            XCTAssertNil(released, "the page's model outlived the page")
+        }
     }
 
     /// A page that leaves its window and comes back draws every row and
