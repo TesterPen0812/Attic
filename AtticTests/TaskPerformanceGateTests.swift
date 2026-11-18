@@ -389,6 +389,44 @@ final class TaskPerformanceGateTests: XCTestCase {
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
     }
 
+    /// F2 (lead, 14:42, from the GPT Pro review): the save succeeds but every fresh read after it fails. The store stays
+    /// unresolved (reported, no narrow change published, nothing skipped), a later retry presents the durable state, and
+    /// nothing is applied twice: one deletion group, one Undo step, one restore.
+    func testF2DurableSaveWithFailedFreshReadsStaysUnresolvedAndRetries() async throws {
+        let rig = try await makeF2Rig()
+        let id = rig.ids[3]
+        let physical = try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>()).count
+        rig.tasks.resetFullTaskReloadCount()
+        // The save's fresh read, its recovery read and the commit's read all fail.
+        rig.tasks.listRefreshFailures = 3
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied, "The durable save cannot be refused by a presentation read")
+        XCTAssertEqual(rig.tasks.listRefreshFailures, 0)
+        XCTAssertEqual(rig.tasks.fullTaskReloadCount, 3, "No read was skipped after a failed one")
+        XCTAssertNotNil(rig.tasks.errorNotice, "The unresolved presentation is reported")
+        XCTAssertNil(rig.tasks.revisionChangedTaskIDs, "An unconfirmed state is never published as a narrow change")
+        XCTAssertTrue(rig.library.undo.canUndo(in: .tasks))
+
+        // Retry: one fresh read presents the durable state.
+        rig.tasks.refresh()
+        XCTAssertNil(rig.tasks.errorNotice)
+        XCTAssertNil(rig.tasks.task(withID: id))
+        var rows = try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.count, physical, "Nothing was inserted or applied twice")
+        let deleted = rows.filter { $0.id == id }
+        XCTAssertTrue(!deleted.isEmpty && deleted.allSatisfy { $0.deletedAt != nil })
+        XCTAssertEqual(Set(deleted.compactMap(\.deletionGroupID)).count, 1, "One deletion group, applied once")
+
+        // One Undo step restores it once; there is no second step for the same delete.
+        XCTAssertTrue(rig.library.undo(in: .tasks).isApplied)
+        XCTAssertNotNil(rig.tasks.task(withID: id))
+        XCTAssertFalse(rig.library.undo.canUndo(in: .tasks), "The delete recorded exactly one Undo step")
+        rows = try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.count, physical)
+        XCTAssertTrue(rows.filter { $0.id == id }.allSatisfy { $0.deletedAt == nil })
+        XCTAssertTrue(rig.notes.notes.contains { $0.id == rig.writingID }, "Its writing came back once")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
     /// F2: a commit made on the note side (deleting a task's writing takes its task) still reads the task store.
     func testF2NoteSideCommitStillRefreshesTasks() async throws {
         let rig = try await makeF2Rig()
