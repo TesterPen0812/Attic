@@ -571,26 +571,33 @@ final class TasksCountGuardTests: XCTestCase {
     /// PR 30 R-2: a reader of the rows that runs before the model hears of a
     /// store change (here the store's `objectWillChange`, which is sent
     /// before any `$revision` subscriber runs, at the moment the store's
-    /// data revision has moved), during a new hold, must not leave a
-    /// changed row that is not held stale. Uses no API the PR added.
-    func testRowsReadBeforeTheModelHearsOfAChangeShowTheChange() throws {
+    /// data revision has moved), during a new hold, gets a full build, never
+    /// a restate: the restate would clear a change set the model has not yet
+    /// noted. Red on e70d134e, where that read restated only the held row.
+    /// It does not assert the changed row's title: a full build there reuses
+    /// the row's cached projection, as the trunk does (R-5, board row
+    /// rows-early-read-stale-projection, its own PR).
+    func testRowsReadBeforeTheModelHearsOfAChangeAreBuiltInFull() throws {
         let (model, store) = try makeDatedModel([("K", nil, nil), ("L", nil, nil), ("M", nil, nil)])
         func task(_ title: String) throws -> UUID { try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id) }
         let held = try task("K"), changed = try task("L")
-        var seen = store.taskDataRevision, earlyReads = 0
+        var seen = store.taskDataRevision, earlyReads = 0, earlyMisses = 0, earlyRestates = 0
         let early = store.objectWillChange.sink { _ in
             guard store.taskDataRevision != seen else { return }
             seen = store.taskDataRevision
             earlyReads += 1
+            let misses = model.rowsCacheMissCount[.now, default: 0], restates = model.rowsRestateCount[.now, default: 0]
             _ = model.rows(for: .now)
+            earlyMisses += model.rowsCacheMissCount[.now, default: 0] - misses
+            earlyRestates += model.rowsRestateCount[.now, default: 0] - restates
         }
         defer { early.cancel() }
         model.completeAcknowledged(held) { _ in }
         XCTAssertNotNil(model.held[held])
         XCTAssertTrue(model.library.updateTask(changed, title: "L renamed").isApplied)
         XCTAssertEqual(earlyReads, 1, "the early reader ran during the store's publication")
-        XCTAssertEqual(model.rows(for: .now).first { $0.id == changed }?.model.title, "L renamed",
-                       "a changed row that is not held stays stale")
+        XCTAssertEqual(earlyRestates, 0, "R-2: a read before the model noted the change restated the list")
+        XCTAssertEqual(earlyMisses, 1, "R-2: a read before the model noted the change was not a full build")
         XCTAssertEqual(model.rows(for: .now).map(\.id), [held, changed, try task("M")])
     }
 
