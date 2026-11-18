@@ -452,7 +452,13 @@ final class PanelUIState: ObservableObject {
         editingDraftTitle = ""
     }
 
+    /// DEBUG count of the live task IDs handed to `reconcileTaskIDs`.
+    private(set) var reconciledTaskIDCount = 0
+
     func reconcileTaskIDs(_ availableIDs: Set<UUID>) {
+        #if DEBUG
+        reconciledTaskIDCount += availableIDs.count
+        #endif
         if let confirmingTaskCompletionID, !availableIDs.contains(confirmingTaskCompletionID) {
             self.confirmingTaskCompletionID = nil
         }
