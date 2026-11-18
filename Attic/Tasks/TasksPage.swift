@@ -3811,6 +3811,14 @@ extension View {
 }
 
 #if DEBUG
+/// Tests (S2, the lead's S-c count): how often each reporter's transform closure runs, by row: the row frame's
+/// (`TasksReorderCell`) and the control frames' (`onAtticRowControlFramesChange`). A closure that runs is work even when its
+/// result is equal and no action follows.
+enum TasksReporterCounts {
+    nonisolated(unsafe) static var rowTransforms: [TasksRowID: Int] = [:]
+    nonisolated(unsafe) static var controlTransforms: [TasksRowID: Int] = [:]
+}
+
 /// What the old way measured (S2 tests): a row, a day header, Completed today.
 enum TasksSlotProbeKey: Hashable {
     case row(TasksRowID)
@@ -4611,7 +4619,11 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             // date, the tags, the checklist) keep their clicks; a press that
             // moves 4 pt drags at once, with no hold.
             row(live)
-                .onAtticRowControlFramesChange { [session, id, tab, reports] frames in
+                .onAtticRowControlFramesChange(counting: { [id, tab] in
+                    #if DEBUG
+                    TasksReporterCounts.controlTransforms[TasksRowID(tab: tab, id: id), default: 0] += 1
+                    #endif
+                }) { [session, id, tab, reports] frames in
                     MainActor.assumeIsolated {
                         reports.controls = frames
                         session.setControlFrames(frames, for: TasksRowID(tab: tab, id: id), from: reports)
@@ -4635,7 +4647,12 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         // Each row's frame in its list, for the pointer's questions (which
         // row a right-click, a drop or a drag-out is on) and the reveal. A
         // scroll moves the list, not the row in it: no report (S2).
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: TasksPage.contentSpace(tab)) } action: { [pointer, tab, id, reports] frame in
+        .onGeometryChange(for: CGRect.self) { proxy in
+            #if DEBUG
+            TasksReporterCounts.rowTransforms[TasksRowID(tab: tab, id: id), default: 0] += 1
+            #endif
+            return proxy.frame(in: TasksPage.contentSpace(tab))
+        } action: { [pointer, tab, id, reports] frame in
             reports.frame = frame
             pointer.setFrame(frame, for: TasksRowID(tab: tab, id: id), from: reports)
         }

@@ -59,6 +59,44 @@ final class TasksRowFrameScrollTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(hosted.pointer.frame(for: row.key)).height, row.value.height, "and the pointer holds its new size")
     }
 
+    // MARK: - The lead's S-c count (printed, not asserted)
+
+    /// How often each reporter's transform closure runs per scroll frame, for rows that stay drawn through the scroll: the row
+    /// frame's and the control frames' apart. 10 steps of 6.5 and 5.25 pt on Now, then on Done. If the row frame's closure still
+    /// runs once per row per frame, a SwiftUI reporter cannot do this job (S-c).
+    func testCountReporterTransformRunsPerScrollFrame() throws {
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false)
+        defer { hosted.close() }
+        for tab in [TasksTab.now, .done] {
+            if tab != .now { hosted.go(to: tab) }
+            let scroll = try list(hosted)
+            let before = Set(hosted.pointer.frames.keys.filter { $0.tab == tab })
+            var rowRuns: [TasksRowID: Int] = [:], controlRuns: [TasksRowID: Int] = [:]
+            var perStep: [String] = []
+            for index in 0..<10 {
+                let rows0 = TasksReporterCounts.rowTransforms, controls0 = TasksReporterCounts.controlTransforms
+                step(hosted, scroll, by: index.isMultiple(of: 2) ? 6.5 : 5.25)
+                var stepRows = 0, stepControls = 0
+                for row in before {
+                    let r = TasksReporterCounts.rowTransforms[row, default: 0] - rows0[row, default: 0]
+                    let c = TasksReporterCounts.controlTransforms[row, default: 0] - controls0[row, default: 0]
+                    rowRuns[row, default: 0] += r; controlRuns[row, default: 0] += c
+                    stepRows += r; stepControls += c
+                }
+                perStep.append("\(stepRows)/\(stepControls)")
+            }
+            let after = Set(hosted.pointer.frames.keys.filter { $0.tab == tab })
+            let stayed = before.intersection(after)
+            let rowTotal = stayed.reduce(0) { $0 + rowRuns[$1, default: 0] }
+            let controlTotal = stayed.reduce(0) { $0 + controlRuns[$1, default: 0] }
+            let perRowFrame = { (total: Int) in stayed.isEmpty ? 0 : Double(total) / Double(stayed.count * 10) }
+            print("COUNT_S2_TRANSFORMS tab=\(tab) steps=10 rows_stayed=\(stayed.count) row_transform_runs=\(rowTotal) " +
+                  "control_transform_runs=\(controlTotal) row_runs_per_row_per_frame=\(perRowFrame(rowTotal)) " +
+                  "control_runs_per_row_per_frame=\(perRowFrame(controlTotal)) per_step(row/control, all held rows)=\(perStep.joined(separator: " "))")
+            XCTAssertGreaterThan(stayed.count, 4, "rows stayed on \(tab)")
+        }
+    }
+
     // MARK: - The same frames as the old way
 
     /// At several offsets, down and back up (rows leave the lazy list and
