@@ -119,6 +119,24 @@ final class TasksRowFrameScrollTests: XCTestCase {
         }
     }
 
+    /// SR-04, the scroll keeper: a list scrolled, left for another tab (its page let go) and drawn again restores its place;
+    /// its rows' frames are where the old way puts them as soon as it is back, with no scroll needed to refresh them.
+    func testAListThatRestoresItsPlaceAfterATabChangeHasCurrentFrames() throws {
+        let hosted = try slotRecording()
+        defer { hosted.close() }
+        let scroll = try list(hosted)
+        scrollTo(hosted, scroll, y: 300)
+        let place = scroll.contentView.bounds.minY
+        XCTAssertGreaterThan(place, 200, "Now scrolled")
+        _ = try assertMatchesTheOldWay(hosted, tab: .now, at: "before leaving")
+        hosted.go(to: .done)
+        _ = try assertMatchesTheOldWay(hosted, tab: .done, at: "on Done")
+        hosted.go(to: .now)
+        let back = try list(hosted)
+        XCTAssertEqual(back.contentView.bounds.minY, place, accuracy: 1, "Now restored its place")
+        _ = try assertMatchesTheOldWay(hosted, tab: .now, at: "back on Now")
+    }
+
     /// A row's quick look opens in a scrolled list: the row grows, the
     /// rows below it move, and every frame is still where the old way puts
     /// it. It closes again, the same.
