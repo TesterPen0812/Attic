@@ -767,9 +767,11 @@ final class TasksPageModel: ObservableObject {
         let dayDrag: Bool
     }
 
-    /// What a page kept built but not drawn shows (round 11): while it is
-    /// the same, the page is not redrawn when the model changes elsewhere (a
-    /// selection, a keystroke), only when its own rows could have.
+    /// What a page shows (round 11): it changes when the page's own rows
+    /// could have, not when the model changes elsewhere (a selection, a
+    /// keystroke). Tests read it to check what a change touches. The pager
+    /// does not build it: a page kept built but not drawn is frozen whatever
+    /// changed, and catches up when it is drawn again (`TasksKeptPage`).
     struct PageToken: Equatable {
         let tab: TasksTab
         let revision: UInt64
@@ -798,8 +800,17 @@ final class TasksPageModel: ObservableObject {
         let owner: Bool
     }
 
+    #if DEBUG
+    /// How many page tokens were built (the pager's warm-page guard).
+    private(set) var pageTokenBuildCount = 0
+    func resetPageTokenBuildCount() { pageTokenBuildCount = 0 }
+    #endif
+
     func pageToken(_ tab: TasksTab) -> PageToken {
-        PageToken(tab: tab, revision: searchQuery(for: tab).isEmpty ? store.taskDataRevision : store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        #if DEBUG
+        pageTokenBuildCount += 1
+        #endif
+        return PageToken(tab: tab, revision: searchQuery(for: tab).isEmpty ? store.taskDataRevision : store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), tag: self.tab == tab ? tagPicks(on: tab) : .none,
