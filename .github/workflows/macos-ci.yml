@@ -89,9 +89,14 @@ jobs:
         env:
           LANE: ${{ inputs.lane }}
           HEADLESS_COSTS: ${{ inputs.headless_costs }}
+          UI_TESTS: ${{ inputs.ui_tests }}
         run: |
           if [ "$HEADLESS_COSTS" = true ] && [ "$LANE" != costs ]; then
             echo '::error::headless_costs=true requires lane=costs'
+            exit 1
+          fi
+          if [ -n "$UI_TESTS" ] && [ "$LANE" = performance ]; then
+            echo '::error::ui_tests requires lane=full; lane=performance would run nothing'
             exit 1
           fi
 
@@ -236,14 +241,16 @@ jobs:
     # That quadratic, deliberately checked behavior is independent of the
     # functional unit suite, so the seeds get their own required runner: one
     # build, then one test process per seed. Every seed runs even when an
-    # earlier one fails, and the job fails if any seed failed. Each seed has
-    # its own 20-minute limit (the slowest seed took 6 min in run 43976364570),
-    # so a hung seed fails alone instead of starving the seeds after it.
+    # earlier one fails, and the job fails unless every named seed passed.
+    # Each seed's test has its own 20-minute limit (the slowest seed took
+    # 6 min in run 43976364570) and its result reader 2 minutes, so a hung seed
+    # fails alone instead of starving the seeds after it.
     timeout-minutes: 120
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       NOTES_SEEDS: 11012 11013 11014 11015
       NOTES_SEED_TIMEOUT_SECONDS: 1200
+      NOTES_RESULT_TIMEOUT_SECONDS: 120
       NOTES_SEED_HOST: AtticUnitTestHost
     steps:
       - uses: actions/checkout@v5
@@ -255,27 +262,25 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
           Scripts/sign_crash_harness.zsh "$RUNNER_TEMP/AtticNotesSeed/Build/Products/Local/AtticUnitTestHost.app"
       - name: Verify every complete generated Notes editor seed
-        timeout-minutes: 95
+        timeout-minutes: 100
         run: |
-          # Job control gives each seed and its watchdog their own process
-          # group, so a timeout stops the whole xcodebuild tree by exact group id.
+          # Job control gives each bounded command and its watchdog their own
+          # process group, so a timeout stops the whole tree by exact group id.
           set -m
-          failed=''
-          for seed in $NOTES_SEEDS; do
-            echo "::group::Notes editor generated seed $seed"
-            out="$RUNNER_TEMP/notes-seed-$seed"
-            mkdir -p "$out"
-            Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
-              -configuration Local -destination 'platform=macOS' \
-              -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
-              -resultBundlePath "$out/AtticNotesSeed.xcresult" \
-              CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
-              -only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed$seed < /dev/null &
+          host_suffix="/AtticNotesSeed/Build/Products/Local/$NOTES_SEED_HOST.app/Contents/MacOS/$NOTES_SEED_HOST"
+
+          # run_bounded LABEL SECONDS COMMAND...: returns the command's status,
+          # or 124 after interrupting (then killing) its process group on timeout.
+          run_bounded() {
+            local label=$1 limit=$2 pid watchdog waited rc=0
+            shift 2
+            rm -f "$out/timed-out-now"
+            "$@" < /dev/null &
             pid=$!
             (
-              sleep "$NOTES_SEED_TIMEOUT_SECONDS"
-              : > "$out/timed-out"
-              echo "::error::Notes editor generated seed $seed timed out after $NOTES_SEED_TIMEOUT_SECONDS s"
+              sleep "$limit"
+              : > "$out/timed-out-now"
+              echo "::error::$label timed out after $limit s"
               kill -INT -- "-$pid" 2>/dev/null
               waited=0
               while [ "$waited" -lt 60 ] && kill -0 -- "-$pid" 2>/dev/null; do sleep 1; waited=$((waited + 1)); done
@@ -283,41 +288,93 @@ jobs:
               exit 0
             ) &
             watchdog=$!
-            status=0
-            wait "$pid" || status=$?
-            if [ -e "$out/timed-out" ]; then
-              wait "$watchdog" || true
-              # The test host is launched outside this process group, so stop
-              # any copy still running, by exact process name and PID.
-              hosts=$(pgrep -x -U "$(id -u)" "$NOTES_SEED_HOST" || true)
-              for host in $hosts; do
-                echo "::warning::Seed $seed timed out: stopping $NOTES_SEED_HOST pid $host"
-                kill -TERM "$host" 2>/dev/null || true
-              done
-              for host in $hosts; do
-                waited=0
-                while [ "$waited" -lt 10 ] && kill -0 "$host" 2>/dev/null; do sleep 1; waited=$((waited + 1)); done
-                if kill -KILL "$host" 2>/dev/null; then echo "::warning::Seed $seed: killed $NOTES_SEED_HOST pid $host"; fi
-              done
-            else
+            wait "$pid" || rc=$?
+            if [ ! -e "$out/timed-out-now" ]; then
               kill -- "-$watchdog" 2>/dev/null || true
-              wait "$watchdog" 2>/dev/null || true
             fi
+            wait "$watchdog" 2>/dev/null || true
+            if [ -e "$out/timed-out-now" ]; then
+              : > "$out/timed-out"
+              return 124
+            fi
+            return "$rc"
+          }
+
+          # Test hosts are launched outside the seed's process group. Stop any
+          # that this seed started: new since its start, at this job's build path.
+          seed_hosts() {
+            local host
+            for host in $(pgrep -x -U "$(id -u)" "$NOTES_SEED_HOST" || true); do
+              case " $hosts_before " in *" $host "*) continue ;; esac
+              case "$(ps -o comm= -p "$host" 2>/dev/null)" in *"$host_suffix") echo "$host" ;; esac
+            done
+          }
+          stop_seed_hosts() {
+            local host hosts waited=0
+            # A host that is already exiting gets 5 s to finish on its own.
+            while [ "$waited" -lt 5 ] && [ -n "$(seed_hosts)" ]; do sleep 1; waited=$((waited + 1)); done
+            waited=0
+            hosts=$(seed_hosts)
+            [ -n "$hosts" ] || return 0
+            for host in $hosts; do
+              echo "::warning::Seed $seed left $NOTES_SEED_HOST pid $host running: stopping it"
+              kill -TERM "$host" 2>/dev/null || true
+            done
+            while [ "$waited" -lt 10 ] && [ -n "$(seed_hosts)" ]; do sleep 1; waited=$((waited + 1)); done
+            for host in $(seed_hosts); do
+              kill -KILL "$host" 2>/dev/null && echo "::warning::Seed $seed: killed $NOTES_SEED_HOST pid $host" || true
+            done
+          }
+
+          read_result() {
+            xcrun xcresulttool get test-results summary \
+              --path "$1/AtticNotesSeed.xcresult" --format json > "$1/notes-seed-summary.json" \
+            && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==1 and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$1/notes-seed-summary.json"
+          }
+
+          failed='' named=0 passed=0 timed_out_seed=''
+          for seed in $NOTES_SEEDS; do
+            named=$((named + 1))
+            echo "::group::Notes editor generated seed $seed"
+            out="$RUNNER_TEMP/notes-seed-$seed"
+            mkdir -p "$out"
+            if [ -n "$timed_out_seed" ]; then
+              echo "::warning::Seed $seed runs after seed $timed_out_seed timed out; its result may be affected by test infrastructure that timeout left behind"
+            fi
+            hosts_before=$(pgrep -x -U "$(id -u)" "$NOTES_SEED_HOST" || true)
+            status=0
+            case "$seed" in
+              *[!0-9]*) echo "::error::Notes editor generated seed '$seed' is not a number"; status=2 ;;
+              *)
+                run_bounded "Notes editor generated seed $seed test" "$NOTES_SEED_TIMEOUT_SECONDS" \
+                  Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+                  -configuration Local -destination 'platform=macOS' \
+                  -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
+                  -resultBundlePath "$out/AtticNotesSeed.xcresult" \
+                  CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
+                  -only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed$seed || status=$?
+                ;;
+            esac
+            stop_seed_hosts
             if [ "$status" -eq 0 ] && [ ! -e "$out/timed-out" ] \
-              && xcrun xcresulttool get test-results summary \
-                --path "$out/AtticNotesSeed.xcresult" --format json > "$out/notes-seed-summary.json" \
-              && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==1 and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$out/notes-seed-summary.json"; then
+              && run_bounded "Notes editor generated seed $seed result reader" "$NOTES_RESULT_TIMEOUT_SECONDS" read_result "$out"; then
+              passed=$((passed + 1))
               echo "Notes editor generated seed $seed passed"
             else
               failed="$failed $seed"
               echo "::error::Notes editor generated seed $seed failed"
             fi
+            if [ -e "$out/timed-out" ] && [ -z "$timed_out_seed" ]; then timed_out_seed=$seed; fi
             echo "::endgroup::"
           done
-          if [ -n "$failed" ]; then
-            echo "::error::Failed Notes editor generated seeds:$failed"
+          if [ -n "$timed_out_seed" ]; then
+            echo "::warning::Seed $timed_out_seed timed out; results of the seeds after it are suspect"
+          fi
+          if [ -n "$failed" ] || [ "$named" -eq 0 ] || [ "$passed" -ne "$named" ]; then
+            echo "::error::Notes editor generated seeds: $passed of $named passed; failed:${failed:- none}"
             exit 1
           fi
+          echo "Notes editor generated seeds: $passed of $named passed"
       - name: Upload Notes editor generated seed 11012 evidence
         if: always()
         uses: actions/upload-artifact@v4

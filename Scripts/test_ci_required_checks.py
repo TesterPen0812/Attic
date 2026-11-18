@@ -158,9 +158,14 @@ class RequiredChecksTests(unittest.TestCase):
             for headless in ['true', 'false', '']:
                 with self.subTest(lane=lane, headless=headless):
                     result = subprocess.run(['/bin/bash', '-e', '-c', script],
-                        env=dict(os.environ, LANE=lane, HEADLESS_COSTS=headless), capture_output=True, text=True)
+                        env=dict(os.environ, LANE=lane, HEADLESS_COSTS=headless, UI_TESTS=''), capture_output=True, text=True)
                     self.assertEqual(result.returncode, int(headless == 'true' and lane != 'costs'))
                     if result.returncode: self.assertIn('::error::headless_costs=true requires lane=costs', result.stdout)
+            with self.subTest(lane=lane, ui_tests='AtticUITests/X'):
+                result = subprocess.run(['/bin/bash', '-e', '-c', script],
+                    env=dict(os.environ, LANE=lane, HEADLESS_COSTS='false', UI_TESTS='AtticUITests/X'), capture_output=True, text=True)
+                self.assertEqual(result.returncode, int(lane == 'performance'))
+                if result.returncode: self.assertIn('::error::ui_tests requires lane=full', result.stdout)
         for job in ['fka', 'round-trips', 'notes-seeds', 'macos', 'unit-continuation', 'ui', 'costs', 'performance', 'appearance', 'iphone']:
             self.assertIn(f'  {job}:\n    needs: validate-inputs\n', workflow)
 
@@ -243,20 +248,81 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn('test-without-building', job)
         self.assertIn('-only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed$seed', job)
         self.assertIn('failed="$failed $seed"', job)
-        self.assertIn('if [ -n "$failed" ]; then', job)
+        self.assertIn('if [ -n "$failed" ] || [ "$named" -eq 0 ] || [ "$passed" -ne "$named" ]; then', job)
+        self.assertIn('NOTES_RESULT_TIMEOUT_SECONDS: 120\n', job)
         self.assertIn('NOTES_SEED_TIMEOUT_SECONDS: 1200\n', job)
         self.assertIn('kill -INT -- "-$pid"', job)
         self.assertIn('kill -KILL -- "-$pid"', job)
         self.assertIn('NOTES_SEED_HOST: AtticUnitTestHost\n', job)
         self.assertIn('pgrep -x -U "$(id -u)" "$NOTES_SEED_HOST"', job)
         for seed in seeds:
-            self.assertIn(f'name: notes-editor-seed-{seed}-${{{{ github.sha }}}}', job)
+            upload = job.split(f'      - name: Upload Notes editor generated seed {seed} evidence\n', 1)[1].split('\n      - ', 1)[0]
+            self.assertIn(f'name: notes-editor-seed-{seed}-${{{{ github.sha }}}}', upload)
+            self.assertIn(f'${{{{ runner.temp }}}}/notes-seed-{seed}/AtticNotesSeed.xcresult\n', upload)
+            self.assertIn(f'${{{{ runner.temp }}}}/notes-seed-{seed}/notes-seed-summary.json\n', upload)
+            self.assertIn('if: always()', upload)
         self.assertIn('timeout-minutes: 120', job)
         self.assertNotIn('continue-on-error', job)
         self.assertIn('s["passedTests"]==1', job)
         self.assertIn('s["skippedTests"]==0', job)
         self.assertIn('s["failedTests"]==0', job)
         self.assertIn('NOTES_SEEDS: ${{ needs.notes-seeds.result }}', required)
+
+    def test_performance_and_costs_run_on_their_own_lanes_and_on_main_pushes_only(self):
+        import re
+        workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
+        conditions = dict(re.findall(r'\n  ([a-z-]+):\n    needs: [^\n]+\n(?:    [a-z-]+: [^\n]+\n)?    if: \$\{\{ ([^\n]+) \}\}\n', workflow))
+        self.assertEqual(conditions['costs'], "(github.event_name != 'workflow_dispatch' || inputs.lane == 'costs') && !inputs.ui_tests")
+        self.assertEqual(conditions['performance'], "(github.event_name != 'workflow_dispatch' || inputs.lane == 'performance') && !inputs.ui_tests")
+        self.assertIn('options: [full, fast, costs, performance, fka]', workflow)
+        for job in ['round-trips', 'notes-seeds', 'macos', 'unit-continuation', 'required', 'ui', 'appearance', 'iphone', 'canvas-lab']:
+            with self.subTest(job=job):
+                self.assertIn("inputs.lane != 'performance'", conditions[job])
+        self.assertIn("inputs.lane == 'fka' || inputs.lane == 'full'", conditions['fka'])
+        self.assertIn('group: attic-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.lane }}\n', workflow)
+
+    def test_notes_seed_loop_runs_every_seed_and_fails_unless_all_named_seeds_pass(self):
+        import os
+        import stat
+        import subprocess
+        workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
+        job = workflow.split('  notes-seeds:', 1)[1].split('\n  macos:', 1)[0]
+        step = job.split('      - name: Verify every complete generated Notes editor seed\n', 1)[1].split('\n      - name:', 1)[0]
+        script = '\n'.join(line[10:] for line in step.split('        run: |\n', 1)[1].splitlines())
+        stub_test = ('#!/bin/bash\nseed=$(printf "%s\\n" "$@" | sed -n "s/.*testGeneratedSeed//p")\n'
+                     'echo "test $seed" >> "$CALLS"\n'
+                     '[ "$seed" = "$FAIL_SEED" ] && [ "$MODE" = fail ] && exit 65\n'
+                     '[ "$seed" = "$FAIL_SEED" ] && [ "$MODE" = hang ] && sleep 30\nexit 0\n')
+        stub_xcrun = ('#!/bin/bash\necho "read" >> "$CALLS"\n'
+                      'case "$*" in *notes-seed-$FAIL_SEED/*) [ "$MODE" = reader-hang ] && sleep 30 ;; esac\n'
+                      'echo \'{"passedTests":1,"failedTests":0,"skippedTests":0,"expectedFailures":0}\'\n')
+        cases = [  # (seeds, fail seed, mode, exit code, test runs)
+            ('11012 11013 11014 11015', '', 'pass', 0, 4),
+            ('11012 11013 11014 11015', '11013', 'fail', 1, 4),
+            ('11012 11013 11014 11015', '11013', 'hang', 1, 4),
+            ('11012 11013 11014 11015', '11012', 'reader-hang', 1, 4),
+            ('', '', 'pass', 1, 0),
+            ('11012 1101x 11014 11015', '', 'pass', 1, 3),
+        ]
+        for seeds, fail_seed, mode, code, runs in cases:
+            with self.subTest(seeds=seeds, fail_seed=fail_seed, mode=mode), tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                (tmp / 'Scripts').mkdir()
+                (tmp / 'bin').mkdir()
+                for path, body in [(tmp / 'Scripts/xcodebuild_locked.sh', stub_test), (tmp / 'bin/xcrun', stub_xcrun)]:
+                    path.write_text(body)
+                    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+                env = dict(os.environ, PATH=f"{tmp / 'bin'}:{os.environ['PATH']}", RUNNER_TEMP=str(tmp),
+                           CALLS=str(tmp / 'calls'), FAIL_SEED=fail_seed, MODE=mode, NOTES_SEEDS=seeds,
+                           NOTES_SEED_HOST='AtticUnitTestHost', NOTES_SEED_TIMEOUT_SECONDS='2',
+                           NOTES_RESULT_TIMEOUT_SECONDS='2')
+                result = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-e', '-c', script], cwd=tmp, env=env,
+                                        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+                calls = (tmp / 'calls').read_text().split('\n') if (tmp / 'calls').exists() else []
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                self.assertEqual(sum(line.startswith('test ') for line in calls), runs, calls)
+                if mode in ('hang', 'reader-hang'):
+                    self.assertIn('timed out after 2 s', result.stdout)
 
     def test_generated_methods_compile_in_exactly_one_lane(self):
         import json

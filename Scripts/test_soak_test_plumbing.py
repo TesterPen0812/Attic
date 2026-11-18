@@ -1,4 +1,4 @@
-"""Keep expensive retention gates opt-in locally and mandatory in full CI."""
+"""Keep expensive retention gates opt-in locally and mandatory in the costs lane and on main pushes."""
 from pathlib import Path
 import re
 import unittest
@@ -24,7 +24,7 @@ class SoakTestPlumbingTests(unittest.TestCase):
     def test_costs_lane_runs_and_requires_all_heavy_gates(self):
         workflow = (ROOT / '.github/workflows/macos-ci.yml').read_text()
         costs = workflow.split('\n  costs:', 1)[1].split('\n  performance:', 1)[0]
-        self.assertIn("inputs.lane != 'fast' && inputs.lane != 'fka'", costs)
+        self.assertIn("(github.event_name != 'workflow_dispatch' || inputs.lane == 'costs') && !inputs.ui_tests", costs)
         step = costs.split('- name: Run opt-in soak and retention gates', 1)[1].split('\n      - name:', 1)[0]
         self.assertIn('TEST_RUNNER_ATTIC_SOAK_TESTS: "1"', step)
         self.assertIn('-parallel-testing-enabled NO', step)
