@@ -266,6 +266,9 @@
     "AtticTests/PanelChromeTests.swift": {
       "runloop": 4
     },
+    "AtticTests/PanelComposerScrollRoomTests.swift": {
+      "runloop": 1
+    },
     "AtticTests/PanelGeometryTests.swift": {
       "runloop": 5,
       "skip": 3
