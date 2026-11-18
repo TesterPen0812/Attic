@@ -79,6 +79,60 @@ final class TasksCountGuardTests: XCTestCase {
         XCTAssertEqual(bySize[40], bySize[400], "F3/TA-02: a tick's row rebuilds grew with the store")
     }
 
+    /// The tick guard on dated rows (PR 30 review): Now with every kind of
+    /// date group, a manual order that mixes them and an Overdue group over
+    /// two days with clocks. A tick on the common path rebuilds Now's rows
+    /// once (the release), the Overdue one included. The named fallback, a
+    /// held row off its index after a rebuild during its hold (the second
+    /// of two holds in one date group, once the first is released before it
+    /// is saved), rebuilds at most twice: the save and the release.
+    func testGuardDatedTicksRebuildNowRowsOncePerTick() throws {
+        let (model, store) = try makeDatedModel([("H", -2, 600), ("X", 1, nil), ("Y", 0, 540), ("Q", -1, nil), ("Z", 1, nil),
+                                                 ("W", 0, nil), ("A", -2, 540), ("V", 0, 480), ("U", nil, nil)])
+        let hosting = page(model, store)
+        XCTAssertEqual(model.rows(for: .now).map(\.model.title), ["A", "Q", "H", "V", "Y", "W", "X", "Z", "U"])
+        func task(_ title: String) throws -> UUID { try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id) }
+        func misses() -> Int { model.rowsCacheMissCount[.now, default: 0] }
+        func press(_ id: UUID) { model.completeAcknowledged(id) { _ in }; settle(hosting) }
+        func save(_ id: UUID) { model.settlePendingCompletionAcknowledgements(through: id); settle(hosting) }
+        func release(_ id: UUID) { model.releaseHold(id); settle(hosting); settle(hosting) }
+
+        // H: Overdue over two days, a clock on its day. X: Tomorrow, behind
+        // Today's rows in the manual order. Y: Today, with a clock.
+        for title in ["H", "X", "Y"] {
+            let id = try task(title), start = misses()
+            press(id)
+            save(id)
+            XCTAssertEqual(store.task(withID: id)?.status, .done)
+            release(id)
+            XCTAssertNil(model.held[id])
+            print("GUARD_DATED_TICK row=\(title) now_rows_cache_misses=\(misses() - start)")
+            XCTAssertEqual(misses() - start, 1, "\(title): one tick rebuilt Now's rows \(misses() - start) times")
+        }
+
+        // V and W, the whole of Today, held together; V is released before W
+        // is saved, so W is put back at the end of its shorter group.
+        XCTAssertEqual(model.rows(for: .now).map(\.model.title), ["Q", "A", "V", "W", "Z", "U"])
+        let v = try task("V"), w = try task("W")
+        var start = misses()
+        press(v)
+        press(w)
+        save(v)
+        release(v)
+        print("GUARD_DATED_TICK row=V now_rows_cache_misses=\(misses() - start)")
+        XCTAssertEqual(misses() - start, 1, "V: one tick rebuilt Now's rows \(misses() - start) times")
+        let place = try XCTUnwrap(model.held[w]?.index)
+        XCTAssertNotEqual(model.rows(for: .now).firstIndex { $0.id == w }, place,
+                          "W is not at its index, so its save takes the fallback this guard bounds")
+        start = misses()
+        save(w)
+        XCTAssertEqual(store.task(withID: w)?.status, .done)
+        release(w)
+        XCTAssertNil(model.held[w])
+        print("GUARD_DATED_TICK row=W off_index now_rows_cache_misses=\(misses() - start)")
+        XCTAssertLessThanOrEqual(misses() - start, 2, "W (off its index): its save and release rebuilt Now's rows \(misses() - start) times")
+    }
+
     /// The tick's restated rows are the rows a full build gives (the oracle
     /// builds every restated list in full as well), on a Now with every kind
     /// of date group and clock, a folded group, a family, two holds at once,
@@ -274,6 +328,63 @@ final class TasksCountGuardTests: XCTestCase {
             XCTAssertFalse(model.rows(for: .now).contains { $0.id == id }, "\(title): the released row leaves")
         }
         XCTAssertGreaterThan(model.rowsRestateCount[.now, default: 0], restates)
+    }
+
+    /// PR 30, accepted change to the full build: at the press, a full build
+    /// of the list keeps the held row where it was drawn when the manual
+    /// order mixes date groups. Only full builds are read (each read toggles
+    /// "Completed today", which changes the list's key; Now draws no done
+    /// rows), and only APIs the trunk has, so it runs on the trunk too.
+    func testFullBuildKeepsAHeldRowInPlaceAtThePressWhenManualOrderMixesDateGroups() throws {
+        // Manual order X Y Z W V U, drawn Today (Y W V) · Tomorrow (X Z) · No date (U).
+        let (model, store) = try makeDatedModel([("X", 1, nil), ("Y", 0, nil), ("Z", 1, nil), ("W", 0, nil), ("V", 0, nil), ("U", nil, nil)])
+        func fullBuild() -> [UUID] {
+            model.toggleCompletedToday()
+            let ids = model.rows(for: .now).map(\.id)
+            model.toggleCompletedToday()
+            return ids
+        }
+        XCTAssertEqual(model.rows(for: .now).map(\.model.title), ["Y", "W", "V", "X", "Z", "U"])
+        for title in ["X", "Z", "W", "U"] {
+            let before = fullBuild()
+            let id = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id)
+            model.completeAcknowledged(id) { _ in }
+            XCTAssertNotNil(model.held[id])
+            XCTAssertEqual(fullBuild(), before, "\(title): the full build keeps the held row in place at the press")
+            model.settlePendingCompletionAcknowledgements(through: id)
+            XCTAssertEqual(store.task(withID: id)?.status, .done)
+            model.releaseHold(id)
+            XCTAssertFalse(fullBuild().contains(id), "\(title): the released row leaves")
+        }
+    }
+
+    /// PR 30 review: in an Overdue group over two days with a clock on the
+    /// held row's day, the held row and every row around it keep their
+    /// drawn places until the release, through the save and any full build.
+    /// (Overdue orders each day's rows by clock within that day's slots in
+    /// the store's order, and a save moves a finished task to the end of
+    /// that order.) The rows may reorder at the release, as on the trunk.
+    func testOverdueRowsKeepTheirPlacesUntilTheReleaseAcrossDaysWithClocks() throws {
+        // Manual order H Q A U; Overdue draws A (9:00) in H's slot, then Q, then H (10:00) in A's.
+        let (model, store) = try makeDatedModel([("H", -2, 600), ("Q", -1, nil), ("A", -2, 540), ("U", nil, nil)])
+        func fullBuild() -> [UUID] {
+            model.toggleCompletedToday()
+            let ids = model.rows(for: .now).map(\.id)
+            model.toggleCompletedToday()
+            return ids
+        }
+        XCTAssertEqual(model.rows(for: .now).map(\.model.title), ["A", "Q", "H", "U"])
+        let before = model.rows(for: .now).map(\.id)
+        let id = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "H" }?.id)
+        model.completeAcknowledged(id) { _ in }
+        XCTAssertEqual(model.rows(for: .now).map(\.id), before, "the press keeps every row in place")
+        XCTAssertEqual(fullBuild(), before, "a full build during the hold keeps every row in place")
+        model.settlePendingCompletionAcknowledgements(through: id)
+        XCTAssertEqual(store.task(withID: id)?.status, .done)
+        XCTAssertEqual(model.rows(for: .now).map(\.id), before, "the save keeps every row in place")
+        XCTAssertEqual(fullBuild(), before, "a full build after the save keeps every row in place")
+        model.releaseHold(id)
+        XCTAssertFalse(model.rows(for: .now).contains { $0.id == id }, "the released row leaves")
     }
 
     // MARK: - Rig
