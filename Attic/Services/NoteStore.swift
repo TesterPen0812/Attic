@@ -153,6 +153,11 @@ final class NoteStore: ObservableObject {
     private var tagInventory: (counts: [String: Int], rows: [UUID: String])?
     private(set) var tagInventoryBuildCount = 0
     private(set) var tagInventoryNoteReadCount = 0
+    #if DEBUG
+    /// Whole-store reloads (`reloadModels`): every note and attachment read into a fresh context.
+    private(set) var fullNoteReloadCount = 0
+    func resetFullNoteReloadCount() { fullNoteReloadCount = 0 }
+    #endif
 
     /// Warm suggestions read values only, without revisiting the library's
     /// models. Content-only saves do not invalidate this inventory.
@@ -1766,6 +1771,9 @@ final class NoteStore: ObservableObject {
     /// outside context, the workspace coordinator's transaction), so a failed one must not leave
     /// the inventory as it was.
     private func reloadModels(preservingAttachmentProofs: Bool = false) throws {
+        #if DEBUG
+        fullNoteReloadCount += 1
+        #endif
         do {
             let refreshedContext = try makeFreshContext()
             let presentation = try presentationSnapshot(in: refreshedContext)

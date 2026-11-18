@@ -282,6 +282,68 @@ final class TaskPerformanceGateTests: XCTestCase {
         print("PF2_COUNTS journaled_deletion_full_reloads=\(store.fullTaskReloadCount)")
     }
 
+    /// Fix order item 1 (lead, 18 Nov 2026; audits F2 and TA-01). One Delete of a live task and its Undo, through
+    /// the panel's wiring: the library, and the Notes lifecycle controller registered for whole-item lifecycle.
+    /// A journaled delete or restore replaces the task store's staging context with one fresh read (the stale-context
+    /// rule, pinned above in testPF2ConfirmedMembershipChangesDoNotReloadUnrelatedArchive); a second full read of the
+    /// same tables after it protects nothing new. Red on the trunk: a delete reloads every task and every note three
+    /// times, its Undo twice.
+    func testF2OneDeleteAndItsUndoReadEachStoreOnce() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let seed = ModelContext(container)
+        var ids: [UUID] = []
+        for index in 0..<30 {
+            let task = TaskItem(title: "Open task \(index) with a longer title like the tracker's", createdAt: date)
+            task.tags = ["tag\(index % 7)", "area\(index % 3)"]
+            seed.insert(task); ids.append(task.id)
+        }
+        let document = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Open task 3"), .text("Writing")], requires: ["taskNote"]))
+        let writing = NoteItem(title: "Open task 3", body: "Writing", createdAt: date)
+        writing.taskID = ids[3]; writing.content = document
+        seed.insert(writing)
+        for index in 0..<6 { seed.insert(NoteItem(title: "Note \(index)", body: "Body \(index)", createdAt: date)) }
+        try seed.save()
+        let files = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("F2Guard-\(UUID())"))
+        let tasks = TaskStore(container: container, now: { date }, taskImageFiles: files)
+        let notes = NoteStore(container: container, now: { date }, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        let controller = NotesPageController(store: notes, journal: coordinator.journal)
+        await notes.waitForAttachmentReconciliation()
+        XCTAssertTrue(coordinator.lifecycleNotes === controller, "didCommit must reach the Notes controller, as in the panel")
+        XCTAssertTrue(coordinator.lifecycleLibrary === library)
+
+        var counts: [String] = []
+        // A bare task, then a task that has writing (its note goes to Recently Deleted with it).
+        for (label, id) in [("bare", ids[5]), ("writing", ids[3])] {
+            tasks.resetFullTaskReloadCount(); notes.resetFullNoteReloadCount()
+            XCTAssertTrue(library.deleteTasks([id]).isApplied)
+            XCTAssertNil(tasks.task(withID: id))
+            let deleteCounts = (tasks.fullTaskReloadCount, notes.fullNoteReloadCount)
+
+            tasks.resetFullTaskReloadCount(); notes.resetFullNoteReloadCount()
+            XCTAssertTrue(library.undo(in: .tasks).isApplied)
+            XCTAssertNotNil(tasks.task(withID: id))
+            let undoCounts = (tasks.fullTaskReloadCount, notes.fullNoteReloadCount)
+            counts.append("\(label)_delete_task_reloads=\(deleteCounts.0) \(label)_delete_note_reloads=\(deleteCounts.1) "
+                + "\(label)_undo_task_reloads=\(undoCounts.0) \(label)_undo_note_reloads=\(undoCounts.1)")
+
+            XCTAssertEqual(deleteCounts.0, 1, "\(label) delete: one fresh read replaces the journaled staging context")
+            XCTAssertLessThanOrEqual(deleteCounts.1, 1, "\(label) delete: notes read at most once")
+            XCTAssertEqual(undoCounts.0, 1, "\(label) Undo: one fresh read replaces the journaled staging context")
+            XCTAssertLessThanOrEqual(undoCounts.1, 1, "\(label) Undo: notes read at most once")
+        }
+        // What the reloads exist for still holds: durable rows, and the writing follows its task both ways.
+        let writingID = writing.id
+        let durable = try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == writingID }))
+        XCTAssertTrue(durable.allSatisfy { $0.deletedAt == nil })
+        XCTAssertNotNil(notes.note(withID: writingID))
+        print("F2_COUNTS " + counts.joined(separator: " "))
+        await controller.waitForRecoveryWork()
+        await notes.waitForAttachmentReconciliation()
+    }
+
     func testPF2JournaledPresentationReadFailureRecoversFromFreshContext() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let store = TaskStore(container: container)
