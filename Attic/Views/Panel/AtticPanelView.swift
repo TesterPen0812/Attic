@@ -868,7 +868,9 @@ struct PanelStoreRevisionObserver: View {
     var body: some View {
         Color.clear.frame(width: 0, height: 0)
             .onChange(of: store.revision) { _, _ in
-                uiState.reconcileTaskIDs(Set(store.tasks.map(\.id)))
+                // The store's ID index (one per revision, shared) answers
+                // for the few IDs the panel names, not a set of every task.
+                uiState.reconcileTaskIDs { store.task(withID: $0) != nil }
             }
     }
 }

@@ -452,25 +452,37 @@ final class PanelUIState: ObservableObject {
         editingDraftTitle = ""
     }
 
-    /// DEBUG count of the live task IDs handed to `reconcileTaskIDs`.
+    /// DEBUG count of the task IDs `reconcileTaskIDs` examined.
     private(set) var reconciledTaskIDCount = 0
 
     func reconcileTaskIDs(_ availableIDs: Set<UUID>) {
-        #if DEBUG
-        reconciledTaskIDCount += availableIDs.count
-        #endif
-        if let confirmingTaskCompletionID, !availableIDs.contains(confirmingTaskCompletionID) {
+        reconcileTaskIDs(isLive: availableIDs.contains)
+    }
+
+    /// Panel state that names a task ends when the task is no longer live
+    /// (deleted, cleaned up, undone): a completion or deletion confirmation,
+    /// a file picker for it (cancelled), and its title edit with its draft.
+    /// Only the IDs this state names are examined, so a save costs the same
+    /// in any store (F7); with none named, nothing is looked up.
+    func reconcileTaskIDs(isLive: (UUID) -> Bool) {
+        func gone(_ id: UUID) -> Bool {
+            #if DEBUG
+            reconciledTaskIDCount += 1
+            #endif
+            return !isLive(id)
+        }
+        if let confirmingTaskCompletionID, gone(confirmingTaskCompletionID) {
             self.confirmingTaskCompletionID = nil
         }
         // A picker whose owner was deleted ends as a cancel; its own finish
         // path clears the mark (never cleared directly, see the property).
-        if let taskAttachmentPickerOwnerID, !availableIDs.contains(taskAttachmentPickerOwnerID) {
+        if let taskAttachmentPickerOwnerID, gone(taskAttachmentPickerOwnerID) {
             TaskAttachmentPicker.cancelIfOwned(by: taskAttachmentPickerOwnerID)
         }
-        if let confirmingTaskDeletionID, !availableIDs.contains(confirmingTaskDeletionID) {
+        if let confirmingTaskDeletionID, gone(confirmingTaskDeletionID) {
             self.confirmingTaskDeletionID = nil
         }
-        if let editingTaskID, !availableIDs.contains(editingTaskID) {
+        if let editingTaskID, gone(editingTaskID) {
             self.editingTaskID = nil
             editingDraftTitle = ""
         }
