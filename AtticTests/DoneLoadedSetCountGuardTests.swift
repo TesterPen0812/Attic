@@ -176,6 +176,102 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
         step("search: archived edit", inPlace: true) { XCTAssertTrue(model.setPriority(.low, for: [parents[32]]).isApplied) }
     }
 
+    /// Review R-1 of PR 31. A Done log shorter than one page is loaded whole.
+    /// When a save logs a task below its loaded rows (the daily cleanup
+    /// logging a task finished long ago), the next update shows that row at
+    /// once, as a full read did: no loading rows, and nothing left to read.
+    /// Run with an empty log too (the first task logged).
+    func testShortDoneLogShowsARowLoggedBelowItWithoutLoadingRows() throws {
+        for logged in [10, 0] {
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let context = ModelContext(container)
+            let now = Date()
+            var order: Int64 = 10_000_000
+            for index in 0..<logged {
+                order -= 1_024
+                let completed = now.addingTimeInterval(-86_400 - Double(index + 1) * 3_600)
+                let task = TaskItem(title: "Finished task \(index)", status: .done, createdAt: now, completedAt: completed, manualOrder: order)
+                task.listOrderVersion = TaskItem.currentListOrderVersion
+                task.doneLoggedAt = completed
+                context.insert(task)
+            }
+            // Finished a month ago and still in the list: logging it puts it
+            // below every loaded row.
+            order -= 1_024
+            let late = TaskItem(title: "Finished long ago", status: .done, createdAt: now.addingTimeInterval(-40 * 86_400),
+                                completedAt: now.addingTimeInterval(-30 * 86_400), manualOrder: order)
+            late.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(late)
+            try context.save()
+            let lateID = late.id
+            let store = TaskStore(container: container)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store))
+            model.select(tab: .done)
+            model.loadDoneLogIfNeeded()
+            XCTAssertEqual(model.doneLogTasks.count, logged, "logged=\(logged)")
+            XCTAssertFalse(model.doneLogHasMore, "logged=\(logged): the short log is loaded whole")
+
+            let reads = store.donePageReadCount
+            XCTAssertEqual(store.moveCompletedToDoneLog(before: Calendar.current.startOfDay(for: now)), 1, "logged=\(logged)")
+            // The save named the task, so the loaded page may be updated in place.
+            XCTAssertEqual(store.revisionChangedTaskIDs?.contains(lateID), true, "logged=\(logged)")
+            model.loadDoneLogIfNeeded()
+            XCTAssertEqual(model.doneLogTasks.map(\.id).last, lateID,
+                           "R-1 logged=\(logged): the row logged below the short log is shown at once")
+            XCTAssertEqual(model.doneLogTasks.count, logged + 1, "R-1 logged=\(logged)")
+            XCTAssertFalse(model.doneLogHasMore, "R-1 logged=\(logged): the short log shows loading rows")
+            let afterUpdate = store.donePageReadCount
+            // What the loading row does when it is drawn.
+            model.loadMoreDoneLog()
+            XCTAssertEqual(store.donePageReadCount, afterUpdate,
+                           "R-1 logged=\(logged): the short log read again for a row a full read shows at once")
+            XCTAssertEqual(model.doneLogTasks.count, logged + 1, "R-1 logged=\(logged)")
+            XCTAssertEqual(store.donePageReadCount - reads, 1, "logged=\(logged): one read in all, as a full read")
+            print("GUARD_DONE_SHORT_LOG logged=\(logged) loaded=\(model.doneLogTasks.count) "
+                  + "has_more=\(model.doneLogHasMore) done_page_reads=\(store.donePageReadCount - reads)")
+        }
+    }
+
+    /// Review R-2 of PR 31. A full read that fails puts the cursor back at
+    /// the log's start. When Retry then brings the loaded page up to date in
+    /// place, the next page must still start after the loaded rows: no row
+    /// twice, and the rows the index has next.
+    func testDoneLogNextPageAfterAnInPlaceRetryRepeatsNoRow() throws {
+        let store = try makeStore(open: 5, logged: 100)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        let pageSize = TasksPageModel.doneLogPageSize
+        XCTAssertEqual(model.doneLogTasks.count, pageSize)
+        XCTAssertTrue(model.doneLogHasMore)
+
+        // An edit to a loaded Done task asks for the pages again (a save that
+        // failed publishes no revision, so this is a full read), and that
+        // read fails: Retry is shown and what loaded is kept.
+        store.doneLogReadFailures = 1
+        model.reloadDoneLogAfterEdit()
+        XCTAssertNotNil(model.doneLogFailure, "the full read failed")
+        XCTAssertEqual(model.doneLogTasks.count, pageSize, "a failed read keeps what loaded")
+
+        // A save elsewhere names its task; Retry brings the page up to date in place.
+        let open = try XCTUnwrap(store.tasks.first { $0.status == .todo }?.id)
+        XCTAssertTrue(model.setPriority(.high, for: [open]).isApplied)
+        let inPlace = model.doneLogInPlaceRefreshCount
+        model.retryDoneLog()
+        XCTAssertNil(model.doneLogFailure)
+        XCTAssertEqual(model.doneLogInPlaceRefreshCount, inPlace + 1, "Retry updated the loaded page in place")
+        XCTAssertEqual(model.doneLogTasks.count, pageSize)
+
+        model.loadMoreDoneLog()
+        let ids = model.doneLogTasks.map(\.id)
+        let index = store.indexedDoneLogIDs(limit: 3 * pageSize).ids
+        print("GUARD_DONE_CURSOR loaded=\(ids.count) unique=\(Set(ids).count)")
+        XCTAssertEqual(Set(ids).count, ids.count, "R-2: the next page after an in-place Retry repeated loaded rows")
+        XCTAssertEqual(ids.count, 2 * pageSize, "R-2: one more page")
+        XCTAssertEqual(Array(ids.dropFirst(pageSize)), Array(index[pageSize..<min(2 * pageSize, index.count)]),
+                       "R-2: the next page is not the rows after the loaded ones")
+    }
+
     // MARK: - Rig
 
     private static let size = CGSize(width: 344, height: 520)
