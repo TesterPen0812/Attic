@@ -44,6 +44,42 @@ final class DoneLogTagsCountGuardTests: XCTestCase {
         XCTAssertEqual(bySize[50], bySize[500], "TA-05: a priority edit's tag bar walk grew with the Done log")
     }
 
+    /// The fix's own check: the tags the index counts are the tags a walk
+    /// of every Done log entry finds, through tagging and untagging logged
+    /// tasks, a tag's last task leaving the log (delete, Restore to Now),
+    /// Undo, a full reload and a task finishing on Now.
+    func testDoneLogTagCountsMatchAWalkOfTheLog() throws {
+        let store = try makeStore(open: 6, logged: 30, tagged: true)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let hosting = page(model, store)
+        let logged = store.indexedDoneLogPage(limit: 30).tasks.map(\.id)
+        XCTAssertEqual(logged.count, 30)
+        func check(_ name: String, _ body: () -> Void) {
+            body()
+            settle(hosting)
+            let counted = store.indexedDoneLogTags(), walked = store.walkedDoneLogTags()
+            print("DONE_LOG_TAGS step=\"\(name)\" tags=\(counted.sorted())")
+            XCTAssertEqual(counted, walked, name)
+            XCTAssertTrue(counted.isSubset(of: Set(model.tagChips())), "\(name): the chips list the log's tags")
+        }
+        check("seeded") {}
+        check("tag a logged task") { XCTAssertTrue(model.toggleTag("only-here", for: [logged[0]]).isApplied) }
+        check("its tag again on another") { XCTAssertTrue(model.toggleTag("only-here", for: [logged[1]]).isApplied) }
+        check("untag one of the two") { XCTAssertTrue(model.toggleTag("only-here", for: [logged[0]]).isApplied) }
+        XCTAssertTrue(store.indexedDoneLogTags().contains("only-here"), "one logged task still carries it")
+        check("delete the last task carrying it") { XCTAssertTrue(model.delete([logged[1]]).isApplied) }
+        XCTAssertFalse(store.indexedDoneLogTags().contains("only-here"), "no logged task carries it")
+        check("Undo the delete") { XCTAssertTrue(model.undo().isApplied) }
+        XCTAssertTrue(store.indexedDoneLogTags().contains("only-here"), "Undo brought its task back to the log")
+        check("Restore to Now") { XCTAssertTrue(model.restoreToNow([logged[1]]).isApplied) }
+        XCTAssertFalse(store.indexedDoneLogTags().contains("only-here"), "its task left the log")
+        check("a full reload") { store.refresh() }
+        check("finish a task on Now") {
+            if let open = model.rows(for: .now).first?.id { XCTAssertTrue(model.complete(open).isApplied) }
+        }
+        check("untag a seeded tag") { XCTAssertTrue(model.toggleTag("done3", for: [logged[3]]).isApplied) }
+    }
+
     // MARK: - Rig
 
     private static let size = CGSize(width: 344, height: 520)

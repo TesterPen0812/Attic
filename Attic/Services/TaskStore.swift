@@ -2918,6 +2918,9 @@ final class TaskStore: ObservableObject {
 
     private var doneSearchEntries: [DoneSearchEntry] = []
     private var doneSearchEntryIDs = Set<UUID>()
+    /// TA-05: how many Done log entries carry each tag, kept with the
+    /// entries, so the tag bar lists the log's tags without walking it.
+    private var doneSearchTagCounts: [String: Int] = [:]
     private var doneSearchMatches: (query: String, tags: TagPicks, locale: String, ids: [UUID])?
     /// Count requests for an empty query must not displace the active
     /// searched page. Bound this to one separate tag-only projection.
@@ -2944,14 +2947,20 @@ final class TaskStore: ObservableObject {
                 #endif
                 return doneSearchEntryIDs.contains(id)
             }) else { return }
-            doneSearchEntries.removeAll { ids.contains($0.id) }
+            doneSearchEntries.removeAll { entry in
+                guard ids.contains(entry.id) else { return false }
+                countDoneSearchTags(of: entry, by: -1)
+                return true
+            }
             doneSearchEntryIDs.subtract(ids)
         } else {
             doneSearchEntries.removeAll(keepingCapacity: true)
             doneSearchEntryIDs.removeAll(keepingCapacity: true)
+            doneSearchTagCounts.removeAll(keepingCapacity: true)
         }
         doneSearchEntries += entries
         doneSearchEntryIDs.formUnion(entries.map(\.id))
+        for entry in entries { countDoneSearchTags(of: entry, by: 1) }
         doneSearchEntries.sort {
             if $0.completed != $1.completed { return $0.completed > $1.completed }
             if $0.created != $1.created { return $0.created > $1.created }
@@ -3000,15 +3009,31 @@ final class TaskStore: ObservableObject {
             ? doneSearchEntries.count : doneSearchIDs(matching: query, tags: tags).count
     }
 
-    /// Every tag on a task in the Done log, from the index (no read).
+    /// Every tag on a task in the Done log, from the index's tag counts (no
+    /// read, and no walk of the log).
     func indexedDoneLogTags() -> Set<String> {
-        var tags = Set<String>()
-        #if DEBUG
+        Set(doneSearchTagCounts.keys)
+    }
+
+    /// An entry joining (+1) or leaving (-1) the index: its tags' counts. A
+    /// tag counted once per entry, as a set of tags is.
+    private func countDoneSearchTags(of entry: DoneSearchEntry, by change: Int) {
+        for tag in Set(entry.tags) {
+            let count = doneSearchTagCounts[tag, default: 0] + change
+            doneSearchTagCounts[tag] = count > 0 ? count : nil
+        }
+    }
+
+    #if DEBUG
+    /// The oracle: the log's tags by walking every entry, as the tag bar
+    /// did before TA-05. Counted in `doneLogTagEntryVisits`.
+    func walkedDoneLogTags() -> Set<String> {
         doneLogTagEntryVisits += doneSearchEntries.count
-        #endif
+        var tags = Set<String>()
         for entry in doneSearchEntries { tags.formUnion(entry.tags) }
         return tags
     }
+    #endif
 
     /// The panel's logical cursor walks matching canonical IDs. Only this
     /// page is hydrated; no SQL string predicate or full-log count on typing.
