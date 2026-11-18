@@ -1888,10 +1888,10 @@ struct TasksPage: View {
     @ViewBuilder
     private func cell(_ row: TasksListRow, tab: TasksTab, run: AtticSelectionRun, drawn: Bool = true) -> some View {
         let id = row.id
+        let editing = model.editingTitleID == id
         #if DEBUG
         let _ = TasksCellBodyCounts.passPalettes[TasksRowID(tab: tab, id: id)] = tagColouring.palette
         #endif
-        let editing = model.editingTitleID == id
         // The wrapper is skipped by a page pass that changes nothing in its
         // key (slice 1a), and then keeps the closures of the pass that last
         // built it. So they read only what that page copy still reads as it
@@ -1903,6 +1903,7 @@ struct TasksPage: View {
                               isSelected: model.selection.contains(id), isExpanded: model.expanded.contains(id) && row.status != .done,
                               isEditing: editing, opensTaskNotes: opensTaskNotes, chromeInsets: layout.chromeInsets,
                               reduceMotion: design.reduceMotion, hapticsEnabled: design.hapticsEnabled,
+                              palette: tagColouring.palette,
                               isLive: editing || metaPopover?.id == id || (tab == .done && model.doneDetailID == id),
                               references: [ObjectIdentifier(model), ObjectIdentifier(store), ObjectIdentifier(dragSession),
                                            ObjectIdentifier(pointer)]),
@@ -3839,8 +3840,15 @@ final class TasksCellReports {
 }
 
 /// What a row's wrapper shows (slice 1a): a page pass that leaves it the
-/// same skips the wrapper. A row with an editor, a picker or Done's
-/// details open always redraws (they show live state), as `TasksRowKey`.
+/// same skips the wrapper, and the wrapper keeps the row and the page copy
+/// it was last built with. So the key holds every input the wrapper and its
+/// row builders read that no binding, state object or model publication
+/// delivers: the whole row (every field of its model, the full due date
+/// with its tone and whether it shows, its status, subtasks and due day),
+/// the page's state for the row, the design settings and the palette its
+/// menus read, and the objects it acts on. A row with an editor, a picker
+/// or Done's details open always redraws (they show live state), as
+/// `TasksRowKey`.
 struct TasksCellKey: Equatable {
     let row: TasksListRow
     let tab: TasksTab
@@ -3857,17 +3865,22 @@ struct TasksCellKey: Equatable {
     /// The design settings the row's transitions and haptics read.
     let reduceMotion: Bool
     let hapticsEnabled: Bool
+    /// The tag colours the row's menus show (the Tags submenu's swatches).
+    let palette: AtticTagPalette
     let isLive: Bool
     /// The model, the store, the drag session and the pointer.
     let references: [ObjectIdentifier]
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        !lhs.isLive && !rhs.isLive && lhs.row == rhs.row && lhs.tab == rhs.tab && lhs.run == rhs.run
+        // `TasksListRow.==` leaves out parts of the row's model (the due
+        // date's tone, whether it shows): the model is compared whole.
+        !lhs.isLive && !rhs.isLive && lhs.row == rhs.row && lhs.row.model == rhs.row.model
+            && lhs.tab == rhs.tab && lhs.run == rhs.run
             && lhs.drawn == rhs.drawn && lhs.isActive == rhs.isActive && lhs.isSelected == rhs.isSelected
             && lhs.isExpanded == rhs.isExpanded && lhs.isEditing == rhs.isEditing
             && lhs.opensTaskNotes == rhs.opensTaskNotes && lhs.chromeInsets == rhs.chromeInsets
             && lhs.reduceMotion == rhs.reduceMotion && lhs.hapticsEnabled == rhs.hapticsEnabled
-            && lhs.references == rhs.references
+            && lhs.palette == rhs.palette && lhs.references == rhs.references
     }
 }
 
@@ -4722,9 +4735,11 @@ struct TasksReorderCell<Row: View, Below: View>: View, Equatable {
                 state = value.translation.height
             }
             .onChanged { value in
+                // The press decision first: a refused press never works out
+                // a group. Then the group once, when the drag lifts.
+                guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart) else { return }
                 let group = drag?.id == id ? drag?.group ?? [] : self.group()
-                guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
-                      let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
+                guard let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
                 session.translation = value.translation.height
                 session.horizontalTranslation = value.translation.width
                 session.location = value.location
@@ -4752,13 +4767,18 @@ struct TasksReorderCell<Row: View, Below: View>: View, Equatable {
             .onEnded { value in
                 // A queued Escape must be read before the release commits.
                 session.cancellation.poll()
-                let group = drag?.id == id ? drag?.group ?? [] : self.group()
                 // A cancelled press never commits on release.
-                guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
-                      let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
+                guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart) else { return }
+                // The release lands among the group as it is now, as on the
+                // trunk; a row that has left it since the lift means the
+                // drop lands back and writes nothing (Astra R-2).
+                let group = self.group()
+                let lifted = drag?.id == id ? drag?.group ?? group : group
+                let left = lifted.contains { !group.contains($0) }
+                guard let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
                 let moved = value.translation.height + (drag?.id == id ? (drag?.scrolled ?? 0) : 0)
                 let crossing = crossDay(value.location)
-                let target = crossing ? start
+                let target = crossing || left ? start
                     : Self.target(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
                 onEnd(TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target, geometry: session.geometry))
             }

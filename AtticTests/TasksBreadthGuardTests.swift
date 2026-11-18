@@ -276,6 +276,39 @@ final class TasksBreadthGuardTests: XCTestCase {
         XCTAssertNil(host.store.task(withID: lifted)?.dueDay)
     }
 
+    /// The other side of Astra R-2: a row that joins the group mid-drag
+    /// (renamed into Find) does not cancel the drop. The release lands
+    /// among the group as it is now, as on the trunk.
+    func testARowThatJoinsTheGroupMidDragLeavesTheDropStanding() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = true
+        let host = try CrossDayHost(seed: [TaskDraft(title: "Match A", status: .backlog),
+                                           TaskDraft(title: "Match B", status: .backlog),
+                                           TaskDraft(title: "Other C", status: .backlog)])
+        defer { host.close() }
+        host.model.select(tab: .backlog)
+        host.model.setSearchQuery("Match", for: .backlog)
+        let shown = expectation(for: NSPredicate { _, _ in
+            MainActor.assumeIsolated {
+                let rows = host.model.rows(for: .backlog)
+                return rows.count == 2 && rows.allSatisfy { host.pointer.frames[TasksRowID(tab: .backlog, id: $0.id)] != nil }
+            }
+        }, evaluatedWith: nil)
+        wait(for: [shown], timeout: 5)
+        let ids = host.model.rows(for: .backlog).map(\.id)
+        let (lifted, passed) = (ids[0], ids[1])
+        guard let joining = host.store.tasks.first(where: { $0.title == "Other C" })?.id else { return XCTFail("seed") }
+        var groupBeforeRelease: [UUID]?
+        try host.drag(lifted, in: .backlog, steps: [6, 20, 44], then: { _ in
+            guard let task = host.store.task(withID: joining), task.title != "Match C" else { return }
+            XCTAssertTrue(host.store.update(task, title: "Match C"))
+        }, beforeRelease: {
+            groupBeforeRelease = host.model.listSnapshot(for: .backlog).entries.first { $0.row?.id == lifted }?.reorderIDs
+        })
+        XCTAssertEqual(groupBeforeRelease?.count, 3, "the case under test: C joined Find before the release")
+        XCTAssertEqual(host.model.rows(for: .backlog).map(\.id), [passed, lifted, joining], "the drop landed A below B")
+    }
+
     /// Astra R-8, Opus R-3: a press the row refuses (on the circle column)
     /// never works out a drag group, however far it moves; an accepted
     /// drag works it out once, when it lifts.
