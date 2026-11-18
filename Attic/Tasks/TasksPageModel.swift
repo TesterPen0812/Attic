@@ -1325,6 +1325,10 @@ final class TasksPageModel: ObservableObject {
         let loadedIDs = Set(loaded)
         let index = store.indexedDoneLogIDs(limit: loaded.count, matching: query, tags: tag)
         guard index.ids.count == loaded.count, loadedIDs.count == loaded.count, Set(index.ids) == loadedIDs else { return false }
+        // A log shorter than one page is loaded whole, and a full read (one
+        // page) shows a row that lands below it at once. In place it would
+        // wait for loading rows and one more read (review R-1).
+        guard loaded.count >= Self.doneLogPageSize || index.total == loaded.count else { return false }
         var touched = Set<UUID>(), unlisted = Set<UUID>()
         for id in changed {
             if loadedIDs.contains(id) { touched.insert(id); continue }
@@ -1363,6 +1367,9 @@ final class TasksPageModel: ObservableObject {
         }
         doneCountCache = nil
         markDoneLogRead()
+        // The loaded rows are the cursor's first rows; a failed full read may
+        // have put the cursor back at the start (review R-2).
+        doneLogCursor = TaskStore.DoneLogCursor(rowOffset: loaded.count)
         // Set even when unchanged: it tells the Done list to draw the saves,
         // as reading the pages again did.
         doneLogHasMore = loaded.count < index.total
