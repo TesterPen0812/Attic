@@ -120,7 +120,15 @@ struct CalendarDayMarksView: View {
 
     @Environment(\.atticDesign) private var design
 
+    #if DEBUG
+    /// Test seam (CalendarDayMarksTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
+
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let tokens = design.tokens
         HStack(spacing: CalendarDesign.dotGap) {
             ForEach(Array(marks.eventColours.enumerated()), id: \.offset) { _, colour in

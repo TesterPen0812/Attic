@@ -1221,3 +1221,202 @@ final class CalendarPageHostedTests: XCTestCase {
         try body(mounted)
     }
 }
+
+// MARK: - The month grid's event dots (S1, 18 Nov 2026)
+
+/// Ticks on its own, beside the Calendar and not above it: an update of
+/// the hosting view that changes none of the Calendar's inputs, as a Tasks
+/// scroll does while Calendar is built and hidden.
+@MainActor
+private final class HostTicker: ObservableObject {
+    @Published var value = 0
+}
+
+private struct HostTickerText: View {
+    @ObservedObject var ticker: HostTicker
+    static var bodyEvaluations = 0
+
+    var body: some View {
+        let _ = Self.bodyEvaluations += 1
+        Text(verbatim: String(ticker.value)).frame(width: 40, height: 12)
+    }
+}
+
+private struct HiddenCalendarWithTicker: View {
+    let probe: CalendarVisibilityProbe
+    let ticker: HostTicker
+    let model: CalendarPageModel
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            CalendarVisibilityProbeView(probe: probe, model: model)
+            HostTickerText(ticker: ticker)
+        }
+    }
+}
+
+/// The dots as trunk drew them (2715d5da), with a `ForEach`: the reference
+/// for drawing the same before and after the fixed slots.
+private struct TrunkCalendarDayMarks: View {
+    let marks: CalendarDayMarks
+    let isPast: Bool
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let tokens = design.tokens
+        HStack(spacing: CalendarDesign.dotGap) {
+            ForEach(Array(marks.eventColours.enumerated()), id: \.offset) { _, colour in
+                Circle().fill(colour.rgba.color)
+                    .frame(width: CalendarDesign.dot, height: CalendarDesign.dot)
+            }
+            if marks.hasOpenTasks {
+                let ring = isPast ? AtticSurfaceInk.vivid(CalendarDesign.red, tokens: tokens)
+                    : AtticSurfaceInk.toneInk(.meta, tokens: tokens)
+                Circle().strokeBorder(ring.color, lineWidth: CalendarDesign.ringWidth)
+                    .frame(width: CalendarDesign.dot, height: CalendarDesign.dot)
+            }
+        }
+        .frame(height: CalendarDesign.dot)
+        .opacity(isPast && !marks.hasOpenTasks ? 0.4 : 1)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A Tasks scroll traced with the Calendar built and hidden (18 Nov,
+/// `write-path-causegraph/READOUT-scroll.md`): the dots' `ForEach`
+/// evictor ran on every frame, 49 of them (one per day key), driven by
+/// SwiftUI's per-update seed. 13 % of the scroll's cause edges.
+@MainActor
+final class CalendarDayMarksTests: XCTestCase {
+    private let calendar = CalendarMonthMath.calendar(timeZone: TimeZone(identifier: "Europe/London")!)
+    private let colours = [CalendarEventColour(red: 0.2, green: 0.5, blue: 0.9),
+                           CalendarEventColour(red: 0.9, green: 0.3, blue: 0.2),
+                           CalendarEventColour(red: 0.3, green: 0.7, blue: 0.3)]
+
+    /// Red first: a `ForEach` owns an evictor that SwiftUI re-runs on every
+    /// update of the one hosting view, shown page or hidden. The dots draw
+    /// from fixed slots instead.
+    func testDotsAreDrawnWithoutAForEach() {
+        let bodyType = String(reflecting: CalendarDayMarksView.Body.self)
+        XCTAssertFalse(bodyType.contains("ForEach"), "the dots' body holds a ForEach: \(bodyType)")
+        XCTAssertEqual(CalendarDesign.maxEventDots, 3, "the dots view has three fixed slots")
+    }
+
+    /// Keep-green: with the Calendar built and hidden, updates elsewhere in
+    /// the hosting view never run the dots' body.
+    func testHiddenCalendarDotsDoNotUpdateWhileTheHostUpdates() throws {
+        let source = CalendarEventSourceStub(events: [event("a", day: 12, hour: 9), event("b", day: 12, hour: 11),
+                                                      event("c", day: 20, hour: 9)])
+        let model = CalendarPageModel(store: try makeTestStore(), source: source, calendar: calendar,
+                                      now: { self.date(2026, 10, 29, 12) })
+        let probe = CalendarVisibilityProbe()
+        let ticker = HostTicker()
+        let size = CGSize(width: 320, height: 460)
+        CalendarDayMarksView.bodyEvaluations = 0
+        let host = NSHostingView(rootView: HiddenCalendarWithTicker(probe: probe, ticker: ticker, model: model))
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+
+        // Shown first, so the month loads its events and draws dots. (The
+        // stub's events are there from the first render, so the dots may be
+        // drawn before the page is shown; the count starts before mounting.)
+        probe.onScreen = true
+        let drawn = turns(host, window) {
+            model.snapshot.weeks.contains { $0.days.contains { !$0.marks.eventColours.isEmpty } }
+                && CalendarDayMarksView.bodyEvaluations > 0
+        }
+        let marked = model.snapshot.weeks.flatMap(\.days).filter { !$0.marks.eventColours.isEmpty }.map(\.day.rawValue)
+        XCTAssertTrue(drawn, "the shown month draws its event dots: marked days \(marked), "
+                      + "dots body \(CalendarDayMarksView.bodyEvaluations), page body \(CalendarPage.bodyEvaluations), "
+                      + "month \(model.snapshot.month), host \(host.fittingSize)")
+
+        // Then hidden, still built.
+        let pageBeforeHide = CalendarPage.bodyEvaluations
+        probe.onScreen = false
+        XCTAssertTrue(turns(host, window) { CalendarPage.bodyEvaluations > pageBeforeHide }, "the page sees it is hidden")
+        for _ in 0..<3 { turn(host, window) }
+        let dotsBefore = CalendarDayMarksView.bodyEvaluations
+        let tickerBefore = HostTickerText.bodyEvaluations
+
+        for value in 1...60 {
+            ticker.value = value
+            _ = turns(host, window) { HostTickerText.bodyEvaluations - tickerBefore >= value }
+        }
+        XCTAssertEqual(HostTickerText.bodyEvaluations - tickerBefore, 60, "the host updated once per tick")
+        XCTAssertEqual(CalendarDayMarksView.bodyEvaluations - dotsBefore, 0,
+                       "a hidden Calendar's dots stay still while the rest of the panel updates")
+    }
+
+    /// The fixed slots draw what the `ForEach` drew: 0–3 colours, the ring
+    /// on and off, past and not past, light and dark.
+    func testDotsDrawTheSameAsTrunk() throws {
+        let blank = try pixels(CalendarDayMarksView(marks: CalendarDayMarks(), isPast: false), mode: .light)
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            for count in 0...3 {
+                for ring in [false, true] {
+                    for isPast in [false, true] {
+                        let marks = CalendarDayMarks(eventColours: Array(colours.prefix(count)), hasOpenTasks: ring)
+                        let label = "\(mode) colours \(count) ring \(ring) past \(isPast)"
+                        let actual = try pixels(CalendarDayMarksView(marks: marks, isPast: isPast), mode: mode)
+                        let expected = try pixels(TrunkCalendarDayMarks(marks: marks, isPast: isPast), mode: mode)
+                        XCTAssertEqual(actual.size, expected.size, label)
+                        XCTAssertEqual(actual.bytes, expected.bytes, label)
+                        if mode == .light, count > 0 || ring { XCTAssertNotEqual(actual.bytes, blank.bytes, "\(label) draws") }
+                    }
+                }
+            }
+        }
+    }
+
+    private func pixels<V: View>(_ view: V, mode: AtticDesignContext.Mode) throws -> (size: CGSize, bytes: Data) {
+        let renderer = ImageRenderer(content: view
+            .padding(4)
+            .frame(width: 60, height: 16)
+            .atticDesign(AtticDesignContext(mode: mode)))
+        renderer.scale = 2
+        let image = try XCTUnwrap(renderer.cgImage)
+        let width = image.width, height = image.height
+        var bytes = Data(count: width * height * 4)
+        try bytes.withUnsafeMutableBytes { raw in
+            let context = try XCTUnwrap(CGContext(data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                                  bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        return (CGSize(width: width, height: height), bytes)
+    }
+
+    /// One turn of the main run loop, then layout and display. A timer,
+    /// not `async`: the run loop sleeps until it fires, so its
+    /// before-waiting observers (SwiftUI's view updates, the Core Animation
+    /// commit) run as they do between real frames. Callers poll a condition.
+    private func turn(_ host: NSView, _ window: NSWindow) {
+        let turned = expectation(description: "main run loop turn")
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(5)) { turned.fulfill() }
+        wait(for: [turned], timeout: 5)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+    }
+
+    /// Turns until the condition holds or the deadline passes.
+    private func turns(_ host: NSView, _ window: NSWindow, deadline seconds: TimeInterval = 5,
+                       until condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !condition(), Date() < deadline { turn(host, window) }
+        return condition()
+    }
+
+    private func date(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 0) -> Date {
+        calendar.date(from: DateComponents(year: y, month: m, day: d, hour: h))!
+    }
+
+    private func event(_ id: String, day d: Int, hour h: Int) -> CalendarEvent {
+        CalendarEvent(id: id, title: "Event \(id)", start: date(2026, 10, d, h), end: date(2026, 10, d, h + 1),
+                      isAllDay: false, location: nil, calendarTitle: "Home", colour: colours[0])
+    }
+}
