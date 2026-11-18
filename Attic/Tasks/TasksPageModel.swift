@@ -884,6 +884,9 @@ final class TasksPageModel: ObservableObject {
     #if DEBUG
     private(set) var selectionRunRebuildCount = 0
     private(set) var rowProjectionBuildCount = 0
+    /// DEBUG count of row-list rebuilds (rows-cache misses) per tab, for the
+    /// count guards in `TasksCountGuardTests`.
+    private(set) var rowsCacheMissCount: [TasksTab: Int] = [:]
 
     func resetRowProjectionBuildCount() { rowProjectionBuildCount = 0 }
     #endif
@@ -934,6 +937,9 @@ final class TasksPageModel: ObservableObject {
             return cached
         }
         IdleLatencyTrace.count("task_rows_cache_miss", 1)
+        #if DEBUG
+        rowsCacheMissCount[tab, default: 0] += 1
+        #endif
         let all = IdleLatencyTrace.span("task_rows_build") { buildRows(for: tab) }
         IdleLatencyTrace.count("task_rows", all.count)
         var sections = TasksSections()
