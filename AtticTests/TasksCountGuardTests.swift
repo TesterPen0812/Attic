@@ -475,6 +475,125 @@ final class TasksCountGuardTests: XCTestCase {
         check(["Q", "A", "P"], "the release")
     }
 
+    /// PR 30 round 3: the view's filter changes during a hold (a row held
+    /// with To Do picked, then Any Status again). Its index is a place in the
+    /// filtered list, so the list shows as the trunk's full build gives it,
+    /// at every step. The trunk's lists are traced from 2715d5da's
+    /// `buildRows`: the held task goes back at its index in the ungrouped
+    /// list, and Overdue orders day -2's rows by clock in that day's places.
+    /// Uses no API the PR added.
+    func testRowHeldUnderAViewFilterShowsAsTheTrunkDoesOnceTheFilterChanges() throws {
+        let (model, store) = try makeDatedModel([("Q", -1, nil), ("H", -2, 600), ("A", -2, 540), ("U", nil, nil)])
+        func check(_ trunk: [String], _ step: String) {
+            XCTAssertEqual(model.rows(for: .now).map(\.model.title), trunk, "\(step): the rows shown")
+            model.toggleCompletedToday()
+            XCTAssertEqual(model.rows(for: .now).map(\.model.title), trunk, "\(step): a full build")
+            model.toggleCompletedToday()
+        }
+        func task(_ title: String) throws -> UUID { try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id) }
+        // Q in progress goes first in the order: Q H A U.
+        XCTAssertTrue(model.library.updateTask(try task("Q"), status: .inProgress).isApplied)
+        check(["Q", "A", "H", "U"], "start")
+        model.setViewOptions(TasksViewOptions(status: .toDo), for: .now)
+        check(["A", "H", "U"], "To Do")
+        let id = try task("H")
+        model.completeAcknowledged(id) { _ in }
+        XCTAssertNotNil(model.held[id])
+        check(["A", "H", "U"], "the press, with To Do")
+        model.setViewOptions(TasksViewOptions(), for: .now)
+        check(["Q", "A", "H", "U"], "Any Status again during the hold")
+        model.settlePendingCompletionAcknowledgements(through: id)
+        XCTAssertEqual(store.task(withID: id)?.status, .done)
+        check(["Q", "A", "H", "U"], "the save")
+        model.releaseHold(id)
+        check(["Q", "A", "U"], "the release")
+    }
+
+    /// PR 30 round 3: the tag picks change during a hold (a row held with
+    /// one tag picked, then All again). As the view filter above, traced from
+    /// 2715d5da's `buildRows`. Uses no API the PR added.
+    func testRowHeldUnderATagPickShowsAsTheTrunkDoesOnceThePickChanges() throws {
+        let (model, store) = try makeDatedModel([("Q", -1, nil), ("H", -2, 600), ("A", -2, 540), ("U", nil, nil)])
+        func check(_ trunk: [String], _ step: String) {
+            XCTAssertEqual(model.rows(for: .now).map(\.model.title), trunk, "\(step): the rows shown")
+            model.toggleCompletedToday()
+            XCTAssertEqual(model.rows(for: .now).map(\.model.title), trunk, "\(step): a full build")
+            model.toggleCompletedToday()
+        }
+        func task(_ title: String) throws -> UUID { try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id) }
+        for title in ["H", "A", "U"] { XCTAssertTrue(model.library.updateTask(try task(title), tags: ["picked"]).isApplied) }
+        check(["Q", "A", "H", "U"], "start")
+        model.setTagPicks(TagPicks(["picked"]))
+        check(["A", "H", "U"], "the pick")
+        let id = try task("H")
+        model.completeAcknowledged(id) { _ in }
+        XCTAssertNotNil(model.held[id])
+        check(["A", "H", "U"], "the press, with the pick")
+        model.setTagPicks(TagPicks.none)
+        check(["Q", "A", "H", "U"], "All again during the hold")
+        model.settlePendingCompletionAcknowledgements(through: id)
+        XCTAssertEqual(store.task(withID: id)?.status, .done)
+        check(["Q", "A", "H", "U"], "the save")
+        model.releaseHold(id)
+        check(["Q", "A", "U"], "the release")
+    }
+
+    /// PR 30 round 3, R-4: folding a group above a held row during its hold
+    /// leaves the row where the trunk's full build puts it. Its index was
+    /// taken with Today open, so it is a place in that list only. Traced
+    /// from 2715d5da's `buildRows`: Z goes back at index 4 of the ungrouped
+    /// list (Y W V X Z T U), so Tomorrow stays X Z T and folded Today's rows
+    /// are left out. Uses no API the PR added.
+    func testFoldAboveAHeldRowLeavesItAsTheTrunkDoes() throws {
+        let (model, store) = try makeDatedModel([("Y", 0, nil), ("W", 0, nil), ("V", 0, nil), ("X", 1, nil), ("Z", 1, nil),
+                                                 ("T", 1, nil), ("U", nil, nil)])
+        func check(_ trunk: [String], _ step: String) {
+            XCTAssertEqual(model.rows(for: .now).map(\.model.title), trunk, "\(step): the rows shown")
+            model.toggleCompletedToday()
+            XCTAssertEqual(model.rows(for: .now).map(\.model.title), trunk, "\(step): a full build")
+            model.toggleCompletedToday()
+        }
+        check(["Y", "W", "V", "X", "Z", "T", "U"], "start")
+        let today = try XCTUnwrap(model.sections(for: .now).groups.first { $0.kind == .today }?.key)
+        let id = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Z" }?.id)
+        model.completeAcknowledged(id) { _ in }
+        XCTAssertNotNil(model.held[id])
+        check(["Y", "W", "V", "X", "Z", "T", "U"], "the press")
+        model.toggleGroup(today, on: .now)
+        check(["X", "Z", "T", "U"], "Today folded during the hold")
+        model.settlePendingCompletionAcknowledgements(through: id)
+        XCTAssertEqual(store.task(withID: id)?.status, .done)
+        check(["X", "Z", "T", "U"], "the save")
+        model.releaseHold(id)
+        check(["X", "T", "U"], "the release")
+    }
+
+    /// PR 30 R-2: a reader of the rows that runs before the model hears of a
+    /// store change (here the store's `objectWillChange`, which is sent
+    /// before any `$revision` subscriber runs, at the moment the store's
+    /// data revision has moved), during a new hold, must not leave a
+    /// changed row that is not held stale. Uses no API the PR added.
+    func testRowsReadBeforeTheModelHearsOfAChangeShowTheChange() throws {
+        let (model, store) = try makeDatedModel([("K", nil, nil), ("L", nil, nil), ("M", nil, nil)])
+        func task(_ title: String) throws -> UUID { try XCTUnwrap(model.rows(for: .now).first { $0.model.title == title }?.id) }
+        let held = try task("K"), changed = try task("L")
+        var seen = store.taskDataRevision, earlyReads = 0
+        let early = store.objectWillChange.sink { _ in
+            guard store.taskDataRevision != seen else { return }
+            seen = store.taskDataRevision
+            earlyReads += 1
+            _ = model.rows(for: .now)
+        }
+        defer { early.cancel() }
+        model.completeAcknowledged(held) { _ in }
+        XCTAssertNotNil(model.held[held])
+        XCTAssertTrue(model.library.updateTask(changed, title: "L renamed").isApplied)
+        XCTAssertEqual(earlyReads, 1, "the early reader ran during the store's publication")
+        XCTAssertEqual(model.rows(for: .now).first { $0.id == changed }?.model.title, "L renamed",
+                       "a changed row that is not held stays stale")
+        XCTAssertEqual(model.rows(for: .now).map(\.id), [held, changed, try task("M")])
+    }
+
     // MARK: - Rig
 
     private static let size = CGSize(width: 344, height: 520)
