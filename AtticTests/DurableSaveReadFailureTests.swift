@@ -277,20 +277,50 @@ final class DurableSaveReadFailureTests: XCTestCase {
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
     }
 
+    /// Condition 7, second half: the owner read fails on two journaled saves in a row, then on none. Neither failed
+    /// read wedges the store: each delete is durable once, the commands after them work, and no row is doubled.
+    func testC7TwoFailedOwnerReadsInARowThenTheNextSavesWork() async throws {
+        let rig = try await makeRig()
+        WorkspaceLegacyBridge.postCommitOwnerReadFailures = 2
+        let first = rig.library.deleteTasks([rig.ids[5]])
+        let second = rig.library.deleteTasks([rig.ids[6]])
+        let seamUsed = WorkspaceLegacyBridge.postCommitOwnerReadFailures == 0
+        WorkspaceLegacyBridge.postCommitOwnerReadFailures = 0
+        let renamed = rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[7])), to: "Saved after two failed reads")
+        let third = rig.library.deleteTasks([rig.ids[9]])
+        let context = ModelContext(rig.container)
+        func deleted(_ id: UUID) throws -> String {
+            let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+            return "\(rows.filter { $0.deletedAt != nil }.count)/\(rows.count)"
+        }
+        print("C7_TWICE seam_used=\(seamUsed) first=\(first) second=\(second) renamed=\(renamed) third=\(third) "
+            + "deleted=\(try deleted(rig.ids[5])),\(try deleted(rig.ids[6])),\(try deleted(rig.ids[9])) "
+            + "can_undo=\(rig.library.undo.canUndo(in: .tasks)) error=\(rig.tasks.lastErrorMessage ?? "nil") "
+            + "duplicates=\(try duplicateRows(rig.container))")
+        XCTAssertTrue(seamUsed)
+        XCTAssertEqual(try deleted(rig.ids[5]), "1/1", "The first delete is durable once")
+        XCTAssertEqual(try deleted(rig.ids[6]), "1/1", "The second delete is durable once")
+        XCTAssertTrue(renamed, "The next plain save works")
+        XCTAssertTrue(third.isApplied, "The next journaled save works")
+        XCTAssertEqual(try deleted(rig.ids[9]), "1/1")
+        XCTAssertEqual(try duplicateRows(rig.container), [])
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
     // MARK: Condition 3: every TaskStore site that stages on the spent context
 
     /// One unresolved delete (three failed presentation reads after the durable save), then one command that stages on
     /// the store's context without a prepare step, then the next save. Every id keeps one physical row, and the
     /// delete's preservation record stays one row.
-    private func afterUnresolvedDelete(_ label: String, setup: (Rig) throws -> Void = { _ in },
-                                       command: (Rig) throws -> Bool) async throws {
+    private func afterUnresolvedDelete(_ label: String, setup: (Rig) async throws -> Void = { _ in },
+                                       command: (Rig) async throws -> Bool) async throws {
         let rig = try await makeRig()
-        try setup(rig)
+        try await setup(rig)
         let id = rig.ids[3]
         rig.tasks.listRefreshFailures = 3
         XCTAssertTrue(rig.library.deleteTasks([id]).isApplied, label)
         XCTAssertTrue(rig.tasks.hasUnresolvedTaskReload, label)
-        let commandResult = try command(rig)
+        let commandResult = try await command(rig)
         let afterCommand = try duplicateRows(rig.container)
         let next = rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[20])), to: "The next save after \(label)")
         let afterNext = try duplicateRows(rig.container)
@@ -354,6 +384,45 @@ final class DurableSaveReadFailureTests: XCTestCase {
         }) { $0.tasks.restoreToNow(taskIDs: [$0.ids[12]]) }
     }
 
+    /// Attaches one small file to `taskID` and returns its reference.
+    private func attachOne(_ rig: Rig, to taskID: UUID) async throws -> TaskImageReference {
+        let source = ownedTemporaryDirectory(prefix: "R12Attach").appendingPathComponent("plan.txt")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("plan".utf8).write(to: source)
+        let attached = await rig.tasks.attachFiles([source], to: taskID)
+        XCTAssertTrue(attached)
+        return try XCTUnwrap(rig.tasks.task(withID: taskID)?.attachments.first)
+    }
+
+    func testC3AttachFilesOnTheSpentContext() async throws {
+        let source = ownedTemporaryDirectory(prefix: "R12Attach").appendingPathComponent("later.txt")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("later".utf8).write(to: source)
+        try await afterUnresolvedDelete("attachFiles") { rig in await rig.tasks.attachFiles([source], to: rig.ids[9]) }
+    }
+
+    func testC3RemoveAttachmentOnTheSpentContext() async throws {
+        var reference: TaskImageReference?
+        try await afterUnresolvedDelete("removeAttachment", setup: { rig in
+            reference = try await self.attachOne(rig, to: rig.ids[9])
+        }) { rig in rig.tasks.removeAttachment(try XCTUnwrap(reference).id, from: rig.ids[9]) }
+    }
+
+    func testC3RestoreAttachmentOnTheSpentContext() async throws {
+        var reference: TaskImageReference?
+        try await afterUnresolvedDelete("restoreAttachment", setup: { rig in
+            reference = try await self.attachOne(rig, to: rig.ids[9])
+            XCTAssertTrue(rig.tasks.removeAttachment(try XCTUnwrap(reference).id, from: rig.ids[9]))
+        }) { rig in rig.tasks.restoreAttachment(try XCTUnwrap(reference).id) }
+    }
+
+    func testC3PurgeRemovedAttachmentsOnTheSpentContext() async throws {
+        try await afterUnresolvedDelete("purgeRemovedAttachments", setup: { rig in
+            let reference = try await self.attachOne(rig, to: rig.ids[9])
+            XCTAssertTrue(rig.tasks.removeAttachment(reference.id, from: rig.ids[9]))
+        }) { $0.tasks.purgeRemovedAttachments(before: .distantFuture) > 0 }
+    }
+
     // MARK: Condition 2 and the Notes side
 
     /// A new note written through the editor session, whose journaled save commits and whose post-commit owner read
@@ -363,17 +432,18 @@ final class DurableSaveReadFailureTests: XCTestCase {
         let rig = try await makeRig()
         XCTAssertTrue(rig.controller.newNote())
         let session = try XCTUnwrap(rig.controller.active)
-        var document = session.engine.checkpointDocument()
-        document.blocks.append(.text("Written once"))
+        session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+                                   with: NSAttributedString(string: "Written once"), name: "Typing")
+        let stateBeforeSave = "\(session.state)"
         WorkspaceLegacyBridge.postCommitOwnerReadFailures = 1
-        let first = rig.controller.save(session, snapshot: document)
+        let first = rig.controller.save(session)
         let seamUsed = WorkspaceLegacyBridge.postCommitOwnerReadFailures == 0
         WorkspaceLegacyBridge.postCommitOwnerReadFailures = 0
         let stateAfterFirst = "\(session.state)"
         let preserved = rig.controller.preserve(session)
         let noteID = session.noteID
         let rows = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
-        print("C2_NOTE persisted=\(session.isPersisted) seam_used=\(seamUsed) first=\(first) state_after_first=\(stateAfterFirst) preserved=\(preserved) "
+        print("C2_NOTE state_before=\(stateBeforeSave) persisted=\(session.isPersisted) seam_used=\(seamUsed) first=\(first) state_after_first=\(stateAfterFirst) preserved=\(preserved) "
             + "state=\(session.state) rows=\(rows.count) error=\(rig.notes.lastErrorMessage ?? "nil") "
             + "duplicates=\(try duplicateRows(rig.container))")
         XCTAssertTrue(seamUsed)
