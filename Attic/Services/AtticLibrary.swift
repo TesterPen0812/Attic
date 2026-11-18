@@ -591,9 +591,20 @@ final class AtticLibrary {
     func delete(_ ref: AtticItemRef, in history: UndoHistoryID? = nil) -> Bool {
         undo.perform(in: history ?? Self.defaultHistory(for: ref)) {
             guard performDelete(ref) else { return nil }
-            refreshItemStores()
+            if !lifecycleRefreshed(after: ref) { refreshItemStores() }
             return committedDeletionStep(ref)
         }
+    }
+
+    /// Whether a delete's own save has already refreshed every store here: a
+    /// task's or a note's store ends its delete with
+    /// `WorkspaceItemLifecycle.didCommit`, which refreshes the lifecycle's
+    /// library, so this library refreshes again only for a canvas (whose store
+    /// has no such step) or when the lifecycle reaches another library.
+    private func lifecycleRefreshed(after ref: AtticItemRef) -> Bool {
+        guard ref.kind != .canvas,
+              let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) else { return false }
+        return coordinator.lifecycleLibrary === self
     }
 
     /// A validating store command has already committed this deletion.
