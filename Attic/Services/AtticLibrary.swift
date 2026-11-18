@@ -1126,9 +1126,6 @@ final class AtticLibrary {
         return ownedMembers(of: [ref.id], kind: ref.kind)
     }
 
-    /// DEBUG count of task and note records `itemOwnership` read.
-    private(set) var ownershipRecordsRead = 0
-
     func itemOwnership(_ members: Set<UUID>, deleted: Bool, noteID: UUID? = nil) -> FamilyOwnership {
         let owned = FamilyOwnership(members), context = ModelContext(container)
         guard deleted else {
@@ -1136,14 +1133,14 @@ final class AtticLibrary {
             // writing of its own tasks, read by owner id, so the read does
             // not grow with the library. A failed read records nothing.
             owned.writing = liveWriting(ownedBy: members, in: context)
+            #if DEBUG
+            lastCapturedWriting = owned.writing
+            #endif
             return owned
         }
         guard let rows = try? context.fetch(FetchDescriptor<TaskItem>()) else { return owned }
         let schemaHasNotes = WorkspaceItemLifecycle.has("NoteItem", in: context)
         guard let notes = schemaHasNotes ? (try? context.fetch(FetchDescriptor<NoteItem>())) : [] else { return owned }
-        #if DEBUG
-        ownershipRecordsRead += rows.count + notes.count
-        #endif
         if deleted {
             for id in members {
                 if let group = rows.filter({ $0.id == id }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID { owned.groups.insert(group) }
@@ -1160,37 +1157,52 @@ final class AtticLibrary {
     /// read failed. A runtime that rejects the optional membership test gets
     /// one small fetch per task instead.
     func liveWriting(ownedBy members: Set<UUID>, in context: ModelContext) -> Set<UUID>? {
-        #if DEBUG
-        if ownershipReadFailures > 0 {
-            ownershipReadFailures -= 1
-            return nil
-        }
-        #endif
         guard WorkspaceItemLifecycle.has("NoteItem", in: context) else { return [] }
         let owners: [UUID?] = members.map { $0 }
         let notes: [NoteItem]
-        if let all = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { owners.contains($0.taskID) })) {
+        if let all = try? ownershipNotes(FetchDescriptor<NoteItem>(predicate: #Predicate { owners.contains($0.taskID) }), byOwner: true, in: context) {
             notes = all
         } else {
             var each: [NoteItem] = []
             for member in members {
                 let owner: UUID? = member
-                guard let rows = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == owner })) else {
+                guard let rows = try? ownershipNotes(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == owner }), byOwner: true, in: context) else {
                     return nil
                 }
                 each += rows
             }
             notes = each
         }
-        #if DEBUG
-        ownershipRecordsRead += notes.count
-        #endif
         return Set(notes.filter { $0.deletedAt == nil }.map(\.id))
     }
 
+    /// The ownership capture's one fetch boundary: every note fetch it makes
+    /// goes through here, so DEBUG counts what completed and what it returned.
+    private func ownershipNotes(_ descriptor: FetchDescriptor<NoteItem>, byOwner: Bool, in context: ModelContext) throws -> [NoteItem] {
+        #if DEBUG
+        if byOwner, ownerFetchFailures > 0 {
+            ownerFetchFailures -= 1
+            throw WorkspaceFoundationError.unknown
+        }
+        #endif
+        let rows = try context.fetch(descriptor)
+        #if DEBUG
+        ownershipFetches += 1
+        ownershipNoteRows += rows.count
+        #endif
+        return rows
+    }
+
     #if DEBUG
-    /// Test seam: the next `count` ownership reads by owner id fail.
-    var ownershipReadFailures = 0
+    /// DEBUG counts at the capture's fetch boundary (TA-03 review R-3): note
+    /// fetches that completed, and the note rows they returned.
+    private(set) var ownershipFetches = 0
+    private(set) var ownershipNoteRows = 0
+    /// What the last capture for a create or restore recorded; nil when it failed.
+    private(set) var lastCapturedWriting: Set<UUID>?
+    /// Test seam: the next `count` note fetches filtered by owner id throw.
+    /// Unfiltered fetches still read.
+    var ownerFetchFailures = 0
 
     /// The whole-table read `liveWriting(ownedBy:in:)` replaced (TA-03),
     /// kept as the equivalence test's reference: every task (a failure
