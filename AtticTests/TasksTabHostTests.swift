@@ -116,37 +116,6 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertFalse(hosts.contains { !$0.isInteractive }, "nothing from a host not in use")
     }
 
-    /// Diagnostic (temporary): where ↓ goes in a hosted Tasks page.
-    func testDiagnoseArrowRoute() throws {
-        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
-            throw XCTSkip("key window only")
-        }
-        for warm in [false, true] {
-            let hosted = try warm ? warmed() : Hosted(height: 520)
-            defer { hosted.close() }
-            func chain() -> String {
-                var names: [String] = []
-                var responder = hosted.window.firstResponder
-                while let current = responder, names.count < 6 {
-                    names.append(String(describing: type(of: current)))
-                    responder = current.nextResponder
-                }
-                return names.joined(separator: ">")
-            }
-            print("HBDIAG warm=\(warm) before key=\(hosted.window.isKeyWindow) active=\(NSApp.isActive) fr=\(chain()) hosts=\(hosts(hosted).map(\.isInteractive))")
-            hosted.press("\u{F701}", keyCode: 125)
-            hosted.spin(0.3)
-            print("HBDIAG warm=\(warm) after-fix-path fr=\(chain()) sel=\(hosted.model.selection.count) kf=\(String(describing: hosted.model.keyboardFocus))")
-            // By hand: the tab's host takes the keyboard, then ↓.
-            if let host = hosts(hosted).first(where: \.isInteractive) {
-                print("HBDIAG warm=\(warm) handoff=\(hosted.window.makeFirstResponder(host))")
-            }
-            hosted.press("\u{F701}", keyCode: 125)
-            hosted.spin(0.3)
-            print("HBDIAG warm=\(warm) after fr=\(chain()) sel=\(hosted.model.selection.count) kf=\(String(describing: hosted.model.keyboardFocus))")
-        }
-    }
-
     /// Condition 3 and HB-02: after a switch the page acts on the tab
     /// shown's focus. Arrows move the ring on the tab shown only.
     func testArrowsMoveTheKeyboardOnTheTabShownAfterASwitch() throws {

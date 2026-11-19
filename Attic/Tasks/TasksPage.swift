@@ -3911,18 +3911,8 @@ struct TasksCellKey: Equatable {
 @MainActor
 final class TasksRowFocusLink {
     private var bindings: [TasksTab: FocusState<AtticRowFocusID?>.Binding] = [:]
-    /// A view inside each tab's host, to find the host a write gives the
-    /// keyboard to.
-    private var anchors: [TasksTab: WeakAnchor] = [:]
-    private struct WeakAnchor { weak var view: NSView? }
-    /// A write waiting for its tab's host to come into use.
-    private var pending: AtticRowFocusID?
     /// The page's handler for a focus change on any tab.
     var changed: ((AtticRowFocusID?) -> Void)?
-
-    func anchor(_ view: NSView, for tab: TasksTab) {
-        if anchors[tab]?.view !== view { anchors[tab] = WeakAnchor(view: view) }
-    }
 
     func set(_ binding: FocusState<AtticRowFocusID?>.Binding, for tab: TasksTab) {
         bindings[tab] = binding
@@ -3942,28 +3932,10 @@ final class TasksRowFocusLink {
 
     /// Gives the keyboard to `value` on its own tab and takes it from the
     /// others; nil takes it from every tab.
-    /// A row written here gets the keyboard in its tab's host first: the
-    /// write comes from the page's handlers, which run in the panel's host,
-    /// and SwiftUI focuses a row only in the host that has the keyboard.
-    /// A host not in use yet (the tab changed in this turn) takes the write
-    /// when it comes into use; a later write replaces a waiting one.
     func setValue(_ value: AtticRowFocusID?) {
-        pending = nil
         let owner = value.flatMap { TasksTab(rawValue: $0.page) }
         for tab in TasksTab.allCases where tab != owner { clear(tab) }
-        guard let owner, let value, bindings[owner]?.wrappedValue != value else { return }
-        if let anchor = anchors[owner]?.view, let host = KeptContentHostingView.enclosing(anchor),
-           !host.takeKeyboard() {
-            pending = value
-            host.whenInteractive.append { [weak self] in
-                DispatchQueue.main.async {
-                    guard let self, self.pending == value else { return }
-                    self.setValue(value)
-                }
-            }
-            return
-        }
-        bindings[owner]?.wrappedValue = value
+        if let owner, let value, bindings[owner]?.wrappedValue != value { bindings[owner]?.wrappedValue = value }
     }
 
     /// A tab's owner saw its focus change. A tab letting go while another
@@ -4002,29 +3974,7 @@ struct TasksRowFocusOwner<Content: View>: View {
     var body: some View {
         let _ = link.set($focusedRow, for: tab)
         content($focusedRow)
-            .background { TasksRowFocusAnchor(tab: tab, link: link).frame(width: 0, height: 0) }
             .onChange(of: focusedRow) { _, focus in link.report(focus, from: tab) }
-    }
-}
-
-/// A view in the tab's host the link finds the host by. No clicks, no reads.
-private struct TasksRowFocusAnchor: NSViewRepresentable {
-    let tab: TasksTab
-    let link: TasksRowFocusLink
-
-    final class AnchorView: NSView {
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        override func isAccessibilityElement() -> Bool { false }
-    }
-
-    func makeNSView(context: Context) -> AnchorView {
-        let view = AnchorView()
-        link.anchor(view, for: tab)
-        return view
-    }
-
-    func updateNSView(_ view: AnchorView, context: Context) {
-        link.anchor(view, for: tab)
     }
 }
 
