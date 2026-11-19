@@ -673,13 +673,16 @@ final class DurableSaveReadFailureTests: XCTestCase {
         let note = try XCTUnwrap(rig.notes.notes.first { $0.id == twinID })
         let renamed = rig.notes.update(note, title: "Twin renamed")
         let titles = try rows().map(\.title).sorted()
-        // As in the app: the note is opened, then deleted from the page (Delete Note), which leaves the editor first.
+        // As in the app: the note is opened, then deleted from the page (Delete Note), after recovery work, which
+        // leaves the editor first.
         let opened = rig.controller.open(noteID: twinID)
-        let deleted = rig.controller.deleteNote(noteID: twinID)
+        let session = rig.controller.active
+        let deleted = await rig.controller.deleteNoteDurably(noteID: twinID)
+        let notice = session?.noticeValue.map { "\($0.kind): \(session?.notice ?? "")" } ?? "nil"
         let afterDelete = try rows()
         print("C8_TWO_NOTE_ROWS rows=\(afterDelete.count) listed=\(listed) opened=\(opened) renamed=\(renamed) "
             + "titles=\(titles) deleted=\(deleted) deleted_rows=\(afterDelete.filter { $0.deletedAt != nil }.count) "
-            + "error=\(rig.notes.lastErrorMessage ?? "nil")")
+            + "error=\(rig.notes.lastErrorMessage ?? "nil") notice=\(notice)")
         XCTAssertEqual(afterDelete.count, 2, "Characterization only: both physical rows remain")
         XCTAssertEqual(listed, 1, "Listed once")
         XCTAssertTrue(opened, "Opens")
