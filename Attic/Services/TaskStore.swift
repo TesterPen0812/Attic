@@ -542,7 +542,7 @@ final class TaskStore: ObservableObject {
                 guard let self else { return nil }
                 do {
                     let fresh = ModelContext(self.container)
-                    var ids = Set(try fresh.fetch(FetchDescriptor<TaskItem>()).flatMap { try WorkspacePurge.legacyReferences($0).map(\.id) })
+                    var ids = Set(try fresh.fetch(WholeTableRead.all(TaskItem.self)).flatMap { try WorkspacePurge.legacyReferences($0).map(\.id) })
                     ids.formUnion(try TaskAttachmentMigration.coveredAttachmentIDs(in: fresh))
                     let coordinator = try WorkspaceLegacyBridge.coordinator(for: self.container)
                     ids.formUnion(coordinator.retainedHistoryBytes)
@@ -602,7 +602,7 @@ final class TaskStore: ObservableObject {
             pending.fetchLimit = 1
             guard try !migration.fetch(pending).isEmpty else { return 0 }
 
-            let stored = try migration.fetch(FetchDescriptor<TaskItem>())
+            let stored = try migration.fetch(WholeTableRead.all(TaskItem.self))
             let replicasByID = Dictionary(grouping: stored, by: \.id)
             let live = Self.canonicalReplicas(from: stored).filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
             let liveByID = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -917,7 +917,7 @@ final class TaskStore: ObservableObject {
         self.persist = { _ in throw WorkspaceFoundationError.conflict }
         self.taskImageFiles = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("AtticWorkspaceStaging-\(UUID().uuidString)"))
-        self.tasks = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletedAt == nil }
+        self.tasks = try context.fetch(WholeTableRead.all(TaskItem.self)).filter { $0.deletedAt == nil }
     }
 
     static func stageCreation(in context: ModelContext, drafts: [TaskDraft], ids: [UUID], timestamp: Date, allowingBlankTitle: Bool = false) throws -> [TaskItem] {
@@ -2051,7 +2051,7 @@ final class TaskStore: ObservableObject {
         }
         tasks.removeAll { deletedIDs.contains($0.id) }
         guard save(owner: owner) else { return false }
-        WorkspaceItemLifecycle.didCommit(in: container)
+        WorkspaceItemLifecycle.didCommit(in: container, freshTasks: freshAfterSave)
         return true
     }
 
@@ -2242,7 +2242,7 @@ final class TaskStore: ObservableObject {
         if !context.hasChanges { context = Self.makeStoreContext(container) }
         do {
             let retired = try Self.circleRemovedRoots(in: context)
-            let requested = try context.fetch(FetchDescriptor<TaskItem>()).filter { taskIDs.contains($0.id) }
+            let requested = try context.fetch(WholeTableRead.all(TaskItem.self)).filter { taskIDs.contains($0.id) }
             let roots = Set(requested.map { $0.deletionRootID ?? $0.id }).union(taskIDs)
             guard retired.isDisjoint(with: roots) else {
                 throw TaskEditRefusal("Only Undo can return a task removed from Tasks.")
@@ -2254,13 +2254,13 @@ final class TaskStore: ObservableObject {
             return false
         }
         guard save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed") else { return false }
-        WorkspaceItemLifecycle.didCommit(in: container)
+        WorkspaceItemLifecycle.didCommit(in: container, freshTasks: freshAfterSave)
         return true
     }
 
     private func stageRestoration(taskIDs: [UUID], includeGroups: Bool = true) throws {
         if includeGroups {
-            let all = try context.fetch(FetchDescriptor<TaskItem>())
+            let all = try context.fetch(WholeTableRead.all(TaskItem.self))
             var selected: [UUID: UUID] = [:]
             for id in taskIDs {
                 let candidates = all.filter { $0.id == id && $0.deletedAt != nil }.sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
@@ -2385,7 +2385,7 @@ final class TaskStore: ObservableObject {
     /// compatibility collector and coordinated purge stage through this guard.
     static func guardedDeletedFamily(in context: ModelContext, rootID: UUID, before cutoff: Date,
                                      confirmed: Date? = nil) throws -> [TaskItem]? {
-        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        let all = try context.fetch(WholeTableRead.all(TaskItem.self))
         let batch = all.filter { $0.deletionRootID == rootID && $0.deletedAt != nil }
         guard let first = batch.first, let deletedAt = first.deletedAt,
               deletedAt < cutoff, confirmed == nil || confirmed == deletedAt else { return nil }
@@ -4363,6 +4363,15 @@ final class TaskStore: ObservableObject {
         return changed ? save(owner: owner, retaining: retainedEdits) : true
     }
 
+    /// Set by `save` when the save presented itself from one successful fresh
+    /// read of every task row (a journaled commit's reload). A failed read, a
+    /// recovery retry or an incremental publish leaves it false.
+    private var savePresentedFromFreshRead = false
+
+    /// This store, when its last save already presented from a fresh read;
+    /// passed to `WorkspaceItemLifecycle.didCommit` so it is not read twice.
+    private var freshAfterSave: TaskStore? { savePresentedFromFreshRead ? self : nil }
+
     func refresh() {
         defer { tagInventoryRefreshed() }
         do {
@@ -4383,6 +4392,7 @@ final class TaskStore: ObservableObject {
         // in this context (a reload would abandon it), so save it as before
         // and publish through a full reload instead of an incremental commit.
         let listNeedsReload = taskEditNeedsReload
+        savePresentedFromFreshRead = false
         tagInventoryWillSave(context)
         do {
             let removedRows = context.deletedModelsArray.contains { $0 is TaskItem }
@@ -4487,7 +4497,11 @@ final class TaskStore: ObservableObject {
                 // state. Do not notify subscribers of an unconfirmed change.
                 taskEditNeedsReload = true
                 refresh()
-            } else if !presentationReloaded {
+            } else if presentationReloaded {
+                // A fact for the lifecycle commit that follows: this save's
+                // own fresh read of every row succeeded and is presented.
+                savePresentedFromFreshRead = true
+            } else {
                 // reloadTasks already published one coherent revision when it
                 // was required. Plain commits publish here, exactly once.
                 revisionChangedTaskIDs = changedIDs
@@ -4621,7 +4635,7 @@ final class TaskStore: ObservableObject {
         }
         #endif
         let refreshedContext = initialContext ?? Self.makeStoreContext(container)
-        let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
+        let fetched = try refreshedContext.fetch(WholeTableRead.all(TaskItem.self))
         try WorkspaceLegacyBridge.establishScopeBaseline(refreshedContext, roots: fetched, entities: [.task])
         reloaded = fetched
         let unique = Self.canonicalReplicas(from: fetched)
