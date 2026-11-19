@@ -391,18 +391,15 @@ final class DurableSaveReadFailureTests: XCTestCase {
         return (container, TaskStore(container: container, now: { date }, taskImageFiles: files), ids)
     }
 
-    /// Purge on a spent context, on a task store alone: the delete commits, its after-commit step and its list refresh
-    /// fail, so the store's context stays spent. The purge must replace it (discarding nothing), purge the task durably,
+    /// Purge on a spent context, on a task store alone: the delete commits and its list refresh fails, so the store's
+    /// context stays spent (the purge's own replacement of it, below, shows it was). The purge must replace it (discarding nothing), purge the task durably,
     /// and leave the next save working with one physical row per id.
     func testC3PurgeDeletedOnTheSpentContext() async throws {
         let (container, tasks, ids) = try makeBareTaskStore()
         let id = ids[13]
-        WorkspaceLegacyBridge.postCommitPlainFailures = 1
         tasks.listRefreshFailures = 3
         let deleted = tasks.delete(taskIDs: [id])
-        let plainSeamUsed = WorkspaceLegacyBridge.postCommitPlainFailures == 0
         let refreshFailed = 3 - tasks.listRefreshFailures
-        WorkspaceLegacyBridge.postCommitPlainFailures = 0
         tasks.listRefreshFailures = 0
         let replacedBefore = tasks.lastSpentContextUnsaved
         let deletedRows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
@@ -416,11 +413,12 @@ final class DurableSaveReadFailureTests: XCTestCase {
         let afterPurge = try duplicateRows(container)
         let next = tasks.rename(try XCTUnwrap(tasks.task(withID: ids[20])), to: "The next save after purgeDeleted")
         let afterNext = try duplicateRows(container)
-        print("C3_PURGE_SPENT_BARE deleted=\(deleted) plain_seam_used=\(plainSeamUsed) refresh_failed=\(refreshFailed) "
+        print("C3_PURGE_SPENT_BARE deleted=\(deleted) refresh_failed=\(refreshFailed) "
             + "deleted_rows=\(deletedRows.filter { $0.deletedAt != nil }.count)/\(deletedRows.count) replaced_before=\(replacedBefore.map { "\($0)" } ?? "nil") "
             + "purged=\(purged.contains(id)) replaced_by_purge=\(replacedByPurge.map { "\($0)" } ?? "nil") refusals=\(refusals) rows_left=\(left) "
             + "durable_change=\(changed) dupes_after_purge=\(afterPurge) next=\(next) dupes_after_next=\(afterNext) error=\(tasks.lastErrorMessage ?? "nil")")
         XCTAssertTrue(deleted)
+        XCTAssertGreaterThan(refreshFailed, 0, "The delete's list refresh failed")
         XCTAssertTrue(!deletedRows.isEmpty && deletedRows.allSatisfy { $0.deletedAt != nil }, "The delete is durable")
         XCTAssertNil(replacedBefore, "Nothing replaced a spent context before the purge")
         XCTAssertEqual(replacedByPurge, [], "The purge itself replaced the spent context, discarding nothing unsaved")
