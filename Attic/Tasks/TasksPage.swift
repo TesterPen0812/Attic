@@ -5986,9 +5986,25 @@ private struct TasksSubtaskDraftView<Content: View>: View {
 @MainActor enum TasksPageRenderProbe {
     static var lastTab: TasksTab?
     static var bodyRuns = 0
+    /// The tab being set, from its `willSet` until the set is over: a body
+    /// that runs then runs inside the tab's announcement.
+    static var settingTab: TasksTab?
+    /// Reads inside the announcement, and those that saw the old tab.
+    static var announcedReads = (page: 0, tabBar: 0)
+    static var staleReads = (page: 0, tabBar: 0)
     static func rendered(_ tab: TasksTab) {
         lastTab = tab
         bodyRuns += 1
+        if let setting = settingTab {
+            announcedReads.page += 1
+            if tab != setting { staleReads.page += 1 }
+        }
+    }
+    static func tabBarRendered(_ tab: TasksTab) {
+        if let setting = settingTab {
+            announcedReads.tabBar += 1
+            if tab != setting { staleReads.tabBar += 1 }
+        }
     }
 }
 #endif

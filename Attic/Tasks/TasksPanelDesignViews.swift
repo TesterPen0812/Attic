@@ -238,6 +238,9 @@ struct TasksTopTabs: View {
     typealias M = TasksTopTabsMetrics
 
     var body: some View {
+        #if DEBUG
+        let _ = TasksPageRenderProbe.tabBarRendered(selection)
+        #endif
         let tokens = design.tokens
         let tabs = TasksTab.allCases
         let selected = tabs.firstIndex(of: selection) ?? 0

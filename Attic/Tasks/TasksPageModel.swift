@@ -303,9 +303,19 @@ final class TasksPageModel: ObservableObject {
     @Published var tab: TasksTab = .now {
         // The tab being left lets go of its rows' focus first (the page
         // sets this; host-boundary.md §5, HB-02).
-        willSet { if newValue != tab { tabWillChange?(tab) } }
+        willSet {
+            #if DEBUG
+            TasksPageRenderProbe.settingTab = newValue
+            #endif
+            if newValue != tab { tabWillChange?(tab) }
+        }
         // Remembered across relaunch (L7), where the page has a memory.
-        didSet { if tab != oldValue { memory?.savePage(tab) } }
+        didSet {
+            if tab != oldValue { memory?.savePage(tab) }
+            #if DEBUG
+            TasksPageRenderProbe.settingTab = nil
+            #endif
+        }
     }
     /// Called with the tab being left, before `tab` changes.
     var tabWillChange: ((TasksTab) -> Void)?

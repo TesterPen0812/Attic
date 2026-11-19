@@ -89,6 +89,8 @@ final class TasksTabHostTests: XCTestCase {
         hosted.spin(1.5)
         var stalls: [String] = []
         var runs: [Int] = []
+        TasksPageRenderProbe.announcedReads = (0, 0)
+        TasksPageRenderProbe.staleReads = (0, 0)
         for (n, tab) in Array(repeating: [TasksTab.backlog, .now], count: 8).joined().enumerated() {
             let before = TasksPageRenderProbe.bodyRuns
             withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: tab) }
@@ -98,7 +100,13 @@ final class TasksTabHostTests: XCTestCase {
             hosted.spin(0.5)
             runs.append(TasksPageRenderProbe.bodyRuns - before)
         }
-        print("TAB-STALL body runs per switch \(runs) total \(runs.reduce(0, +))")
+        let announced = TasksPageRenderProbe.announcedReads, stale = TasksPageRenderProbe.staleReads
+        print("TAB-STALL body runs per switch \(runs) total \(runs.reduce(0, +)); read inside the announcement: page \(announced.page) tab bar \(announced.tabBar); old tab: page \(stale.page) tab bar \(stale.tabBar)")
+        // The mechanism, whenever the flush in the announcement happens (its
+        // per-run trigger is unnamed, HB-SYNC-FLUSH-UNNAMED): no read of the
+        // old tab there.
+        XCTAssertEqual(stale.page, 0, "the page's body never reads the old tab inside the tab's announcement")
+        XCTAssertEqual(stale.tabBar, 0, "the tab bar never reads the old tab inside the tab's announcement")
         XCTAssertEqual(stalls, [], "every switch reaches the page's body with the new tab")
     }
 
