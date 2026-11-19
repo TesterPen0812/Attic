@@ -738,8 +738,8 @@ final class AtticLibrary {
     /// Everything in Recently Deleted, newest deletion first.
     func recentlyDeleted() -> [DeletedItemSummary] {
         let context = ModelContext(container)
-        let taskRows = (try? context.fetch(FetchDescriptor<TaskItem>())) ?? []
-        let noteRows = WorkspaceItemLifecycle.has("NoteItem", in: context) ? ((try? context.fetch(FetchDescriptor<NoteItem>())) ?? []) : []
+        let taskRows = (try? context.fetch(WholeTableRead.all(TaskItem.self))) ?? []
+        let noteRows = WorkspaceItemLifecycle.has("NoteItem", in: context) ? ((try? context.fetch(WholeTableRead.all(NoteItem.self))) ?? []) : []
         let tasksByID = Dictionary(grouping: taskRows, by: \.id)
         let notesByID = Dictionary(grouping: noteRows, by: \.id)
         let candidates = tasks.recentlyDeletedTasks() + (notes?.recentlyDeletedNotes() ?? []) + (canvases?.recentlyDeletedCanvases() ?? [])
@@ -1118,9 +1118,9 @@ final class AtticLibrary {
     func ownedMembers(of ref: AtticItemRef) -> Set<UUID> {
         if ref.kind == .note {
             let context = ModelContext(container)
-            guard let notes = try? context.fetch(FetchDescriptor<NoteItem>()),
+            guard let notes = try? context.fetch(WholeTableRead.all(NoteItem.self)),
                   let group = notes.filter({ $0.id == ref.id }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID,
-                  let rows = try? context.fetch(FetchDescriptor<TaskItem>()) else { return [] }
+                  let rows = try? context.fetch(WholeTableRead.all(TaskItem.self)) else { return [] }
             return Set(rows.filter { $0.deletionGroupID == group }.map(\.id))
         }
         return ownedMembers(of: [ref.id], kind: ref.kind)
@@ -1128,20 +1128,98 @@ final class AtticLibrary {
 
     func itemOwnership(_ members: Set<UUID>, deleted: Bool, noteID: UUID? = nil) -> FamilyOwnership {
         let owned = FamilyOwnership(members), context = ModelContext(container)
-        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>()) else { return owned }
+        guard deleted else {
+            // TA-03: what a create's (or a restore's) step owns is the live
+            // writing of its own tasks, read by owner id, so the read does
+            // not grow with the library. Nil only when every read failed.
+            owned.writing = liveWriting(ownedBy: members, in: context)
+            #if DEBUG
+            lastCapturedWriting = owned.writing
+            #endif
+            return owned
+        }
+        guard let rows = try? context.fetch(WholeTableRead.all(TaskItem.self)) else { return owned }
         let schemaHasNotes = WorkspaceItemLifecycle.has("NoteItem", in: context)
-        guard let notes = schemaHasNotes ? (try? context.fetch(FetchDescriptor<NoteItem>())) : [] else { return owned }
+        guard let notes = schemaHasNotes ? (try? context.fetch(WholeTableRead.all(NoteItem.self))) : [] else { return owned }
         if deleted {
             for id in members {
                 if let group = rows.filter({ $0.id == id }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID { owned.groups.insert(group) }
             }
             if let noteID, let group = notes.filter({ $0.id == noteID }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID { owned.groups.insert(group) }
             owned.writing = Set(notes.filter { $0.deletionGroupID.map(owned.groups.contains) == true }.map(\.id))
-        } else {
-            owned.writing = Set(notes.filter { $0.taskID.map(members.contains) == true && $0.deletedAt == nil }.map(\.id))
         }
         return owned
     }
+
+    /// The live notes (deletedAt nil, any physical replica) whose owner is
+    /// one of `members`: the writing a step that made or brought back these
+    /// tasks owns. One fetch of live notes by owner id, in the given context.
+    /// A runtime that rejects the optional membership test gets one small
+    /// fetch per task instead. If that fails too, the whole note table is
+    /// read and filtered here, as the capture did before TA-03, so a failed
+    /// narrowed read never records less than that read would (review R-1).
+    /// Nil only when the whole table can't be read either.
+    func liveWriting(ownedBy members: Set<UUID>, in context: ModelContext) -> Set<UUID>? {
+        guard WorkspaceItemLifecycle.has("NoteItem", in: context) else { return [] }
+        if let notes = liveNotes(ownedBy: members, in: context) { return Set(notes.map(\.id)) }
+        guard let all = try? ownershipNotes(WholeTableRead.all(NoteItem.self), byOwner: false, in: context) else { return nil }
+        return Set(all.filter { $0.taskID.map(members.contains) == true && $0.deletedAt == nil }.map(\.id))
+    }
+
+    /// The live notes owned by `members`, read by owner id; nil when a read failed.
+    private func liveNotes(ownedBy members: Set<UUID>, in context: ModelContext) -> [NoteItem]? {
+        let owners: [UUID?] = members.map { $0 }
+        let bulk = FetchDescriptor<NoteItem>(predicate: #Predicate { owners.contains($0.taskID) && $0.deletedAt == nil })
+        if let all = try? ownershipNotes(bulk, byOwner: true, in: context) { return all }
+        var each: [NoteItem] = []
+        for member in members {
+            let owner: UUID? = member
+            let one = FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == owner && $0.deletedAt == nil })
+            guard let rows = try? ownershipNotes(one, byOwner: true, in: context) else { return nil }
+            each += rows
+        }
+        return each
+    }
+
+    /// The ownership capture's one fetch boundary: every note fetch it makes
+    /// goes through here, so DEBUG counts what completed and what it returned.
+    private func ownershipNotes(_ descriptor: FetchDescriptor<NoteItem>, byOwner: Bool, in context: ModelContext) throws -> [NoteItem] {
+        #if DEBUG
+        if byOwner, ownerFetchFailures > 0 {
+            ownerFetchFailures -= 1
+            throw WorkspaceFoundationError.unknown
+        }
+        #endif
+        let rows = try context.fetch(descriptor)
+        #if DEBUG
+        ownershipFetches += 1
+        ownershipNoteRows += rows.count
+        #endif
+        return rows
+    }
+
+    #if DEBUG
+    /// DEBUG counts at the capture's fetch boundary (TA-03 review R-3): note
+    /// fetches that completed, and the note rows they returned.
+    private(set) var ownershipFetches = 0
+    private(set) var ownershipNoteRows = 0
+    /// What the last capture for a create or restore recorded; nil when it failed.
+    private(set) var lastCapturedWriting: Set<UUID>?
+    /// Test seam: the next `count` note fetches filtered by owner id throw.
+    /// Unfiltered fetches still read.
+    var ownerFetchFailures = 0
+
+    /// The whole-table read `liveWriting(ownedBy:in:)` replaced (TA-03),
+    /// kept as the equivalence test's reference: every task (a failure
+    /// gate) and every note, filtered in memory.
+    func wholeTableLiveWriting(ownedBy members: Set<UUID>) -> Set<UUID>? {
+        let context = ModelContext(container)
+        guard (try? context.fetch(FetchDescriptor<TaskItem>())) != nil else { return nil }
+        let schemaHasNotes = WorkspaceItemLifecycle.has("NoteItem", in: context)
+        guard let notes = schemaHasNotes ? (try? context.fetch(FetchDescriptor<NoteItem>())) : [] else { return nil }
+        return Set(notes.filter { $0.taskID.map(members.contains) == true && $0.deletedAt == nil }.map(\.id))
+    }
+    #endif
 
     func wholeItemDeleteGuard(_ owned: FamilyOwnership, roots: [UUID]) -> UndoOutcome? {
         guard !roots.isEmpty else { return nil }
@@ -1161,8 +1239,8 @@ final class AtticLibrary {
         guard !owned.groups.isEmpty else { return nil } // pre-group history
         do {
             let context = ModelContext(container)
-            let tasks = try context.fetch(FetchDescriptor<TaskItem>())
-            let notes = WorkspaceItemLifecycle.has("NoteItem", in: context) ? try context.fetch(FetchDescriptor<NoteItem>()) : []
+            let tasks = try context.fetch(WholeTableRead.all(TaskItem.self))
+            let notes = WorkspaceItemLifecycle.has("NoteItem", in: context) ? try context.fetch(WholeTableRead.all(NoteItem.self)) : []
             var groups = Set<UUID>()
             for ref in refs {
                 let group: UUID?
@@ -1406,12 +1484,20 @@ final class AtticLibrary {
     /// One pass: each store's reload reconciles the kind it read, and the
     /// shared tag inventory reads any kind no store reloaded once the pass
     /// ends (`TagService.refreshing`).
-    func refreshItemStores() {
+    ///
+    /// `freshTasks`: the task store already presented this commit from a fresh read of every row (its own save's
+    /// reload succeeded), so it is not read again; the tag pass still counts the task kind as read, because that
+    /// reload reconciled it. Returns the note store when its reload in this pass succeeded, so the Notes controller
+    /// presenting from that same object does not read it again.
+    @discardableResult
+    func refreshItemStores(freshTasks: TaskStore? = nil) -> NoteStore? {
+        var notesRead: NoteStore?
         tags.refreshing {
-            tasks.refresh()
-            notes?.refresh()
+            if let freshTasks, freshTasks === tasks { tasks.tagInventoryRefreshed() } else { tasks.refresh() }
+            if let notes, notes.refresh() { notesRead = notes }
             canvases?.refresh()
         }
+        return notesRead
     }
 
     /// Always false, so failures read `return store.op() || fail(...)`.

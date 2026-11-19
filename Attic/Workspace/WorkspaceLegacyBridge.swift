@@ -578,8 +578,11 @@ enum WorkspaceLegacyBridge {
             if let entities, !entities.contains(entity) { return }
             if let entities, entities.contains(entity), !schema.contains(name) { throw WorkspaceFoundationError.unsupportedField(name) }
             guard schema.contains(name) else { return }
-            // Old Canvas rows go through the counted, gated funnel.
-            let rows = name.hasPrefix("Canvas") ? try context.fetchCanvasReplicas(FetchDescriptor<M>()) : try context.fetch(FetchDescriptor<M>())
+            // Old Canvas rows go through the counted, gated funnel. Every other table is a whole-table read, counted
+            // under this function's name.
+            let rows = name.hasPrefix("Canvas")
+                ? try context.fetchCanvasReplicas(FetchDescriptor<M>())
+                : try context.fetch(WholeTableRead.all(M.self, function: "inventory(in:includeCanvas:entities:)"))
             for row in rows {
                 guard let owner = WorkspaceOperationCoordinator.owner(row) else { throw WorkspaceFoundationError.unknown }
                 families[owner, default: []].append(.init(physicalID: row.persistentModelID, fields: try WorkspaceModelFields.fingerprint(row)))

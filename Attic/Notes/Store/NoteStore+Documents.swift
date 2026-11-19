@@ -499,7 +499,7 @@ extension NoteStore {
             ids.formUnion(files.map(\.noteID))
             // S10 is one result even when the match is in alternate writing.
             // Keep all records/bytes; only the presented UUID is canonical.
-            let physical = try context.fetch(FetchDescriptor<NoteItem>())
+            let physical = try context.fetch(WholeTableRead.all(NoteItem.self))
             let canonical = NoteStore.itemWritingIDs(from: physical)
             let all = NoteStore.canonicalReplicas(from: physical).filter { $0.deletedAt == nil }
             let byID = Dictionary(all.map { ($0.id, $0.taskID) }, uniquingKeysWith: { first, _ in first })

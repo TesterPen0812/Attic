@@ -319,11 +319,11 @@ extension TaskNoteConversion {
     /// while any writing could lose its restore window, including group-only
     /// notes and independently deleted writing in old stores.
     private static func proveEarlierWritingAbsent(taskID: UUID, in context: ModelContext) throws {
-        let earlier = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.parentID == taskID && $0.deletedAt != nil }
+        let earlier = try context.fetch(WholeTableRead.all(TaskItem.self)).filter { $0.parentID == taskID && $0.deletedAt != nil }
         guard !earlier.isEmpty else { return }
         let ids = Set(earlier.map(\.id)), groups = Set(earlier.compactMap(\.deletionGroupID))
         let writing = try WorkspaceItemLifecycle.writing(taskIDs: ids, in: context)
-        let grouped = try context.fetch(FetchDescriptor<NoteItem>()).contains { $0.deletionGroupID.map(groups.contains) == true }
+        let grouped = try context.fetch(WholeTableRead.all(NoteItem.self)).contains { $0.deletionGroupID.map(groups.contains) == true }
         guard writing.isEmpty, !grouped else { throw RemovalRefusal.earlierWriting }
     }
 
@@ -333,7 +333,7 @@ extension TaskNoteConversion {
         // Recheck in the fresh commit context after journal IO. Undo Add and
         // redo use this boundary too; preflight alone cannot protect new rows.
         try proveEarlierWritingAbsent(taskID: taskID, in: context)
-        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        let all = try context.fetch(WholeTableRead.all(TaskItem.self))
         let ids = Set(all.filter { ($0.id == taskID || $0.parentID == taskID) && $0.deletedAt == nil }.map(\.id))
         let rows = all.filter { ids.contains($0.id) }
         guard rows.allSatisfy({ $0.deletedAt == nil && ($0.id == taskID ? $0.parentID == nil : $0.parentID == taskID) }) else { throw WorkspaceFoundationError.conflict }
@@ -443,7 +443,7 @@ extension TaskNoteConversion {
         let context = coordinator.freshContext()
         try proveEarlierWritingAbsent(taskID: taskID, in: context)
         guard hasWriting(taskID, in: context) else { throw WorkspaceFoundationError.conflict }
-        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        let all = try context.fetch(WholeTableRead.all(TaskItem.self))
         let candidateIDs = Set(all.filter { $0.id == taskID || $0.parentID == taskID }.map(\.id))
         let family = all.filter { candidateIDs.contains($0.id) }
         guard family.allSatisfy({ $0.id == taskID ? $0.parentID == nil : $0.parentID == taskID }) else { throw WorkspaceFoundationError.conflict }

@@ -204,8 +204,8 @@ final class TagService {
         guard inventory != nil else { return rebuild() }
         let context = ModelContext(container)
         do {
-            if !refreshed.contains(.task) { reconcile(tasks: try fetchRows(FetchDescriptor<TaskItem>(), in: context)) }
-            if !refreshed.contains(.note) { reconcile(notes: try fetchRows(FetchDescriptor<NoteItem>(), in: context)) }
+            if !refreshed.contains(.task) { reconcile(tasks: try fetchRows(WholeTableRead.all(TaskItem.self), in: context)) }
+            if !refreshed.contains(.note) { reconcile(notes: try fetchRows(WholeTableRead.all(NoteItem.self), in: context)) }
         } catch {
             return rebuildInventory()
         }

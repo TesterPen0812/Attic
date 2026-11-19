@@ -153,6 +153,11 @@ final class NoteStore: ObservableObject {
     private var tagInventory: (counts: [String: Int], rows: [UUID: String])?
     private(set) var tagInventoryBuildCount = 0
     private(set) var tagInventoryNoteReadCount = 0
+    #if DEBUG
+    /// Whole-store reloads (`reloadModels`): every note and attachment read into a fresh context.
+    private(set) var fullNoteReloadCount = 0
+    func resetFullNoteReloadCount() { fullNoteReloadCount = 0 }
+    #endif
 
     /// Warm suggestions read values only, without revisiting the library's
     /// models. Content-only saves do not invalidate this inventory.
@@ -528,7 +533,7 @@ final class NoteStore: ObservableObject {
             let workerContext = ModelContext(container)
             let snapshot = try NoteDocumentRetentionSnapshot.read(in: workerContext, observeRead: observeRead)
             var ids = try snapshot.attachmentIDs(observeDecode: observeDecode)
-            ids.formUnion(try workerContext.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
+            ids.formUnion(try workerContext.fetch(WholeTableRead.all(NoteAttachment.self)).map(\.id))
             return ids
         }.value
     }
@@ -693,7 +698,7 @@ final class NoteStore: ObservableObject {
                 predicate: #Predicate { deletedIDs.contains($0.id) }
             ))
 #if os(macOS)
-            let attachmentNoteIDs = try freshContext.fetch(FetchDescriptor<NoteAttachment>()).map(\.noteID)
+            let attachmentNoteIDs = try freshContext.fetch(WholeTableRead.all(NoteAttachment.self)).map(\.noteID)
             var attachmentCounts: [UUID: Int] = [:]
             for noteID in attachmentNoteIDs { attachmentCounts[noteID, default: 0] += 1 }
 #else
@@ -907,8 +912,8 @@ final class NoteStore: ObservableObject {
                 if let group = first.deletionGroupID {
                     // A writing endpoint of a task group never enters the
                     // independent collector, even if its task is divergent.
-                    let groupedTasks = WorkspaceItemLifecycle.has("TaskItem", in: context) ? try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletionGroupID == group } : []
-                    let groupedNotes = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.deletionGroupID == group }
+                    let groupedTasks = WorkspaceItemLifecycle.has("TaskItem", in: context) ? try context.fetch(WholeTableRead.all(TaskItem.self)).filter { $0.deletionGroupID == group } : []
+                    let groupedNotes = try context.fetch(WholeTableRead.all(NoteItem.self)).filter { $0.deletionGroupID == group }
                     guard groupedTasks.isEmpty, Set(groupedNotes.map(\.id)) == [id] else { continue }
                 }
                 if let confirmed, confirmed[id] != first.deletedAt { continue }
@@ -1053,7 +1058,7 @@ final class NoteStore: ObservableObject {
         attachmentFailures[attachment.id] = nil
         attachmentRetryVersions[attachment.id] = nil
         // Visibility changed in place; reconcile the retained file inventory.
-        if let rows = try? context.fetch(FetchDescriptor<NoteAttachment>()) { reconcileFileStorage(with: rows) }
+        if let rows = try? context.fetch(WholeTableRead.all(NoteAttachment.self)) { reconcileFileStorage(with: rows) }
         return true
     }
 
@@ -1518,13 +1523,17 @@ final class NoteStore: ObservableObject {
         return index
     }
 
-    func refresh() {
+    /// True when every note was read again from a fresh context and presented.
+    @discardableResult
+    func refresh() -> Bool {
         defer { tagInventoryRefreshed() }
         do {
             try reloadModels()
             lastErrorMessage = nil
+            return true
         } catch {
             lastErrorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -1766,6 +1775,9 @@ final class NoteStore: ObservableObject {
     /// outside context, the workspace coordinator's transaction), so a failed one must not leave
     /// the inventory as it was.
     private func reloadModels(preservingAttachmentProofs: Bool = false) throws {
+        #if DEBUG
+        fullNoteReloadCount += 1
+        #endif
         do {
             let refreshedContext = try makeFreshContext()
             let presentation = try presentationSnapshot(in: refreshedContext)
@@ -1790,8 +1802,8 @@ final class NoteStore: ObservableObject {
     private func presentationSnapshot(
         in sourceContext: ModelContext
     ) throws -> NotePresentationSnapshot {
-        let fetchedNotes = try sourceContext.fetch(FetchDescriptor<NoteItem>())
-        let fetchedAttachments = try sourceContext.fetch(FetchDescriptor<NoteAttachment>())
+        let fetchedNotes = try sourceContext.fetch(WholeTableRead.all(NoteItem.self))
+        let fetchedAttachments = try sourceContext.fetch(WholeTableRead.all(NoteAttachment.self))
         return NotePresentationSnapshot(
             notes: fetchedNotes,
             attachments: fetchedAttachments
@@ -1882,7 +1894,7 @@ final class NoteStore: ObservableObject {
     }
 #else
     private func presentationSnapshot(in sourceContext: ModelContext) throws -> [NoteItem] {
-        try sourceContext.fetch(FetchDescriptor<NoteItem>())
+        try sourceContext.fetch(WholeTableRead.all(NoteItem.self))
     }
 
     private func installPresentation(_ fetchedNotes: [NoteItem], using sourceContext: ModelContext,

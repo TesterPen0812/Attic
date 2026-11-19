@@ -1621,8 +1621,7 @@ struct TasksPage: View {
             ZStack(alignment: .topLeading) {
                 TasksPagerPages(span: swipe.span, model: model, store: store, motion: swipe.motion, count: TasksTab.allCases.count,
                                 shown: TasksTab.allCases.firstIndex(of: model.tab) ?? 0, size: proxy.size,
-                                page: { index, drawn in page(TasksTab.allCases[index], drawn: drawn) },
-                                token: { [model] index in model.pageToken(TasksTab.allCases[index]) })
+                                page: { index, drawn in page(TasksTab.allCases[index], drawn: drawn) })
                 if TasksPagerMotion.tracing {
                     TasksPagerTrace(motion: swipe.motion)
                 }

@@ -120,13 +120,25 @@ struct CalendarDayMarksView: View {
 
     @Environment(\.atticDesign) private var design
 
+    #if DEBUG
+    /// Test seam (CalendarDayMarksTests): how many times the body has run.
+    static var bodyEvaluations = 0
+    #endif
+
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let tokens = design.tokens
+        let colours = marks.eventColours
         HStack(spacing: CalendarDesign.dotGap) {
-            ForEach(Array(marks.eventColours.enumerated()), id: \.offset) { _, colour in
-                Circle().fill(colour.rgba.color)
-                    .frame(width: CalendarDesign.dot, height: CalendarDesign.dot)
-            }
+            // Three fixed slots (`CalendarDesign.maxEventDots`), not a
+            // ForEach: SwiftUI re-runs every ForEach's evictor on each update
+            // of the hosting view, so the 49 day keys ticked on every frame
+            // of a Tasks scroll with Calendar hidden (trace, 18 Nov).
+            if !colours.isEmpty { Self.dot(colours[0]) }
+            if colours.count > 1 { Self.dot(colours[1]) }
+            if colours.count > 2 { Self.dot(colours[2]) }
             if marks.hasOpenTasks {
                 let ring = isPast ? AtticSurfaceInk.vivid(CalendarDesign.red, tokens: tokens)
                     : AtticSurfaceInk.toneInk(.meta, tokens: tokens)
@@ -137,6 +149,11 @@ struct CalendarDayMarksView: View {
         .frame(height: CalendarDesign.dot)
         .opacity(isPast && !marks.hasOpenTasks ? 0.4 : 1)
         .accessibilityHidden(true)
+    }
+
+    private static func dot(_ colour: CalendarEventColour) -> some View {
+        Circle().fill(colour.rgba.color)
+            .frame(width: CalendarDesign.dot, height: CalendarDesign.dot)
     }
 }
 
