@@ -1293,10 +1293,12 @@ final class TasksPageModel: ObservableObject {
             store.indexedDoneLogPage(limit: limit, matching: query, tags: tag)
         }
         IdleLatencyTrace.count("task_done_reads", page.tasks.count)
-        if let failure = page.failure {
+        let familyRead = store.doneLogFamilies(ofParents: page.tasks.map(\.id))
+        if let failure = page.failure ?? familyRead.failure {
             // Keep what the page showed for this search; a new search shows
-            // what was read. Not marked as loaded, so Retry reads again.
-            if !same { setDoneLog(page.tasks) }
+            // what was read. Not marked as loaded, so Retry reads again. A
+            // failed family read counts as a failed read.
+            if !same { setDoneLog(page.tasks, families: familyRead.families) }
             doneLogCursor = page.next
             doneLogHasMore = true
             doneLogFailure = failure
@@ -1305,7 +1307,7 @@ final class TasksPageModel: ObservableObject {
         doneLogQuery = query
         doneLogTag = tag
         markDoneLogRead()
-        setDoneLog(page.tasks)
+        setDoneLog(page.tasks, families: familyRead.families)
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
         doneLogFailure = nil
@@ -1357,8 +1359,16 @@ final class TasksPageModel: ObservableObject {
                 return true
             }
             guard read.tasks.count == parents.count else { return false }
+            // A failed family read is a failed read too: nothing is changed
+            // or marked as read, so no row keeps a checklist it could not read.
+            let familyRead = store.doneLogFamilies(ofParents: parents)
+            if let failure = familyRead.failure {
+                doneLogHasMore = true
+                doneLogFailure = failure
+                return true
+            }
+            let families = familyRead.families
             let fresh = Dictionary(read.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            let families = store.doneLogSubtasks(ofParents: parents)
             for parent in parents {
                 for child in doneLogChildren[parent] ?? [] where doneLogParentByChild[child.id] == parent {
                     doneLogParentByChild[child.id] = nil
@@ -1447,11 +1457,18 @@ final class TasksPageModel: ObservableObject {
             guard doneLogHasMore, doneLogFailure == nil else { return }
         }
         let page = store.indexedDoneLogPage(from: doneLogCursor, limit: limit, matching: doneLogQuery ?? "", tags: doneLogTag ?? .none)
+        let familyRead = store.doneLogFamilies(ofParents: page.tasks.map(\.id))
+        if page.failure == nil, let failure = familyRead.failure {
+            // A failed family read is a failed read: the page is not added
+            // and the cursor stays, so Retry reads this page again.
+            doneLogFailure = failure
+            return
+        }
+        let families = familyRead.families
         doneCountCache = nil
         // The indexed cursor supplies canonical IDs in completion order.
         // Existing families remain valid for this store revision.
         doneLogTasks.append(contentsOf: page.tasks)
-        let families = store.doneLogSubtasks(ofParents: page.tasks.map(\.id))
         doneLogChildren.merge(families) { _, new in new }
         for (parent, children) in families { for child in children { doneLogParentByChild[child.id] = parent } }
         doneLogCursor = page.next
@@ -1480,11 +1497,11 @@ final class TasksPageModel: ObservableObject {
 
     /// Loaded Done log tasks, in the log's order by the replica each shows
     /// (pages are merged, so a divergent copy never splits a day), with
-    /// their families read in one go.
-    private func setDoneLog(_ tasks: [TaskItem]) {
+    /// their families, read in one go.
+    private func setDoneLog(_ tasks: [TaskItem], families: [UUID: [TaskItem]]) {
         doneCountCache = nil
         doneLogTasks = tasks.sorted(by: TaskStore.doneLogOrder)
-        doneLogChildren = store.doneLogSubtasks(ofParents: doneLogTasks.map(\.id))
+        doneLogChildren = families
         doneLogParentByChild = [:]
         for (parent, children) in doneLogChildren { for child in children { doneLogParentByChild[child.id] = parent } }
         // Read in full, the rows are projected again: a read that replaced

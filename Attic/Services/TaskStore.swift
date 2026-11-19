@@ -3120,8 +3120,15 @@ final class TaskStore: ObservableObject {
     private(set) var doneFamilyRowsReadCount = 0
     private(set) var donePageReadCount = 0
     func doneLogSubtasks(ofParents parentIDs: [UUID]) -> [UUID: [TaskItem]] {
+        doneLogFamilies(ofParents: parentIDs).families
+    }
+
+    /// The same families, and the message when the read failed (reported;
+    /// no family is returned then). The Done page counts a failed family
+    /// read as a failed read, as it does a failed page (Astra r5 R1, PR 31).
+    func doneLogFamilies(ofParents parentIDs: [UUID]) -> (families: [UUID: [TaskItem]], failure: String?) {
         doneFamilyParentReadCount += parentIDs.count
-        guard !parentIDs.isEmpty else { return [:] }
+        guard !parentIDs.isEmpty else { return ([:], nil) }
         let wanted = Set(parentIDs)
         do {
             if doneFamilyBatchReadFailures > 0 {
@@ -3140,17 +3147,17 @@ final class TaskStore: ObservableObject {
                 }
             }
             let ids = Array(Set(children.map(\.id)))
-            guard !ids.isEmpty else { return [:] }
+            guard !ids.isEmpty else { return ([:], nil) }
             let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
             var result: [UUID: [TaskItem]] = [:]
             for child in Self.canonicalReplicas(from: replicas) {
                 guard let parentID = child.parentID, wanted.contains(parentID), child.deletedAt == nil else { continue }
                 result[parentID, default: []].append(child)
             }
-            return result.mapValues { $0.sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) } }
+            return (result.mapValues { $0.sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) } }, nil)
         } catch {
             report(error.localizedDescription, owner: nil)
-            return [:]
+            return ([:], error.localizedDescription)
         }
     }
 
