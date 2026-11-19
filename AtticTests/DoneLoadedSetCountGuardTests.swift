@@ -191,6 +191,9 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
         let named = parents[16]
         XCTAssertEqual(row(named)?.priority, TaskPriority.none, "the named row is loaded, with no priority yet")
         let before = model.doneLogTasks.map { (id: $0.id, text: describe($0)) }
+        // The row the page draws (doneDays), not only the task it holds.
+        func drawn(_ id: UUID) -> TasksListRow? { model.doneDays().flatMap(\.rows).first { $0.id == id } }
+        let drawnBefore = drawn(named)?.model.priority
         store.doneLogReadFailures = 2
         step("drawn page: archived edit, both reads fail", inPlace: false) {
             XCTAssertTrue(model.setPriority(.medium, for: [named]).isApplied)
@@ -203,6 +206,9 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
         let namedShowsSaved = row(named)?.priority == .medium
         let othersUnchanged = sameOrder && zip(before, failed).allSatisfy { old, new in old.id == named || old.text == new.text }
         let retryShows = model.doneLogFailure != nil
+        let drawnAfter = drawn(named)?.model.priority
+        let drawnShowsSaved = drawnAfter != nil && drawnAfter != drawnBefore
+            && drawnAfter == row(named).map { model.rowModel(for: $0).model.priority }
         let countedBeforeRetry = model.doneLogInPlaceRefreshCount
         step("Retry after both reads failed", inPlace: true) { model.retryDoneLog() }
         let retryInPlace = model.doneLogInPlaceRefreshCount > countedBeforeRetry
@@ -210,12 +216,13 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
         let retryUpdates = model.doneLogFailure == nil && retryInPlace && model.doneLogTasks.map(describe) == fullRead.map(describe)
         print("DONE_CONDITION_2 step=\"both reads fail, then Retry\" injected_used=\(injectedUsed) "
               + "loaded=\(before.count)->\(failed.count) none_dropped=\(noneDropped) same_order=\(sameOrder) "
-              + "named_shows_saved=\(namedShowsSaved) others_unchanged=\(othersUnchanged) retry_shows=\(retryShows) "
+              + "named_shows_saved=\(namedShowsSaved) drawn_shows_saved=\(drawnShowsSaved) others_unchanged=\(othersUnchanged) retry_shows=\(retryShows) "
               + "retry_in_place=\(retryInPlace) retry_updates=\(retryUpdates)")
         XCTAssertTrue(injectedUsed, "condition 2: both injected failures were used")
         XCTAssertTrue(noneDropped, "condition 2: no loaded row is dropped")
         XCTAssertTrue(sameOrder, "condition 2: the loaded rows keep their order")
         XCTAssertTrue(namedShowsSaved, "condition 2: the row the save named shows its saved value")
+        XCTAssertTrue(drawnShowsSaved, "condition 2: the drawn row shows its saved value, as a fresh projection does")
         XCTAssertTrue(othersUnchanged, "condition 2: every other loaded row is unchanged")
         XCTAssertTrue(retryShows, "condition 2: both reads failed, so Retry shows")
         XCTAssertTrue(retryUpdates, "condition 2: Retry clears the failure and brings the list up to date in place")
@@ -392,6 +399,182 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
 
     /// Open tasks on Now, tasks in Later, finished tasks in the Done log
     /// (finished before today) and unrelated notes.
+    /// Astra r5 R1 of PR 31. A family read that fails is a failed read, on
+    /// every path that loads Done log rows: what loaded is kept (no row is
+    /// marked as read with a checklist it could not read), Retry shows, and
+    /// once reads recover the row shows its subtasks as a full read does. On
+    /// the trunk each save reads the loaded families again (source-traced in
+    /// `loadDoneLogIfNeeded`, not run); the in-place update must not keep a
+    /// family it failed to read across later saves.
+    func testFailedFamilyReadInAnInPlaceUpdateIsAFailedRead() throws {
+        let (store, parents) = try makeFamilyLog(logged: 60, families: [2])
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        let family = parents[2]
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize)
+        XCTAssertEqual(drawnSubtaskTotal(model, family), 2, "before: the row shows its two subtasks")
+        let familyParents = store.doneFamilyParentReadCount
+        store.doneFamilyBatchReadFailures = 1
+        XCTAssertTrue(model.setPriority(.high, for: [family]).isApplied)
+        assertFamilyReadFailure("in_place", store, model, family, familyParentsRead: store.doneFamilyParentReadCount - familyParents,
+                                expectedFamilyParents: 1)
+    }
+
+    /// R1, the full read: the first page's family read fails.
+    func testFailedFamilyReadInAFullReadIsAFailedRead() throws {
+        let (store, parents) = try makeFamilyLog(logged: 60, families: [2])
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .done)
+        let familyParents = store.doneFamilyParentReadCount
+        store.doneFamilyBatchReadFailures = 1
+        model.loadDoneLogIfNeeded()
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize, "the page's rows show")
+        assertFamilyReadFailure("full_read", store, model, parents[2], familyParentsRead: store.doneFamilyParentReadCount - familyParents,
+                                expectedFamilyParents: TasksPageModel.doneLogPageSize)
+    }
+
+    /// R1, one more page: the next page's family read fails.
+    func testFailedFamilyReadOnTheNextPageIsAFailedRead() throws {
+        let (store, parents) = try makeFamilyLog(logged: 100, families: [50])
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize)
+        let familyParents = store.doneFamilyParentReadCount
+        store.doneFamilyBatchReadFailures = 1
+        model.loadMoreDoneLog()
+        assertFamilyReadFailure("next_page", store, model, parents[50], familyParentsRead: store.doneFamilyParentReadCount - familyParents,
+                                expectedFamilyParents: TasksPageModel.doneLogPageSize)
+    }
+
+    /// After the injected family read failure: the failure is shown (Retry);
+    /// then reads recover, an unrelated save on Now is loaded, and the row is
+    /// scrolled to if it is not loaded. Its subtask total must be a full read's.
+    private func assertFamilyReadFailure(_ path: String, _ store: TaskStore, _ model: TasksPageModel, _ family: UUID,
+                                         familyParentsRead: Int, expectedFamilyParents: Int,
+                                         file: StaticString = #filePath, line: UInt = #line) {
+        let used = store.doneFamilyBatchReadFailures == 0
+        let failureShown = model.doneLogFailure != nil
+        let during = drawnSubtaskTotal(model, family)
+        guard let nowID = store.tasks.first(where: { $0.status == .todo })?.id else {
+            return XCTFail("\(path): a task on Now", file: file, line: line)
+        }
+        XCTAssertTrue(model.setPriority(.low, for: [nowID]).isApplied, file: file, line: line)
+        model.loadDoneLogIfNeeded()
+        var pages = 0
+        while !model.doneLogTasks.contains(where: { $0.id == family }), model.doneLogHasMore, pages < 3 {
+            model.loadMoreDoneLog()
+            pages += 1
+        }
+        let shown = drawnSubtaskTotal(model, family)
+        let full = store.doneLogSubtasks(ofParents: [family])[family]?.count ?? 0
+        print("GUARD_DONE_FAMILY_READ_FAILURE path=\(path) injected_used=\(used) family_parents_read=\(familyParentsRead) "
+              + "failure_shown=\(failureShown) during=\(during.map(String.init) ?? "not_loaded") pages_after=\(pages) "
+              + "after_unrelated_save=\(shown.map(String.init) ?? "not_loaded") full_read=\(full) "
+              + "failure_after=\(model.doneLogFailure != nil)")
+        XCTAssertTrue(used, "\(path): the injected failure reached a batch family read", file: file, line: line)
+        XCTAssertEqual(familyParentsRead, expectedFamilyParents, "\(path): it was this path's family read", file: file, line: line)
+        XCTAssertTrue(failureShown, "\(path): a failed family read is a failed read: Retry shows", file: file, line: line)
+        XCTAssertEqual(full, 2, "\(path): a full read finds the two subtasks", file: file, line: line)
+        XCTAssertEqual(shown, full, "\(path): once reads recover the row shows its subtasks, as a full read does",
+                       file: file, line: line)
+        XCTAssertNil(model.doneLogFailure, "\(path): the reads recovered", file: file, line: line)
+    }
+
+    /// The subtask total a drawn Done row shows (0 when it shows none); nil
+    /// when the row is not loaded.
+    private func drawnSubtaskTotal(_ model: TasksPageModel, _ id: UUID) -> Int? {
+        guard let row = model.doneDays().flatMap(\.rows).first(where: { $0.id == id }) else { return nil }
+        return row.model.subtasks?.total ?? 0
+    }
+
+    /// Astra r5 R2 of PR 31. The daily cleanup logs `archived` older tasks
+    /// below a loaded page. Bringing the page up to date reads no more Done
+    /// log rows than the loaded page, however many were archived (a full read
+    /// reads the page). Prints `GUARD_DONE_PARENT_LOOKUP`.
+    func testGuardUpdateAfterCleanupReadsNoMoreThanTheLoadedPage() throws {
+        let pageSize = TasksPageModel.doneLogPageSize
+        for archived in [100, 1_000] {
+            let (store, now) = try makeCleanupLog(logged: pageSize, late: archived)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store))
+            model.select(tab: .done)
+            model.loadDoneLogIfNeeded()
+            XCTAssertEqual(model.doneLogTasks.count, pageSize, "archived=\(archived)")
+            XCTAssertEqual(store.moveCompletedToDoneLog(before: Calendar.current.startOfDay(for: now)), archived, "archived=\(archived)")
+            XCTAssertNotNil(store.revisionChangedTaskIDs, "archived=\(archived): the cleanup named its tasks")
+            let rows = store.doneLogRowsReadCount
+            let inPlace = model.doneLogInPlaceRefreshCount
+            model.loadDoneLogIfNeeded()
+            let read = store.doneLogRowsReadCount - rows
+            print("GUARD_DONE_PARENT_LOOKUP archived=\(archived) loaded=\(model.doneLogTasks.count) done_log_rows_read=\(read) "
+                  + "in_place=\(model.doneLogInPlaceRefreshCount - inPlace) has_more=\(model.doneLogHasMore)")
+            XCTAssertLessThanOrEqual(read, pageSize, "archived=\(archived): the update read more Done log rows than the loaded page")
+            XCTAssertEqual(model.doneLogTasks.map(\.id), store.indexedDoneLogIDs(limit: pageSize).ids, "archived=\(archived)")
+            XCTAssertTrue(model.doneLogHasMore, "archived=\(archived): the archived tasks are below the page")
+            XCTAssertNil(model.doneLogFailure, "archived=\(archived)")
+        }
+    }
+
+    /// Five open tasks on Now and `logged` tasks in the Done log, finished
+    /// before today; each task at an index in `families` has two logged
+    /// subtasks. Returns the logged tasks' IDs in the log's order.
+    private func makeFamilyLog(logged: Int, families: Set<Int>) throws -> (TaskStore, [UUID]) {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let context = ModelContext(container)
+        let now = Date()
+        var order: Int64 = 10_000_000
+        for index in 0..<5 {
+            order -= 1_024
+            let open = TaskItem(title: "Open task \(index)", status: .todo, createdAt: now, manualOrder: order)
+            open.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(open)
+        }
+        var parents: [UUID] = []
+        for index in 0..<logged {
+            order -= 1_024
+            let completed = now.addingTimeInterval(-86_400 - Double(index + 1) * 3_600)
+            let parent = TaskItem(title: "Finished task \(index)", status: .done, createdAt: now, completedAt: completed, manualOrder: order)
+            parent.listOrderVersion = TaskItem.currentListOrderVersion
+            parent.doneLoggedAt = completed
+            context.insert(parent)
+            parents.append(parent.id)
+            guard families.contains(index) else { continue }
+            for step in 0..<2 {
+                let child = TaskItem(title: "Step \(step) of \(index)", status: .done, createdAt: now,
+                                     completedAt: completed.addingTimeInterval(-Double(step + 1) * 60), parentID: parent.id)
+                child.doneLoggedAt = completed
+                context.insert(child)
+            }
+        }
+        try context.save()
+        return (TaskStore(container: container), parents)
+    }
+
+    /// `logged` tasks in the Done log, finished before today, and `late`
+    /// tasks finished a month ago and still in the list: the daily cleanup
+    /// logs them below every logged row. Returns the time the rows count from.
+    private func makeCleanupLog(logged: Int, late: Int) throws -> (TaskStore, Date) {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let context = ModelContext(container)
+        let now = Date()
+        var order: Int64 = 10_000_000
+        for index in 0..<(logged + late) {
+            order -= 1_024
+            let isLate = index >= logged
+            let completed = isLate
+                ? now.addingTimeInterval(-30 * 86_400 - Double(index) * 60)
+                : now.addingTimeInterval(-86_400 - Double(index + 1) * 3_600)
+            let task = TaskItem(title: isLate ? "Finished long ago \(index)" : "Finished task \(index)", status: .done,
+                                createdAt: now.addingTimeInterval(-40 * 86_400), completedAt: completed, manualOrder: order)
+            task.listOrderVersion = TaskItem.currentListOrderVersion
+            if !isLate { task.doneLoggedAt = completed }
+            context.insert(task)
+        }
+        try context.save()
+        return (TaskStore(container: container), now)
+    }
+
     private func makeStore(open: Int, later: Int = 0, logged: Int = 0, notes: Int = 0, tagged: Bool = false) throws -> TaskStore {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let context = ModelContext(container)
