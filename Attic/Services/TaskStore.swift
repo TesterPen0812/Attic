@@ -3094,7 +3094,9 @@ final class TaskStore: ObservableObject {
             throw DoneLogReadFailure()
         }
         let rows = try context.fetch(descriptor)
+        #if DEBUG
         doneLogRowsReadCount += rows.count
+        #endif
         return rows
     }
 
@@ -3104,11 +3106,13 @@ final class TaskStore: ObservableObject {
 
     /// Test seam: the next `count` Done log reads fail.
     var doneLogReadFailures = 0
+    #if DEBUG
     /// Test seam: the next `count` batch family reads of the Done page
-    /// (`doneLogSubtasks(ofParents:)`) fail, outside the per-parent fallback.
+    /// (`doneLogFamilies(ofParents:)`) fail, outside the per-parent fallback.
     var doneFamilyBatchReadFailures = 0
     /// Rows returned by Done log reads (`readDoneLog`), for the count guards.
     private(set) var doneLogRowsReadCount = 0
+    #endif
 
     /// The subtasks of several Done log tasks, read together (one page's
     /// rows, Astra 19), each list in `doneLogSubtasks`' order. A parent
@@ -3124,17 +3128,20 @@ final class TaskStore: ObservableObject {
     }
 
     /// The same families, and the message when the read failed (reported;
-    /// no family is returned then). The Done page counts a failed family
-    /// read as a failed read, as it does a failed page (Astra r5 R1, PR 31).
+    /// no family is returned then). The Done page's in-place update makes no
+    /// change when it fails, and a full read or page load that failed one
+    /// refuses the next in-place update (Astra r5 R1, PR 31).
     func doneLogFamilies(ofParents parentIDs: [UUID]) -> (families: [UUID: [TaskItem]], failure: String?) {
         doneFamilyParentReadCount += parentIDs.count
         guard !parentIDs.isEmpty else { return ([:], nil) }
         let wanted = Set(parentIDs)
         do {
+            #if DEBUG
             if doneFamilyBatchReadFailures > 0 {
                 doneFamilyBatchReadFailures -= 1
                 throw DoneLogReadFailure()
             }
+            #endif
             let optionalIDs: [UUID?] = parentIDs.map { $0 }
             let children: [TaskItem]
             do {

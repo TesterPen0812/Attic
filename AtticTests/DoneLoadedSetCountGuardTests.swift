@@ -81,11 +81,10 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
     /// pages is read again in full and compared, rows, families and order,
     /// and every reused Done row is projected again and compared. Run through
     /// edits elsewhere, archived edits (a parent's and, where the page lists
-    /// it, a subtask's), a search, failed reads on the drawn page (one, which
-    /// the page's own second load recovers, and two, which show Retry) and
-    /// Retry, and the changes
-    /// that must still read the pages in full: an archived delete and its
-    /// Undo, Restore to Now, and a delete that gives the store a new context.
+    /// it, a subtask's), a search, and the changes that must still read the
+    /// pages in full: an archived delete and its Undo, Restore to Now, and a
+    /// delete that gives the store a new context. Failed reads have their own
+    /// tests, one per read the in-place update makes.
     func testDoneLogInPlaceUpdatesMatchAFullRead() throws {
         TasksPageModel.checksDoneLogInPlace = true
         defer { TasksPageModel.checksDoneLogInPlace = false }
@@ -155,78 +154,6 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
             XCTAssertTrue(model.setPriority(.medium, for: [nowIDs[1]]).isApplied)
             XCTAssertTrue(model.setPriority(.low, for: [parents[12]]).isApplied)
         }
-        let loadedCount = 2 * TasksPageModel.doneLogPageSize
-        func row(_ id: UUID) -> TaskItem? { model.doneLogTasks.first { $0.id == id } }
-        func describe(_ task: TaskItem) -> String { "\(task.id) \(task.title) \(task.priority) \(task.tags)" }
-        // The list shows what a full read shows: the same rows, in order, with
-        // the same content.
-        func assertMatchesAFullRead(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
-            let full = store.indexedDoneLogPage(limit: model.doneLogTasks.count).tasks.sorted(by: TaskStore.doneLogOrder)
-            XCTAssertEqual(model.doneLogTasks.map(describe), full.map(describe), "\(label): the list is a full read's", file: file, line: line)
-        }
-        // On a drawn page every save is loaded twice: the model's own reload
-        // after the edit, then the Done page's revision watcher. A failed
-        // read is not marked as read, so the watcher's load reads the pages
-        // in full (the in-place path is refused while a failure is set).
-        //
-        // One failed read: the model's in-place read fails and sets the
-        // failure; the watcher's full read then shows the edit. No Retry.
-        store.doneLogReadFailures = 1
-        step("drawn page: archived edit, one failed read", inPlace: false) {
-            XCTAssertTrue(model.setPriority(.medium, for: [parents[17]]).isApplied)
-            XCTAssertNotNil(model.doneLogFailure, "before the page draws: the model's read failed")
-        }
-        XCTAssertEqual(store.doneLogReadFailures, 0, "the injected failure was used")
-        XCTAssertNil(model.doneLogFailure, "the watcher's full read succeeded: no Retry")
-        XCTAssertEqual(model.doneLogTasks.count, loadedCount)
-        XCTAssertEqual(row(parents[17])?.priority, .medium, "the list shows the edit")
-        assertMatchesAFullRead("one failed read")
-        // Condition 2 (lead, 19 Nov), one named step: both reads fail (the
-        // model's in-place read, then the watcher's full read). No loaded row
-        // is dropped and the order holds. The row the save named shows its
-        // saved value, as on the trunk: a loaded row is the task the save
-        // edited, in the store's one context, so it needs no read to show it.
-        // Every other row is unchanged, and Retry shows. Retry then brings
-        // the list up to date in place.
-        let named = parents[16]
-        XCTAssertEqual(row(named)?.priority, TaskPriority.none, "the named row is loaded, with no priority yet")
-        let before = model.doneLogTasks.map { (id: $0.id, text: describe($0)) }
-        // The row the page draws (doneDays), not only the task it holds.
-        func drawn(_ id: UUID) -> TasksListRow? { model.doneDays().flatMap(\.rows).first { $0.id == id } }
-        let drawnBefore = drawn(named)?.model.priority
-        store.doneLogReadFailures = 2
-        step("drawn page: archived edit, both reads fail", inPlace: false) {
-            XCTAssertTrue(model.setPriority(.medium, for: [named]).isApplied)
-            XCTAssertNotNil(model.doneLogFailure, "before the page draws: the model's read failed")
-        }
-        let failed = model.doneLogTasks.map { (id: $0.id, text: describe($0)) }
-        let injectedUsed = store.doneLogReadFailures == 0
-        let noneDropped = Set(failed.map(\.id)).isSuperset(of: before.map(\.id))
-        let sameOrder = failed.map(\.id) == before.map(\.id)
-        let namedShowsSaved = row(named)?.priority == .medium
-        let othersUnchanged = sameOrder && zip(before, failed).allSatisfy { old, new in old.id == named || old.text == new.text }
-        let retryShows = model.doneLogFailure != nil
-        let drawnAfter = drawn(named)?.model.priority
-        let drawnShowsSaved = drawnAfter != nil && drawnAfter != drawnBefore
-            && drawnAfter == row(named).map { model.rowModel(for: $0).model.priority }
-        let countedBeforeRetry = model.doneLogInPlaceRefreshCount
-        step("Retry after both reads failed", inPlace: true) { model.retryDoneLog() }
-        let retryInPlace = model.doneLogInPlaceRefreshCount > countedBeforeRetry
-        let fullRead = store.indexedDoneLogPage(limit: model.doneLogTasks.count).tasks.sorted(by: TaskStore.doneLogOrder)
-        let retryUpdates = model.doneLogFailure == nil && retryInPlace && model.doneLogTasks.map(describe) == fullRead.map(describe)
-        print("DONE_CONDITION_2 step=\"both reads fail, then Retry\" injected_used=\(injectedUsed) "
-              + "loaded=\(before.count)->\(failed.count) none_dropped=\(noneDropped) same_order=\(sameOrder) "
-              + "named_shows_saved=\(namedShowsSaved) drawn_shows_saved=\(drawnShowsSaved) others_unchanged=\(othersUnchanged) retry_shows=\(retryShows) "
-              + "retry_in_place=\(retryInPlace) retry_updates=\(retryUpdates)")
-        XCTAssertTrue(injectedUsed, "condition 2: both injected failures were used")
-        XCTAssertTrue(noneDropped, "condition 2: no loaded row is dropped")
-        XCTAssertTrue(sameOrder, "condition 2: the loaded rows keep their order")
-        XCTAssertTrue(namedShowsSaved, "condition 2: the row the save named shows its saved value")
-        XCTAssertTrue(drawnShowsSaved, "condition 2: the drawn row shows its saved value, as a fresh projection does")
-        XCTAssertTrue(othersUnchanged, "condition 2: every other loaded row is unchanged")
-        XCTAssertTrue(retryShows, "condition 2: both reads failed, so Retry shows")
-        XCTAssertTrue(retryUpdates, "condition 2: Retry clears the failure and brings the list up to date in place")
-        assertMatchesAFullRead("Retry")
         step("archived delete reads in full", inPlace: false) { XCTAssertTrue(model.delete([parents[20]]).isApplied) }
         step("its Undo reads in full", inPlace: false) { XCTAssertTrue(model.undo().isApplied) }
         step("edit after Undo", inPlace: true) { XCTAssertTrue(model.setPriority(.high, for: [parents[20]]).isApplied) }
@@ -275,46 +202,6 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
             print("GUARD_DONE_SHORT_LOG logged=\(logged) loaded=\(model.doneLogTasks.count) "
                   + "has_more=\(model.doneLogHasMore) done_page_reads=\(store.donePageReadCount - reads)")
         }
-    }
-
-    /// The model alone, with no page drawn and so no revision watcher to load
-    /// again: a failed in-place update keeps the loaded rows and sets the
-    /// failure (Retry). The row the save named shows its saved value (it is
-    /// the task the save edited); the others are unchanged. Retry then brings
-    /// the loaded page up to date in place.
-    func testFailedInPlaceUpdateKeepsWhatLoadedAndSetsTheFailure() throws {
-        let store = try makeStore(open: 5, logged: 100)
-        let model = TasksPageModel(library: AtticLibrary(tasks: store))
-        model.select(tab: .done)
-        model.loadDoneLogIfNeeded()
-        let pageSize = TasksPageModel.doneLogPageSize
-        XCTAssertEqual(model.doneLogTasks.count, pageSize)
-        func describe(_ task: TaskItem) -> String { "\(task.id) \(task.title) \(task.priority) \(task.tags)" }
-        let edited = model.doneLogTasks[3].id
-        XCTAssertEqual(model.doneLogTasks[3].priority, TaskPriority.none, "the named row has no priority yet")
-        let before = model.doneLogTasks.map { (id: $0.id, text: describe($0)) }
-        let inPlace = model.doneLogInPlaceRefreshCount
-
-        store.doneLogReadFailures = 1
-        XCTAssertTrue(model.setPriority(.high, for: [edited]).isApplied)
-        print("GUARD_DONE_FAILED_IN_PLACE pending_failures=\(store.doneLogReadFailures) failure=\(model.doneLogFailure != nil) "
-              + "in_place=\(model.doneLogInPlaceRefreshCount - inPlace) loaded=\(model.doneLogTasks.count)")
-        XCTAssertEqual(store.doneLogReadFailures, 0, "the injected failure was used")
-        XCTAssertNotNil(model.doneLogFailure, "a failed in-place update sets the failure (Retry)")
-        let failed = model.doneLogTasks.map { (id: $0.id, text: describe($0)) }
-        XCTAssertEqual(failed.map(\.id), before.map(\.id), "a failed in-place update drops no loaded row and keeps the order")
-        XCTAssertEqual(model.doneLogTasks.first { $0.id == edited }?.priority, .high,
-                       "the row the save named shows its saved value")
-        for (old, new) in zip(before, failed) where old.id != edited {
-            XCTAssertEqual(new.text, old.text, "a failed in-place update leaves every other loaded row unchanged")
-        }
-        XCTAssertEqual(model.doneLogInPlaceRefreshCount, inPlace, "a failed update is not counted as done")
-
-        model.retryDoneLog()
-        XCTAssertNil(model.doneLogFailure)
-        XCTAssertEqual(model.doneLogInPlaceRefreshCount, inPlace + 1, "Retry updated the loaded page in place")
-        XCTAssertEqual(model.doneLogTasks.first { $0.id == edited }?.priority, .high, "Retry shows the edit")
-        XCTAssertEqual(model.doneLogTasks.map(\.id), store.indexedDoneLogIDs(limit: pageSize).ids)
     }
 
     /// Review R-2 of PR 31. A full read that fails puts the cursor back at
@@ -384,6 +271,7 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
         XCTAssertNil(model.doneLogFailure, "the full read succeeded: nothing is shown as failed")
         XCTAssertEqual(model.doneLogTasks.map(\.id), store.indexedDoneLogIDs(limit: pageSize).ids)
         XCTAssertTrue(model.doneLogHasMore)
+        XCTAssertEqual(model.doneLogState(), fullReadState(store, rows: model.doneLogTasks.count), "the state is a full read's")
 
         while model.doneLogHasMore, model.doneLogFailure == nil { model.loadMoreDoneLog() }
         let ids = model.doneLogTasks.map(\.id)
@@ -397,158 +285,139 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
 
     private static let size = CGSize(width: 344, height: 520)
 
-    /// Open tasks on Now, tasks in Later, finished tasks in the Done log
-    /// (finished before today) and unrelated notes.
-    /// Astra r5 R1 of PR 31. A family read that fails is a failed read, on
-    /// every path that loads Done log rows: what loaded is kept (no row is
-    /// marked as read with a checklist it could not read), Retry shows, and
-    /// once reads recover the row shows its subtasks as a full read does. On
-    /// the trunk each save reads the loaded families again (source-traced in
-    /// `loadDoneLogIfNeeded`, not run); the in-place update must not keep a
-    /// family it failed to read across later saves.
-    func testFailedFamilyReadInAnInPlaceUpdateIsAFailedRead() throws {
+    /// The lead's rule (19 Nov), per read the in-place update makes: one
+    /// injected failure there changes nothing in place, and the pages are
+    /// read in full in the same load, so the whole state (rows, families,
+    /// query, revision, cursor, failure and Retry, the drawn days) is a full
+    /// read's in the same build. The lookup is
+    /// `testDoneLogInPlaceParentReadFailureFallsBackToAFullRead`; this is the
+    /// touched parents' read.
+    func testInPlaceParentReadFailureLeavesAFullReadsState() throws {
         let (store, parents) = try makeFamilyLog(logged: 60, families: [2])
         let model = TasksPageModel(library: AtticLibrary(tasks: store))
         model.select(tab: .done)
         model.loadDoneLogIfNeeded()
-        let family = parents[2]
         XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize)
-        XCTAssertEqual(drawnSubtaskTotal(model, family), 2, "before: the row shows its two subtasks")
-        let familyParents = store.doneFamilyParentReadCount
-        store.doneFamilyBatchReadFailures = 1
-        XCTAssertTrue(model.setPriority(.high, for: [family]).isApplied)
-        assertFamilyReadFailure("in_place", store, model, family, familyParentsRead: store.doneFamilyParentReadCount - familyParents,
-                                expectedFamilyParents: 1)
+        let inPlace = model.doneLogInPlaceRefreshCount
+        store.doneLogReadFailures = 1
+        XCTAssertTrue(model.setPriority(.high, for: [parents[5]]).isApplied)
+        assertFullReadsState("parent_read", store, model, injectedUsed: store.doneLogReadFailures == 0, inPlace: inPlace)
+        XCTAssertEqual(model.doneLogTasks.first { $0.id == parents[5] }?.priority, .high, "the list shows the edit")
     }
 
-    /// R1, the full read: the first page's family read fails.
-    func testFailedFamilyReadInAFullReadIsAFailedRead() throws {
+    /// The same for the touched families' read.
+    func testInPlaceFamilyReadFailureLeavesAFullReadsState() throws {
         let (store, parents) = try makeFamilyLog(logged: 60, families: [2])
         let model = TasksPageModel(library: AtticLibrary(tasks: store))
         model.select(tab: .done)
-        let familyParents = store.doneFamilyParentReadCount
-        store.doneFamilyBatchReadFailures = 1
         model.loadDoneLogIfNeeded()
-        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize, "the page's rows show")
-        assertFamilyReadFailure("full_read", store, model, parents[2], familyParentsRead: store.doneFamilyParentReadCount - familyParents,
-                                expectedFamilyParents: TasksPageModel.doneLogPageSize)
+        XCTAssertEqual(drawnSubtaskTotal(model, parents[2]), 2, "before: the row shows its two subtasks")
+        let inPlace = model.doneLogInPlaceRefreshCount
+        store.doneFamilyBatchReadFailures = 1
+        XCTAssertTrue(model.setPriority(.high, for: [parents[2]]).isApplied)
+        assertFullReadsState("family_read", store, model, injectedUsed: store.doneFamilyBatchReadFailures == 0, inPlace: inPlace)
+        XCTAssertEqual(drawnSubtaskTotal(model, parents[2]), 2, "the row shows its two subtasks")
     }
 
-    /// R1, one more page: the next page's family read fails.
-    func testFailedFamilyReadOnTheNextPageIsAFailedRead() throws {
+    /// After one injected failure at an in-place read: it was used, nothing
+    /// was applied in place, nothing shows as failed, and the state is a
+    /// full read's. Prints `GUARD_DONE_IN_PLACE_SITE`.
+    private func assertFullReadsState(_ site: String, _ store: TaskStore, _ model: TasksPageModel, injectedUsed: Bool, inPlace: Int,
+                                      file: StaticString = #filePath, line: UInt = #line) {
+        let state = model.doneLogState()
+        let oracle = fullReadState(store, rows: model.doneLogTasks.count)
+        print("GUARD_DONE_IN_PLACE_SITE site=\(site) injected_used=\(injectedUsed) in_place=\(model.doneLogInPlaceRefreshCount - inPlace) "
+              + "loaded=\(state.rows.count) failure=\(state.failure != nil) in_place_allowed=\(state.inPlaceAllowed) "
+              + "matches_full_read=\(state == oracle)")
+        XCTAssertTrue(injectedUsed, "\(site): the injected failure reached the in-place read", file: file, line: line)
+        XCTAssertEqual(model.doneLogInPlaceRefreshCount, inPlace, "\(site): nothing was applied in place", file: file, line: line)
+        XCTAssertNil(state.failure, "\(site): the full read succeeded: nothing shows as failed", file: file, line: line)
+        XCTAssertEqual(state, oracle, "\(site): the state is a full read's", file: file, line: line)
+    }
+
+    /// The kept line, full read: a full read whose family read failed shows
+    /// the row with no checklist and no Retry, as on the trunk, and refuses
+    /// the in-place update until a full read succeeds. Later saves do not
+    /// allow it again, nor does a full read that fails; the next full read
+    /// that succeeds reads the family again and its state is a full read's.
+    func testFullReadFamilyFailureRefusesInPlaceUntilAFullReadSucceeds() throws {
+        let (store, parents) = try makeFamilyLog(logged: 60, families: [2])
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .done)
+        store.doneFamilyBatchReadFailures = 1
+        model.loadDoneLogIfNeeded()
+        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize)
+        try assertRefusedUntilAFullReadSucceeds("full_read", store, model, family: parents[2])
+    }
+
+    /// The kept line, one more page: the same when the page's family read
+    /// failed.
+    func testPageLoadFamilyFailureRefusesInPlaceUntilAFullReadSucceeds() throws {
         let (store, parents) = try makeFamilyLog(logged: 100, families: [50])
         let model = TasksPageModel(library: AtticLibrary(tasks: store))
         model.select(tab: .done)
         model.loadDoneLogIfNeeded()
-        XCTAssertEqual(model.doneLogTasks.count, TasksPageModel.doneLogPageSize)
-        let familyParents = store.doneFamilyParentReadCount
+        XCTAssertTrue(model.doneLogState().inPlaceAllowed, "before: the first page read in full")
         store.doneFamilyBatchReadFailures = 1
         model.loadMoreDoneLog()
-        assertFamilyReadFailure("next_page", store, model, parents[50], familyParentsRead: store.doneFamilyParentReadCount - familyParents,
-                                expectedFamilyParents: TasksPageModel.doneLogPageSize)
+        XCTAssertEqual(model.doneLogTasks.count, 2 * TasksPageModel.doneLogPageSize)
+        try assertRefusedUntilAFullReadSucceeds("page_load", store, model, family: parents[50])
     }
 
-    /// Astra r6 F1 of PR 31. A new search whose read fails shows what it read
-    /// but must not leave the earlier search marked as loaded: clearing the
-    /// search reads that search again, and its rows show their subtasks.
-    /// Both searches match the same rows here, so stale state would be kept.
-    func testFailedReadInANewSearchLeavesNothingMarkedAsLoaded() throws {
-        let (store, parents) = try makeFamilyLog(logged: 60, families: [2])
-        let model = TasksPageModel(library: AtticLibrary(tasks: store))
-        model.select(tab: .done)
-        model.loadDoneLogIfNeeded()
-        let family = parents[2]
-        let firstPage = model.doneLogTasks.map(\.id)
-        XCTAssertEqual(firstPage.count, TasksPageModel.doneLogPageSize)
-        XCTAssertEqual(drawnSubtaskTotal(model, family), 2, "before: the row shows its two subtasks")
-        store.doneFamilyBatchReadFailures = 1
-        model.doneSearch = "Finished"
-        model.flushDoneSearchInput()
+    /// After a family read failed in a full read or a page load: the row
+    /// shows no checklist and nothing shows as failed (the trunk's result);
+    /// two saves on Now and a failed full read leave the in-place update
+    /// refused; a third save and Retry (a full read that succeeds) read the
+    /// family again, nothing was updated in place on the way, and the state
+    /// is a full read's. Prints `GUARD_DONE_REFUSED`.
+    private func assertRefusedUntilAFullReadSucceeds(_ path: String, _ store: TaskStore, _ model: TasksPageModel, family: UUID,
+                                                      file: StaticString = #filePath, line: UInt = #line) throws {
         let used = store.doneFamilyBatchReadFailures == 0
-        let failureShown = model.doneLogFailure != nil
-        model.doneSearch = ""
-        model.flushDoneSearchInput()
-        model.loadDoneLogIfNeeded()
-        let afterClear = drawnSubtaskTotal(model, family)
-        model.retryDoneLog()
-        guard let nowID = store.tasks.first(where: { $0.status == .todo })?.id else { return XCTFail("a task on Now") }
-        XCTAssertTrue(model.setPriority(.low, for: [nowID]).isApplied)
-        model.loadDoneLogIfNeeded()
-        let shown = drawnSubtaskTotal(model, family)
-        let full = store.doneLogSubtasks(ofParents: [family])[family]?.count ?? 0
-        let ids = model.doneLogTasks.map(\.id)
-        print("GUARD_DONE_SEARCH_FAILURE injected_used=\(used) failure_shown=\(failureShown) "
-              + "after_clear=\(afterClear.map(String.init) ?? "not_loaded") after_retry_and_save=\(shown.map(String.init) ?? "not_loaded") "
-              + "full_read=\(full) loaded=\(ids.count) unique=\(Set(ids).count) failure_after=\(model.doneLogFailure != nil)")
-        XCTAssertTrue(used, "the injected failure reached the search's family read")
-        XCTAssertTrue(failureShown, "the search's failed family read shows Retry")
-        XCTAssertEqual(afterClear, 2, "clearing the search reads it again: the row shows its subtasks")
-        XCTAssertEqual(full, 2)
-        XCTAssertEqual(shown, full, "after Retry and a save the row shows its subtasks, as a full read does")
-        XCTAssertEqual(Array(ids.prefix(firstPage.count)), firstPage, "the cleared search's rows, in order")
-        XCTAssertEqual(Set(ids).count, ids.count, "no row twice")
-        XCTAssertNil(model.doneLogFailure)
-    }
-
-    /// Astra r6 F2 of PR 31. Retry after a failed family read, with no save
-    /// in between, redraws the days: the rows show the families Retry read.
-    func testRetryAfterAFailedFamilyReadRedrawsTheDays() throws {
-        let (store, parents) = try makeFamilyLog(logged: 60, families: [2])
-        let model = TasksPageModel(library: AtticLibrary(tasks: store))
-        model.select(tab: .done)
-        let family = parents[2]
-        store.doneFamilyBatchReadFailures = 1
-        model.loadDoneLogIfNeeded()
-        let used = store.doneFamilyBatchReadFailures == 0
-        let failureShown = model.doneLogFailure != nil
+        let failed = model.doneLogState()
         let during = drawnSubtaskTotal(model, family)
-        let revision = store.revision
-        model.retryDoneLog()
-        let after = drawnSubtaskTotal(model, family)
-        let full = store.doneLogSubtasks(ofParents: [family])[family]?.count ?? 0
-        print("GUARD_DONE_RETRY_REDRAW injected_used=\(used) failure_shown=\(failureShown) "
-              + "during=\(during.map(String.init) ?? "not_loaded") after_retry=\(after.map(String.init) ?? "not_loaded") "
-              + "full_read=\(full) same_revision=\(store.revision == revision) failure_after=\(model.doneLogFailure != nil)")
-        XCTAssertTrue(used, "the injected failure reached the first page's family read")
-        XCTAssertTrue(failureShown, "the failed family read shows Retry")
-        XCTAssertEqual(store.revision, revision, "no save between the failure and Retry")
-        XCTAssertEqual(full, 2)
-        XCTAssertEqual(after, full, "after Retry the drawn row shows the subtasks Retry read")
-        XCTAssertNil(model.doneLogFailure)
-    }
-
-    /// After the injected family read failure: the failure is shown (Retry);
-    /// then reads recover, an unrelated save on Now is loaded, and the row is
-    /// scrolled to if it is not loaded. Its subtask total must be a full read's.
-    private func assertFamilyReadFailure(_ path: String, _ store: TaskStore, _ model: TasksPageModel, _ family: UUID,
-                                         familyParentsRead: Int, expectedFamilyParents: Int,
-                                         file: StaticString = #filePath, line: UInt = #line) {
-        let used = store.doneFamilyBatchReadFailures == 0
-        let failureShown = model.doneLogFailure != nil
-        let during = drawnSubtaskTotal(model, family)
-        guard let nowID = store.tasks.first(where: { $0.status == .todo })?.id else {
-            return XCTFail("\(path): a task on Now", file: file, line: line)
-        }
-        XCTAssertTrue(model.setPriority(.low, for: [nowID]).isApplied, file: file, line: line)
+        let nowIDs = store.tasks.filter { $0.status == .todo }.map(\.id)
+        let inPlace = model.doneLogInPlaceRefreshCount
+        XCTAssertTrue(model.setPriority(.low, for: [nowIDs[0]]).isApplied, file: file, line: line)
+        XCTAssertTrue(model.setPriority(.medium, for: [nowIDs[1]]).isApplied, file: file, line: line)
+        let afterSaves = model.doneLogState()
+        store.doneLogReadFailures = 1
         model.loadDoneLogIfNeeded()
-        var pages = 0
-        while !model.doneLogTasks.contains(where: { $0.id == family }), model.doneLogHasMore, pages < 3 {
-            model.loadMoreDoneLog()
-            pages += 1
-        }
+        let afterFailedRead = model.doneLogState()
+        let fullReadFailureUsed = store.doneLogReadFailures == 0
+        XCTAssertTrue(model.setPriority(.high, for: [nowIDs[2]]).isApplied, file: file, line: line)
+        model.retryDoneLog()
+        let recovered = model.doneLogState()
         let shown = drawnSubtaskTotal(model, family)
-        let full = store.doneLogSubtasks(ofParents: [family])[family]?.count ?? 0
-        print("GUARD_DONE_FAMILY_READ_FAILURE path=\(path) injected_used=\(used) family_parents_read=\(familyParentsRead) "
-              + "failure_shown=\(failureShown) during=\(during.map(String.init) ?? "not_loaded") pages_after=\(pages) "
-              + "after_unrelated_save=\(shown.map(String.init) ?? "not_loaded") full_read=\(full) "
-              + "failure_after=\(model.doneLogFailure != nil)")
-        XCTAssertTrue(used, "\(path): the injected failure reached a batch family read", file: file, line: line)
-        XCTAssertEqual(familyParentsRead, expectedFamilyParents, "\(path): it was this path's family read", file: file, line: line)
-        XCTAssertTrue(failureShown, "\(path): a failed family read is a failed read: Retry shows", file: file, line: line)
-        XCTAssertEqual(full, 2, "\(path): a full read finds the two subtasks", file: file, line: line)
-        XCTAssertEqual(shown, full, "\(path): once reads recover the row shows its subtasks, as a full read does",
+        let oracle = fullReadState(store, rows: model.doneLogTasks.count)
+        print("GUARD_DONE_REFUSED path=\(path) injected_used=\(used) during=\(during.map(String.init) ?? "not_loaded") "
+              + "allowed_after_failure=\(failed.inPlaceAllowed) allowed_after_saves=\(afterSaves.inPlaceAllowed) "
+              + "full_read_failed=\(afterFailedRead.failure != nil) allowed_after_failed_read=\(afterFailedRead.inPlaceAllowed) "
+              + "in_place=\(model.doneLogInPlaceRefreshCount - inPlace) recovered=\(shown.map(String.init) ?? "not_loaded") "
+              + "allowed_after_recovery=\(recovered.inPlaceAllowed) matches_full_read=\(recovered == oracle)")
+        XCTAssertTrue(used, "\(path): the injected failure reached the family read", file: file, line: line)
+        XCTAssertEqual(during, 0, "\(path): the row shows no checklist, as on the trunk", file: file, line: line)
+        XCTAssertNil(failed.failure, "\(path): no Retry, as on the trunk", file: file, line: line)
+        XCTAssertFalse(failed.inPlaceAllowed, "\(path): the in-place update is refused", file: file, line: line)
+        XCTAssertEqual(afterSaves.revision, failed.revision, "\(path): the saves on Now loaded nothing", file: file, line: line)
+        XCTAssertFalse(afterSaves.inPlaceAllowed, "\(path): later saves do not allow it again", file: file, line: line)
+        XCTAssertTrue(fullReadFailureUsed, "\(path): the next load was a full read, and it failed", file: file, line: line)
+        XCTAssertNotNil(afterFailedRead.failure, "\(path): the failed full read shows Retry", file: file, line: line)
+        XCTAssertFalse(afterFailedRead.inPlaceAllowed, "\(path): a failed full read does not allow it either", file: file, line: line)
+        XCTAssertEqual(model.doneLogInPlaceRefreshCount, inPlace, "\(path): nothing was updated in place before a full read succeeded",
                        file: file, line: line)
-        XCTAssertNil(model.doneLogFailure, "\(path): the reads recovered", file: file, line: line)
+        XCTAssertEqual(shown, 2, "\(path): the full read read the family again", file: file, line: line)
+        XCTAssertTrue(recovered.inPlaceAllowed, "\(path): a full read that succeeded allows it again", file: file, line: line)
+        XCTAssertEqual(recovered, oracle, "\(path): the state is a full read's", file: file, line: line)
+    }
+
+    /// The oracle: what a full read shows now, in the same build. A new model
+    /// on the same store reads the first page, then pages on to `count` rows.
+    private func fullReadState(_ store: TaskStore, rows count: Int) -> TasksPageModel.DoneLogState {
+        let oracle = TasksPageModel(library: AtticLibrary(tasks: store))
+        oracle.select(tab: .done)
+        oracle.loadDoneLogIfNeeded()
+        while oracle.doneLogTasks.count < count, oracle.doneLogHasMore, oracle.doneLogFailure == nil { oracle.loadMoreDoneLog() }
+        return oracle.doneLogState()
     }
 
     /// The subtask total a drawn Done row shows (0 when it shows none); nil
@@ -582,6 +451,9 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
             XCTAssertEqual(model.doneLogTasks.map(\.id), store.indexedDoneLogIDs(limit: pageSize).ids, "archived=\(archived)")
             XCTAssertTrue(model.doneLogHasMore, "archived=\(archived): the archived tasks are below the page")
             XCTAssertNil(model.doneLogFailure, "archived=\(archived)")
+            XCTAssertEqual(model.doneLogInPlaceRefreshCount, inPlace, "archived=\(archived): over the bound, nothing in place")
+            XCTAssertEqual(model.doneLogState(), fullReadState(store, rows: model.doneLogTasks.count),
+                           "archived=\(archived): the state is a full read's")
         }
     }
 
@@ -644,6 +516,8 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
         return (TaskStore(container: container), now)
     }
 
+    /// Open tasks on Now, tasks in Later, finished tasks in the Done log
+    /// (finished before today) and unrelated notes.
     private func makeStore(open: Int, later: Int = 0, logged: Int = 0, notes: Int = 0, tagged: Bool = false) throws -> TaskStore {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let context = ModelContext(container)

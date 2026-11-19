@@ -1459,6 +1459,39 @@ final class TasksPageModel: ObservableObject {
             doneLogInPlaceMismatches.append("more: in place \(doneLogHasMore) read \(page.hasMore)")
         }
     }
+
+    /// Test seam: everything the Done page's loaded state holds, for a test
+    /// that compares it with a full read's (the lead's oracle, PR 31).
+    struct DoneLogState: Equatable {
+        var rows: [String]
+        var families: [String]
+        var query: String?
+        var tag: TagPicks?
+        var revision: UInt64?
+        var current: Bool
+        var inPlaceAllowed: Bool
+        var cursor: Int
+        var hasMore: Bool
+        var failure: String?
+        var days: [String]
+    }
+
+    func doneLogState() -> DoneLogState {
+        func describe(_ task: TaskItem) -> String {
+            "\(task.id) \(task.title) \(task.status) \(task.priority) \(task.tags) \(task.completedAt?.timeIntervalSince1970 ?? 0)"
+        }
+        let days = doneDays().map { day in
+            "\(day.title) folded=\(day.folded) total=\(day.total): " + day.rows.map { row in
+                "\(row.id) \(row.model.title) \(row.model.priority) \(row.model.subtasks.map { "\($0.done)/\($0.total)" } ?? "-")"
+            }.joined(separator: ", ")
+        }
+        return DoneLogState(
+            rows: doneLogTasks.map(describe),
+            families: doneLogTasks.map { task in "\(task.id): " + (doneLogChildren[task.id] ?? []).map(describe).joined(separator: "; ") },
+            query: doneLogQuery, tag: doneLogTag, revision: doneLogRevision, current: doneLogIsCurrent,
+            inPlaceAllowed: doneLogChangedIDs != nil, cursor: doneLogCursor.rowOffset, hasMore: doneLogHasMore,
+            failure: doneLogFailure, days: days)
+    }
     #endif
 
     /// The next page, when the last loaded row comes on screen. The cursor
