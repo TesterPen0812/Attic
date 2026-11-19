@@ -637,9 +637,6 @@ struct TasksPagerPages<Page: View>: View {
     /// A page, and whether it is drawn (the one shown, or one a move
     /// passes); a page kept built but not drawn hides its list.
     let page: (Int, Bool) -> Page
-    /// The hidden page's snapshot; changes are applied on the next reveal
-    /// instead of invalidating a warm offscreen list.
-    let token: (Int) -> TasksPageModel.PageToken
 
     var body: some View {
         if let transit {
@@ -652,7 +649,10 @@ struct TasksPagerPages<Page: View>: View {
     }
 
     private func pages(drawsDeparting: Bool) -> some View {
-        ZStack(alignment: .topLeading) {
+        #if DEBUG
+        let _ = TasksPagerPassCount.passes += 1
+        #endif
+        return ZStack(alignment: .topLeading) {
             // Every slot stays (removing one left its neighbour's list
             // drawn where the last swipe had it); only its content comes
             // and goes.
@@ -664,7 +664,7 @@ struct TasksPagerPages<Page: View>: View {
                     (index == shown || (span.pages.contains(index) && span.skipped != index))
                 Group {
                     if drawn || span.warm?.contains(index) == true {
-                        TasksKeptPage(frozen: drawn ? nil : token(index)) { page(index, drawn) }
+                        TasksKeptPage(frozen: !drawn) { page(index, drawn) }
                             .equatable()
                     } else {
                         Color.clear
@@ -680,6 +680,13 @@ struct TasksPagerPages<Page: View>: View {
         }
     }
 }
+
+#if DEBUG
+/// How many times the pager laid out its pages (tests count its passes).
+@MainActor enum TasksPagerPassCount {
+    static var passes = 0
+}
+#endif
 
 /// Observe only the slide's start/end; the retained Tasks page can remain
 /// visually complete after it has released its keyboard and input monitors.
@@ -697,13 +704,15 @@ private struct TasksPagerOutgoingDraw<Content: View>: View {
 /// Hidden native scroll views retain their current hosts without paying for
 /// new list layout on an unrelated store or model change.
 struct TasksKeptPage<Content: View>: View, Equatable {
-    let frozen: TasksPageModel.PageToken?
+    /// Kept built but not drawn: changes are applied on the next reveal
+    /// instead of invalidating a warm offscreen list.
+    let frozen: Bool
     @ViewBuilder let content: () -> Content
 
     var body: some View { content() }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.frozen != nil && rhs.frozen != nil
+        lhs.frozen && rhs.frozen
     }
 }
 
