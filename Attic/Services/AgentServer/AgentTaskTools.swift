@@ -1019,6 +1019,10 @@ final class AgentTaskTools {
 
     /// A declared read set rides on the note store's current context, so that context must be the one the write
     /// commits from: the store replaces a spent context here, before the set is attached, not inside the write.
+    /// Called after the tool's disposition, because computing it can save a background editor through the store, and
+    /// after the revision read, not before it: the in-app agent records its Undo snapshot from the store's
+    /// presentation before the tool runs, so a write whose base revision is behind must be refused (or become a
+    /// proposal) by the store's own revision check, never applied against a fresher read than the snapshot.
     static func prepared(_ noteStore: NoteStore) throws {
         guard noteStore.prepareNoteEdit() else {
             throw AgentToolError.notPerformed(noteStore.lastErrorMessage ?? "The note could not be refreshed.")
