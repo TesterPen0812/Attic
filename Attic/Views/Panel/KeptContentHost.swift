@@ -23,8 +23,40 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     var isInteractive = true {
         didSet {
             guard isInteractive != oldValue else { return }
-            if !isInteractive { releaseKeyboard() }
+            if isInteractive {
+                let waiting = whenInteractive
+                whenInteractive = []
+                waiting.forEach { $0() }
+            } else {
+                whenInteractive = []
+                releaseKeyboard()
+            }
         }
+    }
+
+    /// Run once when the host next turns interactive (a focus write made
+    /// in the same turn as the tab change that puts this host in use).
+    var whenInteractive: [() -> Void] = []
+
+    /// The kept-content host `view` lies in, if any.
+    static func enclosing(_ view: NSView) -> KeptContentHostingView? {
+        sequence(first: view.superview, next: { $0?.superview }).lazy
+            .compactMap { $0 as? KeptContentHostingView }.first
+    }
+
+    /// Gives this host the window's keyboard before a focus state inside it
+    /// is set from outside it (a key the panel's host handled). SwiftUI
+    /// moves focus only inside the hosting view that is first responder: a
+    /// row focus written from the panel's host left the keyboard there and
+    /// the row unfocused (hb-step1 diagnostic run, d3d1e388: sel=1 kf=nil,
+    /// first responder the panel's host). Returns whether the keyboard is
+    /// in this host; a host not in use never takes it.
+    @discardableResult
+    func takeKeyboard() -> Bool {
+        guard isInteractive, let window else { return false }
+        if let responder = window.firstResponder as? NSView,
+           responder === self || responder.isDescendant(of: self) { return true }
+        return window.makeFirstResponder(self)
     }
 
     required init(rootView: AnyView) {

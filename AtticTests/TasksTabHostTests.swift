@@ -136,6 +136,13 @@ final class TasksTabHostTests: XCTestCase {
             print("HBDIAG warm=\(warm) before key=\(hosted.window.isKeyWindow) active=\(NSApp.isActive) fr=\(chain()) hosts=\(hosts(hosted).map(\.isInteractive))")
             hosted.press("\u{F701}", keyCode: 125)
             hosted.spin(0.3)
+            print("HBDIAG warm=\(warm) after-fix-path fr=\(chain()) sel=\(hosted.model.selection.count) kf=\(String(describing: hosted.model.keyboardFocus))")
+            // By hand: the tab's host takes the keyboard, then ↓.
+            if let host = hosts(hosted).first(where: \.isInteractive) {
+                print("HBDIAG warm=\(warm) handoff=\(hosted.window.makeFirstResponder(host))")
+            }
+            hosted.press("\u{F701}", keyCode: 125)
+            hosted.spin(0.3)
             print("HBDIAG warm=\(warm) after fr=\(chain()) sel=\(hosted.model.selection.count) kf=\(String(describing: hosted.model.keyboardFocus))")
         }
     }
