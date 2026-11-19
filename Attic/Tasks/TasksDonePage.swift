@@ -156,6 +156,9 @@ struct TasksDonePage<Cell: View>: View {
                         .padding(.leading, TasksDesignMetrics.textX)
                 }
             }
+            // Rows measure in the log's content; the log reports its one
+            // origin as it scrolls (S2).
+            .tasksListContent(.done, pointer: pointer)
             .padding(.bottom, bottomClearance - bottomMargin)
             // The log's place is kept while its page is not built (round 10).
             .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, pointer: pointer,

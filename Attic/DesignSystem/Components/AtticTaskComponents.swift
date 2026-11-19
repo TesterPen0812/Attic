@@ -1937,7 +1937,7 @@ extension View {
 
     /// Resolve the anchors in the row's coordinates. Only actual rectangle
     /// changes reach the input cache; geometry never constructs a writer.
-    func onAtticRowControlFramesChange(_ action: @escaping ([CGRect]) -> Void) -> some View {
+    func onAtticRowControlFramesChange(counting: @escaping () -> Void = {}, _ action: @escaping ([CGRect]) -> Void) -> some View {
         overlayPreferenceValue(AtticRowControlAnchorsKey.self) { anchors in
             Color.clear
                 // On a 1/256 pt grid: a transform animating at identity
@@ -1945,7 +1945,10 @@ extension View {
                 // frame, and each read was a new report. A departing cell
                 // then took its row's controls back from a newer cell, and
                 // its teardown erased them (RoundN L04).
-                .onGeometryChange(for: [CGRect].self) { proxy in anchors.map { atticControlGrid(proxy[$0]) } } action: { frames in
+                .onGeometryChange(for: [CGRect].self) { proxy in
+                    counting()
+                    return anchors.map { atticControlGrid(proxy[$0]) }
+                } action: { frames in
                     action(frames)
                 }
                 .allowsHitTesting(false)

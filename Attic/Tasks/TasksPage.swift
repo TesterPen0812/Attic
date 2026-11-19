@@ -162,6 +162,15 @@ struct TasksPage: View {
     nonisolated static func slotSpace(_ tab: TasksTab) -> NamedCoordinateSpace {
         TasksPagerSlot.localSpace(TasksTab.allCases.firstIndex(of: tab) ?? 0)
     }
+    /// A list's own content (S2, the lead's scroll fix, 18 Nov 2026):
+    /// scrolling moves the list's content in its slot, but not its rows
+    /// within it. Rows, day headers and Completed today measure here, so
+    /// a steady scroll reports none of them; the list reports its one
+    /// origin in the slot (`TasksPointer.setContentOrigin`), and the
+    /// pointer adds it, with the pager's offset, when it is asked.
+    nonisolated static func contentSpace(_ tab: TasksTab) -> NamedCoordinateSpace {
+        .named("AtticTasksContent.\(tab.rawValue)")
+    }
     #if DEBUG
     /// Hosted scroll-frame regression, alongside PanelHeader and AtticAddBar.
     static var tabsEvaluations = 0
@@ -1723,12 +1732,15 @@ struct TasksPage: View {
                                         toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26))
                                     }
                                 }
-                                .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.slotSpace(tab)) } action: { [pointer, tab, key = dateGroup.key] frame in
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.contentSpace(tab)) } action: { [pointer, tab, key = dateGroup.key] frame in
                                     if tab == .now { pointer.setHeaderFrame(frame, for: key) }
                                 }
                                 .onDisappear { [pointer, tab, key = dateGroup.key] in
                                     if tab == .now { pointer.setHeaderFrame(nil, for: key) }
                                 }
+                                #if DEBUG
+                                .modifier(TasksSlotFrameProbe(pointer: pointer, key: .header(tab, dateGroup.key), tab: tab))
+                                #endif
                                 .id("group:" + dateGroup.key)
                                 .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
                                 // A new day's heading comes in once the one
@@ -1773,10 +1785,13 @@ struct TasksPage: View {
                             }
                         }
                         .accessibilityIdentifier("tasks-completed-today")
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.slotSpace(tab)) } action: { [pointer, tab] frame in
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.contentSpace(tab)) } action: { [pointer, tab] frame in
                             pointer.setCompletedTodayFrame(frame, for: tab)
                         }
                         .onDisappear { [pointer, tab] in pointer.setCompletedTodayFrame(nil, for: tab) }
+                        #if DEBUG
+                        .modifier(TasksSlotFrameProbe(pointer: pointer, key: .completedToday(tab), tab: tab))
+                        #endif
                         // Under an empty message it is the next row (one
                         // row apart); after tasks, 12 below the last one.
                         .padding(.top, sections.open.isEmpty
@@ -1794,6 +1809,9 @@ struct TasksPage: View {
                         }
                     }
                 }
+                // Rows measure in the list's content; the list reports its
+                // one origin as it scrolls (S2).
+                .tasksListContent(tab, pointer: pointer)
                 .backgroundPreferenceValue(AtticSelectedRunBounds.self) { anchors in
                     AtticJoinedSelectedRuns(anchors: anchors)
                 }
@@ -3779,7 +3797,69 @@ final class TasksDrawnSearch {
     var shown = false
 }
 
-/// What a row's cell last reported: its frame in the page and its
+extension View {
+    /// A Tasks list's content (S2): names its space, where its rows, day
+    /// headers and Completed today measure, and reports its origin in the
+    /// pager slot, the one place a scroll changes.
+    func tasksListContent(_ tab: TasksTab, pointer: TasksPointer?) -> some View {
+        coordinateSpace(TasksPage.contentSpace(tab))
+            .onGeometryChange(for: CGPoint.self) { $0.frame(in: TasksPage.slotSpace(tab)).origin } action: { [weak pointer] origin in
+                pointer?.setContentOrigin(origin, for: tab)
+            }
+    }
+}
+
+#if DEBUG
+/// Tests (S2, the lead's S-c count): how often each reporter's transform closure runs, by row: the row frame's
+/// (`TasksReorderCell`) and the control frames' (`onAtticRowControlFramesChange`). A closure that runs is work even when its
+/// result is equal and no action follows.
+enum TasksReporterCounts {
+    nonisolated(unsafe) static var rowTransforms: [TasksRowID: Int] = [:]
+    nonisolated(unsafe) static var controlTransforms: [TasksRowID: Int] = [:]
+}
+
+/// What the old way measured (S2 tests): a row, a day header, Completed today.
+enum TasksSlotProbeKey: Hashable {
+    case row(TasksRowID)
+    case header(TasksTab, String)
+    case completedToday(TasksTab)
+}
+
+/// Tests only (S2): the old way, a frame measured in its pager slot on
+/// every move, kept while `TasksPointer.recordsSlotFrames` is on (set
+/// before the page is built), with the real reporter's appear, disappear
+/// and reuse. The pointer's page frame must equal it.
+struct TasksSlotFrameProbe: ViewModifier {
+    let pointer: TasksPointer
+    let key: TasksSlotProbeKey
+    let tab: TasksTab
+    @State private var last = Last()
+
+    final class Last { var frame: CGRect? }
+
+    func body(content: Content) -> some View {
+        if TasksPointer.recordsSlotFrames {
+            content
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: TasksPage.slotSpace(tab)) } action: { [pointer, key, last] frame in
+                    last.frame = frame
+                    pointer.slotFrames[key] = frame
+                }
+                .onAppear { [pointer, key, last] in
+                    if let frame = last.frame { pointer.slotFrames[key] = frame }
+                }
+                .onDisappear { [pointer, key] in pointer.slotFrames[key] = nil }
+                .onChange(of: key) { [pointer, last] old, new in
+                    pointer.slotFrames[old] = nil
+                    if let frame = last.frame { pointer.slotFrames[new] = frame }
+                }
+        } else {
+            content
+        }
+    }
+}
+#endif
+
+/// What a row's cell last reported: its frame in its list and its
 /// controls' frames in the row. A Done cell can draw another task after a
 /// new query (`TasksDoneSlots`); what it reported then moves to that task.
 final class TasksCellReports {
@@ -4538,7 +4618,11 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             // date, the tags, the checklist) keep their clicks; a press that
             // moves 4 pt drags at once, with no hold.
             row(live)
-                .onAtticRowControlFramesChange { [session, id, tab, reports] frames in
+                .onAtticRowControlFramesChange(counting: { [id, tab] in
+                    #if DEBUG
+                    TasksReporterCounts.controlTransforms[TasksRowID(tab: tab, id: id), default: 0] += 1
+                    #endif
+                }) { [session, id, tab, reports] frames in
                     MainActor.assumeIsolated {
                         reports.controls = frames
                         session.setControlFrames(frames, for: TasksRowID(tab: tab, id: id), from: reports)
@@ -4559,12 +4643,21 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             session.moveControlFrames(from: TasksRowID(tab: tab, id: old), to: TasksRowID(tab: tab, id: new), of: reports)
             pointer.moveFrame(from: TasksRowID(tab: tab, id: old), to: TasksRowID(tab: tab, id: new), of: reports)
         }
-        // Each row's frame in the page, for the pointer's questions (which
-        // row a right-click, a drop or a drag-out is on) and the reveal.
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: TasksPage.slotSpace(tab)) } action: { [pointer, tab, id, reports] frame in
+        // Each row's frame in its list, for the pointer's questions (which
+        // row a right-click, a drop or a drag-out is on) and the reveal. A
+        // scroll moves the list, not the row in it: no report (S2).
+        .onGeometryChange(for: CGRect.self) { proxy in
+            #if DEBUG
+            TasksReporterCounts.rowTransforms[TasksRowID(tab: tab, id: id), default: 0] += 1
+            #endif
+            return proxy.frame(in: TasksPage.contentSpace(tab))
+        } action: { [pointer, tab, id, reports] frame in
             reports.frame = frame
             pointer.setFrame(frame, for: TasksRowID(tab: tab, id: id), from: reports)
         }
+        #if DEBUG
+        .modifier(TasksSlotFrameProbe(pointer: pointer, key: .row(TasksRowID(tab: tab, id: id)), tab: tab))
+        #endif
         // A lazy cell can reappear at the same geometry. Its disappearance
         // removed these registrations, so geometry-change callbacks alone
         // cannot restore the live row and control hit regions.
@@ -4740,63 +4833,83 @@ final class TasksPointer {
     /// a frame. The geometry observers remain steady while a page follows
     /// the fingers. Defaults to zero for standalone pointer tests.
     var pageOffset: (TasksTab) -> CGFloat = { _ in 0 }
+    /// Each list's content origin in its pager slot (S2): where its rows'
+    /// own coordinates start. The list reports it as it scrolls; its rows
+    /// do not. Zero until a list reports (standalone pointer tests).
+    private var contentOrigins: [TasksTab: CGPoint] = [:]
+    func setContentOrigin(_ origin: CGPoint, for tab: TasksTab) {
+        contentOrigins[tab] = origin
+    }
+    /// From a list's coordinates to the page's: the list's origin in its
+    /// slot and the pager's live offset, read together when asked (S2).
+    private func shift(_ tab: TasksTab) -> CGVector {
+        let origin = contentOrigins[tab] ?? .zero
+        return CGVector(dx: origin.x + pageOffset(tab), dy: origin.y)
+    }
+    private func toPage(_ frame: CGRect, _ tab: TasksTab) -> CGRect {
+        let shift = shift(tab)
+        return frame.offsetBy(dx: shift.dx, dy: shift.dy)
+    }
+    private func toList(_ frame: CGRect, _ tab: TasksTab) -> CGRect {
+        let shift = shift(tab)
+        return frame.offsetBy(dx: -shift.dx, dy: -shift.dy)
+    }
+    /// Rows' frames in their lists, by (tab, task).
     private var localFrames: [TasksRowID: CGRect] = [:]
     /// Page-space frames, by (tab, task). A task shown on Now and Done still
     /// has two independent frames (round 12).
     var frames: [TasksRowID: CGRect] {
         get {
-            Dictionary(uniqueKeysWithValues: localFrames.map { row, frame in
-                (row, frame.offsetBy(dx: pageOffset(row.tab), dy: 0))
-            })
+            Dictionary(uniqueKeysWithValues: localFrames.map { row, frame in (row, toPage(frame, row.tab)) })
         }
         set {
-            localFrames = Dictionary(uniqueKeysWithValues: newValue.map { row, frame in
-                (row, frame.offsetBy(dx: -pageOffset(row.tab), dy: 0))
-            })
+            localFrames = Dictionary(uniqueKeysWithValues: newValue.map { row, frame in (row, toList(frame, row.tab)) })
         }
     }
     func frame(for row: TasksRowID) -> CGRect? {
-        localFrames[row]?.offsetBy(dx: pageOffset(row.tab), dy: 0)
+        localFrames[row].map { toPage($0, row.tab) }
     }
     /// A file hover only needs registered cells on this tab. Keep their
-    /// local frames and offset the one under the pointer, rather than
-    /// copying and offsetting the entire frame dictionary on every drag tick.
+    /// local frames and shift the one under the pointer, rather than
+    /// copying and shifting the entire frame dictionary on every drag tick.
     func fileDropRow(at point: CGPoint, in tab: TasksTab, eligible ids: Set<UUID>) -> UUID? {
-        let dx = pageOffset(tab)
+        let shift = shift(tab)
         return localFrames.first {
             $0.key.tab == tab && ids.contains($0.key.id) &&
-            $0.value.offsetBy(dx: dx, dy: 0).contains(point)
+            $0.value.offsetBy(dx: shift.dx, dy: shift.dy).contains(point)
         }?.key.id
     }
     /// This SwiftUI button lives between rows and must keep its native click.
     private var localCompletedTodayFrames: [TasksTab: CGRect] = [:]
     var completedTodayFrames: [TasksTab: CGRect] {
         get {
-            Dictionary(uniqueKeysWithValues: localCompletedTodayFrames.map { tab, frame in
-                (tab, frame.offsetBy(dx: pageOffset(tab), dy: 0))
-            })
+            Dictionary(uniqueKeysWithValues: localCompletedTodayFrames.map { tab, frame in (tab, toPage(frame, tab)) })
         }
         set {
-            localCompletedTodayFrames = Dictionary(uniqueKeysWithValues: newValue.map { tab, frame in
-                (tab, frame.offsetBy(dx: -pageOffset(tab), dy: 0))
-            })
+            localCompletedTodayFrames = Dictionary(uniqueKeysWithValues: newValue.map { tab, frame in (tab, toList(frame, tab)) })
         }
     }
     func setCompletedTodayFrame(_ frame: CGRect?, for tab: TasksTab) {
+        #if DEBUG
+        noteReport(old: localCompletedTodayFrames[tab], new: frame)
+        #endif
         localCompletedTodayFrames[tab] = frame
     }
     /// Now's day headers' frames in the page, by group key (a row dragged
     /// into another day finds the day under the pointer).
     private var localHeaderFrames: [String: CGRect] = [:]
     var headerFrames: [String: CGRect] {
-        get { localHeaderFrames.mapValues { $0.offsetBy(dx: pageOffset(.now), dy: 0) } }
-        set { localHeaderFrames = newValue.mapValues { $0.offsetBy(dx: -pageOffset(.now), dy: 0) } }
+        get { localHeaderFrames.mapValues { toPage($0, .now) } }
+        set { localHeaderFrames = newValue.mapValues { toList($0, .now) } }
     }
     func setHeaderFrame(_ frame: CGRect?, for key: String) {
+        #if DEBUG
+        noteReport(old: localHeaderFrames[key], new: frame)
+        #endif
         localHeaderFrames[key] = frame
     }
     func headerFrame(for key: String) -> CGRect? {
-        localHeaderFrames[key]?.offsetBy(dx: pageOffset(.now), dy: 0)
+        localHeaderFrames[key].map { toPage($0, .now) }
     }
     /// Where a row dragged out of its day would land (Adaptive picks).
     let dayDrop = TasksDayDropState()
@@ -4825,6 +4938,30 @@ final class TasksPointer {
 
     func noteDrawnFocus(_ row: TasksRowID, _ focused: Bool) {
         if focused { drawnFocus.insert(row) } else { drawnFocus.remove(row) }
+    }
+
+    /// Tests (S2, the scroll's row frames): reports that move a frame the
+    /// pointer already holds, for a row, a day header or the Completed
+    /// today line. A steady scroll moves none of them.
+    private(set) var frameMoveReports = 0
+    /// Every report of a frame (new ones included).
+    private(set) var frameReports = 0
+    /// Tests only (S2): the old way, each row measured in its pager slot on
+    /// every move, while `recordsSlotFrames` is on before the page is
+    /// built. A row's page frame read the new way must equal it.
+    @MainActor static var recordsSlotFrames = false
+    var slotFrames: [TasksSlotProbeKey: CGRect] = [:]
+    /// A recorded slot frame in the page (the pager's offset added).
+    func slotProbeFrame(_ key: TasksSlotProbeKey, on tab: TasksTab) -> CGRect? {
+        slotFrames[key]?.offsetBy(dx: pageOffset(tab), dy: 0)
+    }
+    func slotProbeFrame(for row: TasksRowID) -> CGRect? { slotProbeFrame(.row(row), on: row.tab) }
+    /// The list's reported origin, for tests.
+    func contentOrigin(for tab: TasksTab) -> CGPoint? { contentOrigins[tab] }
+    private func noteReport(old: CGRect?, new: CGRect?) {
+        guard let new else { return }
+        frameReports += 1
+        if let old, old != new { frameMoveReports += 1 }
     }
     #endif
 
@@ -4894,6 +5031,9 @@ final class TasksPointer {
     private var frameOwners: [TasksRowID: ObjectIdentifier] = [:]
 
     func setFrame(_ frame: CGRect, for row: TasksRowID, from cell: TasksCellReports) {
+        #if DEBUG
+        noteReport(old: localFrames[row], new: frame)
+        #endif
         localFrames[row] = frame
         frameOwners[row] = ObjectIdentifier(cell)
     }
@@ -4918,8 +5058,8 @@ final class TasksPointer {
     func isOverRow(on tab: TasksTab) -> Bool {
         guard let view, let window = view.window else { return false }
         let point = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        let dx = pageOffset(tab)
-        return localFrames.contains { $0.key.tab == tab && $0.value.offsetBy(dx: dx, dy: 0).contains(point) }
+        let shift = shift(tab)
+        return localFrames.contains { $0.key.tab == tab && $0.value.offsetBy(dx: shift.dx, dy: shift.dy).contains(point) }
     }
 
     /// The event's location in the page, or nil when it is another
@@ -4945,10 +5085,10 @@ final class TasksPointer {
     /// look). Only the page the person is on answers: a copy another page
     /// keeps of the same task, or a page beside it, is never under it.
     func row(at point: CGPoint, in tab: TasksTab) -> UUID? {
-        let dx = pageOffset(tab)
+        let shift = shift(tab)
         return localFrames.first {
             $0.key.tab == tab && $0.value.height < 2_000 &&
-            $0.value.offsetBy(dx: dx, dy: 0).contains(point)
+            $0.value.offsetBy(dx: shift.dx, dy: shift.dy).contains(point)
         }?.key.id
     }
 }
