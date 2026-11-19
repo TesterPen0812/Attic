@@ -654,12 +654,8 @@ final class NoteStore: ObservableObject {
     func delete(_ note: NoteItem) -> Bool {
         guard prepareNoteEdit() else { return false }
         guard let note = notes.first(where: { $0.id == note.id }) else { return false }
-        let release: () -> Void
-        do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: note.id, container: container) }
-        catch { lastErrorMessage = error.localizedDescription; return false }
+        guard let release = beginItemDeletion(noteID: note.id) else { return false }
         defer { release() }
-        // Preparing the deletion saves an open editor through this store, which can leave the context spent.
-        guard prepareNoteEdit() else { return false }
         do {
             if let taskID = try WorkspaceItemLifecycle.taskOwner(noteID: note.id, in: context) {
                 try TaskStore.stageItemDeletion(in: context, taskID: taskID, timestamp: now())
@@ -1485,6 +1481,17 @@ final class NoteStore: ObservableObject {
         } catch { return false }
     }
 
+    /// Prepares deleting `noteID`'s item. Settling the open editors it reaches saves them through this store, and a
+    /// journaled save whose reload fails leaves the context spent, so the deletion gets a usable context again here,
+    /// after that and before it stages. Returns the release, or nil when refused (reported).
+    private func beginItemDeletion(noteID: UUID) -> (() -> Void)? {
+        let release: () -> Void
+        do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: noteID, container: container) }
+        catch { lastErrorMessage = error.localizedDescription; return nil }
+        guard prepareNoteEdit() else { release(); return nil }
+        return release
+    }
+
     /// Reverse an agent's newly created note without deleting the task that
     /// owns its writing. A task note's newly created association is detached
     /// in the same commit, leaving the task available for another own note.
@@ -1493,9 +1500,7 @@ final class NoteStore: ObservableObject {
     func undoAgentCreatedNote(_ id: UUID, revision: String, metadata: String) -> Bool {
         guard prepareNoteEdit() else { return false }
         guard agentCreatedNoteIsUnchanged(id, revision: revision, metadata: metadata) else { return false }
-        let release: () -> Void
-        do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: id, container: container) }
-        catch { lastErrorMessage = error.localizedDescription; return false }
+        guard let release = beginItemDeletion(noteID: id) else { return false }
         defer { release() }
         guard agentCreatedNoteIsUnchanged(id, revision: revision, metadata: metadata) else { return false }
         do {

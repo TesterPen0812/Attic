@@ -1334,8 +1334,8 @@ extension NoteStore {
         disposition: NoteAgentWriteDisposition,
         requiresReview: Bool = false
     ) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
-        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let preflight: NoteMutationPreflight
         do {
             preflight = try noteMutationPreflight(noteID, format: disposition == .proposal ? .editable : .document)
@@ -1519,8 +1519,8 @@ extension NoteStore {
     /// All outside surfaces use these same revision and presence rules.
     func agentDelete(noteID: UUID, baseRevisionToken: String, agentName: String,
                      disposition: NoteAgentWriteDisposition) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
-        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let retainedEdits = RetainedNoteEdits()
         do {
             let preflight = try noteMutationPreflight(noteID, format: .editable)

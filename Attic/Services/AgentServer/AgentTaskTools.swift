@@ -1017,8 +1017,10 @@ final class AgentTaskTools {
         let stale: Bool
     }
 
-    /// A declared read set rides on the note store's current context, so that context must be the one the write
-    /// commits from: the store replaces a spent context here, before the set is attached, not inside the write.
+    /// A note tool's staging entry, before it reads anything: the note, its revision and its staleness are read from
+    /// the store's current presentation, and a declared read set rides on the store's current context, which must be
+    /// the one the write commits from. The store replaces a spent context here (or the tool refuses), not inside the
+    /// write, where the revision read before it would already be out of date.
     static func prepared(_ noteStore: NoteStore) throws {
         guard noteStore.prepareNoteEdit() else {
             throw AgentToolError.notPerformed(noteStore.lastErrorMessage ?? "The note could not be refreshed.")
@@ -1048,6 +1050,7 @@ final class AgentTaskTools {
 
     private func updateNote(_ arguments: [String: Any]) throws -> String {
         guard let noteStore else { throw AgentToolError.unknownTool("update_note") }
+        try Self.prepared(noteStore)
         let note = try findNote(arguments)
         var newTitle: String?
         var newBody: String?
@@ -1115,7 +1118,6 @@ final class AgentTaskTools {
             noteStore.agentWrite(noteID: note.id, baseRevisionToken: stale ? note.revisionToken : baseRevision,
                                 document: document, agentName: agentName, disposition: disposition, requiresReview: stale)
         }
-        if readSet != nil { try Self.prepared(noteStore) }
         let result = try readSet.map { set in
             try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
         } ?? write()
@@ -1139,6 +1141,7 @@ final class AgentTaskTools {
     /// base-revision rule and pending-change rule as `update_note`.
     private func updateNoteTable(_ arguments: [String: Any]) throws -> String {
         guard let noteStore else { throw AgentToolError.unknownTool("update_note_table") }
+        try Self.prepared(noteStore)
         let note = try findNote(arguments)
         guard let baseRevision = arguments["base_revision"] as? String, !baseRevision.isEmpty else {
             throw AgentToolError.invalidArguments("base_revision is required: pass the note's revision from list_notes.")
@@ -1188,7 +1191,6 @@ final class AgentTaskTools {
             noteStore.agentWrite(noteID: note.id, baseRevisionToken: stale ? note.revisionToken : baseRevision,
                 document: document, agentName: self.agentName(arguments), disposition: disposition, requiresReview: stale)
         }
-        if readSet != nil { try Self.prepared(noteStore) }
         let result = try readSet.map { set in
             try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
         } ?? write()
@@ -1226,6 +1228,7 @@ final class AgentTaskTools {
 
     private func deleteNote(_ arguments: [String: Any]) throws -> String {
         guard let noteStore else { throw AgentToolError.unknownTool("delete_note") }
+        try Self.prepared(noteStore)
         let note = try findNote(arguments)
         if let taskID = try WorkspaceItemLifecycle.taskOwner(noteID: note.id, in: ModelContext(store.container)) {
             try requireWholeItemRoute(taskID: taskID)
@@ -1240,7 +1243,6 @@ final class AgentTaskTools {
             noteStore.agentDelete(noteID: note.id, baseRevisionToken: readSet != nil && stale ? note.revisionToken : base,
                                   agentName: self.agentName(arguments), disposition: disposition)
         }
-        if readSet != nil { try Self.prepared(noteStore) }
         let result = try readSet.map { set in
             try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
         } ?? write()

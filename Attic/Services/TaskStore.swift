@@ -3366,8 +3366,9 @@ final class TaskStore: ObservableObject {
     /// the whole command.
     @discardableResult
     func restoreToNow(taskIDs: [UUID]) -> Bool {
-        guard prepareTaskEdit() else { return false }
+        // An empty command touches nothing, as before the staging entry existed: it succeeds even when a read would fail.
         guard !taskIDs.isEmpty else { return true }
+        guard prepareTaskEdit() else { return false }
         let timestamp = now()
         var returning = Set<UUID>()
         do {
@@ -3489,8 +3490,8 @@ final class TaskStore: ObservableObject {
     /// refused or not saved (reported).
     @discardableResult
     func reopen(taskIDs: [UUID]) -> Bool {
-        guard prepareTaskEdit(owner: taskIDs.count == 1 ? familyOwner(forTaskID: taskIDs[0]) : nil) else { return false }
         guard !taskIDs.isEmpty else { return true }
+        guard prepareTaskEdit(owner: taskIDs.count == 1 ? familyOwner(forTaskID: taskIDs[0]) : nil) else { return false }
         let owner = taskIDs.count == 1 ? familyOwner(forTaskID: taskIDs[0]) : nil
         var returning = Set<UUID>()
         do {
