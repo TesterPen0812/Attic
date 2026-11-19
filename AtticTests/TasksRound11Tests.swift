@@ -147,10 +147,10 @@ final class TasksRound11Tests: XCTestCase {
         XCTAssertNil(hosted.pointer.frame(for: TasksRowID(tab: .backlog, id: newTask.id)),
                      "the hidden page must defer laying out its newly added row")
 
-        let hiddenOld = TasksKeptPage(frozen: old) { Text("old") }
-        let hiddenNew = TasksKeptPage(frozen: changed) { Text("new") }
+        let hiddenOld = TasksKeptPage(frozen: true) { Text("old") }
+        let hiddenNew = TasksKeptPage(frozen: true) { Text("new") }
         XCTAssertEqual(hiddenOld, hiddenNew, "a hidden tab must not pay to lay out new rows")
-        let revealed = TasksKeptPage(frozen: nil) { Text("shown") }
+        let revealed = TasksKeptPage(frozen: false) { Text("shown") }
         XCTAssertNotEqual(hiddenNew, revealed, "showing it must rebuild its current contents")
 
         hosted.go(to: .backlog)
@@ -160,6 +160,40 @@ final class TasksRound11Tests: XCTestCase {
                         "the new Later row must actually be laid out when the hidden page is revealed")
         XCTAssertEqual(Set(pageLists(hosted).map(ObjectIdentifier.init)), originalLists,
                        "revealing a changed hidden page must preserve its native scroll hosts")
+    }
+
+    /// The kept pages' freeze compares only whether a page is frozen, so
+    /// the pager builds nothing for a warm hidden page on a pass: no page
+    /// token (design/tasks-breadth.md, slice 6).
+    func testThePagerBuildsNoPageTokenForItsWarmHiddenPages() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let span = hosted.model.pagerSwipe.span
+        let warmed = expectation(description: "Later and Done kept built")
+        let warming = span.$warm.first { $0 == 0...2 }.sink { _ in warmed.fulfill() }
+        wait(for: [warmed], timeout: 5)
+        warming.cancel()
+        XCTAssertEqual(span.pages, 0...0, "only Now drawn; Later and Done kept built and hidden")
+        hosted.model.resetPageTokenBuildCount()
+        let passesBefore = TasksPagerPassCount.passes
+        // A store save and a model change on the page shown: each reaches
+        // the pager (it observes both), with Later and Done frozen.
+        let added = try XCTUnwrap(hosted.store.create(title: "Pager pass task"))
+        hosted.model.selectOnly(added.id)
+        for _ in 0..<2 {
+            // The main queue drains (no fixed wait), then the page lays out and draws.
+            let drained = expectation(description: "main queue drained")
+            DispatchQueue.main.async { drained.fulfill() }
+            wait(for: [drained], timeout: 2)
+            hosted.window.contentView?.layoutSubtreeIfNeeded()
+            hosted.window.displayIfNeeded()
+        }
+        XCTAssertEqual(hosted.model.selection, [added.id])
+        let passes = TasksPagerPassCount.passes - passesBefore
+        print("PAGER_TOKENS passes=\(passes) tokens=\(hosted.model.pageTokenBuildCount) warm=\(String(describing: span.warm))")
+        XCTAssertGreaterThan(passes, 0, "the pager ran, so its count means something")
+        XCTAssertEqual(span.warm, 0...2, "Later and Done stayed kept built")
+        XCTAssertEqual(hosted.model.pageTokenBuildCount, 0, "a pager pass built a page token for a frozen page")
     }
 
     func testBugs4SwitchingShellPagesRetainsTheWarmTaskTabsAcrossHide() throws {
