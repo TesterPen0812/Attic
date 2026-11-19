@@ -603,18 +603,10 @@ final class TaskPerformanceGateTests: XCTestCase {
         XCTAssertEqual(Set(afterUndo.preservations), Set(afterDelete.preservations),
                        "The preservation record keeps its original id; none is lost or replaced")
         XCTAssertEqual(afterUndo.retired, afterUndo.preservations.count, "Every row of the record is retired by the restore")
-        // Outside the expected failure (Astra r3, R-6): the documented defect is one extra row, never more.
-        XCTAssertLessThanOrEqual(afterUndo.preservations.count, afterDelete.preservations.count + 1,
-                                 "At most the one documented extra preservation row")
-        // Pre-existing on trunk 67ef5edf (Air, 18 Nov): the restore stages on the unresolved context and writes the
-        // delete's preservation record a second time, as a second physical row with the same id. Board id
-        // undo-unresolved-staging (P1); its fix is its own pull request. Strict, so the fix must remove this. Only
-        // the row count is expected to fail here.
-        XCTExpectFailure("undo-unresolved-staging: Undo on an unresolved staging context duplicates the preservation row",
-                         strict: true) {
-            XCTAssertEqual(afterUndo.preservations.count, afterDelete.preservations.count,
-                           "One physical row for the preservation record")
-        }
+        // Board id undo-unresolved-staging (P1), fixed by the durable-save pull request: the restore no longer stages
+        // on the context the delete committed from, so the preservation record keeps one physical row.
+        XCTAssertEqual(afterUndo.preservations.count, afterDelete.preservations.count,
+                       "One physical row for the preservation record")
         XCTAssertNotNil(rig.tasks.task(withID: id))
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
     }
