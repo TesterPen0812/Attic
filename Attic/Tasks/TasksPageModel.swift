@@ -602,7 +602,12 @@ final class TasksPageModel: ObservableObject {
     }
     /// The loaded Done log tasks' subtasks, read with their page (Astra 19):
     /// an archived row shows its checklist from its archived family.
-    private var doneLogChildren: [UUID: [TaskItem]] = [:]
+    /// The drawn days' cache is keyed on the loaded rows, not their
+    /// families, so a changed family drops it (Astra r6 F2: Retry after a
+    /// failed family read, with no save in between).
+    private var doneLogChildren: [UUID: [TaskItem]] = [:] {
+        didSet { doneCache = nil }
+    }
     private var doneLogQuery: String?
     /// The tag the loaded Done log pages were read for (T6).
     private var doneLogTag: TagPicks?
