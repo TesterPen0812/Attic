@@ -24,6 +24,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         didSet {
             guard isInteractive != oldValue else { return }
             if isInteractive {
+                claimKeyboard()
                 joinAccessibilityAfterTheFirstFrame()
             } else {
                 stopJoining()
@@ -138,25 +139,44 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         return isInteractive && isAccessible ? super.accessibilityHitTest(point) : nil
     }
 
-    /// The kept host holding `window`'s keyboard gives it to the view around
-    /// it that takes it (the departure step, HB-02: before the departing
-    /// tab's focus is cleared).
-    static func releaseKeyboard(in window: NSWindow?) {
-        var view = window?.firstResponder as? NSView
-        while let current = view, !(current is KeptContentHostingView) { view = current.superview }
-        (view as? KeptContentHostingView)?.releaseKeyboard()
+    /// The keyboard belongs to the tab host in use (host-boundary.md §5.1,
+    /// the lead's decision of 19 Nov 08:22): a host claims it when it comes
+    /// into use, but only from no one (the window itself) or from a tab
+    /// host, never from a text editor (add bar, search, a rename), a
+    /// dropdown or menu, the panel's own host (its tab bar's ←/→), or while
+    /// the panel is not key. A refusal is left alone.
+    private func claimKeyboard() {
+        guard let window, window.isKeyWindow else { return }
+        let responder = window.firstResponder
+        let fromNoOne = responder == nil || responder === window
+        let fromATabHost = (responder as? NSView).map { view in
+            !(view is NSText) && (view is KeptContentHostingView || Self.enclosing(view) != nil)
+        } ?? false
+        guard fromNoOne || fromATabHost else { return }
+        if window.makeFirstResponder(self), window.firstResponder === self { return }
+        #if DEBUG
+        print("KeptContentHost: claim refused; first responder \(String(describing: window.firstResponder))")
+        #endif
+    }
+
+    /// The kept host `view` lies in, if any.
+    static func enclosing(_ view: NSView) -> KeptContentHostingView? {
+        var current = view.superview
+        while let candidate = current {
+            if let host = candidate as? KeptContentHostingView { return host }
+            current = candidate.superview
+        }
+        return nil
     }
 
     /// A host that stops taking part while the keyboard is inside it gives
-    /// the keyboard to the nearest view around it that takes it, read back
-    /// and, if refused, to the window, so no key reaches a graph that is
-    /// not in use (HB-02).
+    /// it to no one (the window), so no key reaches a graph that is not in
+    /// use (HB-02); the host that comes into use claims it. Handing it up
+    /// had no taker: the panel's host refused first responder (trace run
+    /// on `2904c288`).
     private func releaseKeyboard() {
         guard let window, let responder = window.firstResponder as? NSView,
               responder === self || responder.isDescendant(of: self) else { return }
-        var ancestor = superview
-        while let view = ancestor, !view.acceptsFirstResponder { ancestor = view.superview }
-        if window.makeFirstResponder(ancestor), let ancestor, window.firstResponder === ancestor { return }
         window.makeFirstResponder(nil)
     }
 }
