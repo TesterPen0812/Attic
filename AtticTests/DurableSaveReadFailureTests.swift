@@ -392,9 +392,16 @@ final class DurableSaveReadFailureTests: XCTestCase {
             let row = try XCTUnwrap(try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
             let fields = "root=\(row.deletionRootID == id) members=\(row.deletionMembersRaw.isEmpty ? "empty" : "set") "
                 + "group=\(row.deletionGroupID != nil)"
+            let probe = ModelContext(rig.container)
+            let family = try? TaskStore.guardedDeletedFamily(in: probe, rootID: id, before: .distantFuture)
+            let circle = (try? TaskStore.circleRemovedMembers(in: probe)).map { $0.contains(id) }
+            let owns = try? WorkspacePurge.hasOwnNotesOrAssociations([id], in: probe)
+            let guards = "family=\(family.map { "\($0.count)" } ?? "nil") circle_removed=\(circle.map(String.init) ?? "threw") "
+                + "owns_writing=\(owns.map(String.init) ?? "threw")"
             let purged = rig.tasks.purgeDeleted(before: .distantFuture).contains(id)
             let left = try ModelContext(rig.container).fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
-            print("C3_PURGE_CONTROL \(route) deleted=\(deleted) \(fields) purged=\(purged) rows_left=\(left)")
+            print("C3_PURGE_CONTROL \(route) deleted=\(deleted) \(fields) \(guards) purged=\(purged) rows_left=\(left) "
+                + "error=\(rig.tasks.lastErrorMessage ?? "nil")")
             XCTAssertTrue(deleted, route)
             if route == "store" { XCTAssertTrue(purged, "The store's purge takes a task the store deleted") }
             if purged { XCTAssertEqual(left, 0, "\(route): a purged task is gone from disk") }
@@ -975,9 +982,16 @@ final class DurableSaveReadFailureTests: XCTestCase {
     /// A3 (finding 3). Two agent proposals on one base. Leaving the note applies the first; with one injected failure
     /// that apply's reload fails. The second is now stale and must be marked for review, durably, with no refused save.
     /// Arm 0 is the control. The apply starts on a usable context (refreshed after the proposals were written).
+    /// A bare note store, as NoteDocumentStoreTests applies proposals: in the panel-wired rig the control arm applied
+    /// nothing (run dura2red on f9364f73: `failures=0 … applied=0 … error=The save could not be confirmed…`).
     func testA3ApplyingTwoProposalsAfterAFailedReloadMarksTheSecondForReview() async throws {
         for failures in [0, 1] {
-            let rig = try await makeRig()
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let notes = NoteStore(container: container, now: { Date(timeIntervalSince1970: 1_700_000_000) },
+                                  attachmentFileStore: makeTestAttachmentFileStore())
+            await notes.waitForAttachmentReconciliation()
+            struct Bare { let notes: NoteStore; let container: ModelContainer }
+            let rig = Bare(notes: notes, container: container)
             guard case let .success(created) = rig.notes.createDocumentNote(
                 id: UUID(), document: NoteDocument(blocks: [.text("Two proposals"), .text("Base")])) else { return XCTFail("create") }
             let noteID = created.noteID
@@ -1013,10 +1027,11 @@ final class DurableSaveReadFailureTests: XCTestCase {
                 return nil
             } ?? "nil"
             let appliedLine = ["First", "Second"].first { line in bodies.allSatisfy { $0.contains(line) } }
-            print("A3_SURVIVOR failures=\(failures) applied_line=\(appliedLine ?? "nil") remaining=\(remaining)")
+            print("A3_SURVIVOR failures=\(failures) applied_line=\(appliedLine ?? "nil") remaining=\(remaining) "
+                + "replaced_spent=\(rig.notes.lastSpentContextUnsaved.map { "\($0)" } ?? "nil")")
             XCTAssertNotNil(appliedLine, "\(failures): one proposal's body is on disk")
             if let appliedLine { XCTAssertFalse(remaining.contains(appliedLine), "\(failures): the remaining proposal is the other one") }
-            await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+            await rig.notes.waitForAttachmentReconciliation()
         }
     }
 
