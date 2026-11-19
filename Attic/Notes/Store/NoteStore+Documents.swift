@@ -1467,6 +1467,8 @@ extension NoteStore {
         guard prepareNoteEdit() else { return 0 }
         var applied = 0
         for edit in pendingEdits(noteID: noteID) {
+            // Each pass commits; a journaled commit whose reload failed leaves the context spent for the next.
+            guard prepareNoteEdit() else { break }
             guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { break }
             let replicas = preflight.replicas
             let current = preflight.canonical

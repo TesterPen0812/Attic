@@ -2248,10 +2248,11 @@ final class TaskStore: ObservableObject {
         guard !taskIDs.isEmpty else { return false }
         guard prepareTaskEdit() else { return false }
         // Restore preflight consumes the current physical family, including
-        // replicas saved by another context since the previous refusal. After
-        // the staging entry the context is neither spent nor holding staged
-        // edits, so it is replaced by a fresh one unconditionally.
-        context = Self.makeStoreContext(container)
+        // replicas saved by another context since the previous refusal, so a
+        // clean context is replaced by a fresh one. The staging entry has
+        // already replaced a spent one; a context holding staged edits (a
+        // command re-entered during a save) is kept, as before.
+        if !context.hasChanges { context = Self.makeStoreContext(container) }
         do {
             let retired = try Self.circleRemovedRoots(in: context)
             let requested = try context.fetch(WholeTableRead.all(TaskItem.self)).filter { taskIDs.contains($0.id) }
@@ -2450,8 +2451,8 @@ final class TaskStore: ObservableObject {
         alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
     ) -> Set<UUID> {
         guard prepareTaskEdit() else { return [] }
-        // The current physical family, as for a restore: a fresh context after the staging entry.
-        context = Self.makeStoreContext(container)
+        // The current physical family, as for a restore: a clean context is replaced by a fresh one.
+        if !context.hasChanges { context = Self.makeStoreContext(container) }
         let rootsByID: [UUID: [TaskItem]]
         let storedByID: [UUID: [TaskItem]]
         do {

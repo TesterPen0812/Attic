@@ -658,6 +658,8 @@ final class NoteStore: ObservableObject {
         do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: note.id, container: container) }
         catch { lastErrorMessage = error.localizedDescription; return false }
         defer { release() }
+        // Preparing the deletion saves an open editor through this store, which can leave the context spent.
+        guard prepareNoteEdit() else { return false }
         do {
             if let taskID = try WorkspaceItemLifecycle.taskOwner(noteID: note.id, in: context) {
                 try TaskStore.stageItemDeletion(in: context, taskID: taskID, timestamp: now())

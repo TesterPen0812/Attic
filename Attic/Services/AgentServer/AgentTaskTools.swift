@@ -1017,6 +1017,14 @@ final class AgentTaskTools {
         let stale: Bool
     }
 
+    /// A declared read set rides on the note store's current context, so that context must be the one the write
+    /// commits from: the store replaces a spent context here, before the set is attached, not inside the write.
+    static func prepared(_ noteStore: NoteStore) throws {
+        guard noteStore.prepareNoteEdit() else {
+            throw AgentToolError.notPerformed(noteStore.lastErrorMessage ?? "The note could not be refreshed.")
+        }
+    }
+
     private func workspaceReadSet(_ arguments: [String: Any], note: NoteItem) throws -> WorkspaceWriteReadSet? {
         guard let taskID = note.taskID else { return nil }
         func decode(_ key: String) throws -> WorkspaceScopeToken {
@@ -1107,6 +1115,7 @@ final class AgentTaskTools {
             noteStore.agentWrite(noteID: note.id, baseRevisionToken: stale ? note.revisionToken : baseRevision,
                                 document: document, agentName: agentName, disposition: disposition, requiresReview: stale)
         }
+        if readSet != nil { try Self.prepared(noteStore) }
         let result = try readSet.map { set in
             try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
         } ?? write()
@@ -1179,6 +1188,7 @@ final class AgentTaskTools {
             noteStore.agentWrite(noteID: note.id, baseRevisionToken: stale ? note.revisionToken : baseRevision,
                 document: document, agentName: self.agentName(arguments), disposition: disposition, requiresReview: stale)
         }
+        if readSet != nil { try Self.prepared(noteStore) }
         let result = try readSet.map { set in
             try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
         } ?? write()
@@ -1230,6 +1240,7 @@ final class AgentTaskTools {
             noteStore.agentDelete(noteID: note.id, baseRevisionToken: readSet != nil && stale ? note.revisionToken : base,
                                   agentName: self.agentName(arguments), disposition: disposition)
         }
+        if readSet != nil { try Self.prepared(noteStore) }
         let result = try readSet.map { set in
             try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
         } ?? write()

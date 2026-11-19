@@ -202,6 +202,9 @@ enum WorkspaceLegacyBridge {
     static func withDeclaredReadSet<T>(tokens: [WorkspaceModelToken], scopes: [WorkspaceScopeToken],
                                        in source: ModelContext, _ body: () throws -> T) throws -> T {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
+        // A store replaces a spent context at its next staging entry, which would leave these tokens on a context
+        // that no longer commits. The caller makes the store's context usable first; this refuses one that is not.
+        guard !state.spent else { throw WorkspaceFoundationError.spentContext }
         let oldTokens = state.declaredTokens, oldScopes = state.declaredScopes
         state.declaredTokens = tokens; state.declaredScopes = scopes
         defer { state.declaredTokens = oldTokens; state.declaredScopes = oldScopes }
@@ -368,8 +371,14 @@ enum WorkspaceLegacyBridge {
 
     #if DEBUG
     /// Whether some staged row (its fields) is not among the durable rows.
+    /// Compared as multisets: two staged copies of one row need two durable copies.
     static func stagedRowsMissing(staged: [[String: Data]], durable: [[String: Data]]) -> Bool {
-        !Set(staged).isSubset(of: Set(durable))
+        var remaining = Dictionary(durable.map { ($0, 1) }, uniquingKeysWith: +)
+        for row in staged {
+            guard let count = remaining[row], count > 0 else { return true }
+            remaining[row] = count - 1
+        }
+        return false
     }
 
     /// What a spent context still holds that is not durable (build condition 5): every pending insert and change,
