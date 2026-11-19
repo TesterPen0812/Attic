@@ -1566,7 +1566,7 @@ extension WorkspaceOperationCoordinator {
                         // may resurrect a purged UUID.
                         if let taskID = note.taskID, !removed.contains(taskID) {
                             let tasks = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID }))
-                            let notes = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == note.id }
+                            let notes = try context.fetch(WholeTableRead.all(NoteItem.self)).filter { $0.id == note.id }
                             let links = try TaskNoteConversion.associationRows(noteID: note.id, in: context).filter { $0.detachedAt == nil }
                             if !tasks.isEmpty, tasks.allSatisfy({ $0.deletedAt == nil && $0.parentID == nil }),
                                notes.allSatisfy({ $0.taskID == taskID }), !links.isEmpty,

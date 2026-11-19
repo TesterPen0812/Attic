@@ -1,3 +1,4 @@
+import Combine
 import Darwin
 import SwiftData
 import XCTest
@@ -280,6 +281,386 @@ final class TaskPerformanceGateTests: XCTestCase {
         let durableRows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == childID }))
         XCTAssertTrue(durableRows.allSatisfy { $0.deletedAt != nil })
         print("PF2_COUNTS journaled_deletion_full_reloads=\(store.fullTaskReloadCount)")
+    }
+
+    /// R-4, round 2 (Astra): the workspace bridge's inventory reads whole tables too, and the ledger counts them there.
+    /// One inventory of the task, note and attachment tables records one read of each, under the inventory's name.
+    func testF2BridgeInventoryRecordsOneReadPerModel() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let seed = ModelContext(container)
+        seed.insert(TaskItem(title: "One task", createdAt: Date(timeIntervalSince1970: 1_700_000_000)))
+        seed.insert(NoteItem(title: "One note", body: "Body", createdAt: Date(timeIntervalSince1970: 1_700_000_000)))
+        try seed.save()
+        WholeTableRead.ledger.reset()
+        _ = try WorkspaceLegacyBridge.inventory(in: ModelContext(container), includeCanvas: false,
+                                                entities: [.task, .note, .attachment])
+        let site = "WorkspaceLegacyBridge.inventory(in:includeCanvas:entities:)"
+        print("F2_INVENTORY \(WholeTableRead.ledger.bySite.sorted { $0.key < $1.key })")
+        XCTAssertEqual(WholeTableRead.ledger.bySite,
+                       ["TaskItem \(site)": 1, "NoteItem \(site)": 1, "NoteAttachment \(site)": 1])
+    }
+
+    /// Fix order item 1 (lead, 18 Nov 2026; audits F2 and TA-01). One Delete of a live task and its Undo, through
+    /// the panel's wiring: the library, and the Notes lifecycle controller registered for whole-item lifecycle.
+    /// A journaled delete or restore replaces the task store's staging context with one fresh read (the stale-context
+    /// rule, pinned above in testPF2ConfirmedMembershipChangesDoNotReloadUnrelatedArchive); a second reload of the
+    /// same store after it protects nothing new.
+    ///
+    /// The guard counts every whole-table read of tasks, notes and attachments at the production site that makes it
+    /// (`WholeTableRead`), from the command's call to its return, and states the true number at each site. The store
+    /// reloads are one site each; the reads that remain are listed as what they are (`F2WholeTableReads`): Delete reads
+    /// the task table 4 times, the note table 4 and the attachment table 2; Undo 6, 4 and 1. Red on the trunk: each
+    /// store's reload site reads its tables twice.
+    func testF2DeleteAndUndoWholeTableReadsBySite() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let seed = ModelContext(container)
+        var ids: [UUID] = []
+        for index in 0..<30 {
+            let task = TaskItem(title: "Open task \(index) with a longer title like the tracker's", createdAt: date)
+            task.tags = ["tag\(index % 7)", "area\(index % 3)"]
+            seed.insert(task); ids.append(task.id)
+        }
+        let document = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Open task 3"), .text("Writing")], requires: ["taskNote"]))
+        let writing = NoteItem(title: "Open task 3", body: "Writing", createdAt: date)
+        writing.taskID = ids[3]; writing.content = document
+        seed.insert(writing)
+        for index in 0..<6 { seed.insert(NoteItem(title: "Note \(index)", body: "Body \(index)", createdAt: date)) }
+        try seed.save()
+        let files = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("F2Guard-\(UUID())"))
+        let tasks = TaskStore(container: container, now: { date }, taskImageFiles: files)
+        let notes = NoteStore(container: container, now: { date }, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        let controller = NotesPageController(store: notes, journal: coordinator.journal)
+        await notes.waitForAttachmentReconciliation()
+        XCTAssertTrue(coordinator.lifecycleNotes === controller, "didCommit must reach the Notes controller, as in the panel")
+        XCTAssertTrue(coordinator.lifecycleLibrary === library)
+
+        var counts: [String] = []
+        var reads: [String] = []
+        func sites() -> String {
+            WholeTableRead.ledger.bySite.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+        }
+        // A bare task, then a task that has writing (its note goes to Recently Deleted with it).
+        for (label, id) in [("bare", ids[5]), ("writing", ids[3])] {
+            tasks.resetFullTaskReloadCount(); notes.resetFullNoteReloadCount(); WholeTableRead.ledger.reset()
+            XCTAssertTrue(library.deleteTasks([id]).isApplied)
+            XCTAssertNil(tasks.task(withID: id))
+            let deleteCounts = (tasks.fullTaskReloadCount, notes.fullNoteReloadCount)
+            let deleteReads = WholeTableRead.ledger.bySite
+            reads.append("\(label)_delete[\(sites())]")
+
+            tasks.resetFullTaskReloadCount(); notes.resetFullNoteReloadCount(); WholeTableRead.ledger.reset()
+            XCTAssertTrue(library.undo(in: .tasks).isApplied)
+            XCTAssertNotNil(tasks.task(withID: id))
+            let undoCounts = (tasks.fullTaskReloadCount, notes.fullNoteReloadCount)
+            let undoReads = WholeTableRead.ledger.bySite
+            reads.append("\(label)_undo[\(sites())]")
+            XCTAssertEqual(deleteReads, F2WholeTableReads.delete[label], "\(label) delete: whole-table reads by site")
+            XCTAssertEqual(undoReads, F2WholeTableReads.undo[label], "\(label) Undo: whole-table reads by site")
+            counts.append("\(label)_delete_task_reloads=\(deleteCounts.0) \(label)_delete_note_reloads=\(deleteCounts.1) "
+                + "\(label)_undo_task_reloads=\(undoCounts.0) \(label)_undo_note_reloads=\(undoCounts.1)")
+
+            XCTAssertEqual(deleteCounts.0, 1, "\(label) delete: one task-store reload replaces the journaled staging context")
+            XCTAssertEqual(deleteCounts.1, 1, "\(label) delete: one note-store reload")
+            XCTAssertEqual(undoCounts.0, 1, "\(label) Undo: one task-store reload replaces the journaled staging context")
+            XCTAssertEqual(undoCounts.1, 1, "\(label) Undo: one note-store reload")
+        }
+        // What the reloads exist for still holds: durable rows, and the writing follows its task both ways.
+        let writingID = writing.id
+        let durable = try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == writingID }))
+        XCTAssertTrue(durable.allSatisfy { $0.deletedAt == nil })
+        XCTAssertNotNil(notes.note(withID: writingID))
+        print("F2_COUNTS " + counts.joined(separator: " "))
+        print("F2_READS " + reads.joined(separator: " "))
+        await controller.waitForRecoveryWork()
+        await notes.waitForAttachmentReconciliation()
+    }
+
+    /// The panel's wiring for the F2 tests: library plus a registered Notes lifecycle controller, 30 tagged tasks,
+    /// one with writing, and six standalone notes.
+    private func makeF2Rig() async throws -> (container: ModelContainer, tasks: TaskStore, notes: NoteStore, library: AtticLibrary,
+                                               controller: NotesPageController, ids: [UUID], writingID: UUID) {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let seed = ModelContext(container)
+        var ids: [UUID] = []
+        for index in 0..<30 {
+            let task = TaskItem(title: "Open task \(index)", createdAt: date)
+            task.tags = ["tag\(index % 7)"]
+            seed.insert(task); ids.append(task.id)
+        }
+        let writing = NoteItem(title: "Open task 3", body: "Writing", createdAt: date)
+        writing.taskID = ids[3]
+        writing.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Open task 3"), .text("Writing")], requires: ["taskNote"]))
+        seed.insert(writing)
+        for index in 0..<6 { seed.insert(NoteItem(title: "Note \(index)", body: "Body", createdAt: date)) }
+        try seed.save()
+        let files = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("F2Rig-\(UUID())"))
+        let tasks = TaskStore(container: container, now: { date }, taskImageFiles: files)
+        let notes = NoteStore(container: container, now: { date }, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        let controller = NotesPageController(store: notes, journal: coordinator.journal)
+        await notes.waitForAttachmentReconciliation()
+        XCTAssertTrue(coordinator.lifecycleNotes === controller)
+        return (container, tasks, notes, library, controller, ids, writing.id)
+    }
+
+    /// F2 (lead, 13:20): a failed fresh read after the journaled save is not a fact the commit can skip on.
+    func testF2FailedSaveReadSkipsNothing() async throws {
+        let rig = try await makeF2Rig()
+        let id = rig.ids[5]
+        rig.tasks.resetFullTaskReloadCount(); rig.notes.resetFullNoteReloadCount()
+        rig.tasks.listRefreshFailures = 1
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied, "The durable save cannot be refused by a presentation read")
+        // The failed read, the save's own recovery read, then the commit's read: nothing skipped.
+        XCTAssertEqual(rig.tasks.fullTaskReloadCount, 3)
+        XCTAssertEqual(rig.notes.fullNoteReloadCount, 1)
+        XCTAssertNil(rig.tasks.task(withID: id))
+        XCTAssertNotNil(rig.tasks.create(title: "Safe follow-up"), "Later writes use the refreshed context")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// F2 (lead, 14:42, from the GPT Pro review): the save succeeds but every fresh read after it fails. The store stays
+    /// unresolved (reported, no narrow change published, nothing skipped), a later retry presents the durable state, and
+    /// nothing is applied twice: one deletion group, one Undo step, one restore.
+    func testF2DurableSaveWithFailedFreshReadsStaysUnresolvedAndRetries() async throws {
+        let rig = try await makeF2Rig()
+        let id = rig.ids[3]
+        let physical = try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>()).count
+        rig.tasks.resetFullTaskReloadCount()
+        // The save's fresh read, its recovery read and the commit's read all fail.
+        rig.tasks.listRefreshFailures = 3
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied, "The durable save cannot be refused by a presentation read")
+        XCTAssertEqual(rig.tasks.listRefreshFailures, 0)
+        XCTAssertEqual(rig.tasks.fullTaskReloadCount, 3, "No read was skipped after a failed one")
+        XCTAssertNotNil(rig.tasks.errorNotice, "The unresolved presentation is reported")
+        // The task's writing still refreshes the writing search, which publishes `[]` (no task row changed): true,
+        // since the rows shown are the last confirmed ones. What must never be published is the unconfirmed delete
+        // itself as a narrow change to this task.
+        XCTAssertFalse(rig.tasks.revisionChangedTaskIDs?.contains(id) ?? false,
+                       "An unconfirmed state is never published as a narrow change")
+        XCTAssertTrue(rig.library.undo.canUndo(in: .tasks))
+
+        // Retry: one fresh read presents the durable state.
+        rig.tasks.refresh()
+        XCTAssertNil(rig.tasks.errorNotice)
+        XCTAssertNil(rig.tasks.task(withID: id))
+        var rows = try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.count, physical, "Nothing was inserted or applied twice")
+        let deleted = rows.filter { $0.id == id }
+        XCTAssertTrue(!deleted.isEmpty && deleted.allSatisfy { $0.deletedAt != nil })
+        XCTAssertEqual(Set(deleted.compactMap(\.deletionGroupID)).count, 1, "One deletion group, applied once")
+
+        // One Undo step restores it once; there is no second step for the same delete.
+        XCTAssertTrue(rig.library.undo(in: .tasks).isApplied)
+        XCTAssertNotNil(rig.tasks.task(withID: id))
+        XCTAssertFalse(rig.library.undo.canUndo(in: .tasks), "The delete recorded exactly one Undo step")
+        rows = try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.count, physical)
+        XCTAssertTrue(rows.filter { $0.id == id }.allSatisfy { $0.deletedAt == nil })
+        XCTAssertTrue(rig.notes.notes.contains { $0.id == rig.writingID }, "Its writing came back once")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// The durable facts of one deletion, by physical row: the task's rows and their groups, the deletion's preservation
+    /// records (their ids and whether retired), and every operation receipt.
+    private func f2DeletionFacts(_ container: ModelContainer, _ id: UUID) throws
+        -> (rows: Int, live: Int, groups: Set<UUID>, preservations: [UUID], retired: Int, receipts: Int) {
+        let context = ModelContext(container)
+        let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.rootID == id }))
+        return (rows.count, rows.filter { $0.deletedAt == nil }.count, Set(rows.compactMap(\.deletionGroupID)),
+                records.map(\.id), records.filter { $0.retiredAt != nil }.count,
+                try context.fetchCount(FetchDescriptor<OperationReceipt>()))
+    }
+
+    /// The presented tasks a delete of `id` must leave alone: every listed id except `id` and its subtasks.
+    private func f2Unaffected(_ tasks: TaskStore, _ id: UUID) -> Set<UUID> {
+        Set(tasks.tasks.filter { $0.id != id && $0.parentID != id }.map(\.id))
+    }
+
+    /// The emissions (by index) whose ids leave out any of `unaffected`, as "index: missing count".
+    private func f2LostUnaffected(_ log: F2EmissionLog, _ unaffected: Set<UUID>) -> [String] {
+        log.arrays.enumerated().compactMap { index, ids in
+            let missing = unaffected.subtracting(ids)
+            return missing.isEmpty ? nil : "\(index): \(missing.count) missing"
+        }
+    }
+
+    /// Every `tasks` and `revision` emission of the task store, with the ids it carried at the moment it was emitted.
+    private func f2RecordEmissions(_ tasks: TaskStore, _ id: UUID, into log: F2EmissionLog) -> Set<AnyCancellable> {
+        var bag = Set<AnyCancellable>()
+        tasks.$tasks.dropFirst().sink { [weak log] rows in
+            log?.events.append("tasks present=\(rows.contains { $0.id == id }) count=\(rows.count)")
+            log?.arrays.append(Set(rows.map(\.id)))
+        }.store(in: &bag)
+        tasks.$revision.dropFirst().sink { [weak log, weak tasks] _ in
+            let changed = tasks?.revisionChangedTaskIDs
+            log?.events.append("revision changed=\(changed.map { $0.contains(id) ? "names-it" : "\($0.count)-others" } ?? "all")")
+            if changed?.contains(id) == true { log?.namedIt += 1 }
+        }.store(in: &bag)
+        return bag
+    }
+
+    /// R-5 (Astra's review of pull request 29): after a durable delete whose fresh reads all fail, a second Delete of the
+    /// same task, before any refresh. Every emission is recorded with the ids it carried. The delete is applied once: one
+    /// group, one preservation record, one receipt, one Undo step; no revision ever names the unconfirmed delete.
+    func testF2UnresolvedDeleteThenRepeatDeleteBeforeAnyRefresh() async throws {
+        let rig = try await makeF2Rig()
+        let id = rig.ids[3]
+        let before = try f2DeletionFacts(rig.container, id)
+        let unaffected = f2Unaffected(rig.tasks, id)
+        XCTAssertFalse(unaffected.isEmpty)
+        let log = F2EmissionLog()
+        var bag = f2RecordEmissions(rig.tasks, id, into: log)
+        rig.tasks.listRefreshFailures = 3
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied, "The durable save cannot be refused by a presentation read")
+        XCTAssertEqual(rig.tasks.listRefreshFailures, 0)
+        XCTAssertTrue(rig.tasks.hasUnresolvedTaskReload, "Three failed reads leave the presentation unresolved")
+        let afterDelete = try f2DeletionFacts(rig.container, id)
+        let deleteEvents = log.events.count
+        let deleteArrays = log.arrays.count
+
+        let repeated = rig.library.deleteTasks([id])
+        let afterRepeat = try f2DeletionFacts(rig.container, id)
+        bag.removeAll()
+        let lost = f2LostUnaffected(log, unaffected)
+        print("F2R5_REPEAT delete_events=\(log.events[..<deleteEvents].joined(separator: " | ")) "
+            + "repeat_applied=\(repeated.isApplied) repeat_events=\(log.events[deleteEvents...].joined(separator: " | ")) "
+            + "receipts=\(before.receipts)->\(afterDelete.receipts)->\(afterRepeat.receipts) "
+            + "preservations=\(afterRepeat.preservations.count) groups=\(afterRepeat.groups.count) "
+            + "array_emissions=\(log.arrays.count) delete_boundary=\(deleteArrays) lost_unaffected=\(lost)")
+
+        XCTAssertEqual(repeated, .failed(.taskGone), "The repeat Delete reports the task as gone")
+        XCTAssertGreaterThan(log.arrays.count, 0)
+        XCTAssertEqual(lost, [], "Every other task survives every emission of the delete and the repeat Delete")
+        XCTAssertEqual(log.namedIt, 0, "No revision names the unconfirmed delete as a narrow change")
+        XCTAssertEqual(afterDelete.rows, before.rows, "Delete inserts no task row")
+        XCTAssertEqual(afterDelete.live, 0); XCTAssertEqual(afterDelete.groups.count, 1, "One deletion group")
+        XCTAssertEqual(afterDelete.preservations.count, 1, "One preservation record")
+        XCTAssertEqual(afterDelete.receipts, before.receipts + 1, "One receipt for the delete")
+        XCTAssertEqual(afterRepeat.groups, afterDelete.groups, "The repeat Delete applies nothing again")
+        XCTAssertEqual(afterRepeat.preservations, afterDelete.preservations)
+        XCTAssertEqual(afterRepeat.receipts, afterDelete.receipts)
+        XCTAssertEqual(afterRepeat.rows, before.rows)
+        XCTAssertTrue(rig.library.undo.canUndo(in: .tasks), "The delete recorded its Undo step")
+
+        // Recovery, then exactly one Undo step for the delete.
+        rig.tasks.refresh()
+        XCTAssertFalse(rig.tasks.hasUnresolvedTaskReload)
+        XCTAssertNil(rig.tasks.task(withID: id))
+        XCTAssertTrue(rig.library.undo(in: .tasks).isApplied)
+        XCTAssertNotNil(rig.tasks.task(withID: id))
+        XCTAssertFalse(rig.library.undo.canUndo(in: .tasks), "The delete recorded exactly one Undo step")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// R-5 (Astra's review of pull request 29): after a durable delete whose fresh reads all fail, Undo at once, before
+    /// any refresh. Undo restores the family once: every physical row live, the one preservation record kept by id and
+    /// retired, one delete receipt and one inverse receipt, and the step moves to Redo.
+    func testF2UnresolvedDeleteThenImmediateUndoBeforeAnyRefresh() async throws {
+        let rig = try await makeF2Rig()
+        let id = rig.ids[3]
+        let before = try f2DeletionFacts(rig.container, id)
+        let unaffected = f2Unaffected(rig.tasks, id)
+        XCTAssertFalse(unaffected.isEmpty)
+        let log = F2EmissionLog()
+        var bag = f2RecordEmissions(rig.tasks, id, into: log)
+        rig.tasks.listRefreshFailures = 3
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied, "The durable save cannot be refused by a presentation read")
+        XCTAssertTrue(rig.tasks.hasUnresolvedTaskReload)
+        let afterDelete = try f2DeletionFacts(rig.container, id)
+        let namedDuringDelete = log.namedIt
+        let deleteEvents = log.events.count
+        let deleteArrays = log.arrays.count
+
+        let undone = rig.library.undo(in: .tasks)
+        let afterUndo = try f2DeletionFacts(rig.container, id)
+        bag.removeAll()
+        let lost = f2LostUnaffected(log, unaffected)
+        print("F2R5_UNDO delete_events=\(log.events[..<deleteEvents].joined(separator: " | ")) "
+            + "undo_applied=\(undone.isApplied) undo_events=\(log.events[deleteEvents...].joined(separator: " | ")) "
+            + "receipts=\(before.receipts)->\(afterDelete.receipts)->\(afterUndo.receipts) "
+            + "preservations=\(afterDelete.preservations.count)->\(afterUndo.preservations.count) retired=\(afterUndo.retired) "
+            + "rows=\(before.rows)->\(afterUndo.rows) live=\(afterUndo.live) "
+            + "array_emissions=\(log.arrays.count) delete_boundary=\(deleteArrays) lost_unaffected=\(lost)")
+
+        XCTAssertGreaterThan(log.arrays.count, 0)
+        XCTAssertEqual(lost, [], "Every other task survives every emission of the delete and the Undo")
+        XCTAssertEqual(namedDuringDelete, 0, "No revision names the unconfirmed delete as a narrow change")
+        XCTAssertEqual(afterDelete.preservations.count, 1)
+        XCTAssertEqual(afterDelete.receipts, before.receipts + 1)
+        XCTAssertTrue(undone.isApplied, "Undo restores the durable delete")
+        XCTAssertEqual(afterUndo.rows, before.rows, "No task row is added")
+        XCTAssertEqual(afterUndo.live, before.rows, "Every physical row is live again")
+        XCTAssertEqual(afterUndo.receipts, afterDelete.receipts + 1, "One inverse receipt")
+        XCTAssertFalse(rig.library.undo.canUndo(in: .tasks)); XCTAssertTrue(rig.library.undo.canRedo(in: .tasks))
+        // The original preservation record is kept: same id, nothing lost or replaced, and every row of it retired.
+        XCTAssertFalse(afterDelete.preservations.isEmpty)
+        XCTAssertEqual(Set(afterUndo.preservations), Set(afterDelete.preservations),
+                       "The preservation record keeps its original id; none is lost or replaced")
+        XCTAssertEqual(afterUndo.retired, afterUndo.preservations.count, "Every row of the record is retired by the restore")
+        // Outside the expected failure (Astra r3, R-6): the documented defect is one extra row, never more.
+        XCTAssertLessThanOrEqual(afterUndo.preservations.count, afterDelete.preservations.count + 1,
+                                 "At most the one documented extra preservation row")
+        // Pre-existing on trunk 67ef5edf (Air, 18 Nov): the restore stages on the unresolved context and writes the
+        // delete's preservation record a second time, as a second physical row with the same id. Board id
+        // undo-unresolved-staging (P1); its fix is its own pull request. Strict, so the fix must remove this. Only
+        // the row count is expected to fail here.
+        XCTExpectFailure("undo-unresolved-staging: Undo on an unresolved staging context duplicates the preservation row",
+                         strict: true) {
+            XCTAssertEqual(afterUndo.preservations.count, afterDelete.preservations.count,
+                           "One physical row for the preservation record")
+        }
+        XCTAssertNotNil(rig.tasks.task(withID: id))
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// F2: a commit made on the note side (deleting a task's writing takes its task) still reads the task store.
+    func testF2NoteSideCommitStillRefreshesTasks() async throws {
+        let rig = try await makeF2Rig()
+        let owner = rig.ids[3]
+        XCTAssertNotNil(rig.tasks.task(withID: owner))
+        rig.tasks.resetFullTaskReloadCount(); rig.notes.resetFullNoteReloadCount()
+        XCTAssertTrue(rig.library.delete(AtticItemRef(.note, rig.writingID)))
+        XCTAssertGreaterThanOrEqual(rig.tasks.fullTaskReloadCount, 1, "The task store did not make this commit")
+        XCTAssertNil(rig.tasks.task(withID: owner), "The task went with its writing")
+        XCTAssertFalse(rig.notes.notes.contains { $0.id == rig.writingID })
+        XCTAssertTrue(rig.library.undo.undo(in: .note(rig.writingID)))
+        XCTAssertNotNil(rig.tasks.task(withID: owner))
+        XCTAssertTrue(rig.notes.notes.contains { $0.id == rig.writingID })
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// F2: what the reloads exist for. After Delete the task is gone from Tasks and its writing is in Recently
+    /// Deleted; after Undo both are back, presented and durable.
+    func testF2DeleteAndUndoPresentTasksAndWriting() async throws {
+        let rig = try await makeF2Rig()
+        let id = rig.ids[3]
+        let before = rig.tasks.tasks.count
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied)
+        XCTAssertNil(rig.tasks.task(withID: id))
+        XCTAssertEqual(rig.tasks.tasks.count, before - 1)
+        XCTAssertFalse(rig.notes.notes.contains { $0.id == rig.writingID }, "The writing left Notes with its task")
+        let deleted = rig.library.recentlyDeleted()
+        XCTAssertTrue(deleted.contains { $0.ref == AtticItemRef(.task, id) }, "The item is in Recently Deleted")
+        let writingID = rig.writingID
+        let durable = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == writingID }))
+        XCTAssertTrue(!durable.isEmpty && durable.allSatisfy { $0.deletedAt != nil }, "Its writing is in Recently Deleted")
+
+        XCTAssertTrue(rig.library.undo(in: .tasks).isApplied)
+        XCTAssertNotNil(rig.tasks.task(withID: id))
+        XCTAssertEqual(rig.tasks.tasks.count, before)
+        XCTAssertTrue(rig.notes.notes.contains { $0.id == rig.writingID })
+        XCTAssertFalse(rig.library.recentlyDeleted().contains { $0.ref == AtticItemRef(.task, id) })
+        let restored = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == writingID }))
+        XCTAssertTrue(restored.allSatisfy { $0.deletedAt == nil })
+        // A follow-up write uses the context the save installed.
+        XCTAssertNotNil(rig.tasks.create(title: "After Undo"))
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
     }
 
     func testPF2JournaledPresentationReadFailureRecoversFromFreshContext() throws {
@@ -1717,3 +2098,48 @@ extension TaskPerformanceGateTests {
 }
 // END PAIRED PHASE 2 PERF PROBE
 #endif
+
+/// The emissions one F2 test records.
+final class F2EmissionLog {
+    var events: [String] = []
+    var namedIt = 0
+    /// Every `tasks` emission's ids, kept by value in order.
+    var arrays: [Set<UUID>] = []
+}
+
+/// The true whole-table reads of one Delete and one Undo, from call to return, by production site
+/// ("<Model> <File>.<function>"), as the guard read them on the Air at this branch (18 Nov 2026). A bare task and a
+/// task with writing read the same tables. The store reloads are one read of each table (TaskStore.reloadTasksMeasured,
+/// NoteStore.presentationSnapshot); trunk reads each of those twice. Every other line is a read that remains:
+/// staging (beginDeletion, stageWritingDeletion, preservationDependencies, stageRestoration, stageRestore,
+/// restoreDeleted), Undo ownership and its restore guard (AtticLibrary, TA-03), and the Notes controller's editor
+/// scan (publishWholeItemLifecycle, B).
+enum F2WholeTableReads {
+    static let deleteReads: [String: Int] = [
+        "TaskItem TaskStore.reloadTasksMeasured(using:)": 1,
+        "TaskItem WorkspaceItemLifecycle.beginDeletion(taskIDs:noteID:container:)": 1,
+        "TaskItem AtticLibrary.itemOwnership(_:deleted:noteID:)": 1,
+        "TaskItem NotesPageController.publishWholeItemLifecycle(notesReadInThisCommit:)": 1,
+        "NoteItem NoteStore.presentationSnapshot(in:)": 1,
+        "NoteItem WorkspacePurge.preservationDependencies(taskIDs:in:)": 1,
+        "NoteItem AtticLibrary.itemOwnership(_:deleted:noteID:)": 1,
+        "NoteItem NotesPageController.publishWholeItemLifecycle(notesReadInThisCommit:)": 1,
+        "NoteAttachment NoteStore.presentationSnapshot(in:)": 1,
+        "NoteAttachment WorkspaceItemLifecycle.stageWritingDeletion(_:group:timestamp:in:)": 1,
+    ]
+    static let undoReads: [String: Int] = [
+        "TaskItem TaskStore.reloadTasksMeasured(using:)": 1,
+        "TaskItem TaskStore.restoreDeleted(taskIDs:)": 1,
+        "TaskItem TaskStore.stageRestoration(taskIDs:includeGroups:)": 1,
+        "TaskItem WorkspaceItemLifecycle.stageRestore(group:timestamp:in:)": 1,
+        "TaskItem AtticLibrary.wholeItemRestoreGuard(_:refs:)": 1,
+        "TaskItem NotesPageController.publishWholeItemLifecycle(notesReadInThisCommit:)": 1,
+        "NoteItem NoteStore.presentationSnapshot(in:)": 1,
+        "NoteItem WorkspaceItemLifecycle.stageRestore(group:timestamp:in:)": 1,
+        "NoteItem AtticLibrary.wholeItemRestoreGuard(_:refs:)": 1,
+        "NoteItem NotesPageController.publishWholeItemLifecycle(notesReadInThisCommit:)": 1,
+        "NoteAttachment NoteStore.presentationSnapshot(in:)": 1,
+    ]
+    static let delete: [String: [String: Int]] = ["bare": deleteReads, "writing": deleteReads]
+    static let undo: [String: [String: Int]] = ["bare": undoReads, "writing": undoReads]
+}
