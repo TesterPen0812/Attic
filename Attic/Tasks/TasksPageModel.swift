@@ -1317,7 +1317,11 @@ final class TasksPageModel: ObservableObject {
     /// That holds while the loaded rows are still the cursor's first rows
     /// (from the index, no read) and the store reads through the context
     /// they came from. Otherwise (false) the pages are read again, as before.
-    /// A failed read keeps what loaded and stops until Retry, as a page does.
+    /// A failed read keeps what loaded and sets the failure (Retry), and the
+    /// pages are not marked as read. On a drawn page that does not stop the
+    /// reads until Retry: the Done page's revision watcher loads once more in
+    /// the same change, and with a failure set that load reads the pages in
+    /// full, so Retry stays only when that read fails too.
     private func refreshLoadedDoneLog(query: String, tag: TagPicks) -> Bool {
         guard doneLogRevision != nil, doneLogRevision != store.revision, doneLogFailure == nil,
               let changed = doneLogChangedIDs, doneLogContextGeneration == store.contextGeneration else { return false }

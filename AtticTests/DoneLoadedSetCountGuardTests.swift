@@ -81,8 +81,8 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
     /// pages is read again in full and compared, rows, families and order,
     /// and every reused Done row is projected again and compared. Run through
     /// edits elsewhere, archived edits (a parent's and, where the page lists
-    /// it, a subtask's), a search, failed reads (the in-place read; a
-    /// family's parent read, alone and with the full read after it) and
+    /// it, a subtask's), a search, failed reads on the drawn page (one, which
+    /// the page's own second load recovers, and two, which show Retry) and
     /// Retry, and the changes
     /// that must still read the pages in full: an archived delete and its
     /// Undo, Restore to Now, and a delete that gives the store a new context.
@@ -157,45 +157,45 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
         }
         let loadedCount = 2 * TasksPageModel.doneLogPageSize
         func row(_ id: UUID) -> TaskItem? { model.doneLogTasks.first { $0.id == id } }
-        // The in-place read itself fails. The edited task is loaded and has
-        // no subtasks, so the save names only loaded rows: no parent read is
-        // asked, and the one injected failure can reach only the in-place read.
+        func describe(_ task: TaskItem) -> String { "\(task.id) \(task.title) \(task.priority) \(task.tags)" }
+        // The list shows what a full read shows: the same rows, in order, with
+        // the same content.
+        func assertMatchesAFullRead(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
+            let full = store.indexedDoneLogPage(limit: model.doneLogTasks.count).tasks.sorted(by: TaskStore.doneLogOrder)
+            XCTAssertEqual(model.doneLogTasks.map(describe), full.map(describe), "\(label): the list is a full read's", file: file, line: line)
+        }
+        // On a drawn page every save is loaded twice: the model's own reload
+        // after the edit, then the Done page's revision watcher. A failed
+        // read is not marked as read, so the watcher's load reads the pages
+        // in full (the in-place path is refused while a failure is set).
+        //
+        // One failed read: the model's in-place read fails and sets the
+        // failure; the watcher's full read then shows the edit. No Retry.
         store.doneLogReadFailures = 1
-        step("archived edit whose in-place read fails", inPlace: false) {
+        step("drawn page: archived edit, one failed read", inPlace: false) {
             XCTAssertTrue(model.setPriority(.medium, for: [parents[17]]).isApplied)
-        }
-        let named = try XCTUnwrap(store.revisionChangedTaskIDs)
-        XCTAssertTrue(named.isSubset(of: Set(model.doneLogTasks.map(\.id))),
-                      "the save named only loaded rows, so the failure reached the in-place read")
-        XCTAssertEqual(store.doneLogReadFailures, 0, "the injected failure was used")
-        XCTAssertNotNil(model.doneLogFailure, "a failed in-place read shows Retry")
-        XCTAssertEqual(model.doneLogTasks.count, loadedCount, "a failed read keeps what loaded")
-        step("Retry", inPlace: true) { model.retryDoneLog() }
-        XCTAssertNil(model.doneLogFailure)
-        XCTAssertEqual(row(parents[17])?.priority, .medium, "Retry shows the edit")
-        // A family's edit asks where its subtasks belong (`savedParentIDs`).
-        // That read fails once: the update falls back to a full read, which
-        // shows the data, and nothing is shown as failed.
-        store.doneLogReadFailures = 1
-        step("archived family edit whose parent read fails", inPlace: false) {
-            XCTAssertTrue(model.setPriority(.medium, for: [parents[16]]).isApplied)
+            XCTAssertNotNil(model.doneLogFailure, "before the page draws: the model's read failed")
         }
         XCTAssertEqual(store.doneLogReadFailures, 0, "the injected failure was used")
-        XCTAssertNil(model.doneLogFailure, "the full read after a failed parent read succeeded: no Retry")
-        XCTAssertEqual(model.doneLogTasks.map(\.id), store.indexedDoneLogIDs(limit: loadedCount).ids, "the full read's rows")
-        XCTAssertEqual(row(parents[16])?.priority, .medium, "the full read shows the edit")
-        // The parent read fails and so does the full read after it: Retry is
-        // shown and what loaded is kept. Retry then brings the page up to date.
+        XCTAssertNil(model.doneLogFailure, "the watcher's full read succeeded: no Retry")
+        XCTAssertEqual(model.doneLogTasks.count, loadedCount)
+        XCTAssertEqual(row(parents[17])?.priority, .medium, "the list shows the edit")
+        assertMatchesAFullRead("one failed read")
+        // Both reads fail (the model's, then the watcher's): what loaded is
+        // kept and Retry shows. Retry brings the list up to date in place.
+        let before = model.doneLogTasks.map(describe)
         store.doneLogReadFailures = 2
-        step("archived family edit whose parent read and full read fail", inPlace: false) {
-            XCTAssertTrue(model.setPriority(.medium, for: [parents[28]]).isApplied)
+        step("drawn page: archived edit, both reads fail", inPlace: false) {
+            XCTAssertTrue(model.setPriority(.medium, for: [parents[16]]).isApplied)
+            XCTAssertNotNil(model.doneLogFailure, "before the page draws: the model's read failed")
         }
         XCTAssertEqual(store.doneLogReadFailures, 0, "both injected failures were used")
-        XCTAssertNotNil(model.doneLogFailure, "a failed full read after a failed parent read shows Retry")
-        XCTAssertEqual(model.doneLogTasks.count, loadedCount, "a failed read keeps what loaded")
+        XCTAssertNotNil(model.doneLogFailure, "both reads failed: Retry shows")
+        XCTAssertEqual(model.doneLogTasks.map(describe), before, "a failed read keeps what loaded")
         step("Retry after both reads failed", inPlace: true) { model.retryDoneLog() }
         XCTAssertNil(model.doneLogFailure)
-        XCTAssertEqual(row(parents[28])?.priority, .medium, "Retry shows the edit")
+        XCTAssertEqual(row(parents[16])?.priority, .medium, "Retry shows the edit")
+        assertMatchesAFullRead("Retry")
         step("archived delete reads in full", inPlace: false) { XCTAssertTrue(model.delete([parents[20]]).isApplied) }
         step("its Undo reads in full", inPlace: false) { XCTAssertTrue(model.undo().isApplied) }
         step("edit after Undo", inPlace: true) { XCTAssertTrue(model.setPriority(.high, for: [parents[20]]).isApplied) }
@@ -244,6 +244,37 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
             print("GUARD_DONE_SHORT_LOG logged=\(logged) loaded=\(model.doneLogTasks.count) "
                   + "has_more=\(model.doneLogHasMore) done_page_reads=\(store.donePageReadCount - reads)")
         }
+    }
+
+    /// The model alone, with no page drawn and so no revision watcher to load
+    /// again: a failed in-place update keeps what loaded and sets the failure
+    /// (Retry). Retry then brings the loaded page up to date in place.
+    func testFailedInPlaceUpdateKeepsWhatLoadedAndSetsTheFailure() throws {
+        let store = try makeStore(open: 5, logged: 100)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        let pageSize = TasksPageModel.doneLogPageSize
+        XCTAssertEqual(model.doneLogTasks.count, pageSize)
+        func describe(_ task: TaskItem) -> String { "\(task.id) \(task.title) \(task.priority) \(task.tags)" }
+        let edited = model.doneLogTasks[3].id
+        let before = model.doneLogTasks.map(describe)
+        let inPlace = model.doneLogInPlaceRefreshCount
+
+        store.doneLogReadFailures = 1
+        XCTAssertTrue(model.setPriority(.high, for: [edited]).isApplied)
+        print("GUARD_DONE_FAILED_IN_PLACE pending_failures=\(store.doneLogReadFailures) failure=\(model.doneLogFailure != nil) "
+              + "in_place=\(model.doneLogInPlaceRefreshCount - inPlace) loaded=\(model.doneLogTasks.count)")
+        XCTAssertEqual(store.doneLogReadFailures, 0, "the injected failure was used")
+        XCTAssertNotNil(model.doneLogFailure, "a failed in-place update sets the failure (Retry)")
+        XCTAssertEqual(model.doneLogTasks.map(describe), before, "a failed in-place update keeps what loaded")
+        XCTAssertEqual(model.doneLogInPlaceRefreshCount, inPlace, "a failed update is not counted as done")
+
+        model.retryDoneLog()
+        XCTAssertNil(model.doneLogFailure)
+        XCTAssertEqual(model.doneLogInPlaceRefreshCount, inPlace + 1, "Retry updated the loaded page in place")
+        XCTAssertEqual(model.doneLogTasks.first { $0.id == edited }?.priority, .high, "Retry shows the edit")
+        XCTAssertEqual(model.doneLogTasks.map(\.id), store.indexedDoneLogIDs(limit: pageSize).ids)
     }
 
     /// Review R-2 of PR 31. A full read that fails puts the cursor back at
