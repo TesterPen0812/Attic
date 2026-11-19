@@ -661,6 +661,7 @@ final class TaskStore: ObservableObject {
         }
         #if DEBUG
         familyIndexRebuilds += 1
+        familyIndexRowsBuilt += tasks.count
         #endif
         var byID: [UUID: TaskItem] = [:]
         var positions: [UUID: Int] = [:], parents: [UUID: UUID] = [:]
@@ -4457,6 +4458,8 @@ final class TaskStore: ObservableObject {
 
     /// Full family-index rebuilds (the O(n) branch of `familyIndex`).
     private(set) var familyIndexRebuilds = 0
+    /// Task rows those rebuilds read: each one reads every visible task.
+    private(set) var familyIndexRowsBuilt = 0
 
     func resetFamilyIndexRebuilds() { familyIndexRebuilds = 0 }
     #endif
