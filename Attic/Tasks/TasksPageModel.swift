@@ -602,12 +602,7 @@ final class TasksPageModel: ObservableObject {
     }
     /// The loaded Done log tasks' subtasks, read with their page (Astra 19):
     /// an archived row shows its checklist from its archived family.
-    /// The drawn days' cache is keyed on the loaded rows, not their
-    /// families, so a changed family drops it (Astra r6 F2: Retry after a
-    /// failed family read, with no save in between).
-    private var doneLogChildren: [UUID: [TaskItem]] = [:] {
-        didSet { doneCache = nil }
-    }
+    private var doneLogChildren: [UUID: [TaskItem]] = [:]
     private var doneLogQuery: String?
     /// The tag the loaded Done log pages were read for (T6).
     private var doneLogTag: TagPicks?
@@ -1298,20 +1293,10 @@ final class TasksPageModel: ObservableObject {
             store.indexedDoneLogPage(limit: limit, matching: query, tags: tag)
         }
         IdleLatencyTrace.count("task_done_reads", page.tasks.count)
-        let familyRead = store.doneLogFamilies(ofParents: page.tasks.map(\.id))
-        if let failure = page.failure ?? familyRead.failure {
+        if let failure = page.failure {
             // Keep what the page showed for this search; a new search shows
-            // what was read. Not marked as loaded, so Retry reads again. A
-            // failed family read counts as a failed read.
-            if !same {
-                // The rows shown are now this search's, and none is read: the
-                // earlier search is no longer what loaded (Astra r6 F1). The
-                // next load, Retry or a return to that search reads in full.
-                setDoneLog(page.tasks, families: familyRead.families)
-                doneLogQuery = query
-                doneLogTag = tag
-                doneLogRevision = nil
-            }
+            // what was read. Not marked as loaded, so Retry reads again.
+            if !same { setDoneLog(page.tasks) }
             doneLogCursor = page.next
             doneLogHasMore = true
             doneLogFailure = failure
@@ -1320,7 +1305,7 @@ final class TasksPageModel: ObservableObject {
         doneLogQuery = query
         doneLogTag = tag
         markDoneLogRead()
-        setDoneLog(page.tasks, families: familyRead.families)
+        if setDoneLog(page.tasks) != nil { refuseNextInPlaceUpdate() }
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
         doneLogFailure = nil
@@ -1332,11 +1317,10 @@ final class TasksPageModel: ObservableObject {
     /// That holds while the loaded rows are still the cursor's first rows
     /// (from the index, no read) and the store reads through the context
     /// they came from. Otherwise (false) the pages are read again, as before.
-    /// A failed read keeps what loaded and sets the failure (Retry), and the
-    /// pages are not marked as read. On a drawn page that does not stop the
-    /// reads until Retry: the Done page's revision watcher loads once more in
-    /// the same change, and with a failure set that load reads the pages in
-    /// full, so Retry stays only when that read fails too.
+    /// All or nothing (the lead, 19 Nov): every read comes before the first
+    /// change, and a read that fails, or a lookup over its bound, changes
+    /// nothing and returns false, so the pages are read in full exactly as
+    /// the trunk reads them. It has no failure handling of its own.
     private func refreshLoadedDoneLog(query: String, tag: TagPicks) -> Bool {
         guard doneLogRevision != nil, doneLogRevision != store.revision, doneLogFailure == nil,
               let changed = doneLogChangedIDs, doneLogContextGeneration == store.contextGeneration else { return false }
@@ -1368,21 +1352,12 @@ final class TasksPageModel: ObservableObject {
         }
         if !touched.isEmpty {
             let parents = loaded.filter(touched.contains)
+            // Every read comes before the first change. If one fails, nothing
+            // is changed and the pages are read in full instead.
             let read = store.doneLogTasks(withIDs: parents)
-            if let failure = read.failure {
-                doneLogHasMore = true
-                doneLogFailure = failure
-                return true
-            }
-            guard read.tasks.count == parents.count else { return false }
-            // A failed family read is a failed read too: nothing is changed
-            // or marked as read, so no row keeps a checklist it could not read.
+            guard read.failure == nil, read.tasks.count == parents.count else { return false }
             let familyRead = store.doneLogFamilies(ofParents: parents)
-            if let failure = familyRead.failure {
-                doneLogHasMore = true
-                doneLogFailure = failure
-                return true
-            }
+            guard familyRead.failure == nil else { return false }
             let families = familyRead.families
             let fresh = Dictionary(read.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for parent in parents {
@@ -1416,6 +1391,15 @@ final class TasksPageModel: ObservableObject {
         doneLogNeedsRead = false
         doneLogChangedIDs = []
         doneLogContextGeneration = store.contextGeneration
+    }
+
+    /// A family the full read or a page load could not read shows no
+    /// checklist, as on the trunk, where the next save reads it again. The
+    /// in-place update keeps loaded families across saves, so it is refused
+    /// until a full read succeeds: no later save sets the changed IDs again
+    /// (`noteDoneLogChanged` keeps nil), only `markDoneLogRead` does.
+    private func refuseNextInPlaceUpdate() {
+        doneLogChangedIDs = nil
     }
 
     /// A store revision while pages are loaded: what it named, for
@@ -1506,18 +1490,13 @@ final class TasksPageModel: ObservableObject {
             guard doneLogHasMore, doneLogFailure == nil else { return }
         }
         let page = store.indexedDoneLogPage(from: doneLogCursor, limit: limit, matching: doneLogQuery ?? "", tags: doneLogTag ?? .none)
-        let familyRead = store.doneLogFamilies(ofParents: page.tasks.map(\.id))
-        if page.failure == nil, let failure = familyRead.failure {
-            // A failed family read is a failed read: the page is not added
-            // and the cursor stays, so Retry reads this page again.
-            doneLogFailure = failure
-            return
-        }
-        let families = familyRead.families
         doneCountCache = nil
         // The indexed cursor supplies canonical IDs in completion order.
         // Existing families remain valid for this store revision.
         doneLogTasks.append(contentsOf: page.tasks)
+        let familyRead = store.doneLogFamilies(ofParents: page.tasks.map(\.id))
+        if familyRead.failure != nil { refuseNextInPlaceUpdate() }
+        let families = familyRead.families
         doneLogChildren.merge(families) { _, new in new }
         for (parent, children) in families { for child in children { doneLogParentByChild[child.id] = parent } }
         doneLogCursor = page.next
@@ -1546,17 +1525,21 @@ final class TasksPageModel: ObservableObject {
 
     /// Loaded Done log tasks, in the log's order by the replica each shows
     /// (pages are merged, so a divergent copy never splits a day), with
-    /// their families, read in one go.
-    private func setDoneLog(_ tasks: [TaskItem], families: [UUID: [TaskItem]]) {
+    /// their families read in one go. Returns the family read's failure
+    /// (reported; the rows show no checklist then, as on the trunk).
+    @discardableResult
+    private func setDoneLog(_ tasks: [TaskItem]) -> String? {
         doneCountCache = nil
         doneLogTasks = tasks.sorted(by: TaskStore.doneLogOrder)
-        doneLogChildren = families
+        let familyRead = store.doneLogFamilies(ofParents: doneLogTasks.map(\.id))
+        doneLogChildren = familyRead.families
         doneLogParentByChild = [:]
         for (parent, children) in doneLogChildren { for child in children { doneLogParentByChild[child.id] = parent } }
         // Read in full, the rows are projected again: a read that replaced
         // a family in the same objects must not reuse their old rows.
         rowProjections[.done] = nil
         rowProjectionParentByChild[.done] = nil
+        return familyRead.failure
     }
 
     // MARK: - Tabs
