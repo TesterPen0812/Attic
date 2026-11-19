@@ -452,19 +452,51 @@ final class PanelUIState: ObservableObject {
         editingDraftTitle = ""
     }
 
+    #if DEBUG
+    /// DEBUG count of the task rows read on the reconcile's behalf: one per
+    /// task ID it asks about, one per row read to build a set of live IDs,
+    /// and one per row of a store index its lookups had to build (reported
+    /// by the revision observer). The same count for any way of answering.
+    private(set) var reconciledTaskRowCount = 0
+
+    /// The rows of the store's ID index that this reconcile's lookups built.
+    func noteReconcileIndexRows(_ rows: Int) {
+        reconciledTaskRowCount += rows
+    }
+    #endif
+
     func reconcileTaskIDs(_ availableIDs: Set<UUID>) {
-        if let confirmingTaskCompletionID, !availableIDs.contains(confirmingTaskCompletionID) {
+        #if DEBUG
+        // The caller read one task row per member to build the set.
+        reconciledTaskRowCount += availableIDs.count
+        #endif
+        reconcileTaskIDs(isLive: availableIDs.contains)
+    }
+
+    /// Panel state that names a task ends when the task is no longer live
+    /// (deleted, cleaned up, undone): a completion or deletion confirmation,
+    /// a file picker for it (cancelled), and its title edit with its draft.
+    /// Only the IDs this state names are examined, so a save costs the same
+    /// in any store (F7); with none named, nothing is looked up.
+    func reconcileTaskIDs(isLive: (UUID) -> Bool) {
+        func gone(_ id: UUID) -> Bool {
+            #if DEBUG
+            reconciledTaskRowCount += 1
+            #endif
+            return !isLive(id)
+        }
+        if let confirmingTaskCompletionID, gone(confirmingTaskCompletionID) {
             self.confirmingTaskCompletionID = nil
         }
         // A picker whose owner was deleted ends as a cancel; its own finish
         // path clears the mark (never cleared directly, see the property).
-        if let taskAttachmentPickerOwnerID, !availableIDs.contains(taskAttachmentPickerOwnerID) {
+        if let taskAttachmentPickerOwnerID, gone(taskAttachmentPickerOwnerID) {
             TaskAttachmentPicker.cancelIfOwned(by: taskAttachmentPickerOwnerID)
         }
-        if let confirmingTaskDeletionID, !availableIDs.contains(confirmingTaskDeletionID) {
+        if let confirmingTaskDeletionID, gone(confirmingTaskDeletionID) {
             self.confirmingTaskDeletionID = nil
         }
-        if let editingTaskID, !availableIDs.contains(editingTaskID) {
+        if let editingTaskID, gone(editingTaskID) {
             self.editingTaskID = nil
             editingDraftTitle = ""
         }

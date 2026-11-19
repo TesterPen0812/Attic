@@ -425,6 +425,18 @@ final class TasksPageModel: ObservableObject {
     struct HeldPlace: Equatable {
         let tab: TasksTab
         let index: Int
+        /// The list the row was drawn in when it was held: `index` is a
+        /// place in that list only (PR 30 ruling).
+        var list: HeldList? = nil
+    }
+
+    /// What decides which rows a page draws, and in what order: its view,
+    /// its Find query, its tag picks and its folded groups.
+    struct HeldList: Equatable {
+        let view: TasksViewOptions
+        let search: String
+        let tag: TagPicks
+        let folded: Set<String>
     }
 
     /// Whether Now's "Completed today" shows its rows (remembered for the
@@ -668,6 +680,7 @@ final class TasksPageModel: ObservableObject {
         library.tasks.$revision.dropFirst()
             .sink { [weak self] _ in
                 guard let self else { return }
+                self.noteRowsChanged(self.store.revisionChangedTaskIDs)
                 self.noteDoneLogChanged(self.store.revisionChangedTaskIDs)
                 self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
                 self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
@@ -784,11 +797,21 @@ final class TasksPageModel: ObservableObject {
         let nextEvent: TasksNextEvent?
         /// A row is being dragged on Now: Today and Tomorrow show.
         let dayDrag: Bool
+
+        /// Everything but the store's data and the holds is the same.
+        func sameList(as other: RowsKey) -> Bool {
+            tab == other.tab && acknowledgementRevision == other.acknowledgementRevision && noteOwners == other.noteOwners
+                && expanded == other.expanded && completedExpanded == other.completedExpanded && today == other.today
+                && dateEnvironment == other.dateEnvironment && view == other.view && search == other.search && tag == other.tag
+                && folded == other.folded && nextEvent == other.nextEvent && dayDrag == other.dayDrag
+        }
     }
 
-    /// What a page kept built but not drawn shows (round 11): while it is
-    /// the same, the page is not redrawn when the model changes elsewhere (a
-    /// selection, a keystroke), only when its own rows could have.
+    /// What a page shows (round 11): it changes when the page's own rows
+    /// could have, not when the model changes elsewhere (a selection, a
+    /// keystroke). Tests read it to check what a change touches. The pager
+    /// does not build it: a page kept built but not drawn is frozen whatever
+    /// changed, and catches up when it is drawn again (`TasksKeptPage`).
     struct PageToken: Equatable {
         let tab: TasksTab
         let revision: UInt64
@@ -817,8 +840,17 @@ final class TasksPageModel: ObservableObject {
         let owner: Bool
     }
 
+    #if DEBUG
+    /// How many page tokens were built (the pager's warm-page guard).
+    private(set) var pageTokenBuildCount = 0
+    func resetPageTokenBuildCount() { pageTokenBuildCount = 0 }
+    #endif
+
     func pageToken(_ tab: TasksTab) -> PageToken {
-        PageToken(tab: tab, revision: searchQuery(for: tab).isEmpty ? store.taskDataRevision : store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        #if DEBUG
+        pageTokenBuildCount += 1
+        #endif
+        return PageToken(tab: tab, revision: searchQuery(for: tab).isEmpty ? store.taskDataRevision : store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), tag: self.tab == tab ? tagPicks(on: tab) : .none,
@@ -836,12 +868,35 @@ final class TasksPageModel: ObservableObject {
         let ids: [UUID]
         let idsByStatus: [TaskStatus: [UUID]]
         let eligibleIDs: Set<UUID>
+        /// The clocks the date groups were ordered with (every task's).
+        let dueTimes: [UUID: Int]
         var selectedForRuns: Set<UUID>?
         var expandedForRuns: Set<UUID>?
         var selectionRuns: [UUID: AtticSelectionRun] = [:]
     }
 
     private var rowsCache: [TasksTab: RowsSnapshot] = [:]
+    /// The rows of each built list that store publications changed since
+    /// it was built: a changed row, a changed task that may join it, and
+    /// the row of a changed subtask. A list in `rowsChangeUnknown` had a
+    /// publication without its ids. Read by `restated(_:to:)`.
+    private var rowsChangedSinceBuild: [TasksTab: Set<UUID>] = [:]
+    private var rowsChangeUnknown: Set<TasksTab> = []
+    /// The store's data revision `noteRowsChanged` last ran for. The store
+    /// moves its data revision before `$revision` subscribers run, in an
+    /// order Combine does not promise, so a rows read in between must not
+    /// take the change set as complete (PR 30 R-2).
+    private var rowsChangesNotedRevision: UInt64?
+    /// The order `buildRows` last gave each tab, held tasks where they were
+    /// kept, and the list it was built for: where a held task stays in it.
+    /// Kept apart from the rows cache, which other changes drop. Each build
+    /// replaces it with the rows it built; only `buildRows` reads it, and
+    /// it is never saved.
+    private struct BuiltOrder {
+        let list: HeldList
+        let ids: [UUID]
+    }
+    private var rowsBuiltOrder: [TasksTab: BuiltOrder] = [:]
     private struct CachedRowProjection {
         let task: TaskItem
         let row: TasksListRow
@@ -861,6 +916,21 @@ final class TasksPageModel: ObservableObject {
         guard let removed = rowProjections[tab]?.removeValue(forKey: id) else { return }
         for child in removed.childIDs where rowProjectionParentByChild[tab]?[child] == id {
             rowProjectionParentByChild[tab]?[child] = nil
+        }
+    }
+
+    private func noteRowsChanged(_ changedIDs: Set<UUID>?) {
+        rowsChangesNotedRevision = store.taskDataRevision
+        for (tab, snapshot) in rowsCache {
+            guard let changedIDs else { rowsChangeUnknown.insert(tab); continue }
+            var rows: Set<UUID> = []
+            for id in changedIDs {
+                let parent = store.task(withID: id)?.parentID
+                if parent == nil || snapshot.eligibleIDs.contains(id) { rows.insert(id) }
+                if let parent { rows.insert(parent) }
+                if let oldParent = rowProjectionParentByChild[tab]?[id] { rows.insert(oldParent) }
+            }
+            rowsChangedSinceBuild[tab, default: []].formUnion(rows)
         }
     }
 
@@ -903,8 +973,19 @@ final class TasksPageModel: ObservableObject {
     #if DEBUG
     private(set) var selectionRunRebuildCount = 0
     private(set) var rowProjectionBuildCount = 0
+    /// DEBUG count of row-list rebuilds (rows-cache misses) per tab, for the
+    /// count guards in `TasksCountGuardTests`.
+    private(set) var rowsCacheMissCount: [TasksTab: Int] = [:]
+    /// Lists brought up to date by restating held rows in place.
+    private(set) var rowsRestateCount: [TasksTab: Int] = [:]
+    /// Test oracle: build every restated list in full as well and count
+    /// any difference (the full build is then kept).
+    static var checksRowsRestate = false
+    private(set) var rowsRestateMismatches = 0
 
     func resetRowProjectionBuildCount() { rowProjectionBuildCount = 0 }
+    /// Tests only: the order each tab's rows were last built in.
+    var rowsBuiltOrderForTesting: [TasksTab: [UUID]] { rowsBuiltOrder.mapValues(\.ids) }
     #endif
 
     /// The rows a list shows, in order (the keyboard walks them): Now's
@@ -948,11 +1029,104 @@ final class TasksPageModel: ObservableObject {
                           completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagPicks(on: tab),
                           folded: folded(on: tab), nextEvent: nextEvent(on: tab), dayDrag: tab == .now && dayDragLive)
-        if let cached = rowsCache[tab], cached.key == key {
-            IdleLatencyTrace.count("task_rows_cache_hit", 1)
-            return cached
+        if let cached = rowsCache[tab] {
+            if cached.key == key {
+                IdleLatencyTrace.count("task_rows_cache_hit", 1)
+                return cached
+            }
+            if let restated = restated(cached, to: key) {
+                IdleLatencyTrace.count("task_rows_restated", 1)
+                #if DEBUG
+                rowsRestateCount[tab, default: 0] += 1
+                if Self.checksRowsRestate {
+                    let built = builtRows(tab, key: key)
+                    if built.rows != restated.rows || built.sections != restated.sections || built.ids != restated.ids
+                        || built.idsByStatus != restated.idsByStatus
+                        || built.entries.map(\.id) != restated.entries.map(\.id)
+                        || built.entries.map(\.reorderIDs) != restated.entries.map(\.reorderIDs) {
+                        rowsRestateMismatches += 1
+                        return keep(built, for: tab)
+                    }
+                }
+                #endif
+                return keep(restated, for: tab)
+            }
         }
         IdleLatencyTrace.count("task_rows_cache_miss", 1)
+        #if DEBUG
+        rowsCacheMissCount[tab, default: 0] += 1
+        #endif
+        return keep(builtRows(tab, key: key), for: tab)
+    }
+
+    private func keep(_ snapshot: RowsSnapshot, for tab: TasksTab) -> RowsSnapshot {
+        rowsCache[tab] = snapshot
+        rowsChangedSinceBuild[tab] = nil
+        rowsChangeUnknown.remove(tab)
+        return snapshot
+    }
+
+    /// A tick's press and save, without rebuilding the list (F3): the list
+    /// is the one built, with the rows a hold or a save changed restated in
+    /// place. Only when nothing but holds and saves changed since it was
+    /// built, every held row is at the place its hold names, and every
+    /// changed row is held here (a held row stays where it is whatever its
+    /// state) with its date and clock as they were. The result is then the
+    /// full build's: `buildRows` keeps a held task's place in the order and
+    /// `builtRows` puts held rows back at their places. Find, a view filter
+    /// and tag picks (which keep what they showed), an acknowledged command,
+    /// a change without ids, a change not yet noted, a released hold, a row
+    /// held in another list (another view, Find, tag picks or folds) and a
+    /// held row off its place (after a rebuild during its hold) all rebuild.
+    private func restated(_ old: RowsSnapshot, to key: RowsKey) -> RowsSnapshot? {
+        let tab = key.tab
+        guard old.key.sameList(as: key), key.search.isEmpty, key.tag.isEmpty, key.view.isDefault,
+              acknowledgedRows.isEmpty, acknowledgedDeleted.isEmpty, acknowledgedCreated.isEmpty,
+              !rowsChangeUnknown.contains(tab) else { return nil }
+        guard old.key.held.allSatisfy({ key.held[$0.key] == $0.value }) else { return nil }
+        let list = HeldList(view: key.view, search: key.search, tag: key.tag, folded: key.folded)
+        guard key.held.values.allSatisfy({ $0.list == nil || $0.list == list }) else { return nil }
+        // A store change this model has not yet noted (a read from a
+        // subscriber that runs before its own): only a full build is right.
+        guard old.key.revision == key.revision || rowsChangesNotedRevision == key.revision else { return nil }
+        // The full build puts every held row back at its index, so the list
+        // is that build only while every held row is at its index (one put
+        // back at the end of a shorter group after a rebuild is not).
+        var changed = rowsChangedSinceBuild[tab] ?? []
+        for (id, place) in key.held {
+            guard old.rows.indices.contains(place.index), old.rows[place.index].id == id else { return nil }
+            if old.key.held[id] == nil { changed.insert(id) }
+        }
+        guard !changed.isEmpty else { return nil }
+        var replacements: [UUID: TasksListRow] = [:]
+        for id in changed {
+            guard key.held[id] != nil, let task = store.task(withID: id), task.parentID == nil,
+                  let was = old.rows.first(where: { $0.id == id }), was.due == task.dueDay,
+                  old.dueTimes[id] == task.dueTimeMinutes else { return nil }
+            let row = projectedRow(for: task, tab: tab, match: nil)
+            var model = row.model
+            model.hidesDue = was.model.hidesDue
+            replacements[id] = TasksListRow(id: id, model: model, status: row.status, subtasks: row.subtasks, due: row.due)
+        }
+        func swap(_ rows: [TasksListRow]) -> [TasksListRow] { rows.map { replacements[$0.id] ?? $0 } }
+        var sections = old.sections
+        sections.open = swap(sections.open)
+        sections.done = swap(sections.done)
+        for (group, rows) in sections.groupRows where rows.contains(where: { replacements[$0.id] != nil }) {
+            sections.groupRows[group] = swap(rows)
+        }
+        let rows = swap(old.rows)
+        var snapshot = RowsSnapshot(key: key, sections: sections, rows: rows, entries: TasksDateListEntry.entries(sections),
+                                    ids: old.ids, idsByStatus: Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) },
+                                    eligibleIDs: old.eligibleIDs, dueTimes: old.dueTimes)
+        // The ids and their order are the built list's, so its selection runs hold.
+        snapshot.selectedForRuns = old.selectedForRuns
+        snapshot.expandedForRuns = old.expandedForRuns
+        snapshot.selectionRuns = old.selectionRuns
+        return snapshot
+    }
+
+    private func builtRows(_ tab: TasksTab, key: RowsKey) -> RowsSnapshot {
         let all = IdleLatencyTrace.span("task_rows_build") { buildRows(for: tab) }
         IdleLatencyTrace.count("task_rows", all.count)
         var sections = TasksSections()
@@ -981,6 +1155,33 @@ final class TasksPageModel: ObservableObject {
                                       calendar: services.calendar(), locale: services.locale)
         if key.nextEvent != nil { groups = TasksPanelDesign.withTodayForNextEvent(groups) }
         if key.dayDrag { groups = TasksPanelDesign.withDropDays(groups, today: key.today, calendar: services.calendar()) }
+        // A held row stays where it was drawn (spec: "stays in place, then
+        // slides"): at its index in the drawn list, inside its own group,
+        // whatever its state or its place in the store's order now. Put
+        // back in the ungrouped list instead (ordered by state, then manual
+        // order), it moved within its group whenever the manual order mixed
+        // date groups (PR 30 review, R-1 and R-3). In ascending index order,
+        // so a row put back never moves one put back before it.
+        // A row held in another list (Find or the view changed during its
+        // hold) has no place in this one: it stays where the store's order
+        // puts it, as on the trunk.
+        let list = HeldList(view: key.view, search: key.search, tag: key.tag, folded: key.folded)
+        var heldGroup: [UUID: Int] = [:]
+        for (index, group) in groups.enumerated() where !key.folded.contains(group.key) {
+            for id in group.ids {
+                guard let place = key.held[id], place.list == nil || place.list == list else { continue }
+                heldGroup[id] = index
+            }
+        }
+        if !heldGroup.isEmpty {
+            for index in Set(heldGroup.values) { groups[index].ids.removeAll { heldGroup[$0] != nil } }
+            let places = key.held.sorted { ($0.value.index, $0.key.uuidString) < ($1.value.index, $1.key.uuidString) }
+            for (id, place) in places {
+                guard let index = heldGroup[id] else { continue }
+                let start = groups[..<index].reduce(0) { $0 + (key.folded.contains($1.key) ? 0 : $1.ids.count) }
+                groups[index].ids.insert(id, at: min(max(place.index - start, 0), groups[index].ids.count))
+            }
+        }
         let byID = Dictionary(open.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for group in groups where !key.folded.contains(group.key) {
             var drawn: [TasksListRow] = []
@@ -1002,8 +1203,7 @@ final class TasksPageModel: ObservableObject {
         let ids = rows.map(\.id)
         let entry = RowsSnapshot(key: key, sections: sections, rows: rows, entries: TasksDateListEntry.entries(sections),
                                  ids: ids, idsByStatus: Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) },
-                                 eligibleIDs: Set(ids))
-        rowsCache[tab] = entry
+                                 eligibleIDs: Set(ids), dueTimes: times)
         return entry
     }
 
@@ -1099,15 +1299,60 @@ final class TasksPageModel: ObservableObject {
             filterHidden[tab] = nil
         }
         let holding = held.filter { $0.value.tab == tab }.sorted { $0.value.index < $1.value.index }
+        let list = HeldList(view: view, search: query, tag: picks, folded: folded(on: tab))
         if !holding.isEmpty {
-            // A task finished on Later has left the backlog list: the held
-            // row is the task as it is now.
-            let heldTasks = holding.compactMap { id, _ in tasks.first { $0.id == id } ?? store.task(withID: id) }
+            // A held task keeps its place in this order for its whole hold
+            // (PR 30 review): right after the task before it in the last
+            // build's order. A save moves a finished task to the end of the
+            // store's order, and the date groups order each day's rows by
+            // clock within that day's places in this order, so moving it
+            // could reorder the rows around it before the release. A task
+            // gone from the list, or finished and not held (it has moved),
+            // is passed over. That place is known only when the last build
+            // was of this same list and no other open task has moved since,
+            // and only for a row held in this list (PR 30 ruling); otherwise
+            // the held task goes back at its index, as on the trunk.
+            // `builtRows` then puts every row held in this list back where it
+            // was drawn, inside its date group. A task finished on Later has
+            // left the backlog list: the held row is the task as it is now.
+            let heldTasks = Dictionary(holding.compactMap { id, _ in (tasks.first { $0.id == id } ?? store.task(withID: id)).map { (id, $0) } },
+                                       uniquingKeysWith: { first, _ in first })
             tasks.removeAll { held[$0.id]?.tab == tab }
-            for task in heldTasks {
-                tasks.insert(task, at: min(held[task.id]?.index ?? 0, tasks.count))
+            var kept: [UUID] = []
+            var lastIDs: [UUID] = []
+            var lastIndex: [UUID: Int] = [:]
+            if let last = rowsBuiltOrder[tab], last.list == list {
+                lastIDs = last.ids
+                lastIndex = Dictionary(last.ids.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+                let settled = tasks.filter { lastIndex[$0.id] != nil && $0.listedStatus != .done }.map(\.id)
+                let settledIDs = Set(settled)
+                if last.ids.filter({ settledIDs.contains($0) }) == settled {
+                    kept = holding.filter { $0.value.list == nil || $0.value.list == list }.map(\.key)
+                        .filter { lastIndex[$0] != nil && heldTasks[$0] != nil }
+                        .sorted { lastIndex[$0, default: 0] < lastIndex[$1, default: 0] }
+                }
+            }
+            for id in kept {
+                guard let task = heldTasks[id] else { continue }
+                let positions = Dictionary(tasks.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+                var at = 0
+                var before = lastIndex[id, default: 0] - 1
+                while before >= 0 {
+                    let other = lastIDs[before]
+                    if let index = positions[other], held[other]?.tab == tab || tasks[index].listedStatus != .done {
+                        at = index + 1
+                        break
+                    }
+                    before -= 1
+                }
+                tasks.insert(task, at: at)
+            }
+            let keptIDs = Set(kept)
+            for (id, place) in holding where !keptIDs.contains(id) {
+                if let task = heldTasks[id] { tasks.insert(task, at: min(place.index, tasks.count)) }
             }
         }
+        rowsBuiltOrder[tab] = BuiltOrder(list: list, ids: tasks.map(\.id))
         return tasks.map { projectedRow(for: $0, tab: tab, match: query.isEmpty ? nil : query) }
     }
 
@@ -2532,7 +2777,9 @@ final class TasksPageModel: ObservableObject {
     }
 
     private func hold(_ id: UUID, tab: TasksTab, at index: Int) {
-        held[id] = HeldPlace(tab: tab, index: index)
+        held[id] = HeldPlace(tab: tab, index: index,
+                             list: HeldList(view: viewOptions(for: tab), search: trimmedQuery(for: tab), tag: tagPicks(on: tab),
+                                            folded: folded(on: tab)))
         holdTasks[id]?.cancel()
         let delay = services.doneHold
         holdTasks[id] = Task { @MainActor [weak self] in

@@ -12,7 +12,7 @@ final class OwnerTasks1010Tests: XCTestCase {
     func testFocusableTasksViewsCompareFromDisplayLinkThread() throws {
         struct ThreadSafeInput<T>: @unchecked Sendable { let value: T }
         let focused = ThreadSafeInput(value: TasksPageFocusedContent(generation: 12, focusedRow: nil) { EmptyView() })
-        let kept = ThreadSafeInput(value: TasksKeptPage(frozen: nil) { EmptyView() })
+        let kept = ThreadSafeInput(value: TasksKeptPage(frozen: false) { EmptyView() })
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)
         let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())

@@ -79,8 +79,7 @@ final class PanelIntegrationTests: XCTestCase {
                     .onAppear { if index == 0 { pageVisible = drawn } }
                     .onChange(of: drawn) { _, current in if index == 0 { pageVisible = current } }
                     .onDisappear { if index == 0 { pageVisible = false } }
-            },
-            token: { model.pageToken(TasksTab.allCases[$0]) }
+            }
         )
         let host = NSHostingView(rootView: pager.environment(\.panelPageTransit, transit))
         let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 300, height: 200),
