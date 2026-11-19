@@ -664,8 +664,18 @@ struct TasksPagerPages<Page: View>: View {
                     (index == shown || (span.pages.contains(index) && span.skipped != index))
                 Group {
                     if drawn || span.warm?.contains(index) == true {
-                        TasksKeptPage(frozen: !drawn) { page(index, drawn) }
-                            .equatable()
+                        // Each built tab in a host of its own
+                        // (host-boundary.md §4): a hidden tab's graph is
+                        // not run, laid out or walked by the panel's
+                        // updates, nor by the tab shown.
+                        // Drawn and in use are two states (HB-01): a
+                        // neighbour a swipe shows, or Tasks leaving in a
+                        // shell switch, is drawn and takes no input or read.
+                        KeptContentHost(drawn: drawn, interactive: index == shown && model.isPageShown,
+                                        space: TasksPagerSlot.localSpace(index)) {
+                            TasksKeptPage(frozen: !drawn) { page(index, drawn) }
+                                .equatable()
+                        }
                     } else {
                         Color.clear
                     }
