@@ -738,8 +738,8 @@ final class AtticLibrary {
     /// Everything in Recently Deleted, newest deletion first.
     func recentlyDeleted() -> [DeletedItemSummary] {
         let context = ModelContext(container)
-        let taskRows = (try? context.fetch(FetchDescriptor<TaskItem>())) ?? []
-        let noteRows = WorkspaceItemLifecycle.has("NoteItem", in: context) ? ((try? context.fetch(FetchDescriptor<NoteItem>())) ?? []) : []
+        let taskRows = (try? context.fetch(WholeTableRead.all(TaskItem.self))) ?? []
+        let noteRows = WorkspaceItemLifecycle.has("NoteItem", in: context) ? ((try? context.fetch(WholeTableRead.all(NoteItem.self))) ?? []) : []
         let tasksByID = Dictionary(grouping: taskRows, by: \.id)
         let notesByID = Dictionary(grouping: noteRows, by: \.id)
         let candidates = tasks.recentlyDeletedTasks() + (notes?.recentlyDeletedNotes() ?? []) + (canvases?.recentlyDeletedCanvases() ?? [])
@@ -1118,9 +1118,9 @@ final class AtticLibrary {
     func ownedMembers(of ref: AtticItemRef) -> Set<UUID> {
         if ref.kind == .note {
             let context = ModelContext(container)
-            guard let notes = try? context.fetch(FetchDescriptor<NoteItem>()),
+            guard let notes = try? context.fetch(WholeTableRead.all(NoteItem.self)),
                   let group = notes.filter({ $0.id == ref.id }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID,
-                  let rows = try? context.fetch(FetchDescriptor<TaskItem>()) else { return [] }
+                  let rows = try? context.fetch(WholeTableRead.all(TaskItem.self)) else { return [] }
             return Set(rows.filter { $0.deletionGroupID == group }.map(\.id))
         }
         return ownedMembers(of: [ref.id], kind: ref.kind)
@@ -1138,9 +1138,9 @@ final class AtticLibrary {
             #endif
             return owned
         }
-        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>()) else { return owned }
+        guard let rows = try? context.fetch(WholeTableRead.all(TaskItem.self)) else { return owned }
         let schemaHasNotes = WorkspaceItemLifecycle.has("NoteItem", in: context)
-        guard let notes = schemaHasNotes ? (try? context.fetch(FetchDescriptor<NoteItem>())) : [] else { return owned }
+        guard let notes = schemaHasNotes ? (try? context.fetch(WholeTableRead.all(NoteItem.self))) : [] else { return owned }
         if deleted {
             for id in members {
                 if let group = rows.filter({ $0.id == id }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID { owned.groups.insert(group) }
@@ -1162,7 +1162,7 @@ final class AtticLibrary {
     func liveWriting(ownedBy members: Set<UUID>, in context: ModelContext) -> Set<UUID>? {
         guard WorkspaceItemLifecycle.has("NoteItem", in: context) else { return [] }
         if let notes = liveNotes(ownedBy: members, in: context) { return Set(notes.map(\.id)) }
-        guard let all = try? ownershipNotes(FetchDescriptor<NoteItem>(), byOwner: false, in: context) else { return nil }
+        guard let all = try? ownershipNotes(WholeTableRead.all(NoteItem.self), byOwner: false, in: context) else { return nil }
         return Set(all.filter { $0.taskID.map(members.contains) == true && $0.deletedAt == nil }.map(\.id))
     }
 
@@ -1239,8 +1239,8 @@ final class AtticLibrary {
         guard !owned.groups.isEmpty else { return nil } // pre-group history
         do {
             let context = ModelContext(container)
-            let tasks = try context.fetch(FetchDescriptor<TaskItem>())
-            let notes = WorkspaceItemLifecycle.has("NoteItem", in: context) ? try context.fetch(FetchDescriptor<NoteItem>()) : []
+            let tasks = try context.fetch(WholeTableRead.all(TaskItem.self))
+            let notes = WorkspaceItemLifecycle.has("NoteItem", in: context) ? try context.fetch(WholeTableRead.all(NoteItem.self)) : []
             var groups = Set<UUID>()
             for ref in refs {
                 let group: UUID?
@@ -1484,12 +1484,20 @@ final class AtticLibrary {
     /// One pass: each store's reload reconciles the kind it read, and the
     /// shared tag inventory reads any kind no store reloaded once the pass
     /// ends (`TagService.refreshing`).
-    func refreshItemStores() {
+    ///
+    /// `freshTasks`: the task store already presented this commit from a fresh read of every row (its own save's
+    /// reload succeeded), so it is not read again; the tag pass still counts the task kind as read, because that
+    /// reload reconciled it. Returns the note store when its reload in this pass succeeded, so the Notes controller
+    /// presenting from that same object does not read it again.
+    @discardableResult
+    func refreshItemStores(freshTasks: TaskStore? = nil) -> NoteStore? {
+        var notesRead: NoteStore?
         tags.refreshing {
-            tasks.refresh()
-            notes?.refresh()
+            if let freshTasks, freshTasks === tasks { tasks.tagInventoryRefreshed() } else { tasks.refresh() }
+            if let notes, notes.refresh() { notesRead = notes }
             canvases?.refresh()
         }
+        return notesRead
     }
 
     /// Always false, so failures read `return store.op() || fail(...)`.
