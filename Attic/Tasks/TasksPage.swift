@@ -1617,7 +1617,7 @@ struct TasksPage: View {
             let width = proxy.size.width
             ZStack(alignment: .topLeading) {
                 TasksPagerPages(span: swipe.span, model: model, store: store, motion: swipe.motion, count: TasksTab.allCases.count,
-                                shown: TasksTab.allCases.firstIndex(of: model.tab) ?? 0, size: proxy.size,
+                                size: proxy.size,
                                 page: { index, drawn in page(TasksTab.allCases[index], drawn: drawn) })
                 if TasksPagerMotion.tracing {
                     TasksPagerTrace(motion: swipe.motion)

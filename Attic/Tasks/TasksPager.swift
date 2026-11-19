@@ -632,8 +632,13 @@ struct TasksPagerPages<Page: View>: View {
     @ObservedObject var store: TaskStore
     let motion: TasksPagerMotion
     let count: Int
-    let shown: Int
     let size: CGSize
+    /// The page shown: the model's tab, read here from the model this view
+    /// observes. It was a value the page computed and passed in, and when
+    /// the page's own pass did not run after a switch, the pager re-rendered
+    /// with the new tab and the old index: the arriving tab was drawn but
+    /// never in use (locate runs e6bf266c+hb-locate, -trace-1).
+    private var shown: Int { TasksTab.allCases.firstIndex(of: model.tab) ?? 0 }
     /// A page, and whether it is drawn (the one shown, or one a move
     /// passes); a page kept built but not drawn hides its list.
     let page: (Int, Bool) -> Page
