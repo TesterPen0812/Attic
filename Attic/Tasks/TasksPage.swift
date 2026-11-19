@@ -337,8 +337,15 @@ struct TasksPage: View {
 
     private func pageAppeared() {
         // The tab being left clears its own rows' focus before the tab
-        // changes, never through the new tab's link (HB-02).
-        model.tabWillChange = { [rowFocus] leaving in rowFocus.clear(leaving) }
+        // changes, never through the new tab's link (HB-02). Its host gives
+        // the keyboard to the panel's host first: a focus cleared while its
+        // host holds the keyboard is resigned by SwiftUI to the window, and
+        // no key reached a page after the switch (trace run b95951b1:
+        // `FocusStore.Entry.updateFocus` called `makeFirstResponder(nil)`).
+        model.tabWillChange = { [rowFocus, pointer] leaving in
+            KeptContentHostingView.releaseKeyboard(in: pointer.view?.window)
+            rowFocus.clear(leaving)
+        }
         // Row frames are measured relative to the moving page. Convert to
         // TasksPage.space only when an interaction needs a frame.
         pointer.pageOffset = { [weak motion = swipe.motion, weak swipe] tab in

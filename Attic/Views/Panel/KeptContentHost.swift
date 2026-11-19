@@ -87,6 +87,15 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         return isInteractive ? super.accessibilityHitTest(point) : nil
     }
 
+    /// The kept host holding `window`'s keyboard gives it to the view around
+    /// it that takes it (the departure step, HB-02: before the departing
+    /// tab's focus is cleared).
+    static func releaseKeyboard(in window: NSWindow?) {
+        var view = window?.firstResponder as? NSView
+        while let current = view, !(current is KeptContentHostingView) { view = current.superview }
+        (view as? KeptContentHostingView)?.releaseKeyboard()
+    }
+
     /// A host that stops taking part while the keyboard is inside it gives
     /// the keyboard to the nearest view around it that takes it, read back
     /// and, if refused, to the window, so no key reaches a graph that is
