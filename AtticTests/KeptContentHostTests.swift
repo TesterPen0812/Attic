@@ -10,6 +10,22 @@ import XCTest
 /// never a hidden one.
 @MainActor
 final class KeptContentHostTests: XCTestCase {
+    private var enhanced: Any?
+
+    /// SwiftUI builds a window's accessibility tree only for a client; these
+    /// tests ask as one (as `AdaptiveTagsTests.withAccessibility` does).
+    override func setUp() {
+        super.setUp()
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        enhanced = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+    }
+
+    override func tearDown() {
+        NSApp.accessibilitySetValue(enhanced, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+        super.tearDown()
+    }
+
     private final class Shown: ObservableObject {
         @Published var first = true
         /// Drawn but not in use (a neighbour a swipe shows, HB-01).

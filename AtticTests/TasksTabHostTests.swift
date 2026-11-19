@@ -78,6 +78,20 @@ final class TasksTabHostTests: XCTestCase {
     /// the tab shown, inside that tab's nested host, and nothing it returns
     /// lies in a host not in use.
     func testTheHitWalkReachesTheShownTabsRowAndNeverAHiddenTab() throws {
+        try withAccessibility { try hitWalk() }
+    }
+
+    /// SwiftUI builds a window's accessibility tree only for a client; the
+    /// tests ask as one (as `AdaptiveTagsTests.withAccessibility` does).
+    private func withAccessibility(_ body: () throws -> Void) rethrows {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        try body()
+    }
+
+    private func hitWalk() throws {
         let hosted = try warmed()
         defer { hosted.close() }
         hosted.go(to: .backlog)
