@@ -448,6 +448,75 @@ final class DoneLoadedSetCountGuardTests: XCTestCase {
                                 expectedFamilyParents: TasksPageModel.doneLogPageSize)
     }
 
+    /// Astra r6 F1 of PR 31. A new search whose read fails shows what it read
+    /// but must not leave the earlier search marked as loaded: clearing the
+    /// search reads that search again, and its rows show their subtasks.
+    /// Both searches match the same rows here, so stale state would be kept.
+    func testFailedReadInANewSearchLeavesNothingMarkedAsLoaded() throws {
+        let (store, parents) = try makeFamilyLog(logged: 60, families: [2])
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        let family = parents[2]
+        let firstPage = model.doneLogTasks.map(\.id)
+        XCTAssertEqual(firstPage.count, TasksPageModel.doneLogPageSize)
+        XCTAssertEqual(drawnSubtaskTotal(model, family), 2, "before: the row shows its two subtasks")
+        store.doneFamilyBatchReadFailures = 1
+        model.doneSearch = "Finished"
+        model.flushDoneSearchInput()
+        let used = store.doneFamilyBatchReadFailures == 0
+        let failureShown = model.doneLogFailure != nil
+        model.doneSearch = ""
+        model.flushDoneSearchInput()
+        model.loadDoneLogIfNeeded()
+        let afterClear = drawnSubtaskTotal(model, family)
+        model.retryDoneLog()
+        guard let nowID = store.tasks.first(where: { $0.status == .todo })?.id else { return XCTFail("a task on Now") }
+        XCTAssertTrue(model.setPriority(.low, for: [nowID]).isApplied)
+        model.loadDoneLogIfNeeded()
+        let shown = drawnSubtaskTotal(model, family)
+        let full = store.doneLogSubtasks(ofParents: [family])[family]?.count ?? 0
+        let ids = model.doneLogTasks.map(\.id)
+        print("GUARD_DONE_SEARCH_FAILURE injected_used=\(used) failure_shown=\(failureShown) "
+              + "after_clear=\(afterClear.map(String.init) ?? "not_loaded") after_retry_and_save=\(shown.map(String.init) ?? "not_loaded") "
+              + "full_read=\(full) loaded=\(ids.count) unique=\(Set(ids).count) failure_after=\(model.doneLogFailure != nil)")
+        XCTAssertTrue(used, "the injected failure reached the search's family read")
+        XCTAssertTrue(failureShown, "the search's failed family read shows Retry")
+        XCTAssertEqual(afterClear, 2, "clearing the search reads it again: the row shows its subtasks")
+        XCTAssertEqual(full, 2)
+        XCTAssertEqual(shown, full, "after Retry and a save the row shows its subtasks, as a full read does")
+        XCTAssertEqual(Array(ids.prefix(firstPage.count)), firstPage, "the cleared search's rows, in order")
+        XCTAssertEqual(Set(ids).count, ids.count, "no row twice")
+        XCTAssertNil(model.doneLogFailure)
+    }
+
+    /// Astra r6 F2 of PR 31. Retry after a failed family read, with no save
+    /// in between, redraws the days: the rows show the families Retry read.
+    func testRetryAfterAFailedFamilyReadRedrawsTheDays() throws {
+        let (store, parents) = try makeFamilyLog(logged: 60, families: [2])
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        model.select(tab: .done)
+        let family = parents[2]
+        store.doneFamilyBatchReadFailures = 1
+        model.loadDoneLogIfNeeded()
+        let used = store.doneFamilyBatchReadFailures == 0
+        let failureShown = model.doneLogFailure != nil
+        let during = drawnSubtaskTotal(model, family)
+        let revision = store.revision
+        model.retryDoneLog()
+        let after = drawnSubtaskTotal(model, family)
+        let full = store.doneLogSubtasks(ofParents: [family])[family]?.count ?? 0
+        print("GUARD_DONE_RETRY_REDRAW injected_used=\(used) failure_shown=\(failureShown) "
+              + "during=\(during.map(String.init) ?? "not_loaded") after_retry=\(after.map(String.init) ?? "not_loaded") "
+              + "full_read=\(full) same_revision=\(store.revision == revision) failure_after=\(model.doneLogFailure != nil)")
+        XCTAssertTrue(used, "the injected failure reached the first page's family read")
+        XCTAssertTrue(failureShown, "the failed family read shows Retry")
+        XCTAssertEqual(store.revision, revision, "no save between the failure and Retry")
+        XCTAssertEqual(full, 2)
+        XCTAssertEqual(after, full, "after Retry the drawn row shows the subtasks Retry read")
+        XCTAssertNil(model.doneLogFailure)
+    }
+
     /// After the injected family read failure: the failure is shown (Retry);
     /// then reads recover, an unrelated save on Now is loaded, and the row is
     /// scrolled to if it is not loaded. Its subtask total must be a full read's.
