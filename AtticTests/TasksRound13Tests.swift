@@ -10,6 +10,34 @@ import XCTest
 /// a real menu, never by calling the handlers.
 @MainActor
 final class TasksRound13Tests: XCTestCase {
+    /// host-boundary.md §5.1 row, as the user's sequence: a tab switch while
+    /// the panel is not key, then the panel becomes key and ↓: a row in the
+    /// shown tab takes the keyboard. The trunk runs the same test as the
+    /// reference.
+    func testDownAfterASwitchMadeWhileThePanelWasNotKeyFocusesTheShownTab() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("native keyboard interaction runs on CI only")
+        }
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.now.rawValue, "↓ on Now reaches a Now row")
+        let other = NSWindow(contentRect: CGRect(x: -3_000, y: -3_000, width: 80, height: 80),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        other.makeKeyAndOrderFront(nil)
+        hosted.spin(0.2)
+        XCTAssertFalse(hosted.window.isKeyWindow, "another window is key")
+        hosted.go(to: .backlog)
+        hosted.window.makeKey()
+        hosted.spin(0.3)
+        XCTAssertTrue(hosted.window.isKeyWindow, "the panel is key again")
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.backlog.rawValue, "↓ reaches a row of the shown tab")
+    }
+
     // H12-06: native Tab focus must supersede a previous arrow selection.
     func testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
