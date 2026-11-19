@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -26,7 +27,17 @@ final class KeptContentHostTests: XCTestCase {
         super.tearDown()
     }
 
-    private final class Shown: ObservableObject {
+    /// Counts its changes, and the pass that last read it records which
+    /// one it saw: a settle waits for that pass, not for a fixed time.
+    private class Passes: ObservableObject {
+        private(set) var changes = 0
+        var seen = 0
+        private var counting: AnyCancellable?
+        init() { counting = objectWillChange.sink { [unowned self] in self.changes += 1 } }
+        var isCurrent: Bool { seen == changes }
+    }
+
+    private final class Shown: Passes {
         @Published var first = true
         /// Drawn but not in use (a neighbour a swipe shows, HB-01).
         @Published var firstInteractive: Bool?
@@ -34,7 +45,7 @@ final class KeptContentHostTests: XCTestCase {
     }
 
     /// Observed only inside the first host: a change runs that host alone.
-    private final class Inner: ObservableObject {
+    private final class Inner: Passes {
         @Published var value = 0
     }
 
@@ -52,7 +63,10 @@ final class KeptContentHostTests: XCTestCase {
 
     private struct InnerView: View {
         @ObservedObject var inner: Inner
-        var body: some View { GuardProbe(value: inner.value).frame(width: 10, height: 10) }
+        var body: some View {
+            let _ = { inner.seen = inner.changes }()
+            GuardProbe(value: inner.value).frame(width: 10, height: 10)
+        }
     }
 
     /// Two hosts on the same place: the first shown or not as `state` says,
@@ -63,6 +77,7 @@ final class KeptContentHostTests: XCTestCase {
 
         var body: some View {
             let _ = state.tick
+            let _ = { state.seen = state.changes }()
             ZStack {
                 KeptContentHost(drawn: state.first, interactive: state.firstInteractive ?? state.first) {
                     ZStack {
@@ -91,10 +106,16 @@ final class KeptContentHostTests: XCTestCase {
             return view.subviews.flatMap { hosts(in: $0) }
         }
 
-        func settle() {
-            root.layoutSubtreeIfNeeded()
-            window.displayIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        /// Waits, bounded, for the pass that reads the latest change (the
+        /// pair's and the first host's own) and for every host in use to
+        /// join accessibility after its first frame. It reads no
+        /// accessibility itself.
+        @MainActor func settle(file: StaticString = #filePath, line: UInt = #line) {
+            waitForTestOperation("the pair's pass and the hosts' accessibility join", file: file, line: line) {
+                root.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                return state.isCurrent && inner.isCurrent && hosts.allSatisfy { !$0.isInteractive || $0.isAccessible }
+            }
             root.layoutSubtreeIfNeeded()
         }
 
@@ -348,10 +369,11 @@ final class KeptContentHostTests: XCTestCase {
             .environment(\.atticDesign, design)
             .frame(width: 100, height: 100))
         window.orderFront(nil)
-        window.contentView?.layoutSubtreeIfNeeded()
-        window.displayIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        window.contentView?.layoutSubtreeIfNeeded()
+        waitForTestOperation("both probes' first read") {
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            return seen.outside.scheme != nil && seen.inside.scheme != nil
+        }
         XCTAssertEqual(seen.outside.scheme, .dark, "the probe outside read the values set above")
         XCTAssertEqual(seen.outside.locale, "ar_EG")
         XCTAssertEqual(seen.inside, seen.outside, "inside the host as just outside it")
@@ -362,7 +384,7 @@ final class KeptContentHostTests: XCTestCase {
     /// values before its first frame (a theme changed while Later was
     /// hidden shows on its first reveal, not a frame later).
     func testAHostRevealedAfterAThemeChangeWhileHiddenShowsTheCurrentThemeInItsFirstFrame() {
-        final class Seen { var scheme: ColorScheme?; var design: AtticDesignContext? }
+        final class Seen { var scheme: ColorScheme?; var design: AtticDesignContext?; var rootDark: Bool? }
         final class Outer: ObservableObject {
             @Published var drawn = false
             @Published var dark = false
@@ -380,6 +402,7 @@ final class KeptContentHostTests: XCTestCase {
             @ObservedObject var outer: Outer
             let seen: Seen
             var body: some View {
+                let _ = { seen.rootDark = outer.dark }()
                 KeptContentHost(drawn: outer.drawn, interactive: outer.drawn) { Probe(seen: seen) }
                     .environment(\.colorScheme, outer.dark ? .dark : .light)
                     .environment(\.atticDesign, AtticDesignContext(mode: outer.dark ? .dark : .light))
@@ -394,10 +417,14 @@ final class KeptContentHostTests: XCTestCase {
         let root = NSHostingView(rootView: Root(outer: outer, seen: seen))
         window.contentView = root
         window.orderFront(nil)
+        /// Waits, bounded, for the root's pass with the current theme (the
+        /// host's own reads are what the test asserts, so they are not it).
         func settle() {
-            root.layoutSubtreeIfNeeded()
-            window.displayIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            waitForTestOperation("the root's pass") {
+                root.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                return seen.rootDark == outer.dark
+            }
             root.layoutSubtreeIfNeeded()
         }
         settle()

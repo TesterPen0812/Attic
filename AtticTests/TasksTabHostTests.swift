@@ -19,10 +19,14 @@ final class TasksTabHostTests: XCTestCase {
         return walk(content)
     }
 
-    private func warmed() throws -> Hosted {
+    /// Every tab kept built, each in its own host. Warming waits for idle
+    /// input, so this waits, bounded, for the span and the three hosts.
+    private func warmed(line: UInt = #line) throws -> Hosted {
         let hosted = try Hosted(height: 520)
-        hosted.spin(1.5)
-        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2, "every tab kept built")
+        waitForTestOperation("every tab kept built, each in its own host", line: line) {
+            hosted.spin(0.05)
+            return hosted.model.pagerSwipe.span.warm == 0...2 && hosts(hosted).count == TasksTab.allCases.count
+        }
         return hosted
     }
 
@@ -81,12 +85,9 @@ final class TasksTabHostTests: XCTestCase {
     /// published again: the tab bar, the search field and the shown index
     /// stayed on the old tab (hb-ab2 run 4; 14 of 64 switches in hb-ab).
     func testCodeDrivenAnimatedSwitchesReachThePage() throws {
-        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
-            throw XCTSkip("key window only")
-        }
-        let hosted = try Hosted(height: 520)
+        try requireKeyWindowTests()
+        let hosted = try warmed()
         defer { hosted.close() }
-        hosted.spin(1.5)
         var stalls: [String] = []
         var runs: [Int] = []
         TasksPageRenderProbe.announcedReads = (0, 0)
@@ -193,11 +194,8 @@ final class TasksTabHostTests: XCTestCase {
 
     // MARK: Keyboard ownership (host-boundary.md §5.1, one test per row)
 
-    private func keyWindowOnly() throws {
-        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
-            throw XCTSkip("key window only: real key events need a key panel")
-        }
-    }
+    /// Real key events need a key panel (the shared gate, TestSupport).
+    private func keyWindowOnly() throws { try requireKeyWindowTests() }
 
     /// The tab host holding the window's keyboard, if any.
     private func keyboardHost(_ hosted: Hosted) -> KeptContentHostingView? {
@@ -396,9 +394,7 @@ final class TasksTabHostTests: XCTestCase {
     /// Condition 3 and HB-02: after a switch the page acts on the tab
     /// shown's focus. Arrows move the ring on the tab shown only.
     func testArrowsMoveTheKeyboardOnTheTabShownAfterASwitch() throws {
-        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
-            throw XCTSkip("key window only: real key events need a key panel")
-        }
+        try requireKeyWindowTests()
         let hosted = try warmed()
         defer { hosted.close() }
         hosted.press("\u{F701}", keyCode: 125)

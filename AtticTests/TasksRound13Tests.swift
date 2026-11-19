@@ -16,9 +16,7 @@ final class TasksRound13Tests: XCTestCase {
     /// on the trunk (`4b55a9e8`, the same test): pinned, KB-DOWN-AFTER-NOTKEY-SWITCH.
     /// Its fix flips this assertion.
     func testDownAfterASwitchMadeWhileThePanelWasNotKeyIsPinned() throws {
-        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
-            throw XCTSkip("native keyboard interaction runs on CI only")
-        }
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)
@@ -45,9 +43,7 @@ final class TasksRound13Tests: XCTestCase {
     /// (`4b55a9e8`, the same test): pinned, KB-DOWN-AFTER-RENAME-SWITCH. Its
     /// fix flips this assertion.
     func testDownAfterASwitchThatSavedARenameIsPinned() throws {
-        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
-            throw XCTSkip("native keyboard interaction runs on CI only")
-        }
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)
@@ -67,9 +63,7 @@ final class TasksRound13Tests: XCTestCase {
     /// trunk runs the same test as the reference.
     func testAResponderOutsideTheTabsKeepsTheKeyboardAcrossASwitch() throws {
         final class StandIn: NSView { override var acceptsFirstResponder: Bool { true } }
-        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
-            throw XCTSkip("native keyboard interaction runs on CI only")
-        }
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)
