@@ -367,6 +367,11 @@ enum WorkspaceLegacyBridge {
     }
 
     #if DEBUG
+    /// Whether some staged row (its fields) is not among the durable rows.
+    static func stagedRowsMissing(staged: [[String: Data]], durable: [[String: Data]]) -> Bool {
+        !Set(staged).isSubset(of: Set(durable))
+    }
+
     /// What a spent context still holds that is not durable (build condition 5): every pending insert and change,
     /// by owner, compared field by field with a fresh read, and every pending delete checked absent. Empty means
     /// replacing it discards nothing. Physical ids are ignored: committed inserts have permanent ids on disk.
@@ -381,10 +386,9 @@ enum WorkspaceLegacyBridge {
         })
         let staged = try WorkspaceModelToken.capture(owners: owners, models: pending)
         let durable = try WorkspaceModelToken.read(owners: owners, in: fresh)
-        for owner in owners {
-            let stagedFields = Set(staged[owner]?.replicas.map(\.fields) ?? [])
-            let durableFields = Set(durable[owner]?.replicas.map(\.fields) ?? [])
-            if !stagedFields.isSubset(of: durableFields) { unsaved.append("\(owner.entity.rawValue) \(owner.id)") }
+        for owner in owners where stagedRowsMissing(staged: staged[owner]?.replicas.map(\.fields) ?? [],
+                                                    durable: durable[owner]?.replicas.map(\.fields) ?? []) {
+            unsaved.append("\(owner.entity.rawValue) \(owner.id)")
         }
         for row in source.deletedModelsArray {
             guard let owner = WorkspaceOperationCoordinator.owner(row) else { continue }

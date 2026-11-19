@@ -325,22 +325,40 @@ final class DurableSaveReadFailureTests: XCTestCase {
         rig.tasks.listRefreshFailures = 3
         XCTAssertTrue(rig.library.deleteTasks([id]).isApplied, label)
         XCTAssertTrue(rig.tasks.hasUnresolvedTaskReload, label)
+        // Nothing replaced a spent context before the command (the delete's own entry found it usable).
+        XCTAssertNil(rig.tasks.lastSpentContextUnsaved, "\(label): no spent context replaced before the command")
+        let before = try taskFingerprint(rig.container)
         let commandResult = try await command(rig)
+        // Read before the next save, which would replace a spent context itself.
+        let replacedByCommand = rig.tasks.lastSpentContextUnsaved
+        let changed = try taskFingerprint(rig.container) != before
         let afterCommand = try duplicateRows(rig.container)
         let next = rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[20])), to: "The next save after \(label)")
         let afterNext = try duplicateRows(rig.container)
         let records = try ModelContext(rig.container).fetch(
             FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.rootID == id }))
-        print("C3_REUSE \(label) command=\(commandResult) next=\(next) preservation_rows=\(records.count) "
+        print("C3_REUSE \(label) command=\(commandResult) durable_change=\(changed) next=\(next) preservation_rows=\(records.count) "
             + "preservation_ids=\(Set(records.map(\.id)).count) dupes_after_command=\(afterCommand) dupes_after_next=\(afterNext) "
             + "error=\(rig.tasks.lastErrorMessage ?? "nil")")
         // Build condition 5: the command's staging entry replaced the spent context, and it held nothing unsaved.
-        print("C5_SPENT \(label) replaced=\(rig.tasks.lastSpentContextUnsaved != nil) unsaved=\(rig.tasks.lastSpentContextUnsaved ?? [])")
-        XCTAssertEqual(rig.tasks.lastSpentContextUnsaved, [], "\(label): the spent context is replaced, discarding nothing unsaved")
+        print("C5_SPENT \(label) replaced=\(replacedByCommand != nil) unsaved=\(replacedByCommand ?? [])")
+        XCTAssertTrue(commandResult, "\(label): the command reports its work done")
+        XCTAssertTrue(changed, "\(label): the command's own work is durable before the next save")
+        XCTAssertEqual(replacedByCommand, [], "\(label): the command itself replaced the spent context, discarding nothing unsaved")
         XCTAssertEqual(afterCommand, [], "\(label): one physical row per id after the command")
         XCTAssertEqual(afterNext, [], "\(label): one physical row per id after the next save")
         XCTAssertEqual(records.count, 1, "\(label): the delete's preservation record is one row")
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// Every task row's durable fields, read from a fresh context: a command that writes nothing leaves it equal.
+    private func taskFingerprint(_ container: ModelContainer) throws -> [String] {
+        try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).map { task in
+            [task.id.uuidString, task.title, task.statusRaw, "\(task.completedAt?.timeIntervalSince1970 ?? -1)",
+             "\(task.manualOrder ?? -1)", task.parentID?.uuidString ?? "-", "\(task.deletedAt?.timeIntervalSince1970 ?? -1)",
+             "\(task.doneLoggedAt?.timeIntervalSince1970 ?? -1)", "a\(task.attachments.count)",
+             "r\(task.removedAttachments.count)"].joined(separator: " ")
+        }.sorted()
     }
 
     func testC3RestoreDeletedOnTheSpentContext() async throws {
@@ -348,8 +366,10 @@ final class DurableSaveReadFailureTests: XCTestCase {
     }
 
     func testC3PurgeDeletedOnTheSpentContext() async throws {
-        try await afterUnresolvedDelete("purgeDeleted") { rig in
-            !rig.tasks.purgeDeleted(before: .distantFuture).isEmpty
+        try await afterUnresolvedDelete("purgeDeleted", setup: { rig in
+            XCTAssertTrue(rig.library.deleteTasks([rig.ids[13]]).isApplied)
+        }) { rig in
+            rig.tasks.purgeDeleted(before: .distantFuture).contains(rig.ids[13])
         }
     }
 
@@ -448,8 +468,14 @@ final class DurableSaveReadFailureTests: XCTestCase {
         let seamUsed = WorkspaceLegacyBridge.postCommitOwnerReadFailures == 0
         WorkspaceLegacyBridge.postCommitOwnerReadFailures = 0
         let stateAfterFirst = "\(session.state)"
-        let preserved = rig.controller.preserve(session)
         let noteID = session.noteID
+        func revisions() throws -> [String] {
+            try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+                .map { "\($0.revisionToken) \($0.revision)" }
+        }
+        let afterFirst = try revisions()
+        let preserved = rig.controller.preserve(session)
+        let afterPreserve = try revisions()
         let rows = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
         print("C2_NOTE state_before=\(stateBeforeSave) persisted=\(session.isPersisted) seam_used=\(seamUsed) first=\(first) state_after_first=\(stateAfterFirst) preserved=\(preserved) "
             + "state=\(session.state) rows=\(rows.count) error=\(rig.notes.lastErrorMessage ?? "nil") "
@@ -457,6 +483,10 @@ final class DurableSaveReadFailureTests: XCTestCase {
         XCTAssertTrue(seamUsed)
         XCTAssertEqual(rows.count, 1, "The note is durable once")
         XCTAssertTrue(first, "A durable note save is reported as saved")
+        XCTAssertTrue(preserved, "Preserve succeeds")
+        XCTAssertTrue(session.isPersisted)
+        XCTAssertFalse(NoteSessionPolicy.hasPendingWork(session.state), "The session ends saved")
+        XCTAssertEqual(afterPreserve, afterFirst, "Preserve writes the note no second time")
         XCTAssertEqual(try duplicateRows(rig.container), [])
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
     }
@@ -466,15 +496,24 @@ final class DurableSaveReadFailureTests: XCTestCase {
     func testC3NoteCommandAfterAFailedReloadWritesOneRowPerID() async throws {
         let rig = try await makeRig()
         let note = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 0" })
-        rig.notes.reloadFailures = 1
+        // Every presentation read after the delete's commit fails: its own, the library's and the controller's.
+        rig.notes.reloadFailures = 3
         let deleted = rig.notes.delete(note)
-        let reloadFailed = rig.notes.reloadFailures == 0
+        let reloadsFailed = 3 - rig.notes.reloadFailures
         rig.notes.reloadFailures = 0
+        let spentBeforeRename = WorkspaceLegacyBridge.isSpent(rig.notes.modelContext)
         let other = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 1" })
+        let otherID = other.id
         let renamed = rig.notes.update(other, title: "Note 1 after a failed reload")
-        print("C3_NOTE reload_failed=\(reloadFailed) deleted=\(deleted) renamed=\(renamed) "
+        let titles = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == otherID })).map(\.title)
+        print("C3_NOTE reloads_failed=\(reloadsFailed) deleted=\(deleted) spent_before_rename=\(spentBeforeRename) renamed=\(renamed) "
+            + "titles=\(titles) unsaved=\(rig.notes.lastSpentContextUnsaved ?? ["nil"]) "
             + "error=\(rig.notes.lastErrorMessage ?? "nil") duplicates=\(try duplicateRows(rig.container))")
-        XCTAssertTrue(reloadFailed)
+        XCTAssertTrue(deleted, "The delete is durable and reported done")
+        XCTAssertTrue(spentBeforeRename, "The rename meets the spent context")
+        XCTAssertTrue(renamed)
+        XCTAssertEqual(titles, ["Note 1 after a failed reload"], "The rename is durable")
+        XCTAssertEqual(rig.notes.lastSpentContextUnsaved, [], "The rename replaced the spent context, discarding nothing unsaved")
         XCTAssertEqual(try duplicateRows(rig.container), [], "One physical row per id after the next note command")
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
     }
@@ -526,13 +565,18 @@ final class DurableSaveReadFailureTests: XCTestCase {
         let url = try? await rig.files.verifiedMaterializedURL(
             for: AttachmentFileReference(id: id, digest: digest, filename: "original.pdf", payload: nil))
         let onDisk = url.flatMap { try? Data(contentsOf: $0) } == file.bytes
+        // What the app can read back: the stored row's bytes, materialized through the file store.
+        let readable = try? await rig.files.verifiedMaterializedURL(
+            for: AttachmentFileReference(id: id, digest: digest, filename: "original.pdf", payload: rows.first?.payload))
+        let bytesReadable = readable.flatMap { try? Data(contentsOf: $0) } == file.bytes
         print("C3_IMPORT \(entry) seam=\(seam) seam_used=\(seamUsed) reported=\(reported) rows=\(rows.count) durable=\(durable) "
-            + "file_on_disk=\(onDisk) control_file_on_disk=\(control.map(String.init) ?? "-") "
+            + "file_on_disk=\(onDisk) bytes_readable=\(bytesReadable) control_file_on_disk=\(control.map(String.init) ?? "-") "
             + "failure=\(rig.notes.attachmentFailures[id] ?? "nil") error=\(rig.notes.lastErrorMessage ?? "nil")")
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
-        if !seamUsed { print("C3_IMPORT \(entry) seam=\(seam) SEAM_UNUSED: this entry does not reach that save path") }
-        guard seamUsed else { return onDisk }
+        XCTAssertTrue(seamUsed, "\(entry), \(seam): the fault fired on this entry's save")
+        XCTAssertEqual(rows.count, 1, "\(entry), \(seam): one physical row")
         XCTAssertEqual(durable, 1, "\(entry), \(seam): the import is durable once")
+        XCTAssertTrue(bytesReadable, "\(entry), \(seam): the located bytes can be read back")
         if let control { XCTAssertEqual(onDisk, control, "\(entry), \(seam): its file is on disk as after a normal import") }
         XCTAssertTrue(reported, "\(entry), \(seam): a durable import is reported as done")
         return onDisk
@@ -540,7 +584,9 @@ final class DurableSaveReadFailureTests: XCTestCase {
 
     private func durableImportCases(_ entry: String, run: (Rig, MissingFile) async throws -> Bool) async throws {
         let control = try await durableImport(entry, seam: "none", run: run)
-        for seam in ["owner", "plain"] { try await durableImport(entry, seam: seam, control: control, run: run) }
+        // Locate saves through the journaled path only (run durb1: seam=plain seam_used=false on both entries), so the
+        // plain after-commit fault has no save to fire on here; `C1_PLAIN` covers that path.
+        try await durableImport(entry, seam: "owner", control: control, run: run)
     }
 
     func testC3DurableLocateAttachmentKeepsItsFileAndIsReportedDone() async throws {
@@ -691,5 +737,136 @@ final class DurableSaveReadFailureTests: XCTestCase {
         XCTAssertTrue(deleted)
         XCTAssertEqual(afterDelete.filter { $0.deletedAt != nil }.count, 2, "A delete reaches every replica")
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    // MARK: Astra round 1 on this branch (gpt-6.2-astra, 19 Nov)
+
+    /// A1 (finding 1). An agent edit carries a declared read set: tokens it read, checked again at commit. The note
+    /// store's context is spent (a journaled delete whose every reload failed), and the task the agent read changes
+    /// after its read. The edit, attached to the store's context as the agent tools attach it, must not commit.
+    func testA1AnAgentEditKeepsItsDeclaredReadSetWhenTheNoteContextIsSpent() async throws {
+        let rig = try await makeRig()
+        guard case let .success(created) = rig.notes.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("Agent target"), .text("Before")])) else { return XCTFail("create") }
+        let noteID = created.noteID
+        let owner = WorkspaceOwner(entity: .task, id: rig.ids[5])
+        let token = try XCTUnwrap(WorkspaceModelToken.read(owners: [owner], in: ModelContext(rig.container))[owner])
+        let base = try XCTUnwrap(rig.notes.note(withID: noteID)).revisionToken
+        let other = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 0" })
+        rig.notes.reloadFailures = 3
+        XCTAssertTrue(rig.notes.delete(other))
+        let reloadsFailed = 3 - rig.notes.reloadFailures
+        rig.notes.reloadFailures = 0
+        let spent = WorkspaceLegacyBridge.isSpent(rig.notes.modelContext)
+        XCTAssertTrue(rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[5])), to: "Changed after the agent read"))
+        var outcome = "nil"
+        do {
+            let result = try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: [token], scopes: [], in: rig.notes.modelContext) {
+                rig.notes.agentWrite(noteID: noteID, baseRevisionToken: base,
+                                     document: NoteDocument(blocks: [.text("Agent target"), .text("Agent edit")]),
+                                     agentName: "Agent", disposition: .direct)
+            }
+            if case .success(.applied) = result { outcome = "applied" } else { outcome = "refused \(result)" }
+        } catch { outcome = "threw \(error)" }
+        let bodies = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).map(\.body)
+        print("A1_DECLARED reloads_failed=\(reloadsFailed) spent=\(spent) outcome=\(outcome) bodies=\(bodies)")
+        XCTAssertTrue(spent, "The edit meets a spent note context")
+        XCTAssertFalse(outcome == "applied", "An edit whose declared read changed after the read does not commit")
+        XCTAssertFalse(bodies.contains { $0.contains("Agent edit") }, "The note keeps its body")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// A3 (finding 3). Two agent proposals on one base. Leaving the note applies the first; that journaled commit's
+    /// reload fails. The second is now stale and must be marked for review, durably, with no refused save.
+    func testA3ApplyingTwoProposalsAfterAFailedReloadMarksTheSecondForReview() async throws {
+        let rig = try await makeRig()
+        guard case let .success(created) = rig.notes.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("Two proposals"), .text("Base")])) else { return XCTFail("create") }
+        let noteID = created.noteID
+        let base = try XCTUnwrap(rig.notes.note(withID: noteID)).revisionToken
+        for line in ["First", "Second"] {
+            guard case .success(.pending) = rig.notes.agentWrite(noteID: noteID, baseRevisionToken: base,
+                document: NoteDocument(blocks: [.text("Two proposals"), .text(line)]), agentName: "Agent",
+                disposition: .proposal) else { return XCTFail("proposal \(line)") }
+        }
+        let refusalsBefore = WorkspaceLegacyBridge.spentContextRefusals
+        rig.notes.reloadFailures = 1
+        let applied = rig.notes.applyPendingEdits(noteID: noteID)
+        let reloadsFailed = 1 - rig.notes.reloadFailures
+        rig.notes.reloadFailures = 0
+        let refusals = WorkspaceLegacyBridge.spentContextRefusals - refusalsBefore
+        let pending = try ModelContext(rig.container).fetch(FetchDescriptor<NotePendingEdit>()).filter { $0.noteID == noteID }
+        print("A3_PROPOSALS reloads_failed=\(reloadsFailed) applied=\(applied) refusals=\(refusals) "
+            + "pending=\(pending.map { "\($0.needsReview)" }) error=\(rig.notes.lastErrorMessage ?? "nil")")
+        XCTAssertEqual(reloadsFailed, 1, "The first apply's reload failed")
+        XCTAssertEqual(applied, 1)
+        XCTAssertEqual(pending.count, 1, "The second proposal remains")
+        XCTAssertEqual(pending.map(\.needsReview), [true], "The stale second proposal is marked for review durably")
+        XCTAssertEqual(refusals, 0, "No save was refused on a spent context")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// A4 (finding 4). A saved note is open with a file just added (unsaved). Deleting it first saves the editor (an
+    /// inserting, journaled commit) and that save's reloads fail. The delete must still reach every physical row and
+    /// record one Undo step.
+    func testA4DeletingANoteWhoseEditorSaveSpendsTheContextDeletesIt() async throws {
+        let rig = try await makeRig()
+        XCTAssertTrue(rig.controller.newNote())
+        let session = try XCTUnwrap(rig.controller.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0),
+                                                 with: NSAttributedString(string: "Saved first"), name: "Typing"))
+        XCTAssertTrue(rig.controller.save(session))
+        let noteID = session.noteID
+        let data = Data(repeating: 0x43, count: 2_048)
+        let item = StagedNoteAttachment(id: UUID(), filename: "added.pdf", contentTypeIdentifier: "com.adobe.pdf",
+            byteCount: Int64(data.count), digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), data: data)
+        session.engine.beginImageImport()
+        XCTAssertTrue(session.engine.insertImportedObjects([.init(staged: item, pixelSize: nil)]))
+        rig.notes.reloadFailures = 2
+        let deleted = rig.library.delete(AtticItemRef(.note, noteID))
+        let reloadsFailed = 2 - rig.notes.reloadFailures
+        rig.notes.reloadFailures = 0
+        let rows = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+        let canUndo = rig.library.undo.canUndo(in: .note(noteID))
+        print("A4_NOTE_DELETE reloads_failed=\(reloadsFailed) deleted=\(deleted) rows=\(rows.count) "
+            + "deleted_rows=\(rows.filter { $0.deletedAt != nil }.count) can_undo=\(canUndo) listed=\(rig.notes.note(withID: noteID) != nil) "
+            + "error=\(rig.notes.lastErrorMessage ?? "nil")")
+        XCTAssertTrue(deleted, "The delete is done")
+        XCTAssertFalse(rows.isEmpty)
+        XCTAssertTrue(rows.allSatisfy { $0.deletedAt != nil }, "Every physical row is deleted")
+        XCTAssertTrue(canUndo, "The delete is one Undo step")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// A5 (finding 5). A store command re-entered while a save is under way (here an empty purge, from the save's own
+    /// tag-inventory callback) must not discard the staged rows of the save that called it.
+    func testA5ACommandReenteredDuringASaveKeepsTheStagedRows() async throws {
+        let rig = try await makeRig()
+        var reentered = 0
+        let store: TaskStore = rig.tasks
+        store.tagInventoryWillSave = { _ in
+            guard reentered == 0 else { return }
+            reentered += 1
+            _ = store.purgeDeleted(before: .distantPast)
+        }
+        let created = rig.tasks.create(title: "Created while a purge re-enters")
+        store.tagInventoryWillSave = { _ in }
+        let id = created?.id
+        let rows = try id.map { id in try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).count } ?? 0
+        print("A5_REENTRY reentered=\(reentered) created=\(created != nil) rows=\(rows)")
+        XCTAssertEqual(reentered, 1, "The purge ran inside the save")
+        XCTAssertNotNil(created)
+        XCTAssertEqual(rows, 1, "The created task is durable")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// A9 (finding 9). The spent-context diagnostic compares staged rows with durable rows as multisets: two staged
+    /// copies with one durable copy is one row not durable.
+    func testA9TheDiagnosticCountsIdenticalStagedReplicas() {
+        let fields = ["title": Data("Same".utf8)]
+        XCTAssertTrue(WorkspaceLegacyBridge.stagedRowsMissing(staged: [fields, fields], durable: [fields]),
+                      "Two staged copies, one durable: one is missing")
+        XCTAssertFalse(WorkspaceLegacyBridge.stagedRowsMissing(staged: [fields], durable: [fields]))
+        XCTAssertFalse(WorkspaceLegacyBridge.stagedRowsMissing(staged: [fields, fields], durable: [fields, fields]))
     }
 }
