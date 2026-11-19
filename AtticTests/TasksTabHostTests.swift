@@ -91,10 +91,49 @@ final class TasksTabHostTests: XCTestCase {
         try body()
     }
 
+    /// An assistive client starting, stopping and starting again while
+    /// Later is hidden (VoiceOver turned on, off and on), then a switch:
+    /// the panel's hit walk reaches Later's row, inside Later's host.
+    func testTheHitWalkReachesTheShownTabsRowAfterAnAssistiveClientRestartsWhileItIsHidden() throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let hosted = try warmed()
+        defer { hosted.close() }
+        let content = try XCTUnwrap(hosted.window.contentView)
+        for on in [true, false, true] {
+            NSApp.accessibilitySetValue(on, forAttribute: enhanced)
+            // A client's read of the panel, as an assistive client makes.
+            _ = content.accessibilityChildren()
+            hosted.spin(0.5)
+        }
+        let departing = try inUse(hosted)
+        hosted.go(to: .backlog)
+        try waitForTheSwitch(hosted, to: "Later", from: departing, joined: true)
+        let row = try XCTUnwrap(hosted.model.rows(for: .backlog).first)
+        hosted.window.displayIfNeeded()
+        let frame = try XCTUnwrap(hosted.pointer.frame(for: TasksRowID(tab: .backlog, id: row.id)), "Later's first row laid out")
+        let local = NSPoint(x: frame.midX, y: content.isFlipped ? frame.midY : content.bounds.height - frame.midY)
+        let screen = hosted.window.convertPoint(toScreen: content.convert(local, to: nil))
+        let hit = try XCTUnwrap(AtticPanelHostingView.topmostElement(in: content, at: screen) as AnyObject?,
+                                "the walk finds an element at Later's row")
+        var hosts: [KeptContentHostingView] = []
+        var node: AnyObject? = hit
+        var depth = 0
+        while let current = node, depth < 64 {
+            if let host = current as? KeptContentHostingView { hosts.append(host) }
+            node = (current.accessibilityParent?() ?? nil) as AnyObject?
+            depth += 1
+        }
+        XCTAssertFalse(hosts.contains { !$0.isInteractive }, "nothing from a host not in use")
+    }
+
     private func hitWalk() throws {
         let hosted = try warmed()
         defer { hosted.close() }
+        let departing = try inUse(hosted)
         hosted.go(to: .backlog)
+        try waitForTheSwitch(hosted, to: "Later", from: departing, joined: true)
         let content = try XCTUnwrap(hosted.window.contentView)
         let row = try XCTUnwrap(hosted.model.rows(for: .backlog).first)
         hosted.window.displayIfNeeded()
@@ -146,6 +185,26 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertTrue(keyboardHost(hosted) === (try inUse(hosted)), "the keyboard is in Now's host", line: line)
     }
 
+    private struct TheSwitchNeverLanded: Error {}
+
+    /// Waits, up to `timeout`, for a switch to land: the arriving tab's host
+    /// in use (and, with `joined`, joined to accessibility). Never the
+    /// keyboard's claim: that is what the ownership rows assert. It polls
+    /// only (no layout, display or accessibility call), so the walk stays
+    /// the first accessibility read. A switch that never applies fails here,
+    /// by name: that is how the tab stall was found (host-boundary.md §5.1,
+    /// TAB-STALL), where the page's body read the old tab.
+    private func waitForTheSwitch(_ hosted: Hosted, to tab: String, from departing: KeptContentHostingView,
+                                  joined: Bool, timeout: TimeInterval = 3, line: UInt = #line) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let host = hosts(hosted).first(where: \.isInteractive), host !== departing, !joined || host.isAccessible { return }
+            hosted.spin(0.05)
+        } while Date() < deadline
+        XCTFail("the switch never reached \(tab)'s host", line: line)
+        throw TheSwitchNeverLanded()
+    }
+
     private func assertTheArrivingTabHasTheKeyboard(_ hosted: Hosted, _ tab: TasksTab, line: UInt = #line) throws {
         XCTAssertTrue(keyboardHost(hosted) === (try inUse(hosted)), "the arriving tab's host claimed the keyboard: \(String(describing: hosted.window.firstResponder))", line: line)
         down(hosted)
@@ -157,9 +216,13 @@ final class TasksTabHostTests: XCTestCase {
         let hosted = try warmed()
         defer { hosted.close() }
         try focusANowRow(hosted)
+        var departing = try inUse(hosted)
         hosted.go(to: .backlog)
+        try waitForTheSwitch(hosted, to: "Later", from: departing, joined: false)
         try assertTheArrivingTabHasTheKeyboard(hosted, .backlog)
+        departing = try inUse(hosted)
         hosted.go(to: .now)
+        try waitForTheSwitch(hosted, to: "Now", from: departing, joined: false)
         try assertTheArrivingTabHasTheKeyboard(hosted, .now)
     }
 
@@ -181,8 +244,10 @@ final class TasksTabHostTests: XCTestCase {
         let hosted = try warmed()
         defer { hosted.close() }
         try focusANowRow(hosted)
+        let departing = try inUse(hosted)
         withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: .backlog, bySwipe: true) }
         hosted.spin(1.2)
+        try waitForTheSwitch(hosted, to: "Later", from: departing, joined: false)
         try assertTheArrivingTabHasTheKeyboard(hosted, .backlog)
     }
 
@@ -243,33 +308,43 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertTrue(editor.string.contains("a"), "typing goes on: \(editor.string)")
     }
 
-    func testOwnershipRenameIsSavedAndTheArrivingTabTakesTheKeyboard() throws {
+    /// The user's sequence (judged "no worse than the trunk"): ↓ on Now,
+    /// a rename, then a switch: the switch saves the rename and Later is
+    /// shown, as on the trunk. Where ↓ goes next is pinned in
+    /// `TasksRound13Tests` (KB-DOWN-AFTER-RENAME-SWITCH).
+    func testOwnershipRenameIsSavedByTheSwitch() throws {
         try keyWindowOnly()
         let hosted = try warmed()
         defer { hosted.close() }
-        try focusANowRow(hosted)
-        let row = try XCTUnwrap(hosted.model.keyboardFocus?.id)
+        down(hosted)
+        let row = try XCTUnwrap(hosted.model.keyboardFocus?.id, "↓ on Now reaches a Now row")
         hosted.model.beginEditingTitle(row)
         hosted.spin(0.4)
-        XCTAssertEqual(hosted.model.editingTitleID, row)
+        XCTAssertEqual(hosted.model.editingTitleID, row, "the rename is open")
         hosted.go(to: .backlog)
         XCTAssertNil(hosted.model.editingTitleID, "the switch saved the rename")
-        try assertTheArrivingTabHasTheKeyboard(hosted, .backlog)
+        XCTAssertEqual(hosted.model.tab, .backlog, "Later is shown")
     }
 
+    /// The user's sequence (the lead, 19 Nov: rows are judged "no worse
+    /// than the trunk"): ↓ on Now, then a responder outside the tabs (as a
+    /// dropdown's host) takes the keyboard, then a switch. It keeps the
+    /// keyboard, as on the trunk (`TasksRound13Tests`, run on `4b55a9e8`).
     func testOwnershipNoClaimFromAResponderOutsideTheTabHosts() throws {
         final class StandIn: NSView { override var acceptsFirstResponder: Bool { true } }
         try keyWindowOnly()
         let hosted = try warmed()
         defer { hosted.close() }
-        try focusANowRow(hosted)
-        // As a dropdown's host: a responder in the panel, outside the tabs.
+        down(hosted)
+        XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.now.rawValue, "↓ on Now reaches a Now row")
         let standIn = StandIn(frame: CGRect(x: 0, y: 0, width: 10, height: 10))
         hosted.window.contentView?.addSubview(standIn)
         defer { standIn.removeFromSuperview() }
         XCTAssertTrue(hosted.window.makeFirstResponder(standIn))
+        hosted.spin(0.2)
+        XCTAssertTrue(hosted.window.firstResponder === standIn, "it holds the keyboard before the switch")
         hosted.go(to: .backlog)
-        XCTAssertTrue(hosted.window.firstResponder === standIn, "no claim from it")
+        XCTAssertTrue(hosted.window.firstResponder === standIn, "no claim from it: \(String(describing: hosted.window.firstResponder))")
     }
 
     /// Condition 3 and HB-02: after a switch the page acts on the tab

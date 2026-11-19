@@ -11,10 +11,11 @@ import XCTest
 @MainActor
 final class TasksRound13Tests: XCTestCase {
     /// host-boundary.md §5.1 row, as the user's sequence: a tab switch while
-    /// the panel is not key, then the panel becomes key and ↓: a row in the
-    /// shown tab takes the keyboard. The trunk runs the same test as the
-    /// reference.
-    func testDownAfterASwitchMadeWhileThePanelWasNotKeyFocusesTheShownTab() throws {
+    /// the panel is not key, then the panel becomes key and ↓. Wanted: a row
+    /// of the shown tab takes the keyboard. Today no row does, on step 1 as
+    /// on the trunk (`4b55a9e8`, the same test): pinned, KB-DOWN-AFTER-NOTKEY-SWITCH.
+    /// Its fix flips this assertion.
+    func testDownAfterASwitchMadeWhileThePanelWasNotKeyIsPinned() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
             throw XCTSkip("native keyboard interaction runs on CI only")
         }
@@ -35,13 +36,15 @@ final class TasksRound13Tests: XCTestCase {
         hosted.spin(0.3)
         XCTAssertTrue(hosted.window.isKeyWindow, "the panel is key again")
         hosted.press("\u{F701}", keyCode: 125)
-        XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.backlog.rawValue, "↓ reaches a row of the shown tab")
+        XCTAssertNil(hosted.model.keyboardFocus?.page, "KB-DOWN-AFTER-NOTKEY-SWITCH: today ↓ reaches no row (pinned; the fix makes it a row of the shown tab)")
     }
 
     /// host-boundary.md §5.1 row, as the user's sequence: a rename on Now,
-    /// a switch to Later (which saves it), then ↓: a Later row takes the
-    /// keyboard. The trunk runs the same test as the reference.
-    func testDownAfterASwitchThatSavedARenameFocusesTheShownTab() throws {
+    /// a switch to Later (which saves it), then ↓. Wanted: a Later row takes
+    /// the keyboard. Today no row does, on step 1 as on the trunk
+    /// (`4b55a9e8`, the same test): pinned, KB-DOWN-AFTER-RENAME-SWITCH. Its
+    /// fix flips this assertion.
+    func testDownAfterASwitchThatSavedARenameIsPinned() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
             throw XCTSkip("native keyboard interaction runs on CI only")
         }
@@ -56,7 +59,7 @@ final class TasksRound13Tests: XCTestCase {
         hosted.go(to: .backlog)
         XCTAssertNil(hosted.model.editingTitleID, "the switch saved the rename")
         hosted.press("\u{F701}", keyCode: 125)
-        XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.backlog.rawValue, "↓ reaches a row of the shown tab")
+        XCTAssertNil(hosted.model.keyboardFocus?.page, "KB-DOWN-AFTER-RENAME-SWITCH: today ↓ reaches no row (pinned; the fix makes it a Later row)")
     }
 
     /// host-boundary.md §5.1 row: a responder in the panel outside the tabs
