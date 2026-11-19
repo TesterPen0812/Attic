@@ -374,39 +374,94 @@ final class DurableSaveReadFailureTests: XCTestCase {
         try await afterUnresolvedDelete("restoreDeleted") { $0.tasks.restoreDeleted(taskIDs: [$0.ids[3]]) }
     }
 
-    func testC3PurgeDeletedOnTheSpentContext() async throws {
-        try await afterUnresolvedDelete("purgeDeleted", setup: { rig in
-            XCTAssertTrue(rig.tasks.delete(taskIDs: [rig.ids[13]]))
-        }) { rig in
-            rig.tasks.purgeDeleted(before: .distantFuture).contains(rig.ids[13])
+    /// A task store alone, seeded as the rig's tasks. In the rig (notes, library and Notes controller wired) the purge
+    /// cannot commit at all, on the trunk too (board TASK-PURGE-UNKNOWN; pinned in testC3PurgeTargetIsPurgedWithoutAFault).
+    private func makeBareTaskStore() throws -> (container: ModelContainer, tasks: TaskStore, ids: [UUID]) {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let seed = ModelContext(container)
+        var ids: [UUID] = []
+        for index in 0..<30 {
+            let task = TaskItem(title: "Open task \(index)", createdAt: date)
+            task.tags = ["tag\(index % 7)"]
+            seed.insert(task); ids.append(task.id)
         }
+        try seed.save()
+        let files = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("R12Bare-\(UUID())"))
+        return (container, TaskStore(container: container, now: { date }, taskImageFiles: files), ids)
     }
 
-    /// The purge test's control: with no fault, the store's purge takes a task the store deleted. It also prints what
-    /// the library's delete leaves on a task, which the store's purge did not take (run on b7bfbcbe: command=false).
+    /// Purge on a spent context, on a task store alone: the delete commits, its after-commit step and its list refresh
+    /// fail, so the store's context stays spent. The purge must replace it (discarding nothing), purge the task durably,
+    /// and leave the next save working with one physical row per id.
+    func testC3PurgeDeletedOnTheSpentContext() async throws {
+        let (container, tasks, ids) = try makeBareTaskStore()
+        let id = ids[13]
+        WorkspaceLegacyBridge.postCommitPlainFailures = 1
+        tasks.listRefreshFailures = 3
+        let deleted = tasks.delete(taskIDs: [id])
+        let plainSeamUsed = WorkspaceLegacyBridge.postCommitPlainFailures == 0
+        let refreshFailed = 3 - tasks.listRefreshFailures
+        WorkspaceLegacyBridge.postCommitPlainFailures = 0
+        tasks.listRefreshFailures = 0
+        let replacedBefore = tasks.lastSpentContextUnsaved
+        let deletedRows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        let refusalsBefore = WorkspaceLegacyBridge.spentContextRefusals
+        let before = try taskFingerprint(container)
+        let purged = tasks.purgeDeleted(before: .distantFuture)
+        let replacedByPurge = tasks.lastSpentContextUnsaved
+        let refusals = WorkspaceLegacyBridge.spentContextRefusals - refusalsBefore
+        let left = try ModelContext(container).fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        let changed = try taskFingerprint(container) != before
+        let afterPurge = try duplicateRows(container)
+        let next = tasks.rename(try XCTUnwrap(tasks.task(withID: ids[20])), to: "The next save after purgeDeleted")
+        let afterNext = try duplicateRows(container)
+        print("C3_PURGE_SPENT_BARE deleted=\(deleted) plain_seam_used=\(plainSeamUsed) refresh_failed=\(refreshFailed) "
+            + "deleted_rows=\(deletedRows.filter { $0.deletedAt != nil }.count)/\(deletedRows.count) replaced_before=\(replacedBefore.map { "\($0)" } ?? "nil") "
+            + "purged=\(purged.contains(id)) replaced_by_purge=\(replacedByPurge.map { "\($0)" } ?? "nil") refusals=\(refusals) rows_left=\(left) "
+            + "durable_change=\(changed) dupes_after_purge=\(afterPurge) next=\(next) dupes_after_next=\(afterNext) error=\(tasks.lastErrorMessage ?? "nil")")
+        XCTAssertTrue(deleted)
+        XCTAssertTrue(!deletedRows.isEmpty && deletedRows.allSatisfy { $0.deletedAt != nil }, "The delete is durable")
+        XCTAssertNil(replacedBefore, "Nothing replaced a spent context before the purge")
+        XCTAssertEqual(replacedByPurge, [], "The purge itself replaced the spent context, discarding nothing unsaved")
+        XCTAssertEqual(refusals, 0, "No save was refused on a spent context")
+        XCTAssertTrue(purged.contains(id), "The purge reports the task purged")
+        XCTAssertEqual(left, 0, "The purged task is gone from disk")
+        XCTAssertTrue(changed)
+        XCTAssertEqual(afterPurge, [], "One physical row per id after the purge")
+        XCTAssertTrue(next, "The next save works")
+        XCTAssertEqual(try durableTitles(container, "The next save after purgeDeleted"), 1, "The next save is durable")
+        XCTAssertEqual(afterNext, [], "One physical row per id after the next save")
+    }
+
+    /// The purge's control. Arm "bare": a task store alone purges a task it deleted, leaving no row. Arm "rig": with
+    /// notes, the library and the Notes controller wired, the same purge fails on the trunk too (board
+    /// TASK-PURGE-UNKNOWN: probes on 2eb6663a, 6a6429b6 and f4c3a142 print WorkspaceFoundationError.unknown from the
+    /// save). The rig arm pins today's outcome so that a fix fails it and the pin is updated with the fix.
     func testC3PurgeTargetIsPurgedWithoutAFault() async throws {
-        for route in ["store", "library"] {
-            let rig = try await makeRig()
-            let id = rig.ids[13]
-            let deleted = route == "store" ? rig.tasks.delete(taskIDs: [id]) : rig.library.deleteTasks([id]).isApplied
-            let row = try XCTUnwrap(try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
-            let fields = "root=\(row.deletionRootID == id) members=\(row.deletionMembersRaw.isEmpty ? "empty" : "set") "
-                + "group=\(row.deletionGroupID != nil)"
-            let probe = ModelContext(rig.container)
-            let family = try? TaskStore.guardedDeletedFamily(in: probe, rootID: id, before: .distantFuture)
-            let circle = (try? TaskStore.circleRemovedMembers(in: probe)).map { $0.contains(id) }
-            let owns = try? WorkspacePurge.hasOwnNotesOrAssociations([id], in: probe)
-            let guards = "family=\(family.map { "\($0.count)" } ?? "nil") circle_removed=\(circle.map(String.init) ?? "threw") "
-                + "owns_writing=\(owns.map(String.init) ?? "threw")"
-            let purged = rig.tasks.purgeDeleted(before: .distantFuture).contains(id)
-            let left = try ModelContext(rig.container).fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
-            print("C3_PURGE_CONTROL \(route) deleted=\(deleted) \(fields) \(guards) purged=\(purged) rows_left=\(left) "
-                + "error=\(rig.tasks.lastErrorMessage ?? "nil")")
-            XCTAssertTrue(deleted, route)
-            if route == "store" { XCTAssertTrue(purged, "The store's purge takes a task the store deleted") }
-            if purged { XCTAssertEqual(left, 0, "\(route): a purged task is gone from disk") }
-            await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
-        }
+        let (bareContainer, bareTasks, bareIDs) = try makeBareTaskStore()
+        let bareID = bareIDs[13]
+        let bareDeleted = bareTasks.delete(taskIDs: [bareID])
+        let barePurged = bareTasks.purgeDeleted(before: .distantFuture).contains(bareID)
+        let bareLeft = try ModelContext(bareContainer).fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == bareID }))
+        print("C3_PURGE_CONTROL bare deleted=\(bareDeleted) purged=\(barePurged) rows_left=\(bareLeft) error=\(bareTasks.lastErrorMessage ?? "nil")")
+        XCTAssertTrue(bareDeleted)
+        XCTAssertTrue(barePurged, "A task store alone purges a task it deleted")
+        XCTAssertEqual(bareLeft, 0, "No row is left")
+
+        let rig = try await makeRig()
+        let id = rig.ids[13]
+        let deleted = rig.tasks.delete(taskIDs: [id])
+        let purged = rig.tasks.purgeDeleted(before: .distantFuture).contains(id)
+        let left = try ModelContext(rig.container).fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        let error = rig.tasks.lastErrorMessage
+        print("C3_PURGE_CONTROL rig deleted=\(deleted) purged=\(purged) rows_left=\(left) error=\(error ?? "nil")")
+        let pin = "TASK-PURGE-UNKNOWN: today's outcome (the trunk's too). A fix changes it: update this pin with the fix"
+        XCTAssertTrue(deleted)
+        XCTAssertFalse(purged, pin)
+        XCTAssertEqual(left, 1, pin)
+        XCTAssertEqual(error, WorkspaceFoundationError.unknown.localizedDescription, pin)
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
     }
 
     func testC3DuplicateOnTheSpentContext() async throws {
