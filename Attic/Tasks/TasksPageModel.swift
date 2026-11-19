@@ -300,7 +300,17 @@ final class TasksPageModel: ObservableObject {
     var store: TaskStore { library.tasks }
     var services: TasksPageServices
 
-    @Published var tab: TasksTab = .now {
+    /// The tab shown. Published after it is stored, never before
+    /// (host-boundary.md §5.1, TAB-STALL): `@Published` sends its change
+    /// before the store, and with the page's tabs in hosts of their own a
+    /// switch made by code inside `withAnimation` sometimes flushed the
+    /// graph inside that send. The page's body then read the old tab, was
+    /// marked clean, and the tab bar, the search field and the shown tab
+    /// stayed behind (hb-ab2 run 4: `Published.subscript.setter` →
+    /// `ObservableObjectPublisher.send` → `GraphHost.flushTransactions` →
+    /// `TasksPage.body`). Sent after the store, a flush in the send reads
+    /// the new tab.
+    var tab: TasksTab = .now {
         // The tab being left lets go of its rows' focus first (the page
         // sets this; host-boundary.md §5, HB-02).
         willSet {
@@ -311,6 +321,9 @@ final class TasksPageModel: ObservableObject {
         }
         // Remembered across relaunch (L7), where the page has a memory.
         didSet {
+            // As `@Published` did: every set is sent.
+            objectWillChange.send()
+            // Remembered across relaunch (L7), where the page has a memory.
             if tab != oldValue { memory?.savePage(tab) }
             #if DEBUG
             TasksPageRenderProbe.settingTab = nil
