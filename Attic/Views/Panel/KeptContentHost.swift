@@ -116,6 +116,30 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         // `AtticPanelHostingView`): nothing flows from SwiftUI to AppKit.
         sizingOptions = []
         AtticHostDragHooks.install(on: KeptContentHostingView.self)
+        Self.installKeyboardGiveBackRule()
+        Self.all.add(self)
+    }
+
+    /// Every host alive, so a card's declined give-back finds the one in use.
+    private static let all = NSHashTable<KeptContentHostingView>.weakObjects()
+    private static var givesBackRuleInstalled = false
+
+    /// claimKeyboard alone gives a tab host the keyboard (host-boundary.md
+    /// §5.1, HB-DROPDOWN-RESTORE-HIDDEN): a card closing never gives it
+    /// back to a tab host that left use, or a view inside one. It goes to
+    /// no one, and the host in use claims it under the same rules.
+    private static func installKeyboardGiveBackRule() {
+        guard !givesBackRuleInstalled else { return }
+        givesBackRuleInstalled = true
+        AtticDropdownPresenter.mayGiveKeyboardBack = { view in
+            guard let host = (view as? KeptContentHostingView) ?? KeptContentHostingView.enclosing(view) else { return true }
+            return host.isInteractive
+        }
+        AtticDropdownPresenter.declinedKeyboard = { window in
+            for host in KeptContentHostingView.all.allObjects where host.window === window && host.isInteractive {
+                host.claimKeyboard()
+            }
+        }
     }
 
     @available(*, unavailable)

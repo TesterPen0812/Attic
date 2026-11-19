@@ -304,6 +304,105 @@ final class TasksTabHostTests: XCTestCase {
         try assertTheArrivingTabHasTheKeyboard(hosted, .backlog)
     }
 
+    /// What a key does after a swipe to Later: who has the keyboard, the
+    /// row focus, an open rename, and what changed in each tab's tasks
+    /// (by title, so two fixtures compare).
+    private struct AfterTheSwipe: Equatable {
+        var keyboardInTheTabInUse = false
+        var focusPage: Int?
+        var renaming: String?
+        var changedInNow: [String] = []
+        var changedInLater: [String] = []
+    }
+
+    private func tasksByID(_ hosted: Hosted) -> [UUID: TaskItem] {
+        let items = (try? ModelContext(hosted.store.container).fetch(FetchDescriptor<TaskItem>())) ?? []
+        return Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private func state(of task: TaskItem?) -> String {
+        guard let task else { return "gone" }
+        return "\(task.statusRaw) completed=\(task.completedAt != nil) deleted=\(task.deletedAt != nil)"
+    }
+
+    /// A real click on the date chip of the focused Now row (↓ moves on to
+    /// a row with a date first).
+    private func openTheDatePicker(_ hosted: Hosted, line: UInt = #line) throws {
+        func focused() -> TaskItem? { hosted.model.keyboardFocus.flatMap { tasksByID(hosted)[$0.id] } }
+        var steps = 0
+        while focused()?.dueDay == nil, hosted.model.keyboardFocus?.page == TasksTab.now.rawValue, steps < 12 {
+            down(hosted)
+            steps += 1
+        }
+        let title = try XCTUnwrap(focused()?.dueDay != nil ? focused()?.title : nil, "a focused Now row with a date", line: line)
+        var rows: [CGRect] = [], chips: [CGRect] = []
+        func walk(_ element: AnyObject, depth: Int) {
+            let label = element.accessibilityLabel?() ?? ""
+            let rect: CGRect? = element.accessibilityFrame?()
+            if label.hasPrefix("Due ") { chips.append(rect ?? .zero) }
+            if label.contains(title) || (element.accessibilityTitle?() ?? "").contains(title) { rows.append(rect ?? .zero) }
+            guard depth > 0, let children = element.accessibilityChildren?() else { return }
+            for child in children { walk(child as AnyObject, depth: depth - 1) }
+        }
+        walk(try inUse(hosted), depth: 30)
+        let row = try XCTUnwrap(rows.max { $0.height < $1.height }, "the focused row", line: line)
+        let chip = try XCTUnwrap(chips.first { $0.midY >= row.minY && $0.midY <= row.maxY }, "its date chip", line: line)
+        let point = hosted.window.convertPoint(fromScreen: CGPoint(x: chip.midX, y: chip.midY))
+        hosted.click(y: hosted.height - point.y, x: point.x)
+        waitForTestOperation("the date picker opens", line: line) {
+            hosted.spin(0.05)
+            return AtticDropdownPresenter.openCount > 0
+        }
+    }
+
+    /// A Now row focused, the date picker open or not, a swipe to Later
+    /// (which closes the picker), then `key`.
+    private func afterTheSwipe(press key: (String, UInt16), pickerOpen: Bool, line: UInt = #line) throws -> AfterTheSwipe {
+        let hosted = try warmed(line: line)
+        defer { hosted.close() }
+        try focusANowRow(hosted, line: line)
+        if pickerOpen { try openTheDatePicker(hosted, line: line) }
+        let departing = try inUse(hosted)
+        swipe(hosted) {}
+        waitForTestOperation("the swipe reaches Later and no card is open", line: line) {
+            hosted.spin(0.05)
+            return hosted.model.tab == .backlog && AtticDropdownPresenter.openCount == 0
+        }
+        try waitForTheSwitch(hosted, to: "Later", from: departing, joined: true, line: line)
+        var after = AfterTheSwipe()
+        after.keyboardInTheTabInUse = keyboardHost(hosted) === (try inUse(hosted))
+        let now = Set(hosted.model.rows(for: .now).map(\.id))
+        let later = Set(hosted.model.rows(for: .backlog).map(\.id))
+        let before = tasksByID(hosted).mapValues(state)
+        let titles = tasksByID(hosted).mapValues(\.title)
+        hosted.press(key.0, keyCode: key.1)
+        hosted.spin(0.5)
+        let afterKey = tasksByID(hosted)
+        let changed = before.keys.filter { before[$0] != state(of: afterKey[$0]) }
+        func describe(_ id: UUID) -> String { "\(titles[id] ?? "?"): \(before[id] ?? "?") -> \(state(of: afterKey[id]))" }
+        after.changedInNow = changed.filter(now.contains).map(describe).sorted()
+        after.changedInLater = changed.filter(later.contains).map(describe).sorted()
+        after.focusPage = hosted.model.keyboardFocus?.page
+        after.renaming = hosted.model.editingTitleID.flatMap { titles[$0] }
+        return after
+    }
+
+    /// §5.1 (HB-DROPDOWN-RESTORE-HIDDEN): a card open when a swipe leaves
+    /// its tab closes with the tab change, and never gives the keyboard
+    /// back to the host that left use; the tab in use claims it. Return,
+    /// Space and Delete then do exactly what they do after a plain swipe,
+    /// and nothing in Now changes.
+    func testOwnershipAPickerClosedByASwipeLeavesTheKeysAsAPlainSwipeDoes() throws {
+        try keyWindowOnly()
+        for key in [("\r", UInt16(36)), (" ", UInt16(49)), ("\u{7F}", UInt16(51))] {
+            let plain = try afterTheSwipe(press: key, pickerOpen: false)
+            let picker = try afterTheSwipe(press: key, pickerOpen: true)
+            XCTAssertTrue(plain.keyboardInTheTabInUse, "a plain swipe leaves the keyboard with the tab in use (key \(key.1))")
+            XCTAssertEqual(picker, plain, "after the picker closed by the swipe, key \(key.1) does what it does after a plain swipe")
+            XCTAssertEqual(picker.changedInNow, [], "nothing in Now changes (key \(key.1))")
+        }
+    }
+
     func testOwnershipTabBarSwitchMovesTheKeyboardToTheArrivingTab() throws {
         try keyWindowOnly()
         let hosted = try warmed()

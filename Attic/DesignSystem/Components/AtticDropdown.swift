@@ -1985,6 +1985,12 @@ final class AtticDropdownPresenter {
 
     private weak var anchor: NSView?
     private weak var previousResponder: NSResponder?
+    /// Whether the view a card took the keyboard from may have it back
+    /// (nil: always). A view the panel declines (one that left use while
+    /// the card was open) does not: the keyboard goes to no one, and
+    /// `declinedKeyboard` runs for the window.
+    static var mayGiveKeyboardBack: (@MainActor (NSView) -> Bool)?
+    static var declinedKeyboard: (@MainActor (NSWindow) -> Void)?
     /// The caret or selection in a field that had the keyboard.
     private var previousSelection: NSRange?
     private var monitors: [Any] = []
@@ -2190,7 +2196,11 @@ final class AtticDropdownPresenter {
         let window = host.window
         let responderInside = (window?.firstResponder as? NSView).map { $0 === host || $0.isDescendant(of: host) } ?? false
         if restoreFocus, responderInside, let window {
-            if let previous = previousResponder as? NSView, previous.window === window {
+            if let previous = previousResponder as? NSView, previous.window === window,
+               !(Self.mayGiveKeyboardBack?(previous) ?? true) {
+                window.makeFirstResponder(nil)
+                Self.declinedKeyboard?(window)
+            } else if let previous = previousResponder as? NSView, previous.window === window {
                 window.makeFirstResponder(previous)
                 // A field given the keyboard back selects all its text; the
                 // caret goes back where it was instead (Accepted 2026-11-04,
