@@ -74,6 +74,34 @@ final class TasksTabHostTests: XCTestCase {
     }
     #endif
 
+    /// TAB-STALL (host-boundary.md §5.1): a switch made by code inside
+    /// `withAnimation`, outside an event, reaches the page: its body reads the
+    /// new tab. At e6bf266c the tab's publish went out before the store, a
+    /// synchronous flush ran the page's body with the old tab, and nothing
+    /// published again: the tab bar, the search field and the shown index
+    /// stayed on the old tab (hb-ab2 run 4; 14 of 64 switches in hb-ab).
+    func testCodeDrivenAnimatedSwitchesReachThePage() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("key window only")
+        }
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        var stalls: [String] = []
+        var runs: [Int] = []
+        for (n, tab) in Array(repeating: [TasksTab.backlog, .now], count: 8).joined().enumerated() {
+            let before = TasksPageRenderProbe.bodyRuns
+            withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: tab) }
+            let deadline = Date().addingTimeInterval(3)
+            while TasksPageRenderProbe.lastTab != tab, Date() < deadline { hosted.spin(0.05) }
+            if TasksPageRenderProbe.lastTab != tab { stalls.append("\(n):\(tab)") }
+            hosted.spin(0.5)
+            runs.append(TasksPageRenderProbe.bodyRuns - before)
+        }
+        print("TAB-STALL body runs per switch \(runs) total \(runs.reduce(0, +))")
+        XCTAssertEqual(stalls, [], "every switch reaches the page's body with the new tab")
+    }
+
     /// The panel's accessibility hit walk (condition 3): it reaches a row in
     /// the tab shown, inside that tab's nested host, and nothing it returns
     /// lies in a host not in use.

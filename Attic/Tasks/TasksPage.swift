@@ -196,6 +196,9 @@ struct TasksPage: View {
     /// of the height flexes.
 
     var body: some View {
+        #if DEBUG
+        let _ = TasksPageRenderProbe.rendered(model.tab)
+        #endif
         // A row's focus changes inside its tab's host; the page hears it
         // here (the outward notification, host-boundary.md §5, HB-02).
         let _ = rowFocus.changed = { focus in rowFocusChanged(focus) }
@@ -5976,3 +5979,16 @@ private struct TasksSubtaskDraftView<Content: View>: View {
 
     var body: some View { content() }
 }
+
+#if DEBUG
+/// What the page's body last read, and how often it ran (the tab-stall
+/// guard, host-boundary.md §5.1, TAB-STALL).
+@MainActor enum TasksPageRenderProbe {
+    static var lastTab: TasksTab?
+    static var bodyRuns = 0
+    static func rendered(_ tab: TasksTab) {
+        lastTab = tab
+        bodyRuns += 1
+    }
+}
+#endif
