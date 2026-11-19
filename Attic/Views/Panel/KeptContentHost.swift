@@ -40,7 +40,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
 
     /// The kept-content host `view` lies in, if any.
     static func enclosing(_ view: NSView) -> KeptContentHostingView? {
-        sequence(first: view.superview, next: { $0?.superview }).lazy
+        sequence(first: view, next: { $0.superview }).dropFirst().lazy
             .compactMap { $0 as? KeptContentHostingView }.first
     }
 
