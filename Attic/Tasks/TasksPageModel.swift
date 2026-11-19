@@ -1346,7 +1346,10 @@ final class TasksPageModel: ObservableObject {
             }
         }
         if !unlisted.isEmpty {
-            // Logged, deleted or gone: where its saved replicas belong.
+            // Logged, deleted or gone: where its saved replicas belong. A
+            // full read reads the loaded rows; finding the parents of more
+            // tasks than that costs more (the daily cleanup, Astra r5 R2).
+            guard unlisted.count <= loaded.count else { return false }
             guard let parents = store.savedParentIDs(of: unlisted) else { return false }
             touched.formUnion(parents.intersection(loadedIDs))
         }
