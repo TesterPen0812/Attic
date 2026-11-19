@@ -418,6 +418,9 @@
       "skip": 1,
       "sleep": 2
     },
+    "AtticTests/TasksBreadthGuardTests.swift": {
+      "skip": 1
+    },
     "AtticTests/TasksCrossDayDragTests.swift": {
       "runloop": 2
     },

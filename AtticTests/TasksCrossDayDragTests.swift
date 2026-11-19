@@ -345,9 +345,10 @@ final class TasksCrossDayDragTests: XCTestCase {
 }
 
 /// The Tasks page with given tasks in a window off screen, driven with
-/// real mouse events (as `Hosted`, seeded by the test).
+/// real mouse events (as `Hosted`, seeded by the test). Also drives the
+/// breadth guards' drags (`TasksBreadthGuardTests`).
 @MainActor
-private final class CrossDayHost {
+final class CrossDayHost {
     let store: TaskStore
     let model: TasksPageModel
     let window: NSPanel
@@ -383,13 +384,13 @@ private final class CrossDayHost {
     /// Presses the row, moves `steps` down, then (0.3 s on) runs `then`
     /// with a way to move the pointer to a page y; releases 0.4 s later,
     /// after `beforeRelease`, where the pointer was last.
-    func drag(_ id: UUID, steps: [CGFloat], then: @escaping (_ post: (CGFloat) -> Void) -> Void,
-              beforeRelease: @escaping () -> Void) throws {
-        let frame = try XCTUnwrap(pointer.frames[TasksRowID(tab: .now, id: id)])
+    func drag(_ id: UUID, in tab: TasksTab = .now, x: CGFloat = 200, steps: [CGFloat],
+              then: @escaping (_ post: (CGFloat) -> Void) -> Void, beforeRelease: @escaping () -> Void) throws {
+        let frame = try XCTUnwrap(pointer.frames[TasksRowID(tab: tab, id: id)])
         var lastY = frame.midY
         let window = window, height = height
         func post(_ type: NSEvent.EventType, y: CGFloat) {
-            let event = NSEvent.mouseEvent(with: type, location: CGPoint(x: 200, y: height - y), modifierFlags: [],
+            let event = NSEvent.mouseEvent(with: type, location: CGPoint(x: x, y: height - y), modifierFlags: [],
                                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                                            context: nil, eventNumber: 9, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)!
             NSApp.postEvent(event, atStart: false)
