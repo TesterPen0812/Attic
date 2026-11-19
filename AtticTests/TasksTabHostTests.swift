@@ -1,4 +1,5 @@
 import AppKit
+import SwiftData
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -390,11 +391,21 @@ final class TasksTabHostTests: XCTestCase {
         down(hosted)
         let row = try XCTUnwrap(hosted.model.keyboardFocus?.id, "↓ on Now reaches a Now row")
         hosted.model.beginEditingTitle(row)
-        hosted.spin(0.4)
         XCTAssertEqual(hosted.model.editingTitleID, row, "the rename is open")
+        waitForTestOperation("the rename's field takes the keyboard") {
+            hosted.spin(0.05)
+            return hosted.window.firstResponder is NSTextView
+        }
+        let editor = try XCTUnwrap(hosted.window.firstResponder as? NSTextView)
+        let renamed = "Renamed by the switch \(UUID().uuidString.prefix(6))"
+        editor.selectAll(nil)
+        editor.insertText(renamed, replacementRange: editor.selectedRange())
         hosted.go(to: .backlog)
-        XCTAssertNil(hosted.model.editingTitleID, "the switch saved the rename")
+        XCTAssertNil(hosted.model.editingTitleID, "the switch closed the rename")
         XCTAssertEqual(hosted.model.tab, .backlog, "Later is shown")
+        let fresh = ModelContext(hosted.store.container)
+        let saved = try fresh.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == row })).first
+        XCTAssertEqual(saved?.title, renamed, "the switch saved the typed title (a fresh read of the store)")
     }
 
     /// The user's sequence (the lead, 19 Nov: rows are judged "no worse
