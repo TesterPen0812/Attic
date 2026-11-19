@@ -2747,14 +2747,30 @@ extension AtticHorizontalScrollOwner {
 
 /// Adds `AtticPanelHostingView`'s drag-source hooks (O14-11) after
 /// NSHostingView's own implementations, which Swift cannot override.
+/// A host nested in the panel (`KeptContentHostingView`, a warmed Tasks tab)
+/// gets the same hooks; they act through the panel's root host, which owns
+/// the drag's return and landing (host-boundary.md §5, drag hooks).
 @MainActor
 enum AtticHostDragHooks {
-    private static var installed = false
+    private static var installed: Set<ObjectIdentifier> = []
 
     static func install() {
-        guard !installed, let parent = class_getSuperclass(AtticPanelHostingView.self) else { return }
-        installed = true
-        let cls: AnyClass = AtticPanelHostingView.self
+        install(on: AtticPanelHostingView.self)
+    }
+
+    /// The panel's root host for a hooked view: itself, or the one around it.
+    static func panelHost(for object: AnyObject) -> AtticPanelHostingView? {
+        if let host = object as? AtticPanelHostingView { return host }
+        var view = (object as? NSView)?.superview
+        while let current = view {
+            if let host = current as? AtticPanelHostingView { return host }
+            view = current.superview
+        }
+        return nil
+    }
+
+    static func install(on cls: AnyClass) {
+        guard installed.insert(ObjectIdentifier(cls)).inserted, let parent = class_getSuperclass(cls) else { return }
         do {
             let selector = NSSelectorFromString("draggingSession:willBeginAtPoint:")
             if let method = class_getInstanceMethod(parent, selector) {
@@ -2762,7 +2778,7 @@ enum AtticHostDragHooks {
                 let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
                 let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint) -> Void = { object, session, point in
                     original(object, selector, session, point)
-                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragWillBegin(session, at: point) }
+                    MainActor.assumeIsolated { panelHost(for: object)?.hostDragWillBegin(session, at: point) }
                 }
                 class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
             }
@@ -2774,7 +2790,7 @@ enum AtticHostDragHooks {
                 let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
                 let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint) -> Void = { object, session, point in
                     original(object, selector, session, point)
-                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragMoved(session, to: point) }
+                    MainActor.assumeIsolated { panelHost(for: object)?.hostDragMoved(session, to: point) }
                 }
                 class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
             }
@@ -2790,7 +2806,7 @@ enum AtticHostDragHooks {
             let block: @convention(block) (AnyObject, NSDraggingInfo) -> ObjCBool = { object, info in
                 let accepted = original(object, selector, info)
                 MainActor.assumeIsolated {
-                    if let view = object as? AtticPanelHostingView { after(view, info, accepted.boolValue) }
+                    if let view = panelHost(for: object) { after(view, info, accepted.boolValue) }
                 }
                 return accepted
             }
@@ -2803,7 +2819,7 @@ enum AtticHostDragHooks {
                 let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
                 let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint, NSDragOperation) -> Void = { object, session, point, operation in
                     original(object, selector, session, point, operation)
-                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragEnded(session, at: point, operation: operation) }
+                    MainActor.assumeIsolated { panelHost(for: object)?.hostDragEnded(session, at: point, operation: operation) }
                 }
                 class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
             }
