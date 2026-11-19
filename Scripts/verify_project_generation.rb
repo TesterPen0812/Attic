@@ -79,4 +79,13 @@ abort 'Shipping app must not enable crash hooks' if app.build_configurations.any
   config.build_settings.fetch('OTHER_SWIFT_FLAGS', '').include?('ATTIC_OPERATION_CRASH_TESTS')
 }
 
+# A target that compiles a source naming WholeTableRead must compile the helper too (the deferred mobile target included).
+# Test bundles reach it through `@testable import Attic`.
+project.targets.select { |target| target.respond_to?(:source_build_phase) && !target.test_target_type? }.each do |target|
+  paths = target.source_build_phase.files.filter_map { |file| file.file_ref&.real_path&.to_s }
+  next if paths.any? { |path| path.end_with?('/WholeTableRead.swift') }
+  users = paths.select { |path| path.end_with?('.swift') && File.exist?(path) && File.read(path).include?('WholeTableRead.') }
+  abort "#{target.name} compiles #{users.map { |path| File.basename(path) }.join(', ')} without WholeTableRead.swift" unless users.empty?
+end
+
 puts 'Project generation is repeatable and Attic.xcodeproj is current'

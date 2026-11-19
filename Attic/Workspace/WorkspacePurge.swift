@@ -79,7 +79,7 @@ enum WorkspacePurge {
 
     static func hasOwnNotesOrAssociations(_ taskIDs: Set<UUID>, in context: ModelContext) throws -> Bool {
         let schema = Set(context.container.schema.entities.map(\.name))
-        let notes = schema.contains("NoteItem") ? try context.fetch(FetchDescriptor<NoteItem>()) : []
+        let notes = schema.contains("NoteItem") ? try context.fetch(WholeTableRead.all(NoteItem.self)) : []
         let associations = schema.contains("TaskNoteAssociation") ? try context.fetch(FetchDescriptor<TaskNoteAssociation>()) : []
         return notes.contains { $0.taskID.map(taskIDs.contains) == true }
             || associations.contains { taskIDs.contains($0.taskID) && $0.detachedAt == nil }
@@ -152,7 +152,7 @@ enum WorkspacePurge {
         let schema = Set(context.container.schema.entities.map(\.name))
         let associations = schema.contains("TaskNoteAssociation") ? try context.fetch(FetchDescriptor<TaskNoteAssociation>()).filter { taskIDs.contains($0.taskID) } : []
         let associatedNotes = Set(associations.map(\.noteID))
-        let notes = schema.contains("NoteItem") ? try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.taskID.map(taskIDs.contains) == true || associatedNotes.contains($0.id) } : []
+        let notes = schema.contains("NoteItem") ? try context.fetch(WholeTableRead.all(NoteItem.self)).filter { $0.taskID.map(taskIDs.contains) == true || associatedNotes.contains($0.id) } : []
         let noteIDs = Set(notes.map(\.id)).union(associations.map(\.noteID))
         var result = try associations.map { Preservation.Dependency(owner: .init(entity: .association, id: $0.id), fields: try WorkspaceModelFields.read($0)) }
         for note in notes {
@@ -181,7 +181,7 @@ enum WorkspacePurge {
                       publication: WorkspaceOperationCoordinator.Publication = .init(),
                       materialize: ((UUID, [WorkspaceMaterializationPatch]) throws -> Void)? = nil) async -> Result {
         let probe = coordinator.freshContext()
-        if let rows = try? probe.fetch(FetchDescriptor<TaskItem>()),
+        if let rows = try? probe.fetch(WholeTableRead.all(TaskItem.self)),
            let group = rows.first(where: { $0.id == rootID })?.deletionGroupID {
             return await WorkspaceItemLifecycle.purge(group: group, before: cutoff, confirmed: confirmed,
                 coordinator: coordinator, files: files, inventory: inventory, publication: publication, materialize: materialize)
@@ -202,7 +202,7 @@ enum WorkspacePurge {
             let ids = Set(family.map(\.id))
             let taskOwners = Set(ids.map { WorkspaceOwner(entity: .task, id: $0) })
             guard ownership.rows.isDisjoint(with: taskOwners) else { return refused() }
-            let allNotes = try context.fetch(FetchDescriptor<NoteItem>())
+            let allNotes = try context.fetch(WholeTableRead.all(NoteItem.self))
             let allAssociations = try context.fetch(FetchDescriptor<TaskNoteAssociation>())
             let ownIDs = Set(allNotes.filter { $0.taskID.map(ids.contains) == true }.map(\.id))
                 .union(allAssociations.filter { ids.contains($0.taskID) && $0.detachedAt == nil }.map(\.noteID))
@@ -254,7 +254,7 @@ enum WorkspacePurge {
             guard let collection = files.files.acquireCollection(leasedIDs) else { return refused() }
             defer { collection.release() }
             var survivingBytes = ownership.bytes
-            for task in try context.fetch(FetchDescriptor<TaskItem>()) where !ids.contains(task.id) {
+            for task in try context.fetch(WholeTableRead.all(TaskItem.self)) where !ids.contains(task.id) {
                 survivingBytes.formUnion(try legacyReferences(task).map(\.id))
             }
             for note in allNotes {
@@ -339,7 +339,7 @@ enum WorkspacePurge {
             guard Set(ownership.drafts.keys).isSubset(of: Set(documents.keys)) else { return refused() }
             let draftVersionIDs = Dictionary(uniqueKeysWithValues: ownership.drafts.keys.map { ($0, UUID()) })
             let versionIDs = Dictionary(uniqueKeysWithValues: notes.filter { documents[$0.id] != nil }.map { ($0.persistentModelID, UUID()) })
-            let attachmentRows = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { ownIDs.contains($0.noteID) }
+            let attachmentRows = try context.fetch(WholeTableRead.all(NoteAttachment.self)).filter { ownIDs.contains($0.noteID) }
             let missingAssociations = ownIDs.subtracting(Set(associations.map(\.noteID)))
             let detachedIDs = Dictionary(uniqueKeysWithValues: missingAssociations.map { ($0, UUID()) })
             // These notes and associations are detached in this purge's own
@@ -423,7 +423,7 @@ enum WorkspacePurge {
                         revisionID: UUID(), versionIDs: versionIDs, staged: ownership.staged[id] ?? [],
                         tags: materializedTags[id], timestamp: Date())
                 }
-                for note in try commit.fetch(FetchDescriptor<NoteItem>()) where ownIDs.contains(note.id) {
+                for note in try commit.fetch(WholeTableRead.all(NoteItem.self)) where ownIDs.contains(note.id) {
                     note.taskID = nil; note.associationGeneration += 1
                 }
                 for association in try commit.fetch(FetchDescriptor<TaskNoteAssociation>()) where owners.contains(.init(entity: .association, id: association.id)) {
