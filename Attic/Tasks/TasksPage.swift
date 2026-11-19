@@ -1890,7 +1890,7 @@ struct TasksPage: View {
         let id = row.id
         let editing = model.editingTitleID == id
         #if DEBUG
-        let _ = TasksCellBodyCounts.passPalettes[TasksRowID(tab: tab, id: id)] = tagColouring.palette
+        let _ = TasksCellBodyCounts.notePass(TasksRowID(tab: tab, id: id), palette: tagColouring.palette)
         #endif
         // The wrapper is skipped by a page pass that changes nothing in its
         // key (slice 1a), and then keeps the closures of the pass that last
@@ -2095,7 +2095,7 @@ struct TasksPage: View {
     /// has no order to drag to (a sorted view, Done).
     func dragGroup(of id: UUID, in tab: TasksTab) -> [UUID] {
         #if DEBUG
-        TasksCellBodyCounts.groupLookups += 1
+        TasksCellBodyCounts.noteGroupLookup()
         #endif
         guard Self.reorders(tab: tab, manual: model.reorders(on: tab)) else { return [id] }
         let list = model.listSnapshot(for: tab)
@@ -4563,6 +4563,9 @@ final class TasksDragSession {
 /// wrapper would start a drag with (design/tasks-breadth.md, slice 1a).
 /// A generic view cannot keep its own static state.
 @MainActor enum TasksCellBodyCounts {
+    /// Off unless a test turns it on (and clears it after): the
+    /// dictionaries keep row payloads and palettes (Astra R-10).
+    static var records = false
     static var evaluations: [TasksRowID: Int] = [:]
     /// Off unless a test reads them: the closures hold the page.
     static var recordsDragGroups = false
@@ -4578,19 +4581,52 @@ final class TasksDragSession {
     /// How many times a row's drag group was worked out.
     static var groupLookups = 0
 
-    static func noteBuilder(_ row: TasksRowID, palette: AtticTagPalette) { builderPalettes[row] = palette }
+    static func notePass(_ row: TasksRowID, palette: AtticTagPalette) {
+        if records { passPalettes[row] = palette }
+    }
+
+    static func noteBuilder(_ row: TasksRowID, palette: AtticTagPalette) {
+        if records { builderPalettes[row] = palette }
+    }
 
     static func noteLeaf(_ row: TasksRowID, model: AtticTaskRowModel) {
+        guard records else { return }
         leaves[row, default: 0] += 1
         leafModels[row] = model
     }
 
     static func note(_ row: TasksRowID, dragGroup: @escaping () -> [UUID]) {
+        guard records else { return }
         evaluations[row, default: 0] += 1
         if recordsDragGroups { dragGroups[row] = dragGroup }
     }
+
+    static func noteGroupLookup() {
+        if records { groupLookups += 1 }
+    }
+
+    /// Empties every record (a test's setUp and tearDown).
+    static func reset() {
+        evaluations = [:]
+        dragGroups = [:]
+        builderPalettes = [:]
+        passPalettes = [:]
+        leaves = [:]
+        leafModels = [:]
+        groupLookups = 0
+    }
 }
 #endif
+
+/// The release's check that the group lifted is still whole (Astra R-2):
+/// one set of the group shown, so the work grows with the group, not its
+/// square (Astra R-9).
+enum TasksDragRelease {
+    static func hasLeft<ID: Hashable>(_ lifted: [ID], from group: [ID]) -> Bool {
+        let shown = Set(group)
+        return lifted.contains { !shown.contains($0) }
+    }
+}
 
 /// A row that can be dragged to reorder (owner fix 6, review 1). The lift is
 /// a modifier (the row keeps its identity mid-drag); the translation lives in
@@ -4774,7 +4810,7 @@ struct TasksReorderCell<Row: View, Below: View>: View, Equatable {
                 // drop lands back and writes nothing (Astra R-2).
                 let group = self.group()
                 let lifted = drag?.id == id ? drag?.group ?? group : group
-                let left = lifted.contains { !group.contains($0) }
+                let left = TasksDragRelease.hasLeft(lifted, from: group)
                 guard let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
                 let moved = value.translation.height + (drag?.id == id ? (drag?.scrolled ?? 0) : 0)
                 let crossing = crossDay(value.location)

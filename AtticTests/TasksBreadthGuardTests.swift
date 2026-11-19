@@ -16,14 +16,16 @@ final class TasksBreadthGuardTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
-        TasksCellBodyCounts.groupLookups = 0
+        TasksCellBodyCounts.reset()
+        TasksCellBodyCounts.records = true
     }
 
     override func tearDown() async throws {
         window?.close()
         window = nil
         TasksCellBodyCounts.recordsDragGroups = false
-        TasksCellBodyCounts.dragGroups = [:]
+        TasksCellBodyCounts.records = false
+        TasksCellBodyCounts.reset()
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
         try await super.tearDown()
@@ -230,6 +232,52 @@ final class TasksBreadthGuardTests: XCTestCase {
         let stale = untouched.filter { TasksCellBodyCounts.builderPalettes[$0] != recoloured }
         print("BREADTH_PALETTE_EDIT drawn=\(drawn.count) untouched=\(untouched.count) stale_builders=\(stale.count)")
         XCTAssertEqual(stale.count, 0, "rows whose menus read the old palette after a pass that read the new one")
+    }
+
+    // MARK: - Fix round 2
+
+    /// Astra R-9: the release's check that the lifted group is still whole
+    /// does work in proportion to the group, not its square: at most ten
+    /// hashes and comparisons a row for unchanged groups of 400 and 4,000.
+    func testAReleaseChecksItsGroupInLinearWork() {
+        for count in [400, 4_000] {
+            let ids = (0..<count).map(CountedID.init)
+            CountedID.work = 0
+            XCTAssertFalse(TasksDragRelease.hasLeft(ids, from: ids), "the case under test: the group is unchanged")
+            let work = CountedID.work
+            print("BREADTH_RELEASE_WORK rows=\(count) work=\(work)")
+            XCTAssertLessThanOrEqual(work, 10 * count, "the release's group check at \(count) rows")
+        }
+        let ids = (0..<400).map(CountedID.init)
+        XCTAssertTrue(TasksDragRelease.hasLeft(ids, from: Array(ids.dropFirst())), "a row that left is found")
+        XCTAssertFalse(TasksDragRelease.hasLeft(ids, from: ids + [CountedID(id: 400)]), "a row that joined is not a row that left")
+    }
+
+    /// Astra R-10: with recording off (as outside these tests), hosting a
+    /// page, recolouring it, editing a row and closing it records nothing:
+    /// no row payload or palette stays behind.
+    func testRecordsStayEmptyWhenRecordingIsOff() throws {
+        TasksCellBodyCounts.records = false
+        let store = try makeStore(open: 6)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        let palette = PaletteBox()
+        let hosting = page(model, store, pointer: pointer, palette: palette)
+        let ids = model.rows(for: .now).map(\.id)
+        XCTAssertFalse(drawnRows(pointer, ids).isEmpty, "the case under test: the page drew rows")
+        palette.palette = AtticTagPalette(hues: ["work": .green])
+        XCTAssertTrue(model.setPriority(.high, for: [ids[0]]).isApplied)
+        settle(hosting)
+        window?.close()
+        window = nil
+        drain()
+        XCTAssertTrue(TasksCellBodyCounts.evaluations.isEmpty, "wrapper counts")
+        XCTAssertTrue(TasksCellBodyCounts.leaves.isEmpty, "leaf counts")
+        XCTAssertTrue(TasksCellBodyCounts.leafModels.isEmpty, "row models")
+        XCTAssertTrue(TasksCellBodyCounts.builderPalettes.isEmpty, "builder palettes")
+        XCTAssertTrue(TasksCellBodyCounts.passPalettes.isEmpty, "pass palettes")
+        XCTAssertTrue(TasksCellBodyCounts.dragGroups.isEmpty, "drag groups")
+        XCTAssertEqual(TasksCellBodyCounts.groupLookups, 0, "group lookups")
     }
 
     // MARK: - Fix round 1: drags
@@ -449,6 +497,20 @@ final class TasksBreadthGuardTests: XCTestCase {
     private final class Clock: @unchecked Sendable {
         var now: Date
         init(now: Date) { self.now = now }
+    }
+
+    /// An id that counts each hash and each comparison made with it.
+    private struct CountedID: Hashable {
+        let id: Int
+        nonisolated(unsafe) static var work = 0
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            work += 1
+            return lhs.id == rhs.id
+        }
+        func hash(into hasher: inout Hasher) {
+            Self.work += 1
+            hasher.combine(id)
+        }
     }
 
     private final class PaletteBox: ObservableObject {
