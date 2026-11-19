@@ -317,10 +317,37 @@ final class TasksTabHostTests: XCTestCase {
         defer { hosted.close() }
         try focusANowRow(hosted)
         let departing = try inUse(hosted)
-        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: .backlog, bySwipe: true) }
-        hosted.spin(1.2)
+        var crossed = false
+        swipe(hosted) {
+            if hosted.model.tab == .now {
+                XCTAssertTrue(keyboardHost(hosted) === departing, "before the crossing, Now's host has the keyboard")
+            } else {
+                crossed = true
+            }
+        }
+        XCTAssertTrue(crossed, "the swipe crossed halfway to Later")
         try waitForTheSwitch(hosted, to: "Later", from: departing, joined: false)
         try assertTheArrivingTabHasTheKeyboard(hosted, .backlog)
+    }
+
+    /// A trackpad swipe toward the next tab, through the page's scroll
+    /// path (`pagerScrolled`): began, movements, the fingers lift, then
+    /// its momentum. `step` runs after each movement.
+    private func swipe(_ hosted: Hosted, steps: Int = 30, dx: CGFloat = -14, step: () -> Void) {
+        var time = CACurrentMediaTime()
+        func send(_ phase: TasksPagerSwipe.Sample.Phase, dx: CGFloat = 0, momentum: Bool = false) {
+            time += 1.0 / 120
+            _ = hosted.model.pagerScrolled(.init(phase: phase, momentum: momentum, dx: dx, dy: 0, time: time, precise: true),
+                                           allowed: true)
+        }
+        send(.began)
+        for _ in 0..<steps {
+            send(.changed, dx: dx)
+            hosted.spin(1.0 / 120)
+            step()
+        }
+        send(.ended)
+        for _ in 0..<20 { send(.none, dx: dx, momentum: true) }
     }
 
     func testOwnershipPageAwayAndBack() throws {
