@@ -241,7 +241,17 @@ final class TasksTabHostTests: XCTestCase {
         throw TheSwitchNeverLanded()
     }
 
+    /// No row focus is left on a tab not in use (§5.1, KB-CLAIM-RACE): the
+    /// leaving host's focus state goes nil with the keyboard, unwritten.
+    private func assertNoFocusLeftBehind(_ hosted: Hosted, line: UInt = #line) {
+        #if DEBUG
+        XCTAssertEqual(TasksRowFocusLink.current?.tabsHoldingFocus(besides: hosted.model.tab), [],
+                       "no row focus is left on a tab not in use", line: line)
+        #endif
+    }
+
     private func assertTheArrivingTabHasTheKeyboard(_ hosted: Hosted, _ tab: TasksTab, line: UInt = #line) throws {
+        assertNoFocusLeftBehind(hosted, line: line)
         XCTAssertTrue(keyboardHost(hosted) === (try inUse(hosted)), "the arriving tab's host claimed the keyboard: \(String(describing: hosted.window.firstResponder))", line: line)
         down(hosted)
         XCTAssertEqual(hosted.model.keyboardFocus?.page, tab.rawValue, "↓ reaches a row of the arriving tab", line: line)
@@ -396,10 +406,13 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.now.rawValue, "↓ on Now reaches a Now row")
         hosted.go(to: .backlog)
         XCTAssertNotEqual(hosted.model.keyboardFocus?.page, TasksTab.now.rawValue, "Now's row let go on leaving")
+        assertNoFocusLeftBehind(hosted)
         hosted.press("\u{F701}", keyCode: 125)
         hosted.spin(0.3)
         XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.backlog.rawValue, "↓ on Later reaches a Later row")
         hosted.go(to: .now)
+        assertNoFocusLeftBehind(hosted)
+        XCTAssertNil(hosted.model.keyboardFocus, "back on Now, no row is remembered (as on the trunk)")
         hosted.press("\u{F701}", keyCode: 125)
         hosted.spin(0.3)
         XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.now.rawValue, "and on Now again")

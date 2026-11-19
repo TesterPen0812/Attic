@@ -202,6 +202,8 @@ struct TasksPage: View {
         // A row's focus changes inside its tab's host; the page hears it
         // here (the outward notification, host-boundary.md §5, HB-02).
         let _ = rowFocus.changed = { focus in rowFocusChanged(focus) }
+        // The link writes only the tab in use (§5.1, KB-CLAIM-RACE).
+        let _ = rowFocus.tabInUse = { [model] in model.tab }
         // In three parts (round 10: one chain was too long for the
         // compiler to type-check in time on CI).
         observingModel(observingEdits(frame))
@@ -339,10 +341,6 @@ struct TasksPage: View {
     }
 
     private func pageAppeared() {
-        // The tab being left clears its own rows' focus before the tab
-        // changes, never through the new tab's link (HB-02). It hands the
-        // keyboard to no one; the arriving tab's host claims it (§5.1).
-        model.tabWillChange = { [rowFocus] leaving in rowFocus.clear(leaving) }
         // Row frames are measured relative to the moving page. Convert to
         // TasksPage.space only when an interaction needs a frame.
         pointer.pageOffset = { [weak motion = swipe.motion, weak swipe] tab in
@@ -675,9 +673,11 @@ struct TasksPage: View {
             // with the page it searched (read when the change lands: a
             // search opened on the new page meanwhile keeps it).
             if searchFocused, searchTab != model.tab { searchFocused = false }
-            // The last page's row keeps no claim on the keyboard: the tab
-            // being left cleared its own focus before the tab changed
-            // (`TasksPageModel.tabWillChange`, set in `pageAppeared`).
+            // The last page's row keeps no claim on the keyboard. Nothing
+            // writes a row focus state on a tab change: the leaving host
+            // gives the keyboard up (`releaseKeyboard`), its rows' focus
+            // state goes nil with it, and the model let go of its copy as
+            // the tab changed (host-boundary.md §5.1, KB-CLAIM-RACE).
             // A tab, a key, ⌘1–3, `show` or Search: the page goes straight
             // there. A swipe's own live tab leaves the page with the fingers.
             if !swipe.isTracking {
@@ -3910,16 +3910,39 @@ struct TasksCellKey: Equatable {
 
 /// Where the page reaches its rows' focus states: one per tab, each held
 /// by that tab's `TasksRowFocusOwner` inside the tab's host
-/// (host-boundary.md §5). Set as each owner draws; read and written by the
-/// page's handlers; a change on any tab is reported through `changed`.
+/// (host-boundary.md §5). Set as each owner draws; read by the page's
+/// handlers, and written only on the tab in use; a change on any tab is
+/// reported through `changed`.
+///
+/// A tab not in use is never written (§5.1, KB-CLAIM-RACE): SwiftUI applies
+/// a focus-state write at a later update and then resigns the window's
+/// first responder, whoever holds it, so a write to the tab being left took
+/// the keyboard back from the arriving tab's host after its claim. A row
+/// focus still set on a tab not in use is a failure the tests name
+/// (`tabsHoldingFocus(besides:)`), never cleared here.
 @MainActor
 final class TasksRowFocusLink {
     private var bindings: [TasksTab: FocusState<AtticRowFocusID?>.Binding] = [:]
     /// The page's handler for a focus change on any tab.
     var changed: ((AtticRowFocusID?) -> Void)?
+    /// The tab in use, the only one the link writes (the page sets this).
+    var tabInUse: (() -> TasksTab)?
 
     func set(_ binding: FocusState<AtticRowFocusID?>.Binding, for tab: TasksTab) {
         bindings[tab] = binding
+        #if DEBUG
+        Self.current = self
+        #endif
+    }
+
+    #if DEBUG
+    /// The link whose owners drew last (tests host one page at a time).
+    static weak var current: TasksRowFocusLink?
+    #endif
+
+    /// The tabs other than `tab` whose rows still hold a focus state.
+    func tabsHoldingFocus(besides tab: TasksTab) -> [TasksTab] {
+        TasksTab.allCases.filter { $0 != tab && bindings[$0]?.wrappedValue != nil }
     }
 
     /// A tab's binding, once its owner has drawn (every row is built under
@@ -3934,12 +3957,12 @@ final class TasksRowFocusLink {
         return TasksTab.allCases.lazy.compactMap { self.bindings[$0]?.wrappedValue }.first
     }
 
-    /// Gives the keyboard to `value` on its own tab and takes it from the
-    /// others; nil takes it from every tab.
+    /// Gives the keyboard to `value`, a row of the tab in use; nil takes it
+    /// from the tab in use. A row of another tab is refused.
     func setValue(_ value: AtticRowFocusID?) {
-        let owner = value.flatMap { TasksTab(rawValue: $0.page) }
-        for tab in TasksTab.allCases where tab != owner { clear(tab) }
-        if let owner, let value, bindings[owner]?.wrappedValue != value { bindings[owner]?.wrappedValue = value }
+        guard let tab = tabInUse?(), let binding = bindings[tab] else { return }
+        if let value, value.page != tab.rawValue { return }
+        if binding.wrappedValue != value { binding.wrappedValue = value }
     }
 
     /// A tab's owner saw its focus change. A tab letting go while another
@@ -3948,11 +3971,6 @@ final class TasksRowFocusLink {
     func report(_ focus: AtticRowFocusID?, from tab: TasksTab) {
         if focus == nil, TasksTab.allCases.contains(where: { $0 != tab && bindings[$0]?.wrappedValue != nil }) { return }
         changed?(focus)
-    }
-
-    /// Takes the keyboard from `tab`'s rows (the departure step).
-    func clear(_ tab: TasksTab) {
-        if bindings[tab]?.wrappedValue != nil { bindings[tab]?.wrappedValue = nil }
     }
 
     private static var generation: UInt64 = 0

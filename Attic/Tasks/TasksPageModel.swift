@@ -311,15 +311,20 @@ final class TasksPageModel: ObservableObject {
     /// `TasksPage.body`). Sent after the store, a flush in the send reads
     /// the new tab.
     var tab: TasksTab = .now {
-        // The tab being left lets go of its rows' focus first (the page
-        // sets this; host-boundary.md §5, HB-02).
         willSet {
             #if DEBUG
             TasksPageRenderProbe.settingTab = newValue
             #endif
-            if newValue != tab { tabWillChange?(tab) }
+            // The model lets go of its copy of the leaving tab's row focus
+            // (the trunk's "the last page's row keeps no claim"). Nothing
+            // writes a row focus state here (host-boundary.md §5.1,
+            // KB-CLAIM-RACE): the leaving host gives the keyboard up and its
+            // rows' focus state goes nil with it.
+            if newValue != tab, keyboardFocus?.page == tab.rawValue {
+                keyboardFocus = nil
+                keyboardFocusSelectionRevision = nil
+            }
         }
-        // Remembered across relaunch (L7), where the page has a memory.
         didSet {
             // As `@Published` did: every set is sent.
             objectWillChange.send()
@@ -330,8 +335,6 @@ final class TasksPageModel: ObservableObject {
             #endif
         }
     }
-    /// Called with the tab being left, before `tab` changes.
-    var tabWillChange: ((TasksTab) -> Void)?
     @Published private(set) var selection: Set<UUID> = [] {
         didSet { if selection != oldValue { selectionRevision += 1 } }
     }
