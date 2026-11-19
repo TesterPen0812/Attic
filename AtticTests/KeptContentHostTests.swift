@@ -149,7 +149,9 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertNil(hidden.hitTest(hidden.convert(centre, to: hidden.superview)), "a hidden host takes no click")
         XCTAssertEqual(hidden.accessibilityChildren()?.count ?? 0, 0, "a hidden host has no accessibility children")
         XCTAssertNil(hidden.accessibilityHitTest(fixture.screenCentre), "a hidden host answers no accessibility hit")
-        XCTAssertTrue(labels(under: shown).contains("First"), "the shown host answers with its content")
+        XCTAssertTrue(labels(under: fixture.root).contains("First"), "the window's tree reads the shown host's content")
+        XCTAssertFalse(labels(under: fixture.root).contains("Hidden"), "and nothing of the hidden one")
+        XCTAssertTrue(shown.isAccessibilityElement() || (shown.accessibilityChildren()?.count ?? 0) > 0, "the shown host answers")
         XCTAssertTrue(shown.acceptsFirstMouse(for: nil), "the panel takes its first press in a nested host")
     }
 
