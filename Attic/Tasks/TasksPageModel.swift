@@ -1298,7 +1298,15 @@ final class TasksPageModel: ObservableObject {
             // Keep what the page showed for this search; a new search shows
             // what was read. Not marked as loaded, so Retry reads again. A
             // failed family read counts as a failed read.
-            if !same { setDoneLog(page.tasks, families: familyRead.families) }
+            if !same {
+                // The rows shown are now this search's, and none is read: the
+                // earlier search is no longer what loaded (Astra r6 F1). The
+                // next load, Retry or a return to that search reads in full.
+                setDoneLog(page.tasks, families: familyRead.families)
+                doneLogQuery = query
+                doneLogTag = tag
+                doneLogRevision = nil
+            }
             doneLogCursor = page.next
             doneLogHasMore = true
             doneLogFailure = failure
