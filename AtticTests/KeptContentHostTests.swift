@@ -233,6 +233,35 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertTrue(labels(under: fixture.root).contains("First"), "in use again, it is read")
     }
 
+    /// HB-05: a host coming into use takes clicks and the keyboard at
+    /// once, and joins accessibility only after its first frame, so a read
+    /// does not mount rows in the reveal's frame.
+    func testAHostComingIntoUseIsInteractiveAtOnceAndReadAfterItsFirstFrame() throws {
+        let fixture = makeFixture(firstShown: false)
+        defer { fixture.window.close() }
+        let first = try XCTUnwrap(fixture.hosts.first)
+        XCTAssertFalse(first.isInteractive)
+        fixture.state.first = true
+        // The update that shows it, and no turn of the run loop yet.
+        fixture.root.needsLayout = true
+        fixture.root.layoutSubtreeIfNeeded()
+        XCTAssertTrue(first.isInteractive, "in use at once")
+        XCTAssertTrue(first.acceptsFirstMouse(for: nil))
+        let centre = NSPoint(x: first.bounds.midX, y: first.bounds.midY)
+        XCTAssertNotNil(first.hitTest(first.convert(centre, to: first.superview)), "takes a click at once")
+        XCTAssertFalse(first.isAccessible, "not read in the reveal's frame")
+        XCTAssertEqual(first.accessibilityChildren()?.count ?? 0, 0, "no children in the reveal's frame")
+        XCTAssertNil(first.accessibilityHitTest(fixture.screenCentre), "no hit in the reveal's frame")
+        fixture.settle()
+        XCTAssertTrue(first.isAccessible, "read after its first frame")
+        XCTAssertTrue(labels(under: fixture.root).contains("First"), "and its content is read")
+        // Out of use again: not read at once.
+        fixture.state.first = false
+        fixture.root.needsLayout = true
+        fixture.root.layoutSubtreeIfNeeded()
+        XCTAssertFalse(first.isAccessible)
+    }
+
     /// The content's environment is forwarded by name, never whole (the
     /// whole copy carried the panel host's focus values and its focus
     /// bridge took the keyboard back, §5). Every value the Tasks content

@@ -23,7 +23,58 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     var isInteractive = true {
         didSet {
             guard isInteractive != oldValue else { return }
-            if !isInteractive { releaseKeyboard() }
+            if isInteractive {
+                joinAccessibilityAfterTheFirstFrame()
+            } else {
+                stopJoining()
+                isAccessible = false
+                releaseKeyboard()
+            }
+        }
+    }
+
+    /// Whether accessibility reads the content. A host that comes into use
+    /// takes clicks and the keyboard at once, but joins accessibility only
+    /// after its first drawn frame: a client's read mounts the rows it asks
+    /// for (Later 9 to 17 on its first reveal), and in that frame it made
+    /// the reveal's longest frame 40 ms longer (HB-05, the lead's ruling).
+    private(set) var isAccessible = true
+    private var joinLink: CADisplayLink?
+
+    /// Joins on the next display frame, after the reveal's frame has been
+    /// committed; a window on no screen (draws no frames) joins on the next
+    /// turn of the run loop.
+    private func joinAccessibilityAfterTheFirstFrame() {
+        stopJoining()
+        isAccessible = false
+        guard window?.screen != nil else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isInteractive, self.joinLink == nil else { return }
+                self.isAccessible = true
+            }
+            return
+        }
+        let link = displayLink(target: self, selector: #selector(joinAccessibility(_:)))
+        link.add(to: .main, forMode: .common)
+        joinLink = link
+    }
+
+    @objc private func joinAccessibility(_ link: CADisplayLink) {
+        stopJoining()
+        if isInteractive { isAccessible = true }
+    }
+
+    private func stopJoining() {
+        joinLink?.invalidate()
+        joinLink = nil
+    }
+
+    /// A host taken out of its window stops waiting (the link holds it).
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil, joinLink != nil {
+            stopJoining()
+            isAccessible = isInteractive
         }
     }
 
@@ -70,21 +121,21 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     }
 
     override func isAccessibilityElement() -> Bool {
-        isInteractive && super.isAccessibilityElement()
+        isInteractive && isAccessible && super.isAccessibilityElement()
     }
 
     override func accessibilityChildren() -> [Any]? {
         #if DEBUG
         KeptContentHostCounts.accessibilityChildren(interactive: isInteractive)
         #endif
-        return isInteractive ? super.accessibilityChildren() : []
+        return isInteractive && isAccessible ? super.accessibilityChildren() : []
     }
 
     override func accessibilityHitTest(_ point: NSPoint) -> Any? {
         #if DEBUG
         KeptContentHostCounts.accessibilityHit(interactive: isInteractive)
         #endif
-        return isInteractive ? super.accessibilityHitTest(point) : nil
+        return isInteractive && isAccessible ? super.accessibilityHitTest(point) : nil
     }
 
     /// The kept host holding `window`'s keyboard gives it to the view around
