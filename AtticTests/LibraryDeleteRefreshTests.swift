@@ -69,31 +69,53 @@ final class LibraryDeleteRefreshTests: XCTestCase {
         XCTAssertTrue(coordinator.lifecycleLibrary === library)
         XCTAssertTrue(coordinator.lifecycleNotes === controller)
         let deleted = revisionPublishes { XCTAssertTrue(library.deleteTasks([plain]).isApplied) }
-        // The commit step refreshes twice (the library's stores, then the
-        // Notes controller's whole-item publish); the library adds none.
-        XCTAssertEqual(deleted, 2, "a task delete refreshes NoteStore only through its commit step")
+        // The commit step publishes once: the library's stores refresh
+        // (`AtticLibrary.refreshItemStores`) reloads this NoteStore. The Notes
+        // controller presents from that same store, so its whole-item publish
+        // does not reload it again (`publishWholeItemLifecycle`
+        // `notesReadInThisCommit:`); it would only if that reload had failed.
+        // The library adds none.
+        XCTAssertEqual(deleted, 1, "a task delete refreshes NoteStore only through its commit step")
         XCTAssertTrue(try rowDeleted(plain), "the task is in Recently Deleted")
         let undone = revisionPublishes { XCTAssertTrue(library.undo.undo(in: .tasks)) }
-        XCTAssertEqual(undone, 2, "Undo of the delete refreshes as the delete does")
+        // Undo commits through the same step: the one publish is again the
+        // library's stores refresh.
+        XCTAssertEqual(undone, 1, "Undo of the delete refreshes as the delete does")
         XCTAssertNotNil(tasks.task(withID: plain), "Undo brought the task back")
     }
 
     func testDeletingATaskThatOwnsWritingStillUpdatesNotes() throws {
         XCTAssertNotNil(notes.note(withID: writing))
-        let deleted = revisionPublishes { XCTAssertTrue(library.deleteTasks([owner]).isApplied) }
-        XCTAssertEqual(deleted, 2)
+        // What the Notes controller shows comes from its own store. That store
+        // is the library's, so the library's stores refresh is what moves it;
+        // the controller's whole-item publish no longer reloads it.
+        let shown = controller.store
+        XCTAssertTrue(shown === notes, "the Notes controller presents from the library's note store")
+        XCTAssertTrue(shown.notes.contains { $0.id == writing })
+        let deleted = revisionPublishes(of: shown) { XCTAssertTrue(library.deleteTasks([owner]).isApplied) }
+        // One publish: the library's stores refresh, which carries the
+        // writing's deletion.
+        XCTAssertEqual(deleted, 1)
         XCTAssertNil(notes.note(withID: writing), "the task's writing left Notes with it")
+        XCTAssertNil(shown.note(withID: writing), "the writing left the Notes controller's own view on delete")
+        XCTAssertFalse(shown.notes.contains { $0.id == writing })
         XCTAssertTrue(try rowDeleted(writing))
-        _ = revisionPublishes { XCTAssertTrue(library.undo.undo(in: .tasks)) }
+        let undone = revisionPublishes(of: shown) { XCTAssertTrue(library.undo.undo(in: .tasks)) }
+        // One publish again, the library's stores refresh, carrying the restore.
+        XCTAssertEqual(undone, 1)
         XCTAssertNotNil(notes.note(withID: writing), "Undo brought the writing back to Notes")
+        XCTAssertNotNil(shown.note(withID: writing), "Undo brought the writing back to the Notes controller's own view")
+        XCTAssertTrue(shown.notes.contains { $0.id == writing })
     }
 
     func testNoteDeletePublishesItsSaveAndItsCommitStepOnly() throws {
         let deleted = revisionPublishes { XCTAssertTrue(library.delete(AtticItemRef(.note, loose))) }
         // The note store's own save publishes twice (its reload, then the
-        // saved-change record), and the commit step refreshes twice (the
-        // library's stores, then the Notes controller); the library adds none.
-        XCTAssertEqual(deleted, 4, "a note delete publishes for its own save and its commit step only")
+        // saved-change record), and the commit step once: the library's
+        // stores refresh reloads NoteStore, and the Notes controller, which
+        // presents from that store, does not reload it again. The library
+        // adds none.
+        XCTAssertEqual(deleted, 3, "a note delete publishes for its own save and its commit step only")
         XCTAssertNil(notes.note(withID: loose))
     }
 
@@ -126,7 +148,10 @@ final class LibraryDeleteRefreshTests: XCTestCase {
         let deleted = revisionPublishes {
             reachedOther = revisionPublishes(of: otherNotes) { XCTAssertTrue(library.deleteTasks([plain]).isApplied) }
         }
-        XCTAssertEqual(reachedOther, 2, "the commit step refreshes the lifecycle's stores")
+        // Once: the lifecycle library's stores refresh reloads `otherNotes`;
+        // `otherController` presents from that same store and does not
+        // reload it again.
+        XCTAssertEqual(reachedOther, 1, "the commit step refreshes the lifecycle's stores")
         XCTAssertEqual(deleted, 1, "the deleting library still refreshes its own stores once")
         XCTAssertNil(tasks.task(withID: plain), "the deleting library's Tasks dropped the task")
         await otherNotes.waitForAttachmentReconciliation()
