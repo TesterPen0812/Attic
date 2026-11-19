@@ -274,37 +274,58 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertEqual(missing, [:], "read inside a kept host but not forwarded (KeptEnvironment.entries)")
     }
 
-    /// Values set above the host arrive inside it.
+    /// What the whole copy gave for free still arrives (§5): values set
+    /// above the host (colour scheme, theme, enabled, key state, locale,
+    /// direction) and values the host reads from its window (reduce motion)
+    /// are the same inside the host as just outside it.
     func testForwardedValuesReachTheContent() {
-        final class Seen { var scheme: ColorScheme?; var enabled: Bool?; var active: ControlActiveState? }
+        struct Read: Equatable {
+            var scheme: ColorScheme?, enabled: Bool?, active: ControlActiveState?
+            var locale: String?, direction: LayoutDirection?, reduceMotion: Bool?, design: AtticDesignContext?
+        }
+        final class Seen { var outside = Read(); var inside = Read() }
         struct Probe: View {
             let seen: Seen
+            let inside: Bool
             @Environment(\.colorScheme) private var scheme
             @Environment(\.isEnabled) private var enabled
             @Environment(\.controlActiveState) private var active
+            @Environment(\.locale) private var locale
+            @Environment(\.layoutDirection) private var direction
+            @Environment(\.accessibilityReduceMotion) private var reduceMotion
+            @Environment(\.atticDesign) private var design
             var body: some View {
-                let _ = { seen.scheme = scheme; seen.enabled = enabled; seen.active = active }()
+                let read = Read(scheme: scheme, enabled: enabled, active: active, locale: locale.identifier,
+                                direction: direction, reduceMotion: reduceMotion, design: design)
+                let _ = { if inside { seen.inside = read } else { seen.outside = read } }()
                 Color.clear
             }
         }
         let seen = Seen()
+        let design = AtticDesignContext(mode: .dark)
         let window = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 100, height: 100),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        window.contentView = NSHostingView(rootView: KeptContentHost(drawn: true, interactive: true) { Probe(seen: seen) }
+        window.contentView = NSHostingView(rootView: ZStack {
+            Probe(seen: seen, inside: false)
+            KeptContentHost(drawn: true, interactive: true) { Probe(seen: seen, inside: true) }
+        }
             .disabled(true)
             .environment(\.colorScheme, .dark)
             .environment(\.controlActiveState, .key)
+            .environment(\.locale, Locale(identifier: "ar_EG"))
+            .environment(\.layoutDirection, .rightToLeft)
+            .environment(\.atticDesign, design)
             .frame(width: 100, height: 100))
         window.orderFront(nil)
         window.contentView?.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         window.contentView?.layoutSubtreeIfNeeded()
-        XCTAssertEqual(seen.scheme, .dark)
-        XCTAssertEqual(seen.enabled, false)
-        XCTAssertEqual(seen.active, .key)
+        XCTAssertEqual(seen.outside.scheme, .dark, "the probe outside read the values set above")
+        XCTAssertEqual(seen.outside.locale, "ar_EG")
+        XCTAssertEqual(seen.inside, seen.outside, "inside the host as just outside it")
     }
 
     /// HB-03: a nested host's own update runs inside the overlay layout
