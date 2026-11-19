@@ -357,6 +357,63 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertEqual(seen.inside, seen.outside, "inside the host as just outside it")
     }
 
+    /// §4.2 and the lead's ruling (19 Nov): a host that is not drawn takes
+    /// no new environment, and the update that draws it brings the current
+    /// values before its first frame (a theme changed while Later was
+    /// hidden shows on its first reveal, not a frame later).
+    func testAHostRevealedAfterAThemeChangeWhileHiddenShowsTheCurrentThemeInItsFirstFrame() {
+        final class Seen { var scheme: ColorScheme?; var design: AtticDesignContext? }
+        final class Outer: ObservableObject {
+            @Published var drawn = false
+            @Published var dark = false
+        }
+        struct Probe: View {
+            let seen: Seen
+            @Environment(\.colorScheme) private var scheme
+            @Environment(\.atticDesign) private var design
+            var body: some View {
+                let _ = { seen.scheme = scheme; seen.design = design }()
+                Color.clear
+            }
+        }
+        struct Root: View {
+            @ObservedObject var outer: Outer
+            let seen: Seen
+            var body: some View {
+                KeptContentHost(drawn: outer.drawn, interactive: outer.drawn) { Probe(seen: seen) }
+                    .environment(\.colorScheme, outer.dark ? .dark : .light)
+                    .environment(\.atticDesign, AtticDesignContext(mode: outer.dark ? .dark : .light))
+                    .frame(width: 100, height: 100)
+            }
+        }
+        let seen = Seen(), outer = Outer()
+        let window = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 100, height: 100),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = NSHostingView(rootView: Root(outer: outer, seen: seen))
+        window.contentView = root
+        window.orderFront(nil)
+        func settle() {
+            root.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            root.layoutSubtreeIfNeeded()
+        }
+        settle()
+        XCTAssertEqual(seen.scheme, .light, "hidden from the start, with the values it was made with")
+        outer.dark = true
+        settle()
+        XCTAssertEqual(seen.scheme, .light, "hidden: the theme change does not reach it")
+        outer.drawn = true
+        // The update that draws it, and its first frame, with no turn of the run loop.
+        root.needsLayout = true
+        root.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        XCTAssertEqual(seen.scheme, .dark, "its first frame has the current scheme")
+        XCTAssertEqual(seen.design, AtticDesignContext(mode: .dark), "and the current design")
+    }
+
     /// HB-03: a nested host's own update runs inside the overlay layout
     /// guard, as the panel's root does, so an overlay anchor made or
     /// dismantled there changes the hierarchy only after the pass.

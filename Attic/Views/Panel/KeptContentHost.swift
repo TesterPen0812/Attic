@@ -213,6 +213,8 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     final class Coordinator {
         /// The root last set was a hidden one.
         var hiddenRootSet = false
+        /// The host's own environment, held while it is not drawn.
+        let hold = KeptEnvironmentHold()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -253,7 +255,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     }
 
     private func root(_ context: Context) -> AnyView {
-        let forwarded = KeptEnvironment(source: context.environment)
+        let forwarded = KeptEnvironment(source: context.environment, hold: context.coordinator.hold, holding: !drawn)
         if let space {
             return AnyView(content().coordinateSpace(space).modifier(forwarded))
         }
@@ -272,16 +274,29 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
 /// `KeptContentHostTests.testTheTasksContentReadsOnlyForwardedOrHostDerivedValues`
 /// fails when the Tasks content reads a value that is neither here nor
 /// derived by the host.
+///
+/// Not drawn, the host takes no new environment (§4.2, "No new root while
+/// hidden"): the forwarded values come from the root, which is not set
+/// while hidden, and what the host derives itself is held at its last
+/// drawn value. An outside accessibility read changes the host's own
+/// values, and a hidden Later tab then mounted 9 to 17 rows (resize's
+/// HB5B census on c6042b47). Drawn again, it takes the current values in
+/// the update that draws it, before its first frame.
 struct KeptEnvironment: ViewModifier {
     let source: EnvironmentValues
+    var hold: KeptEnvironmentHold?
+    var holding = false
 
     struct Entry {
         let name: String
         let copy: (EnvironmentValues, inout EnvironmentValues) -> Void
+        let describe: (EnvironmentValues) -> String
     }
 
     private static func entry<Value>(_ name: String, _ key: WritableKeyPath<EnvironmentValues, Value>) -> Entry {
-        Entry(name: name) { source, values in values[keyPath: key] = source[keyPath: key] }
+        Entry(name: name,
+              copy: { source, values in values[keyPath: key] = source[keyPath: key] },
+              describe: { String(describing: $0[keyPath: key]) })
     }
 
     /// Set above the host by the panel or the page, and read inside it.
@@ -350,15 +365,49 @@ struct KeptEnvironment: ViewModifier {
 
     func body(content: Content) -> some View {
         let source = source
+        let hold = hold
+        let holding = holding
         let palette = source.atticPanelThemePalette
         return content
             .transformEnvironment(\.self) { values in
+                if let hold {
+                    if holding, let held = hold.held {
+                        #if DEBUG
+                        hold.logChanges(from: held, to: values)
+                        #endif
+                        values = held
+                    } else {
+                        hold.held = values
+                    }
+                }
                 for entry in Self.entries { entry.copy(source, &values) }
             }
             // The panel's default text styles (AtticPanelView's
             // `foregroundStyle`) travel as a style, not a named value.
             .foregroundStyle(palette.primaryForegroundColor, palette.secondaryForegroundColor)
     }
+}
+
+/// The environment a kept host derives itself, as last drawn (or as first
+/// seen, for a host that has never been drawn).
+@MainActor
+final class KeptEnvironmentHold {
+    var held: EnvironmentValues?
+
+    #if DEBUG
+    /// Names what changes in a hidden host's own environment (the lead's
+    /// ruling: which value an outside read flips).
+    func logChanges(from held: EnvironmentValues, to values: EnvironmentValues) {
+        let before = String(describing: held), after = String(describing: values)
+        guard before != after else { return }
+        let named = KeptEnvironment.entries
+            .filter { $0.describe(held) != $0.describe(values) }
+            .map(\.name)
+        let old = Set(before.components(separatedBy: ", ")), new = after.components(separatedBy: ", ")
+        let others = new.filter { !old.contains($0) }.prefix(8).map { String($0.prefix(160)) }
+        print("KeptEnvironment: hidden host's own values changed; forwarded \(named); others \(others)")
+    }
+    #endif
 }
 
 #if DEBUG
