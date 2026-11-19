@@ -411,7 +411,13 @@ final class TaskStore: ObservableObject {
     weak var commandLibrary: AtticLibrary?
 
     let container: ModelContainer
-    private var context: ModelContext
+    private var context: ModelContext {
+        didSet { contextGeneration &+= 1 }
+    }
+    /// Counts the times the store started reading through a new context. A
+    /// page that keeps rows it read (the Done log) reads them again when this
+    /// changed, so it never presents rows of a context the store let go.
+    private(set) var contextGeneration: UInt64 = 0
     private var taskEditNeedsReload = false
     /// The last list read failed, so the list may lack tasks that are saved.
     var hasUnresolvedTaskReload: Bool { taskEditNeedsReload }
@@ -3082,6 +3088,43 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    /// The first `limit` IDs of the panel's logical cursor and how many it
+    /// walks in all, from the index (no read). The Done page compares them
+    /// with what it loaded to tell whether a save moved its loaded rows.
+    func indexedDoneLogIDs(limit: Int, matching query: String = "", tags: TagPicks = .none) -> (ids: [UUID], total: Int) {
+        let ids = doneSearchIDs(matching: query, tags: tags)
+        return (Array(ids.prefix(max(0, limit))), ids.count)
+    }
+
+    /// Done log main tasks by ID, the replica each shows. A task no longer
+    /// in the log is left out. A failed read returns its message, as a
+    /// failed page does.
+    func doneLogTasks(withIDs ids: [UUID]) -> (tasks: [TaskItem], failure: String?) {
+        donePageReadCount += 1
+        guard !ids.isEmpty else { return ([], nil) }
+        do {
+            let rows = try readDoneLog(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+            return (Self.canonicalReplicas(from: rows).filter {
+                $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil
+            }, nil)
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return ([], error.localizedDescription)
+        }
+    }
+
+    /// The parent of every saved replica of `ids` (a subtask's, wherever it
+    /// is: listed, logged or deleted); nil when the read failed. A Done log
+    /// read, so a test can make it fail (`doneLogReadFailures`).
+    func savedParentIDs(of ids: Set<UUID>) -> Set<UUID>? {
+        guard !ids.isEmpty else { return [] }
+        let wanted = Array(ids)
+        guard let rows = try? readDoneLog(FetchDescriptor<TaskItem>(predicate: #Predicate { wanted.contains($0.id) })) else {
+            return nil
+        }
+        return Set(rows.compactMap(\.parentID))
+    }
+
     /// The Done log's order: most recently finished first (the shown
     /// replica's completion time), then newest created, then id.
     static func doneLogOrder(_ lhs: TaskItem, _ rhs: TaskItem) -> Bool {
@@ -3099,7 +3142,11 @@ final class TaskStore: ObservableObject {
             doneLogReadFailures -= 1
             throw DoneLogReadFailure()
         }
-        return try context.fetch(descriptor)
+        let rows = try context.fetch(descriptor)
+        #if DEBUG
+        doneLogRowsReadCount += rows.count
+        #endif
+        return rows
     }
 
     private struct DoneLogReadFailure: LocalizedError {
@@ -3108,6 +3155,13 @@ final class TaskStore: ObservableObject {
 
     /// Test seam: the next `count` Done log reads fail.
     var doneLogReadFailures = 0
+    #if DEBUG
+    /// Test seam: the next `count` batch family reads of the Done page
+    /// (`doneLogFamilies(ofParents:)`) fail, outside the per-parent fallback.
+    var doneFamilyBatchReadFailures = 0
+    /// Rows returned by Done log reads (`readDoneLog`), for the count guards.
+    private(set) var doneLogRowsReadCount = 0
+    #endif
 
     /// The subtasks of several Done log tasks, read together (one page's
     /// rows, Astra 19), each list in `doneLogSubtasks`' order. A parent
@@ -3119,10 +3173,24 @@ final class TaskStore: ObservableObject {
     private(set) var doneFamilyRowsReadCount = 0
     private(set) var donePageReadCount = 0
     func doneLogSubtasks(ofParents parentIDs: [UUID]) -> [UUID: [TaskItem]] {
+        doneLogFamilies(ofParents: parentIDs).families
+    }
+
+    /// The same families, and the message when the read failed (reported;
+    /// no family is returned then). The Done page's in-place update makes no
+    /// change when it fails, and a full read or page load that failed one
+    /// refuses the next in-place update (Astra r5 R1, PR 31).
+    func doneLogFamilies(ofParents parentIDs: [UUID]) -> (families: [UUID: [TaskItem]], failure: String?) {
         doneFamilyParentReadCount += parentIDs.count
-        guard !parentIDs.isEmpty else { return [:] }
+        guard !parentIDs.isEmpty else { return ([:], nil) }
         let wanted = Set(parentIDs)
         do {
+            #if DEBUG
+            if doneFamilyBatchReadFailures > 0 {
+                doneFamilyBatchReadFailures -= 1
+                throw DoneLogReadFailure()
+            }
+            #endif
             let optionalIDs: [UUID?] = parentIDs.map { $0 }
             let children: [TaskItem]
             do {
@@ -3135,17 +3203,17 @@ final class TaskStore: ObservableObject {
                 }
             }
             let ids = Array(Set(children.map(\.id)))
-            guard !ids.isEmpty else { return [:] }
+            guard !ids.isEmpty else { return ([:], nil) }
             let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
             var result: [UUID: [TaskItem]] = [:]
             for child in Self.canonicalReplicas(from: replicas) {
                 guard let parentID = child.parentID, wanted.contains(parentID), child.deletedAt == nil else { continue }
                 result[parentID, default: []].append(child)
             }
-            return result.mapValues { $0.sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) } }
+            return (result.mapValues { $0.sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) } }, nil)
         } catch {
             report(error.localizedDescription, owner: nil)
-            return [:]
+            return ([:], error.localizedDescription)
         }
     }
 
