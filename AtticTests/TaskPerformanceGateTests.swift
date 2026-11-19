@@ -633,7 +633,11 @@ final class TaskPerformanceGateTests: XCTestCase {
         let rig = try await makeF2Rig()
         let id = rig.ids[3]
         let before = rig.tasks.tasks.count
+        // The ordinary path's emissions, recorded as the R-5 tests record theirs, so the two can be read side by side.
+        let log = F2EmissionLog()
+        var bag = f2RecordEmissions(rig.tasks, id, into: log)
         XCTAssertTrue(rig.library.deleteTasks([id]).isApplied)
+        let deleteEvents = log.events.count, deleteArrays = log.arrays.count
         XCTAssertNil(rig.tasks.task(withID: id))
         XCTAssertEqual(rig.tasks.tasks.count, before - 1)
         XCTAssertFalse(rig.notes.notes.contains { $0.id == rig.writingID }, "The writing left Notes with its task")
@@ -644,6 +648,10 @@ final class TaskPerformanceGateTests: XCTestCase {
         XCTAssertTrue(!durable.isEmpty && durable.allSatisfy { $0.deletedAt != nil }, "Its writing is in Recently Deleted")
 
         XCTAssertTrue(rig.library.undo(in: .tasks).isApplied)
+        bag.removeAll()
+        print("F2_ORDINARY delete_events=\(log.events[..<deleteEvents].joined(separator: " | ")) "
+            + "undo_events=\(log.events[deleteEvents...].joined(separator: " | ")) "
+            + "array_emissions=\(log.arrays.count) delete_boundary=\(deleteArrays)")
         XCTAssertNotNil(rig.tasks.task(withID: id))
         XCTAssertEqual(rig.tasks.tasks.count, before)
         XCTAssertTrue(rig.notes.notes.contains { $0.id == rig.writingID })
