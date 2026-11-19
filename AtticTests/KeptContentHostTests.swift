@@ -68,6 +68,9 @@ final class KeptContentHostTests: XCTestCase {
         window.isReleasedWhenClosed = false
         let root = NSHostingView(rootView: Pair(state: state))
         window.contentView = root
+        // Ordered in (off screen, as the hosted Tasks tests do): SwiftUI builds
+        // a window's accessibility tree only once it is on a screen list.
+        window.orderFront(nil)
         let fixture = Fixture(window: window, root: root, state: state)
         fixture.settle()
         return fixture
