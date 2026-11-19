@@ -21,8 +21,9 @@ final class TasksTabHostTests: XCTestCase {
 
     /// Every tab kept built, each in its own host. Warming waits for idle
     /// input, so this waits, bounded, for the span and the three hosts.
-    private func warmed(line: UInt = #line) throws -> Hosted {
+    private func warmed(laterRows: Int = 0, line: UInt = #line) throws -> Hosted {
         let hosted = try Hosted(height: 520)
+        for index in 0..<laterRows { _ = hosted.store.create(title: "Later \(index + 1)", status: .backlog) }
         waitForTestOperation("every tab kept built, each in its own host", line: line) {
             hosted.spin(0.05)
             return hosted.model.pagerSwipe.span.warm == 0...2 && hosts(hosted).count == TasksTab.allCases.count
@@ -135,15 +136,27 @@ final class TasksTabHostTests: XCTestCase {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
         defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
-        let hosted = try warmed()
+        // More Later rows than its page shows, so a read that mounted rows
+        // for a client would show as new rows run.
+        let hosted = try warmed(laterRows: 30)
         defer { hosted.close() }
         let content = try XCTUnwrap(hosted.window.contentView)
+        #if DEBUG
+        TasksCellBodyCounts.records = true
+        TasksCellBodyCounts.leaves = [:]
+        defer { TasksCellBodyCounts.records = false }
+        func laterRowsRun() -> Set<UUID> { Set(TasksCellBodyCounts.leaves.keys.filter { $0.tab == .backlog }.map(\.id)) }
+        #endif
         for on in [true, false, true] {
             NSApp.accessibilitySetValue(on, forAttribute: enhanced)
             // A client's read of the panel, as an assistive client makes.
             _ = content.accessibilityChildren()
             hosted.spin(0.5)
+            #if DEBUG
+            XCTAssertEqual(laterRowsRun(), [], "a read while Later is hidden mounts and runs none of its rows")
+            #endif
         }
+        XCTAssertGreaterThan(hosted.model.rows(for: .backlog).count, 20, "more Later rows than its page shows")
         let departing = try inUse(hosted)
         hosted.go(to: .backlog)
         try waitForTheSwitch(hosted, to: "Later", from: departing, joined: true)
@@ -154,15 +167,37 @@ final class TasksTabHostTests: XCTestCase {
         let screen = hosted.window.convertPoint(toScreen: content.convert(local, to: nil))
         let hit = try XCTUnwrap(AtticPanelHostingView.topmostElement(in: content, at: screen) as AnyObject?,
                                 "the walk finds an element at Later's row")
+        assertTheHit(hit, names: row.model.title)
+    }
+
+    /// Whether `element`, or one of its children to `depth` levels, reads
+    /// `title` (a row's button carries no label of its own; its title is a
+    /// child).
+    private static func names(_ element: AnyObject, _ title: String, depth: Int) -> Bool {
+        let label = element.accessibilityLabel?() ?? ""
+        let value = (element.accessibilityValue?() as? String) ?? ""
+        let text = element.accessibilityTitle?() ?? ""
+        if label.contains(title) || value.contains(title) || text.contains(title) { return true }
+        guard depth > 0, let children = element.accessibilityChildren?() else { return false }
+        return children.contains { names($0 as AnyObject, title, depth: depth - 1) }
+    }
+
+    /// The hit, its children or an ancestor of it names `title` (the
+    /// expected Later task, not just some row), and nothing on the way
+    /// comes from a host not in use.
+    private func assertTheHit(_ hit: AnyObject, names title: String, line: UInt = #line) {
         var hosts: [KeptContentHostingView] = []
+        var named = false
         var node: AnyObject? = hit
         var depth = 0
         while let current = node, depth < 64 {
             if let host = current as? KeptContentHostingView { hosts.append(host) }
+            if Self.names(current, title, depth: current === hit ? 3 : 0) { named = true }
             node = (current.accessibilityParent?() ?? nil) as AnyObject?
             depth += 1
         }
-        XCTAssertFalse(hosts.contains { !$0.isInteractive }, "nothing from a host not in use")
+        XCTAssertTrue(named, "the hit, its children or an ancestor is Later's task \"\(title)\"", line: line)
+        XCTAssertFalse(hosts.contains { !$0.isInteractive }, "nothing from a host not in use", line: line)
     }
 
     private func hitWalk() throws {
@@ -181,15 +216,7 @@ final class TasksTabHostTests: XCTestCase {
         let screen = hosted.window.convertPoint(toScreen: content.convert(local, to: nil))
         let hit = try XCTUnwrap(AtticPanelHostingView.topmostElement(in: content, at: screen) as AnyObject?,
                                 "the walk finds an element at the row's centre")
-        var hosts: [KeptContentHostingView] = []
-        var node: AnyObject? = hit
-        var depth = 0
-        while let current = node, depth < 64 {
-            if let host = current as? KeptContentHostingView { hosts.append(host) }
-            node = (current.accessibilityParent?() ?? nil) as AnyObject?
-            depth += 1
-        }
-        XCTAssertFalse(hosts.contains { !$0.isInteractive }, "nothing from a host not in use")
+        assertTheHit(hit, names: row.model.title)
     }
 
     // MARK: Keyboard ownership (host-boundary.md §5.1, one test per row)
