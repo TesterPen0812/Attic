@@ -475,13 +475,14 @@ final class Hosted {
     init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false, keyWindow: Bool = true,
          chrome: TasksPageChrome = TasksPageChrome(), services: TasksPageServices = TasksPageServices(),
          design: AtticDesignContext = AtticDesignContext(mode: .light),
-         composerIsOpen: (() -> Bool)? = nil, memory: TasksPageMemory? = nil) throws {
+         composerIsOpen: (() -> Bool)? = nil, memory: TasksPageMemory? = nil, warms: Bool = true) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         try TasksPagePreview.seedDemo(in: container, long: long)
         store = TaskStore(container: container)
         model = TasksPageModel(library: AtticLibrary(tasks: store), services: services, memory: memory)
+        model.pagerSwipe.motion.warms = warms
         let size = CGSize(width: AtticLayout.panelSize.width, height: height)
         let focus = focus
         page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),

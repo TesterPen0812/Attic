@@ -24,6 +24,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         didSet {
             guard isInteractive != oldValue else { return }
             if isInteractive {
+                cameIntoUse = true
                 claimKeyboard()
                 joinAccessibilityAfterTheFirstFrame()
             } else {
@@ -41,17 +42,26 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// the reveal's longest frame 40 ms longer (HB-05, the lead's ruling).
     private(set) var isAccessible = true
     private var joinLink: CADisplayLink?
+    /// Whether the host has come into use: turned into use, or made in use
+    /// and reached its window.
+    private var cameIntoUse = false
+    /// A host made already in use claims the keyboard at its first frame,
+    /// with its accessibility join (host-boundary.md §5.1, the first switch
+    /// to a tab not yet built; the lead, 19 Nov).
+    private var claimsAtFirstFrame = false
 
     /// Joins on the next display frame, after the reveal's frame has been
     /// committed; a window on no screen (draws no frames) joins on the next
-    /// turn of the run loop.
-    private func joinAccessibilityAfterTheFirstFrame() {
+    /// turn of the run loop. With `claiming`, it claims the keyboard there
+    /// first.
+    private func joinAccessibilityAfterTheFirstFrame(claiming: Bool = false) {
         stopJoining()
         isAccessible = false
+        claimsAtFirstFrame = claiming
         guard window?.screen != nil else {
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.isInteractive, self.joinLink == nil else { return }
-                self.isAccessible = true
+                self.cameIntoUseAtTheFirstFrame()
             }
             return
         }
@@ -61,21 +71,42 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     }
 
     @objc private func joinAccessibility(_ link: CADisplayLink) {
+        let claiming = claimsAtFirstFrame
         stopJoining()
-        if isInteractive { isAccessible = true }
+        claimsAtFirstFrame = claiming
+        if isInteractive { cameIntoUseAtTheFirstFrame() }
+    }
+
+    /// The deferred part of coming into use: the keyboard first (for a host
+    /// made in use), then accessibility.
+    private func cameIntoUseAtTheFirstFrame() {
+        if claimsAtFirstFrame {
+            claimsAtFirstFrame = false
+            claimKeyboard()
+        }
+        isAccessible = true
     }
 
     private func stopJoining() {
         joinLink?.invalidate()
         joinLink = nil
+        claimsAtFirstFrame = false
     }
 
     /// A host taken out of its window stops waiting (the link holds it).
+    /// A host made already in use never turns into use: once it has a
+    /// window it comes into use the same way, with its claim deferred to
+    /// its first frame, when its content takes keys (a claim at the attach
+    /// gave first responder that no key reached; hb-step1/pr41-c).
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil, joinLink != nil {
             stopJoining()
             isAccessible = isInteractive
+        }
+        if window != nil, isInteractive, !cameIntoUse {
+            cameIntoUse = true
+            joinAccessibilityAfterTheFirstFrame(claiming: true)
         }
     }
 

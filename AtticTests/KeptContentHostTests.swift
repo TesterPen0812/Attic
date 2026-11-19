@@ -283,6 +283,30 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertFalse(first.isAccessible)
     }
 
+    /// A host made already in use (a tab not yet warmed) comes into use
+    /// once it has a window: not read until its first frame, then read
+    /// (§5.1, the first switch to a tab not yet warmed).
+    func testAHostMadeInUseIsReadOnlyAfterItsFirstFrameInAWindow() throws {
+        let state = Shown()
+        let window = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 300, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let inner = Inner()
+        let root = NSHostingView(rootView: Pair(state: state, inner: inner))
+        window.contentView = root
+        window.orderFront(nil)
+        root.layoutSubtreeIfNeeded()
+        let fixture = Fixture(window: window, root: root, state: state, inner: inner)
+        let first = try XCTUnwrap(fixture.hosts.first { $0.isInteractive }, "the host made in use")
+        XCTAssertNotNil(first.window)
+        XCTAssertFalse(first.isAccessible, "not read before its first frame")
+        XCTAssertEqual(first.accessibilityChildren()?.count ?? 0, 0, "no children before its first frame")
+        fixture.settle()
+        XCTAssertTrue(first.isAccessible, "read after its first frame")
+        XCTAssertTrue(labels(under: root).contains("First"), "and its content is read")
+    }
+
     /// The content's environment is forwarded by name, never whole (the
     /// whole copy carried the panel host's focus values and its focus
     /// bridge took the keyboard back, §5). Every value the Tasks content

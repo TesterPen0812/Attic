@@ -284,6 +284,26 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertEqual(hosted.model.keyboardFocus?.page, tab.rawValue, "↓ reaches a row of the arriving tab", line: line)
     }
 
+    /// §5.1 row "first switch to a tab not yet warmed" (PR 41 review,
+    /// finding 1): Later's host is made already in use, so it never turns
+    /// into use; it claims the keyboard at its first frame, just before it
+    /// joins accessibility, under the same rules as every claim.
+    func testOwnershipTheFirstSwitchToATabNotYetWarmedMovesTheKeyboardToIt() throws {
+        try keyWindowOnly()
+        let hosted = try Hosted(height: 520, warms: false)
+        defer { hosted.close() }
+        waitForTestOperation("Now's host") {
+            hosted.spin(0.05)
+            return hosts(hosted).contains(where: \.isInteractive)
+        }
+        XCTAssertEqual(hosts(hosted).count, 1, "only Now is built: Later has no host yet")
+        try focusANowRow(hosted)
+        let departing = try inUse(hosted)
+        hosted.go(to: .backlog)
+        try waitForTheSwitch(hosted, to: "Later", from: departing, joined: true)
+        try assertTheArrivingTabHasTheKeyboard(hosted, .backlog)
+    }
+
     func testOwnershipTabBarSwitchMovesTheKeyboardToTheArrivingTab() throws {
         try keyWindowOnly()
         let hosted = try warmed()
