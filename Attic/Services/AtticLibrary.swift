@@ -1162,7 +1162,7 @@ final class AtticLibrary {
     func liveWriting(ownedBy members: Set<UUID>, in context: ModelContext) -> Set<UUID>? {
         guard WorkspaceItemLifecycle.has("NoteItem", in: context) else { return [] }
         if let notes = liveNotes(ownedBy: members, in: context) { return Set(notes.map(\.id)) }
-        guard let all = try? ownershipNotes(FetchDescriptor<NoteItem>(), byOwner: false, in: context) else { return nil }
+        guard let all = try? ownershipNotes(WholeTableRead.all(NoteItem.self), byOwner: false, in: context) else { return nil }
         return Set(all.filter { $0.taskID.map(members.contains) == true && $0.deletedAt == nil }.map(\.id))
     }
 
