@@ -176,7 +176,8 @@ final class TasksTabHostTests: XCTestCase {
     /// child).
     private static func names(_ element: AnyObject, _ title: String, depth: Int) -> Bool {
         let label = element.accessibilityLabel?() ?? ""
-        let value = ((element as? NSObject)?.accessibilityValue() as? String) ?? ""
+        let raw: Any?? = element.accessibilityValue?()
+        let value = (raw ?? nil) as? String ?? ""
         let text = element.accessibilityTitle?() ?? ""
         if label.contains(title) || value.contains(title) || text.contains(title) { return true }
         guard depth > 0, let children = element.accessibilityChildren?() else { return false }
