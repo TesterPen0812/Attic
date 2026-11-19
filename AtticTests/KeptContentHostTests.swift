@@ -233,6 +233,80 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertTrue(labels(under: fixture.root).contains("First"), "in use again, it is read")
     }
 
+    /// The content's environment is forwarded by name, never whole (the
+    /// whole copy carried the panel host's focus values and its focus
+    /// bridge took the keyboard back, §5). Every value the Tasks content
+    /// reads is forwarded, derived by the host from its window, or set
+    /// inside the content itself.
+    func testTheTasksContentReadsOnlyForwardedOrHostDerivedValues() throws {
+        let forwarded = Set(KeptEnvironment.entries.map(\.name))
+        XCTAssertEqual(forwarded.count, KeptEnvironment.entries.count, "each value named once")
+        let derivedByTheHost: Set<String> = [
+            "accessibilityReduceMotion", "accessibilityReduceTransparency", "accessibilityDifferentiateWithoutColor",
+            "colorSchemeContrast", "displayScale", "appearsActive", "isFocused", "undoManager", "openURL", "dismiss",
+            // The whole environment, read where it is handed on.
+            "self",
+        ]
+        // Declared fileprivate and set where they are read.
+        let setInside: Set<String> = ["atticMenuEntranceTime", "atticMaterialProbeID"]
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Attic")
+        let folders = ["Tasks", "DesignSystem", "Design"].map { root.appendingPathComponent($0) }
+        let pattern = try NSRegularExpression(pattern: #"@Environment\(\\\.([A-Za-z]+)"#)
+        var missing: [String: String] = [:]
+        var scanned = 0
+        for folder in folders {
+            let files = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil)?
+                .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" && !$0.path.contains("/Gallery/") } ?? []
+            for file in files {
+                let source = try String(contentsOf: file, encoding: .utf8)
+                scanned += 1
+                let range = NSRange(source.startIndex..., in: source)
+                for match in pattern.matches(in: source, range: range) {
+                    guard let name = Range(match.range(at: 1), in: source).map({ String(source[$0]) }) else { continue }
+                    if !forwarded.contains(name), !derivedByTheHost.contains(name), !setInside.contains(name) {
+                        missing[name] = file.lastPathComponent
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 20, "the scan found the sources")
+        XCTAssertEqual(missing, [:], "read inside a kept host but not forwarded (KeptEnvironment.entries)")
+    }
+
+    /// Values set above the host arrive inside it.
+    func testForwardedValuesReachTheContent() {
+        final class Seen { var scheme: ColorScheme?; var enabled: Bool?; var active: ControlActiveState? }
+        struct Probe: View {
+            let seen: Seen
+            @Environment(\.colorScheme) private var scheme
+            @Environment(\.isEnabled) private var enabled
+            @Environment(\.controlActiveState) private var active
+            var body: some View {
+                let _ = { seen.scheme = scheme; seen.enabled = enabled; seen.active = active }()
+                Color.clear
+            }
+        }
+        let seen = Seen()
+        let window = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 100, height: 100),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: KeptContentHost(drawn: true, interactive: true) { Probe(seen: seen) }
+            .disabled(true)
+            .environment(\.colorScheme, .dark)
+            .environment(\.controlActiveState, .key)
+            .frame(width: 100, height: 100))
+        window.orderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(seen.scheme, .dark)
+        XCTAssertEqual(seen.enabled, false)
+        XCTAssertEqual(seen.active, .key)
+    }
+
     /// HB-03: a nested host's own update runs inside the overlay layout
     /// guard, as the panel's root does, so an overlay anchor made or
     /// dismantled there changes the hierarchy only after the pass.

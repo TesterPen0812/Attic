@@ -173,11 +173,111 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     }
 
     private func root(_ context: Context) -> AnyView {
-        let environment = context.environment
+        let forwarded = KeptEnvironment(source: context.environment)
         if let space {
-            return AnyView(content().coordinateSpace(space).environment(\.self, environment))
+            return AnyView(content().coordinateSpace(space).modifier(forwarded))
         }
-        return AnyView(content().environment(\.self, environment))
+        return AnyView(content().modifier(forwarded))
+    }
+}
+
+/// The environment a kept host's content gets from the panel, by name
+/// (host-boundary.md §5). The whole environment is never copied: it carries
+/// SwiftUI's own focus values of the panel's host, and the tab host's focus
+/// bridge then gave the keyboard back to the panel's host whenever a row was
+/// focused (trace run 13edbb11+trace: `FocusBridge.moveFocus` from
+/// `KeptContentHostingView.layout` made the panel's root host first
+/// responder). What the host itself derives from its window (reduce motion,
+/// contrast, display scale, active appearance, undo manager) is left to it.
+/// `KeptContentHostTests.testTheTasksContentReadsOnlyForwardedOrHostDerivedValues`
+/// fails when the Tasks content reads a value that is neither here nor
+/// derived by the host.
+struct KeptEnvironment: ViewModifier {
+    let source: EnvironmentValues
+
+    struct Entry {
+        let name: String
+        let copy: (EnvironmentValues, inout EnvironmentValues) -> Void
+    }
+
+    private static func entry<Value>(_ name: String, _ key: WritableKeyPath<EnvironmentValues, Value>) -> Entry {
+        Entry(name: name) { source, values in values[keyPath: key] = source[keyPath: key] }
+    }
+
+    /// Set above the host by the panel or the page, and read inside it.
+    @MainActor static let entries: [Entry] = [
+        // SwiftUI's, set by the panel (AtticPanelView: colour scheme, key
+        // state) or by an ancestor (enabled, locale, direction, font, focus
+        // effect).
+        entry("colorScheme", \.colorScheme),
+        entry("controlActiveState", \.controlActiveState),
+        entry("isEnabled", \.isEnabled),
+        entry("locale", \.locale),
+        entry("layoutDirection", \.layoutDirection),
+        entry("font", \.font),
+        entry("isFocusEffectEnabled", \.isFocusEffectEnabled),
+        // Attic's design and theme.
+        entry("atticDesign", \.atticDesign),
+        entry("atticTagColouring", \.atticTagColouring),
+        entry("atticPanelThemePalette", \.atticPanelThemePalette),
+        entry("atticPanelUsesSystemAccent", \.atticPanelUsesSystemAccent),
+        entry("atticPanelUsesSystemOpaqueSurface", \.atticPanelUsesSystemOpaqueSurface),
+        entry("atticClearGlassForegroundReadabilityEnabled", \.atticClearGlassForegroundReadabilityEnabled),
+        entry("atticPanelSurfaceSize", \.atticPanelSurfaceSize),
+        entry("atticControlCornerExponent", \.atticControlCornerExponent),
+        entry("atticControlState", \.atticControlState),
+        entry("atticForcedState", \.atticForcedState),
+        entry("atticControlAway", \.atticControlAway),
+        entry("atticControlGone", \.atticControlGone),
+        entry("atticControlReveal", \.atticControlReveal),
+        entry("atticIsPressed", \.atticIsPressed),
+        entry("atticSmallControlBarSize", \.atticSmallControlBarSize),
+        entry("atticPageSwitcherPresence", \.atticPageSwitcherPresence),
+        entry("atticPageTabsOnGlass", \.atticPageTabsOnGlass),
+        entry("atticRowHoverGate", \.atticRowHoverGate),
+        // Keyboard and focus requests.
+        entry("atticKeyboardFocusVisible", \.atticKeyboardFocusVisible),
+        entry("atticFocusRequests", \.atticFocusRequests),
+        // Menus and dropdowns opened from the content.
+        entry("atticDropdownRegisterKeys", \.atticDropdownRegisterKeys),
+        entry("atticDropdownFocusRequest", \.atticDropdownFocusRequest),
+        entry("atticDropdownWidth", \.atticDropdownWidth),
+        entry("atticDropdownHeight", \.atticDropdownHeight),
+        entry("atticDropdownContentWidthChanged", \.atticDropdownContentWidthChanged),
+        entry("atticDropdownContentHeightChanged", \.atticDropdownContentHeightChanged),
+        entry("atticMenuHighlight", \.atticMenuHighlight),
+        entry("atticUnfold", \.atticUnfold),
+        entry("atticUnfoldCornerRadius", \.atticUnfoldCornerRadius),
+        entry("atticUnfoldTreated", \.atticUnfoldTreated),
+        entry("atticUnfoldDiagnosticsOwner", \.atticUnfoldDiagnosticsOwner),
+        // Capture and probes.
+        entry("atticCapture", \.atticCapture),
+        entry("atticSpecimen", \.atticSpecimen),
+        entry("atticProbesDisabled", \.atticProbesDisabled),
+        // The panel's shell.
+        entry("atticPanelPageIsCurrent", \.atticPanelPageIsCurrent),
+        entry("atticPanelToasts", \.atticPanelToasts),
+        entry("panelComposer", \.panelComposer),
+        entry("panelComposerRoom", \.panelComposerRoom),
+        entry("panelResumeDefaults", \.panelResumeDefaults),
+        entry("panelSharedChrome", \.panelSharedChrome),
+        entry("panelPageTransit", \.panelPageTransit),
+        entry("panelPageTravel", \.panelPageTravel),
+        entry("panelPageMotion", \.panelPageMotion),
+        entry("panelTopRowPage", \.panelTopRowPage),
+        entry("panelTopRowState", \.panelTopRowState),
+    ]
+
+    func body(content: Content) -> some View {
+        let source = source
+        let palette = source.atticPanelThemePalette
+        return content
+            .transformEnvironment(\.self) { values in
+                for entry in Self.entries { entry.copy(source, &values) }
+            }
+            // The panel's default text styles (AtticPanelView's
+            // `foregroundStyle`) travel as a style, not a named value.
+            .foregroundStyle(palette.primaryForegroundColor, palette.secondaryForegroundColor)
     }
 }
 
