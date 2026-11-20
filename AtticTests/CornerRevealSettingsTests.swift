@@ -506,4 +506,109 @@ final class CornerRevealSettingsTests: XCTestCase {
         XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown,
                        "the menu bar icon, quick capture and agents still open it")
     }
+
+    // MARK: - CORNER-REVEAL-MISS: the exit latch follows the pointer at the hide
+
+    /// Every hide that is not a cursor exit: click away, a controller hide
+    /// (Esc, menu; the `hideCount` path), the interactive swipe and the probe.
+    private enum LatchingHide: CaseIterable { case clickAway, controller, swipe, probe }
+
+    /// Reveals, then hides by `path` with the pointer at `pointer` when the
+    /// hide completes. Returns the monitored screen frame.
+    private func reveal(_ rig: Panel, thenHideBy path: LatchingHide, pointerAt pointer: (CGRect) -> CGPoint,
+                        file: StaticString = #filePath, line: UInt = #line) throws -> CGRect {
+        let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first, file: file, line: line)
+        rig.monitor.pointerLocationAtHideForTesting = pointer(frame)
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown,
+                       file: file, line: line)
+        switch path {
+        case .clickAway:
+            let panel = rig.controller.visibleContentFrameForTesting
+            rig.controller.handlePressForTesting(at: CGPoint(x: panel.midX - 700, y: panel.midY - 700))
+        case .controller, .swipe:
+            _ = rig.controller.requestHide { _ in }
+        case .probe:
+            rig.monitor.hideForPerformanceProbe { _ in }
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while rig.controller.isPanelVisible || !rig.monitor.isHiddenForPerformanceProbe, Date() < deadline { spin(0.01) }
+        if path == .swipe { rig.controller.onInteractiveHideCompleted?() }
+        XCTAssertFalse(rig.controller.isPanelVisible, "\(path) hid the panel", file: file, line: line)
+        XCTAssertTrue(rig.monitor.isHiddenForPerformanceProbe, file: file, line: line)
+        return frame
+    }
+
+    /// Samples the corner as the first sample after the hide, then again at
+    /// the reveal deadline. Returns whether the first sample left a reveal
+    /// pending and whether the second revealed.
+    private func approachCorner(_ rig: Panel, in frame: CGRect) -> (pending: Bool, revealed: Bool) {
+        var announced: [(hiding: Bool, delay: TimeInterval)?] = []
+        rig.monitor.onVisibilityChangeExpected = { announced.append($0) }
+        defer { rig.monitor.onVisibilityChangeExpected = nil }
+        let corner = CGPoint(x: frame.maxX - 1, y: frame.maxY - 1)
+        let time = ProcessInfo.processInfo.systemUptime + 10
+        rig.monitor.sampleForTesting(at: corner, uptime: time)
+        let pending = (announced.last ?? nil).map { !$0.hiding } ?? false
+        rig.monitor.sampleForTesting(at: corner, uptime: time + rig.settings.revealDelay + 0.05)
+        return (pending, rig.controller.isPanelVisible)
+    }
+
+    private func withLatchRig(_ body: (Panel) throws -> Void) throws {
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = previous }
+        let rig = try makePanel()
+        rig.settings.corner = .topRight
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.3) }
+        try body(rig)
+    }
+
+    /// The owner's miss (20 Nov): a hide sets the latch, the pointer then
+    /// travels far from the corner (no samples there), and the first sample
+    /// near the corner is already in the hotspot. That is a new approach,
+    /// not a resting pointer, so the reveal must be pending at once.
+    func testCornerRevealMissFastApproachAfterAHideRevealsOnTheFirstHotspotSample() throws {
+        for path in LatchingHide.allCases {
+            try withLatchRig { rig in
+                let frame = try reveal(rig, thenHideBy: path, pointerAt: { CGPoint(x: $0.midX, y: $0.midY) })
+                let outcome = approachCorner(rig, in: frame)
+                XCTAssertTrue(outcome.pending, "\(path): the first hotspot sample after a far pointer sets the reveal deadline")
+                XCTAssertTrue(outcome.revealed, "\(path): the panel reveals at the deadline without a second entry")
+            }
+        }
+    }
+
+    /// The guarantee the latch exists for: a hide with the pointer still
+    /// resting in the corner must not re-reveal under it. Leaving and
+    /// coming back then reveals.
+    func testCornerRevealMissPointerStillInTheCornerAtAHideMustLeaveFirst() throws {
+        for path in LatchingHide.allCases {
+            try withLatchRig { rig in
+                let frame = try reveal(rig, thenHideBy: path, pointerAt: { CGPoint(x: $0.maxX - 1, y: $0.maxY - 1) })
+                let resting = approachCorner(rig, in: frame)
+                XCTAssertFalse(resting.pending, "\(path): a pointer resting in the corner gets no reveal deadline")
+                XCTAssertFalse(resting.revealed, "\(path): a hide never re-reveals under a resting pointer")
+                rig.monitor.sampleForTesting(at: CGPoint(x: frame.midX, y: frame.midY))
+                let again = approachCorner(rig, in: frame)
+                XCTAssertTrue(again.pending, "\(path): after leaving, the next entry is a fresh approach")
+                XCTAssertTrue(again.revealed, "\(path)")
+            }
+        }
+    }
+
+    /// The sibling: a pointer resting near the corner but outside the
+    /// hotspot when the hide ends (inside the 96 pt band, so the next event
+    /// samples) is not resting in the corner either; a flick into the
+    /// hotspot is a new approach.
+    func testCornerRevealMissPointerNearButOutsideTheHotspotAtAHideDoesNotLatch() throws {
+        for path in LatchingHide.allCases {
+            try withLatchRig { rig in
+                let frame = try reveal(rig, thenHideBy: path, pointerAt: { CGPoint(x: $0.maxX - 50, y: $0.maxY - 50) })
+                let outcome = approachCorner(rig, in: frame)
+                XCTAssertTrue(outcome.pending, "\(path)")
+                XCTAssertTrue(outcome.revealed, "\(path)")
+            }
+        }
+    }
 }

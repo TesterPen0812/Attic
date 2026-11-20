@@ -129,8 +129,7 @@ final class CornerHoverMonitor {
         self.noteDraft = noteDraft
         panelController.onInteractiveHideCompleted = { [weak self] in
             guard let self else { return }
-            stateMachine.forceHidden(untilHotspotExit: true)
-            refreshSamplingCadence(at: NSEvent.mouseLocation)
+            hideCompleted()
         }
         panelController.onOutsidePress = { [weak self] location, window in self?.outsidePress(at: location, in: window) }
     }
@@ -206,8 +205,7 @@ final class CornerHoverMonitor {
         // callback's reset and swallow the next corner entry with an exit latch.
         hideObservation = uiState.$hideCount.dropFirst().sink { [weak self] _ in
             guard let self, self.isRunning, !self.stateMachine.isHidePending else { return }
-            self.stateMachine.forceHidden(untilHotspotExit: true)
-            self.refreshSamplingCadence(at: NSEvent.mouseLocation)
+            self.hideCompleted()
         }
 
         panelController.buildTasksPageWhenIdle()
@@ -307,10 +305,7 @@ final class CornerHoverMonitor {
         completion: @escaping (PanelHideCompletion) -> Void
     ) -> PanelHideRequestResult {
         panelController.requestHide { [weak self] outcome in
-            if outcome == .hidden {
-                self?.stateMachine.forceHidden(untilHotspotExit: true)
-                self?.refreshSamplingCadence(at: NSEvent.mouseLocation)
-            }
+            if outcome == .hidden { self?.hideCompleted() }
             completion(outcome)
         }
     }
@@ -467,8 +462,11 @@ final class CornerHoverMonitor {
         let result = panelController.requestHide { [weak self] outcome in
             guard let self else { return }
             self.stateMachine.resolveHideCompletion(didOrderOut: outcome == .hidden)
-            if outcome == .hidden { self.stateMachine.forceHidden(untilHotspotExit: true) }
-            self.refreshSamplingCadence(at: NSEvent.mouseLocation)
+            if outcome == .hidden {
+                self.hideCompleted()
+            } else {
+                self.refreshSamplingCadence(at: NSEvent.mouseLocation)
+            }
         }
         if !result.isAccepted { stateMachine.resolveHideCompletion(didOrderOut: false) }
     }
@@ -476,6 +474,14 @@ final class CornerHoverMonitor {
     /// Local mouse-down events carry their AppKit window; the pointer can be
     /// far outside the panel while the click is in Settings, a sheet, alert,
     /// popover or another Attic-owned card. Global clicks carry no window.
+    /// A hide that did not come from the pointer leaving (click away, Esc,
+    /// menu, swipe, probe) has ordered the panel out.
+    private func hideCompleted() {
+        let location = pointerLocationAtHideForTesting ?? NSEvent.mouseLocation
+        stateMachine.forceHidden(untilHotspotExit: true)
+        refreshSamplingCadence(at: location)
+    }
+
     private static func isAtticOwnedWindow(_ window: NSWindow?) -> Bool {
         var candidate = window
         while let current = candidate {
@@ -689,6 +695,9 @@ final class CornerHoverMonitor {
         samplePointer(at: location, uptime: uptime)
     }
     func pointerActivityForTesting(at location: CGPoint) { pointerActivityObserved(at: location) }
+    /// Test seam: where the pointer is when a hide completes; nil reads the
+    /// real pointer.
+    var pointerLocationAtHideForTesting: CGPoint?
     /// Test seam: whether a pointer at `location` counts as in the hotspot
     /// with `flags` held, as a sample decides it.
     func isInHotspotForTesting(_ location: CGPoint, flags: NSEvent.ModifierFlags) -> Bool {
