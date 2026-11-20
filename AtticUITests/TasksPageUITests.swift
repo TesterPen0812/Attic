@@ -180,6 +180,7 @@ final class TasksPageUITests: XCTestCase {
         tab("done").click()
         waitFor(row("Book dentist").exists, "Done lists the completed task")
         XCTAssertTrue(label("Book dentist").contains(", done"))
+        waitForRest("Book dentist")
         circle("Book dentist").click()
         waitFor(!row("Book dentist").exists, "restoring removes it from Done")
         tab("now").click()
