@@ -2776,9 +2776,7 @@ struct TasksPage: View {
                     guard let model else { return .failed(.taskGone) }
                     let outcome = model.makeStandalone(subtask.id)
                     // The keyboard follows it without retaining the page.
-                    if outcome.isApplied, let binding = rowFocus?.binding(for: model.tab) {
-                        binding.wrappedValue = AtticRowFocusID(page: model.tab.rawValue, id: subtask.id)
-                    }
+                    if outcome.isApplied { rowFocus?.setValue(AtticRowFocusID(page: model.tab.rawValue, id: subtask.id)) }
                     return outcome
                 }
             },
@@ -3926,11 +3924,14 @@ struct TasksCellKey: Equatable {
 @MainActor
 final class TasksRowFocusLink {
     private var bindings: [TasksTab: FocusState<AtticRowFocusID?>.Binding] = [:]
+    /// Each tab's host, as its owner found it (nil outside a kept host).
+    private var hosts: [TasksTab: KeptHostReference] = [:]
     /// The tab in use, the only one the link writes (the page sets this).
     var tabInUse: (() -> TasksTab)?
 
-    func set(_ binding: FocusState<AtticRowFocusID?>.Binding, for tab: TasksTab) {
+    func set(_ binding: FocusState<AtticRowFocusID?>.Binding, host: KeptHostReference?, for tab: TasksTab) {
         bindings[tab] = binding
+        hosts[tab] = host
         #if DEBUG
         Self.current = self
         #endif
@@ -3958,13 +3959,29 @@ final class TasksRowFocusLink {
         return TasksTab.allCases.lazy.compactMap { self.bindings[$0]?.wrappedValue }.first
     }
 
-    /// Gives the keyboard to `value`, a row of the tab in use; nil takes it
-    /// from the tab in use. A row of another tab is refused.
+    /// The one place the page writes a row's focus state. Gives the
+    /// keyboard to `value`, a row of the tab in use; nil takes it from the
+    /// tab in use. A row of another tab is refused. A nil is not written
+    /// while a view outside that tab's host holds the keyboard (HB-09,
+    /// `KeptContentHostingView.mayLetGo`): the row lost it already, and its
+    /// focus state goes nil by itself.
     func setValue(_ value: AtticRowFocusID?) {
         guard let tab = tabInUse?(), let binding = bindings[tab] else { return }
         if let value, value.page != tab.rawValue { return }
-        if binding.wrappedValue != value { binding.wrappedValue = value }
+        guard binding.wrappedValue != value else { return }
+        if value == nil, !KeptContentHostingView.mayLetGo(in: hosts[tab]?.host) {
+            #if DEBUG
+            skippedLetGos += 1
+            #endif
+            return
+        }
+        binding.wrappedValue = value
     }
+
+    #if DEBUG
+    /// Nils not written because a view outside the tab's host held the keyboard.
+    private(set) var skippedLetGos = 0
+    #endif
 
     /// Whether a tab's owner reports the focus change it saw. A tab letting
     /// go while another tab's row holds the keyboard says nothing: that
@@ -3990,13 +4007,14 @@ final class TasksRowFocusLink {
 /// link (HB-10).
 struct TasksRowFocusOwner<Content: View>: View {
     @FocusState private var focusedRow: AtticRowFocusID?
+    @Environment(\.keptHost) private var host
     let tab: TasksTab
     let link: TasksRowFocusLink
     let changed: (AtticRowFocusID?) -> Void
     @ViewBuilder let content: (FocusState<AtticRowFocusID?>.Binding) -> Content
 
     var body: some View {
-        let _ = link.set($focusedRow, for: tab)
+        let _ = link.set($focusedRow, host: host, for: tab)
         content($focusedRow)
             .onChange(of: focusedRow) { _, focus in
                 if link.reports(focus, from: tab) { changed(focus) }

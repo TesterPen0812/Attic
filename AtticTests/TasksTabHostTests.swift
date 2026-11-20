@@ -617,6 +617,57 @@ final class TasksTabHostTests: XCTestCase {
         try checkARowLettingGo(outsideTheWindowsPass: true)
     }
 
+    /// HB-09's key (hb09-key-note §1), at the write: back in Find's field
+    /// from a row, the page's nil for the row is not written, as a view
+    /// outside Now's host holds the keyboard. The row's focus state goes nil
+    /// by itself (the row lost the keyboard), and Find keeps the keyboard.
+    func testHB09ANilIsNotWrittenWhileFindHoldsTheKeyboardAndTheRowLetsGoByItself() throws {
+        #if DEBUG
+        try keyWindowOnly()
+        let hosted = try warmed(atticPanel: true)
+        defer { hosted.close() }
+        let saved = NSApp.mainMenu
+        let menu = NSMenu()
+        let edit = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        edit.submenu = NSMenu(title: "Edit")
+        let find = NSMenuItem(title: "Find…", action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "f")
+        find.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
+        edit.submenu?.addItem(find)
+        menu.addItem(edit)
+        NSApp.mainMenu = menu
+        defer { NSApp.mainMenu = saved }
+        hosted.press("f", keyCode: 3, modifiers: .command)
+        hosted.press("e", keyCode: 14)
+        let field = try XCTUnwrap(hosted.window.contentView.flatMap { AtticTabsSearchField.searchField(in: $0, placeholder: "Search Now") })
+        let now = try inUse(hosted)
+        down(hosted)
+        let link = try XCTUnwrap(TasksRowFocusLink.current)
+        if keyboardHost(hosted) !== now, let selected = hosted.model.selection.first {
+            link.setValue(AtticRowFocusID(page: TasksTab.now.rawValue, id: selected))
+            hosted.spin(0.3)
+        }
+        XCTAssertTrue(keyboardHost(hosted) === now, "a Now row has the keyboard: \(String(describing: hosted.window.firstResponder))")
+        let row = try XCTUnwrap(link.value(preferring: .now), "the row's focus state holds the row")
+        let skipped = link.skippedLetGos
+        XCTAssertTrue(hosted.window.makeFirstResponder(field))
+        XCTAssertTrue(hosted.searchHasKeyboard, "the field has the keyboard")
+        // The caret at the end, where a click after the text puts it.
+        if let editor = hosted.window.firstResponder as? NSTextView { editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0)) }
+        // The row still holds its focus state; the page lets it go.
+        XCTAssertEqual(link.value(preferring: .now), row, "not yet let go")
+        link.setValue(nil)
+        XCTAssertGreaterThan(link.skippedLetGos, skipped, "the nil is not written while Find's field holds the keyboard")
+        hosted.spin(0.5)
+        XCTAssertNil(link.value(preferring: .now), "the row's focus state went nil by itself")
+        XCTAssertTrue(link.tabsHoldingFocus(besides: .now).isEmpty, "no tab holds a row")
+        XCTAssertTrue(hosted.searchHasKeyboard, "Find's field keeps the keyboard: \(String(describing: hosted.window.firstResponder))")
+        hosted.press("x", keyCode: 7)
+        XCTAssertEqual(hosted.model.searchQuery(for: .now), "ex", "typing reaches Find's field")
+        #else
+        throw XCTSkip("needs the DEBUG link")
+        #endif
+    }
+
     private func checkARowLettingGo(outsideTheWindowsPass: Bool, line: UInt = #line) throws {
         try keyWindowOnly()
         let hosted = try warmed(atticPanel: true, line: line)

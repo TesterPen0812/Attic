@@ -165,17 +165,24 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         #if DEBUG
         KeptContentHostCounts.layout(interactive: isInteractive)
         #endif
-        // HB-09: while this host's SwiftUI pass runs, the panel lets it
-        // release only the keyboard it holds (`AtticPanel.makeFirstResponder`).
-        // Saved and restored, not set and cleared: hosts may nest.
-        let outer = Self.updating
-        Self.updating = self
-        defer { Self.updating = outer }
         AtticOverlayHierarchy.layoutPass { super.layout() }
     }
 
-    /// The host whose own SwiftUI pass is running, if any (HB-09).
-    private(set) static weak var updating: KeptContentHostingView?
+    /// HB-09 (host-boundary.md §5.1, hb09-key-note §1): whether a focus
+    /// state drawn in `host` may be written nil (or false) now. SwiftUI
+    /// applies such a write later, at whichever update ends first, by
+    /// asking for no first responder, whoever holds the keyboard then. So
+    /// the write is skipped only while a view outside `host` holds the
+    /// keyboard (a field editor judged by its field); the focus state then
+    /// goes nil by itself as the holder took it. Written when `host` holds
+    /// the keyboard, when no one does (the window, or nil), and when the
+    /// host is unknown or has no window.
+    static func mayLetGo(in host: KeptContentHostingView?) -> Bool {
+        guard let host, let window = host.window,
+              let holder = (window.firstResponder as? NSTextView)?.delegate as? NSView ?? window.firstResponder as? NSView,
+              holder.window === window else { return true }
+        return holder === host || holder.isDescendant(of: host)
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         isInteractive ? super.hitTest(point) : nil
@@ -289,6 +296,9 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         var hiddenRootSet = false
         /// The host's own environment, held while it is not drawn.
         let hold = KeptEnvironmentHold()
+        /// The host, as its content knows it (one box for the host's life,
+        /// so the root it is in stays equal).
+        let reference = KeptHostReference()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -296,6 +306,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     func makeNSView(context: Context) -> KeptContentContainer {
         let container = KeptContentContainer()
         let host = KeptContentHostingView(rootView: root(context))
+        context.coordinator.reference.host = host
         host.isInteractive = interactive
         host.autoresizingMask = [.width, .height]
         host.frame = container.bounds
@@ -330,10 +341,12 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
 
     private func root(_ context: Context) -> AnyView {
         let forwarded = KeptEnvironment(source: context.environment, hold: context.coordinator.hold, holding: !drawn)
+        // Inside the forwarded environment, which would replace it.
+        let known = content().environment(\.keptHost, context.coordinator.reference)
         if let space {
-            return AnyView(content().coordinateSpace(space).modifier(forwarded))
+            return AnyView(known.coordinateSpace(space).modifier(forwarded))
         }
-        return AnyView(content().modifier(forwarded))
+        return AnyView(known.modifier(forwarded))
     }
 }
 
@@ -530,4 +543,16 @@ private final class KeptHostJoinTarget: NSObject {
         guard let host else { link.invalidate(); return }
         host.joinAccessibility(link)
     }
+}
+
+/// The kept host a view is drawn in, for its focus states (HB-09): weak,
+/// and nil outside a kept host.
+@MainActor
+final class KeptHostReference {
+    weak var host: KeptContentHostingView?
+}
+
+extension EnvironmentValues {
+    /// The kept host this content is drawn in, if any (HB-09).
+    @Entry var keptHost: KeptHostReference?
 }
