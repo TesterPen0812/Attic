@@ -330,6 +330,7 @@ final class TasksPageUITests: XCTestCase {
 
         tab("done").click()
         waitFor(row("Try the paper sketch idea").exists, "it is listed in Done")
+        waitForRest("Try the paper sketch idea")
         circle("Try the paper sketch idea").click()
         waitFor(!row("Try the paper sketch idea").exists, "restored, it leaves Done")
         tab("backlog").click()
