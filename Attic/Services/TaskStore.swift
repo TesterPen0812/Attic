@@ -411,7 +411,13 @@ final class TaskStore: ObservableObject {
     weak var commandLibrary: AtticLibrary?
 
     let container: ModelContainer
-    private var context: ModelContext
+    private var context: ModelContext {
+        didSet { contextGeneration &+= 1 }
+    }
+    /// Counts the times the store started reading through a new context. A
+    /// page that keeps rows it read (the Done log) reads them again when this
+    /// changed, so it never presents rows of a context the store let go.
+    private(set) var contextGeneration: UInt64 = 0
     private var taskEditNeedsReload = false
     /// The last list read failed, so the list may lack tasks that are saved.
     var hasUnresolvedTaskReload: Bool { taskEditNeedsReload }
@@ -536,7 +542,7 @@ final class TaskStore: ObservableObject {
                 guard let self else { return nil }
                 do {
                     let fresh = ModelContext(self.container)
-                    var ids = Set(try fresh.fetch(FetchDescriptor<TaskItem>()).flatMap { try WorkspacePurge.legacyReferences($0).map(\.id) })
+                    var ids = Set(try fresh.fetch(WholeTableRead.all(TaskItem.self)).flatMap { try WorkspacePurge.legacyReferences($0).map(\.id) })
                     ids.formUnion(try TaskAttachmentMigration.coveredAttachmentIDs(in: fresh))
                     let coordinator = try WorkspaceLegacyBridge.coordinator(for: self.container)
                     ids.formUnion(coordinator.retainedHistoryBytes)
@@ -596,7 +602,7 @@ final class TaskStore: ObservableObject {
             pending.fetchLimit = 1
             guard try !migration.fetch(pending).isEmpty else { return 0 }
 
-            let stored = try migration.fetch(FetchDescriptor<TaskItem>())
+            let stored = try migration.fetch(WholeTableRead.all(TaskItem.self))
             let replicasByID = Dictionary(grouping: stored, by: \.id)
             let live = Self.canonicalReplicas(from: stored).filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
             let liveByID = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -661,6 +667,7 @@ final class TaskStore: ObservableObject {
         }
         #if DEBUG
         familyIndexRebuilds += 1
+        familyIndexRowsBuilt += tasks.count
         #endif
         var byID: [UUID: TaskItem] = [:]
         var positions: [UUID: Int] = [:], parents: [UUID: UUID] = [:]
@@ -910,7 +917,7 @@ final class TaskStore: ObservableObject {
         self.persist = { _ in throw WorkspaceFoundationError.conflict }
         self.taskImageFiles = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("AtticWorkspaceStaging-\(UUID().uuidString)"))
-        self.tasks = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletedAt == nil }
+        self.tasks = try context.fetch(WholeTableRead.all(TaskItem.self)).filter { $0.deletedAt == nil }
     }
 
     static func stageCreation(in context: ModelContext, drafts: [TaskDraft], ids: [UUID], timestamp: Date, allowingBlankTitle: Bool = false) throws -> [TaskItem] {
@@ -2044,7 +2051,7 @@ final class TaskStore: ObservableObject {
         }
         tasks.removeAll { deletedIDs.contains($0.id) }
         guard save(owner: owner) else { return false }
-        WorkspaceItemLifecycle.didCommit(in: container)
+        WorkspaceItemLifecycle.didCommit(in: container, freshTasks: freshAfterSave)
         return true
     }
 
@@ -2235,7 +2242,7 @@ final class TaskStore: ObservableObject {
         if !context.hasChanges { context = Self.makeStoreContext(container) }
         do {
             let retired = try Self.circleRemovedRoots(in: context)
-            let requested = try context.fetch(FetchDescriptor<TaskItem>()).filter { taskIDs.contains($0.id) }
+            let requested = try context.fetch(WholeTableRead.all(TaskItem.self)).filter { taskIDs.contains($0.id) }
             let roots = Set(requested.map { $0.deletionRootID ?? $0.id }).union(taskIDs)
             guard retired.isDisjoint(with: roots) else {
                 throw TaskEditRefusal("Only Undo can return a task removed from Tasks.")
@@ -2247,13 +2254,13 @@ final class TaskStore: ObservableObject {
             return false
         }
         guard save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed") else { return false }
-        WorkspaceItemLifecycle.didCommit(in: container)
+        WorkspaceItemLifecycle.didCommit(in: container, freshTasks: freshAfterSave)
         return true
     }
 
     private func stageRestoration(taskIDs: [UUID], includeGroups: Bool = true) throws {
         if includeGroups {
-            let all = try context.fetch(FetchDescriptor<TaskItem>())
+            let all = try context.fetch(WholeTableRead.all(TaskItem.self))
             var selected: [UUID: UUID] = [:]
             for id in taskIDs {
                 let candidates = all.filter { $0.id == id && $0.deletedAt != nil }.sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
@@ -2378,7 +2385,7 @@ final class TaskStore: ObservableObject {
     /// compatibility collector and coordinated purge stage through this guard.
     static func guardedDeletedFamily(in context: ModelContext, rootID: UUID, before cutoff: Date,
                                      confirmed: Date? = nil) throws -> [TaskItem]? {
-        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        let all = try context.fetch(WholeTableRead.all(TaskItem.self))
         let batch = all.filter { $0.deletionRootID == rootID && $0.deletedAt != nil }
         guard let first = batch.first, let deletedAt = first.deletedAt,
               deletedAt < cutoff, confirmed == nil || confirmed == deletedAt else { return nil }
@@ -2916,14 +2923,31 @@ final class TaskStore: ObservableObject {
         Set(itemTaskTerms.keys).union(itemWritingTerms.keys).filter { additionalItemMatch($0, query: query) }
     }
 
-    private var doneSearchEntries: [DoneSearchEntry] = []
+    /// The Done log index's entries. Change them here; walk them only
+    /// through `doneSearchEntries`, which counts the walk. Read directly only
+    /// for the O(1) `count` and by the test oracle `walkedDoneLogTags`.
+    private var doneSearchEntryStorage: [DoneSearchEntry] = []
+    /// Every read of the Done log index's entries. DEBUG counts each read as
+    /// a walk of the whole log (`doneLogEntryVisits`), so an edit that walks
+    /// the log anywhere shows up in the count guards (TA-05).
+    private var doneSearchEntries: [DoneSearchEntry] {
+        #if DEBUG
+        doneLogEntryVisits += doneSearchEntryStorage.count
+        #endif
+        return doneSearchEntryStorage
+    }
     private var doneSearchEntryIDs = Set<UUID>()
+    /// TA-05: how many Done log entries carry each tag, kept with the
+    /// entries, so the tag bar lists the log's tags without walking it.
+    private var doneSearchTagCounts: [String: Int] = [:]
     private var doneSearchMatches: (query: String, tags: TagPicks, locale: String, ids: [UUID])?
     /// Count requests for an empty query must not displace the active
     /// searched page. Bound this to one separate tag-only projection.
     private var doneTagMatches: (tags: TagPicks, locale: String, ids: [UUID])?
     #if DEBUG
     private(set) var doneSearchFullScanVisits = 0
+    /// Done log index entries visited, by any walk of the log (TA-05).
+    private(set) var doneLogEntryVisits = 0
     var doneSearchLocaleOverrideForTesting: String?
 
     func resetDoneSearchFullScanVisits() { doneSearchFullScanVisits = 0 }
@@ -2944,15 +2968,27 @@ final class TaskStore: ObservableObject {
                 #endif
                 return doneSearchEntryIDs.contains(id)
             }) else { return }
-            doneSearchEntries.removeAll { ids.contains($0.id) }
+            #if DEBUG
+            doneLogEntryVisits += doneSearchEntryStorage.count
+            #endif
+            doneSearchEntryStorage.removeAll { entry in
+                guard ids.contains(entry.id) else { return false }
+                countDoneSearchTags(of: entry, by: -1)
+                return true
+            }
             doneSearchEntryIDs.subtract(ids)
         } else {
-            doneSearchEntries.removeAll(keepingCapacity: true)
+            doneSearchEntryStorage.removeAll(keepingCapacity: true)
             doneSearchEntryIDs.removeAll(keepingCapacity: true)
+            doneSearchTagCounts.removeAll(keepingCapacity: true)
         }
-        doneSearchEntries += entries
+        doneSearchEntryStorage += entries
         doneSearchEntryIDs.formUnion(entries.map(\.id))
-        doneSearchEntries.sort {
+        for entry in entries { countDoneSearchTags(of: entry, by: 1) }
+        #if DEBUG
+        doneLogEntryVisits += doneSearchEntryStorage.count
+        #endif
+        doneSearchEntryStorage.sort {
             if $0.completed != $1.completed { return $0.completed > $1.completed }
             if $0.created != $1.created { return $0.created > $1.created }
             return $0.id.uuidString < $1.id.uuidString
@@ -2997,15 +3033,34 @@ final class TaskStore: ObservableObject {
     /// `tags`: the tag bar's picks (several since 13 Nov, Any or All).
     func indexedDoneLogCount(matching query: String = "", tags: TagPicks = .none) -> Int {
         query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && tags.isEmpty
-            ? doneSearchEntries.count : doneSearchIDs(matching: query, tags: tags).count
+            ? doneSearchEntryStorage.count : doneSearchIDs(matching: query, tags: tags).count
     }
 
-    /// Every tag on a task in the Done log, from the index (no read).
+    /// Every tag on a task in the Done log, from the index's tag counts (no
+    /// read, and no walk of the log).
     func indexedDoneLogTags() -> Set<String> {
+        Set(doneSearchTagCounts.keys)
+    }
+
+    /// An entry joining (+1) or leaving (-1) the index: its tags' counts. A
+    /// tag counted once per entry, as a set of tags is.
+    private func countDoneSearchTags(of entry: DoneSearchEntry, by change: Int) {
+        for tag in Set(entry.tags) {
+            let count = doneSearchTagCounts[tag, default: 0] + change
+            doneSearchTagCounts[tag] = count > 0 ? count : nil
+        }
+    }
+
+    #if DEBUG
+    /// The oracle: the log's tags by walking every entry, as the tag bar
+    /// did before TA-05. It reads the storage, so the walk is not counted
+    /// in `doneLogEntryVisits`, which counts production walks only.
+    func walkedDoneLogTags() -> Set<String> {
         var tags = Set<String>()
-        for entry in doneSearchEntries { tags.formUnion(entry.tags) }
+        for entry in doneSearchEntryStorage { tags.formUnion(entry.tags) }
         return tags
     }
+    #endif
 
     /// The panel's logical cursor walks matching canonical IDs. Only this
     /// page is hydrated; no SQL string predicate or full-log count on typing.
@@ -3033,6 +3088,43 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    /// The first `limit` IDs of the panel's logical cursor and how many it
+    /// walks in all, from the index (no read). The Done page compares them
+    /// with what it loaded to tell whether a save moved its loaded rows.
+    func indexedDoneLogIDs(limit: Int, matching query: String = "", tags: TagPicks = .none) -> (ids: [UUID], total: Int) {
+        let ids = doneSearchIDs(matching: query, tags: tags)
+        return (Array(ids.prefix(max(0, limit))), ids.count)
+    }
+
+    /// Done log main tasks by ID, the replica each shows. A task no longer
+    /// in the log is left out. A failed read returns its message, as a
+    /// failed page does.
+    func doneLogTasks(withIDs ids: [UUID]) -> (tasks: [TaskItem], failure: String?) {
+        donePageReadCount += 1
+        guard !ids.isEmpty else { return ([], nil) }
+        do {
+            let rows = try readDoneLog(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+            return (Self.canonicalReplicas(from: rows).filter {
+                $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil
+            }, nil)
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return ([], error.localizedDescription)
+        }
+    }
+
+    /// The parent of every saved replica of `ids` (a subtask's, wherever it
+    /// is: listed, logged or deleted); nil when the read failed. A Done log
+    /// read, so a test can make it fail (`doneLogReadFailures`).
+    func savedParentIDs(of ids: Set<UUID>) -> Set<UUID>? {
+        guard !ids.isEmpty else { return [] }
+        let wanted = Array(ids)
+        guard let rows = try? readDoneLog(FetchDescriptor<TaskItem>(predicate: #Predicate { wanted.contains($0.id) })) else {
+            return nil
+        }
+        return Set(rows.compactMap(\.parentID))
+    }
+
     /// The Done log's order: most recently finished first (the shown
     /// replica's completion time), then newest created, then id.
     static func doneLogOrder(_ lhs: TaskItem, _ rhs: TaskItem) -> Bool {
@@ -3050,7 +3142,11 @@ final class TaskStore: ObservableObject {
             doneLogReadFailures -= 1
             throw DoneLogReadFailure()
         }
-        return try context.fetch(descriptor)
+        let rows = try context.fetch(descriptor)
+        #if DEBUG
+        doneLogRowsReadCount += rows.count
+        #endif
+        return rows
     }
 
     private struct DoneLogReadFailure: LocalizedError {
@@ -3059,6 +3155,13 @@ final class TaskStore: ObservableObject {
 
     /// Test seam: the next `count` Done log reads fail.
     var doneLogReadFailures = 0
+    #if DEBUG
+    /// Test seam: the next `count` batch family reads of the Done page
+    /// (`doneLogFamilies(ofParents:)`) fail, outside the per-parent fallback.
+    var doneFamilyBatchReadFailures = 0
+    /// Rows returned by Done log reads (`readDoneLog`), for the count guards.
+    private(set) var doneLogRowsReadCount = 0
+    #endif
 
     /// The subtasks of several Done log tasks, read together (one page's
     /// rows, Astra 19), each list in `doneLogSubtasks`' order. A parent
@@ -3070,10 +3173,24 @@ final class TaskStore: ObservableObject {
     private(set) var doneFamilyRowsReadCount = 0
     private(set) var donePageReadCount = 0
     func doneLogSubtasks(ofParents parentIDs: [UUID]) -> [UUID: [TaskItem]] {
+        doneLogFamilies(ofParents: parentIDs).families
+    }
+
+    /// The same families, and the message when the read failed (reported;
+    /// no family is returned then). The Done page's in-place update makes no
+    /// change when it fails, and a full read or page load that failed one
+    /// refuses the next in-place update (Astra r5 R1, PR 31).
+    func doneLogFamilies(ofParents parentIDs: [UUID]) -> (families: [UUID: [TaskItem]], failure: String?) {
         doneFamilyParentReadCount += parentIDs.count
-        guard !parentIDs.isEmpty else { return [:] }
+        guard !parentIDs.isEmpty else { return ([:], nil) }
         let wanted = Set(parentIDs)
         do {
+            #if DEBUG
+            if doneFamilyBatchReadFailures > 0 {
+                doneFamilyBatchReadFailures -= 1
+                throw DoneLogReadFailure()
+            }
+            #endif
             let optionalIDs: [UUID?] = parentIDs.map { $0 }
             let children: [TaskItem]
             do {
@@ -3086,17 +3203,17 @@ final class TaskStore: ObservableObject {
                 }
             }
             let ids = Array(Set(children.map(\.id)))
-            guard !ids.isEmpty else { return [:] }
+            guard !ids.isEmpty else { return ([:], nil) }
             let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
             var result: [UUID: [TaskItem]] = [:]
             for child in Self.canonicalReplicas(from: replicas) {
                 guard let parentID = child.parentID, wanted.contains(parentID), child.deletedAt == nil else { continue }
                 result[parentID, default: []].append(child)
             }
-            return result.mapValues { $0.sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) } }
+            return (result.mapValues { $0.sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) } }, nil)
         } catch {
             report(error.localizedDescription, owner: nil)
-            return [:]
+            return ([:], error.localizedDescription)
         }
     }
 
@@ -4246,6 +4363,15 @@ final class TaskStore: ObservableObject {
         return changed ? save(owner: owner, retaining: retainedEdits) : true
     }
 
+    /// Set by `save` when the save presented itself from one successful fresh
+    /// read of every task row (a journaled commit's reload). A failed read, a
+    /// recovery retry or an incremental publish leaves it false.
+    private var savePresentedFromFreshRead = false
+
+    /// This store, when its last save already presented from a fresh read;
+    /// passed to `WorkspaceItemLifecycle.didCommit` so it is not read twice.
+    private var freshAfterSave: TaskStore? { savePresentedFromFreshRead ? self : nil }
+
     func refresh() {
         defer { tagInventoryRefreshed() }
         do {
@@ -4266,6 +4392,7 @@ final class TaskStore: ObservableObject {
         // in this context (a reload would abandon it), so save it as before
         // and publish through a full reload instead of an incremental commit.
         let listNeedsReload = taskEditNeedsReload
+        savePresentedFromFreshRead = false
         tagInventoryWillSave(context)
         do {
             let removedRows = context.deletedModelsArray.contains { $0 is TaskItem }
@@ -4370,7 +4497,11 @@ final class TaskStore: ObservableObject {
                 // state. Do not notify subscribers of an unconfirmed change.
                 taskEditNeedsReload = true
                 refresh()
-            } else if !presentationReloaded {
+            } else if presentationReloaded {
+                // A fact for the lifecycle commit that follows: this save's
+                // own fresh read of every row succeeded and is presented.
+                savePresentedFromFreshRead = true
+            } else {
                 // reloadTasks already published one coherent revision when it
                 // was required. Plain commits publish here, exactly once.
                 revisionChangedTaskIDs = changedIDs
@@ -4409,6 +4540,8 @@ final class TaskStore: ObservableObject {
 
     /// Full family-index rebuilds (the O(n) branch of `familyIndex`).
     private(set) var familyIndexRebuilds = 0
+    /// Task rows those rebuilds read: each one reads every visible task.
+    private(set) var familyIndexRowsBuilt = 0
 
     func resetFamilyIndexRebuilds() { familyIndexRebuilds = 0 }
     #endif
@@ -4502,7 +4635,7 @@ final class TaskStore: ObservableObject {
         }
         #endif
         let refreshedContext = initialContext ?? Self.makeStoreContext(container)
-        let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
+        let fetched = try refreshedContext.fetch(WholeTableRead.all(TaskItem.self))
         try WorkspaceLegacyBridge.establishScopeBaseline(refreshedContext, roots: fetched, entities: [.task])
         reloaded = fetched
         let unique = Self.canonicalReplicas(from: fetched)

@@ -860,15 +860,24 @@ struct AtticPanelView: View {
 }
 
 /// Store revisions still reconcile task-route IDs, without subscribing the
-/// entire panel surface to every task mutation.
-private struct PanelStoreRevisionObserver: View {
+/// entire panel surface to every task mutation. Internal for its count guard.
+struct PanelStoreRevisionObserver: View {
     @ObservedObject var store: TaskStore
     let uiState: PanelUIState
 
     var body: some View {
         Color.clear.frame(width: 0, height: 0)
             .onChange(of: store.revision) { _, _ in
-                uiState.reconcileTaskIDs(Set(store.tasks.map(\.id)))
+                #if DEBUG
+                let indexRowsBefore = store.familyIndexRowsBuilt
+                #endif
+                // The store's ID index (one per revision, shared) answers
+                // for the few IDs the panel names, not a set of every task.
+                uiState.reconcileTaskIDs { store.task(withID: $0) != nil }
+                #if DEBUG
+                // An index this reconcile's lookups built is its work too.
+                uiState.noteReconcileIndexRows(store.familyIndexRowsBuilt - indexRowsBefore)
+                #endif
             }
     }
 }

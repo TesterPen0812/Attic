@@ -1612,8 +1612,7 @@ struct TasksPage: View {
             ZStack(alignment: .topLeading) {
                 TasksPagerPages(span: swipe.span, model: model, store: store, motion: swipe.motion, count: TasksTab.allCases.count,
                                 shown: TasksTab.allCases.firstIndex(of: model.tab) ?? 0, size: proxy.size,
-                                page: { index, drawn in page(TasksTab.allCases[index], drawn: drawn) },
-                                token: { [model] index in model.pageToken(TasksTab.allCases[index]) })
+                                page: { index, drawn in page(TasksTab.allCases[index], drawn: drawn) })
                 if TasksPagerMotion.tracing {
                     TasksPagerTrace(motion: swipe.motion)
                 }
@@ -1636,7 +1635,7 @@ struct TasksPage: View {
                               bottomMargin: bottomMargin, viewportTop: viewportTop, bottomInset: bottomInset, bottomStack: bottomStack, drawn: drawn,
                               reveal: $doneReveal,
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, glides: false) },
-                              cell: { row, run in cell(row, tab: .done, group: [], run: run, drawn: drawn) },
+                              cell: { row, run in cell(row, tab: .done, run: run, drawn: drawn) },
                               proxies: listProxies,
                               pointer: pointer,
                               focusSelection: { id in setFocus(id) },
@@ -1703,7 +1702,7 @@ struct TasksPage: View {
                         let turning = turn?.matches(tab, dateGroup.key) ?? false
                         let folded = Self.shownFolded(turning ? turn : nil, folded: model.folded(on: tab).contains(dateGroup.key))
                         if let row = entry.row {
-                            cell(row, tab: tab, group: entry.reorderIDs, run: selectionRuns[row.id] ?? .single, drawn: drawn)
+                            cell(row, tab: tab, run: selectionRuns[row.id] ?? .single, drawn: drawn)
                                 .id(row.id)
                                 .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
                                 // A moved row pops back in with the feel (1, none, in Calm).
@@ -1786,7 +1785,7 @@ struct TasksPage: View {
                         .padding(.bottom, model.completedTodayExpanded ? AtticSpacing.s4 : 0)
                         if model.completedTodayExpanded {
                             ForEach(sections.done) { row in
-                                cell(row, tab: tab, group: groups[row.status] ?? [], run: selectionRuns[row.id] ?? .single, drawn: drawn)
+                                cell(row, tab: tab, run: selectionRuns[row.id] ?? .single, drawn: drawn)
                                     .id(row.id)
                                     .transition(.asymmetric(
                                         insertion: .identity,
@@ -1886,194 +1885,245 @@ struct TasksPage: View {
     /// `drawn` false: the page is kept built but not drawn; the row does no
     /// work until it is (round 11).
     @ViewBuilder
-    private func cell(_ row: TasksListRow, tab: TasksTab, group: [UUID], run: AtticSelectionRun, drawn: Bool = true) -> some View {
+    private func cell(_ row: TasksListRow, tab: TasksTab, run: AtticSelectionRun, drawn: Bool = true) -> some View {
         let id = row.id
-        // Read when the cell draws (the closures below run in the cell's
-        // own body), never captured when the list built it.
-        let expanded = { model.expanded.contains(id) && row.status != .done }
-        // Every row drags, out of the panel as a copy (owner-approved,
-        // 2026-10-01); only Now's and Later's manual order reorders. A
-        // sorted view (item 6) and Done have no place to drag to: there the
-        // row's drag group is the row alone, so nothing moves aside, the
-        // release lands it back and commits nothing, and leaving the panel
-        // hands it off (GPT-6.1's review).
-        let reorders = Self.reorders(tab: tab, manual: model.reorders(on: tab))
+        let editing = model.editingTitleID == id
+        #if DEBUG
+        let _ = TasksCellBodyCounts.notePass(TasksRowID(tab: tab, id: id), palette: tagColouring.palette)
+        #endif
+        // The wrapper is skipped by a page pass that changes nothing in its
+        // key (slice 1a), and then keeps the closures of the pass that last
+        // built it. So they read only what that page copy still reads as it
+        // is now (its model, its state, its pointer and drag session), or
+        // what is in the key; nothing they use is worked out when the
+        // wrapper is built. The drag group is read when a drag starts.
         TasksReorderCell(
+            key: TasksCellKey(row: row, tab: tab, run: run, drawn: drawn, isActive: model.tab == tab && model.isPageShown,
+                              isSelected: model.selection.contains(id), isExpanded: model.expanded.contains(id) && row.status != .done,
+                              isEditing: editing, opensTaskNotes: opensTaskNotes, chromeInsets: layout.chromeInsets,
+                              reduceMotion: design.reduceMotion, hapticsEnabled: design.hapticsEnabled,
+                              palette: tagColouring.palette,
+                              isLive: editing || metaPopover?.id == id || (tab == .done && model.doneDetailID == id),
+                              references: [ObjectIdentifier(model), ObjectIdentifier(store), ObjectIdentifier(dragSession),
+                                           ObjectIdentifier(pointer)]),
             model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, focus: rowFocus.binding,
-            id: id, tab: tab, group: reorders ? group : [id], drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow, dragOutRow: $dragOutRow,
-            enabled: model.editingTitleID != id,
+            id: id, tab: tab, group: { dragGroup(of: id, in: tab) },
+            drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow, dragOutRow: $dragOutRow,
+            enabled: !editing,
             session: dragSession,
             pointer: pointer,
-            allowsStart: { [pointer, dragSession] point in
-                // Not the circle column (before the row reports its
-                // controls), and never one of the row's controls.
-                point.x > cornerInset + TasksDesignMetrics.textX - AtticSpacing.s4
-                    && !dragSession.isOnControl(TasksRowID(tab: tab, id: id), at: point,
-                                                rowOrigin: pointer.frame(for: TasksRowID(tab: tab, id: id))?.origin)
-            },
+            allowsStart: { point in allowsDragStart(at: point, of: id, in: tab) },
             heights: { rowHeight($0, in: tab) },
-            onBegin: {
-                beginDragSession(in: tab)
-                if let origin = pointer.frame(for: TasksRowID(tab: tab, id: id)) {
-                    pointer.liftedCard.begin(id: id, tab: tab, origin: origin)
-                    // A haptic on pick-up as well as on the drop (Accepted 2026-11-10).
-                    AtticHaptics.pickUp(enabled: design.hapticsEnabled)
-                    pointer.dayDrop.setLineX((origin.minX + TasksDesignMetrics.textX)...(origin.maxX - TasksDesignMetrics.rowPaddingX))
-                }
-                beginDayDrop(in: tab)
-            },
+            onBegin: { beginRowDrag(id, in: tab) },
             onMove: { [pointer, dragSession] translation in
                 pointer.liftedCard.follow(translation, horizontal: dragSession.horizontalTranslation)
             },
             onEnd: finishDrag,
-            onPushPastGroup: { if reorders { showBoundaryHint() } },
+            onPushPastGroup: { pushedPastGroup(in: tab) },
             crossDay: { location in updateDayDrop(for: id, in: tab, at: location) }
         ) { live in
-            let isSelected = model.selection.contains(id)
-            let isExpanded = expanded()
-            // Only the page that answers the keyboard opens an editor: the
-            // copy a kept page draws of the same task shows none (round 12).
-            let editing = model.editingTitleID == id && live.isActive
-            #if DEBUG
-            let _ = pointer.noteDrawnFocus(TasksRowID(tab: tab, id: id), live.focus.isFocused)
-            #endif
-            // The row redraws only when what it shows changed (round 11):
-            // every change to the page's model reached every row's cell, and
-            // each rebuilt its whole row. An editor or a picker open on the
-            // row always redraws it (they show live state).
-            TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
-                                              isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
-                                              layout: layout, isLive: editing || live.metaPopover != nil)) {
-                let drawRow = {
-                    AtticTaskRow(
-                        model: row.model,
-                        isSelected: isSelected,
-                        selectionRun: run,
-                        isExpanded: isExpanded,
-                        dropLabel: live.isDropTarget ? (model.services.addFilesToTaskNote != nil ? String(localized: "Add to task's note")
-                                                                                                    : String(localized: "Add to page")) : nil,
-                        actions: actions(for: id, in: tab),
-                        onToggleExpanded: { toggleExpanded(id) },
-                        onSelect: { rowClicked(id, tab: tab) },
-                        // Done's rows too (the design's goOn and double-click).
-                        onOpenPage: opensTaskNotes ? { openTaskNote(id) } : nil,
-                        focus: live.focus,
-                        titleEditing: editing ? titleEditing(for: id) : nil,
-                        // Every row, done ones too (round 10): a finished task shows
-                        // no date or tags, but its pickers open from its row.
-                        meta: rowMeta(for: id, open: live.metaPopover),
-                        onActions: { anchor in showActions(for: id, anchor: anchor, tab: tab) },
-                        attachmentTiles: row.model.tileFiles.isEmpty ? nil : AnyView(TasksFileTiles(files: row.model.tileFiles))
-                    )
-                    // A kept page that is not shown opens no menu.
-                    .atticContextMenu { model.isPageShown && model.tab == tab ? taskCommands(row.id, tab: tab) : [] }
-                }
-                if editing {
-                    TasksTitleDraftView(draft: model.titleDraft, content: drawRow)
-                } else {
-                    drawRow()
-                }
-            }
-            .equatable()
+            cellRow(row, tab: tab, run: run, live: live)
         } below: { live in
-            // Read here, in the cell's own body, as `live.isActive` is.
-            let active = model.tab == tab && model.isPageShown
-            // A Done log task's details open under its row (Esc or the
-            // menu closes them), raised over the list like a pop-over.
-            // Only on Done (round 12's identity: Now's "Completed today"
-            // draws the same task, and never opens these).
-            if tab == .done, model.doneDetailID == id, let detail = model.doneDetail(for: id) {
-                TasksDoneDetailView(detail: detail, store: store, restore: {
-                    // The details close only once the restore saved; a
-                    // failure shows under the row with Retry (round 4).
-                    reportAcknowledged(on: id, retry: { [weak model] in model?.restoreToNow(id) ?? .failed(.taskGone) },
-                                       start: { done in model.restoreToNowAcknowledged([id], settled: done) },
-                                       onSaved: { model.doneDetailID = nil })
-                })
-                .padding(.leading, TasksDesignMetrics.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
-                .padding(.bottom, AtticSpacing.s8)
-                // Raised from its row: it unfolds down from it (O14-02) by
-                // opacity, scale and travel. A Done row holds no view for its
-                // details until they open (the Done Find keystroke budget), so
-                // this is a transition: it does not grow from a row's height
-                // or sharpen its contents as the dropdowns do.
-                .transition(design.reduceMotion ? .opacity.animation(AtticDropdownReveal.fadeAnimation)
-                            : AtticDropdownReveal.transformsOnly(fromTop: true))
-                .onExitCommand { model.doneDetailID = nil }
-            }
-            if model.failedSave == .title(id) {
-                AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitTitle() })
-                    .padding(.leading, TasksDesignMetrics.textX)
-            }
-            if let failure = model.rowFailure, failure.id == id {
-                AtticErrorLine(message: failure.canRetry ? String(localized: "Not saved") : failure.message,
-                               actionTitle: failure.canRetry ? String(localized: "Retry") : String(localized: "OK"),
-                               onRetry: { failure.canRetry ? model.retryRowFailure() : model.dismissRowFailure() })
-                    .padding(.leading, TasksDesignMetrics.textX)
-                    .accessibilityIdentifier("tasks-row-failure")
-            }
-            if expanded() {
-                TasksSubtaskDraftView(draft: active && (model.newSubtaskParentID == id || model.renamingSubtaskParentID == id)
-                                      ? model.subtaskDraft : .quiet) {
-                    AtticQuickLook(
-                        subtasks: row.subtasks,
-                        onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) } },
-                        onAddSubtask: { model.beginAddingSubtask(to: id) },
-                        commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
-                        onFocusChange: { subtaskID, focused in
-                            if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
-                        },
-                        renaming: (active ? model.renamingSubtaskID : nil).map { renaming in
-                            (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
-                                                         cancel: { model.cancelSubtaskRename() },
-                                                         submit: { model.submitSubtaskRename() },
-                                                         accessibilityLabel: String(localized: "Rename subtask"),
-                                                         emptyBackspace: { model.backspaceEmptySubtask() },
-                                                pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
-                                                pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
-                                                didEdit: { model.noteTextEdit() }))
-                        },
-                        newSubtask: model.newSubtaskParentID == id && active
-                            ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
-                                                cancel: { model.cancelEditing() },
-                                                accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
-                                                placeholder: String(localized: "Add subtask…"),
-                                                emptyBackspace: { model.backspaceEmptySubtask() },
-                                                pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
-                                                pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
-                                                didEdit: { model.noteTextEdit() })
-                            : nil,
-                        popover: movePopover(parentID: id, open: live.metaPopover),
-                        onReorder: { subtaskID, index, group in
-                            let move = { [weak model] in
-                                guard let model else { return CommandOutcome.failed(.taskGone) }
-                                return model.reorderSubtask(subtaskID, toGroupIndex: index, group: group)
-                            }
-                            if model.report(move(), on: id, retry: move).isApplied {
-                                AtticHaptics.tick(enabled: design.hapticsEnabled)
-                                AtticSounds.play(.dropped)
-                            }
-                        }
-                    )
-                }
-                // It opens from under its row (a fade in Calm), uncovered
-                // as the rows below make room (V-10).
-                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top)
-                    .combined(with: .atticTopReveal))
-                if model.subtaskRenameFailed, let renaming = model.renamingSubtaskID,
-                   row.subtasks.contains(where: { $0.id == renaming }) {
-                    AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitSubtaskRename() })
-                        .padding(.leading, TasksDesignMetrics.textX)
-                }
-                if model.failedSave == .newSubtask(id) {
-                    AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitNewSubtask() })
-                        .padding(.leading, TasksDesignMetrics.textX)
-                }
-            }
+            cellBelow(row, tab: tab, live: live)
         }
+        .equatable()
         // Files dropped on a row: one drop destination for the page
         // (`fileDropTarget(at:)`), not one per row (round 11: a drop
         // destination on every row made a screenful of rows slower to build).
+    }
+
+    /// A row's content in its wrapper: run in the wrapper's own body.
+    @ViewBuilder
+    private func cellRow(_ row: TasksListRow, tab: TasksTab, run: AtticSelectionRun, live: TasksCellLive) -> some View {
+        let id = row.id
+        let isSelected = model.selection.contains(id)
+        let isExpanded = model.expanded.contains(id) && row.status != .done
+        // Only the page that answers the keyboard opens an editor: the
+        // copy a kept page draws of the same task shows none (round 12).
+        let editing = model.editingTitleID == id && live.isActive
+        #if DEBUG
+        let _ = TasksCellBodyCounts.noteBuilder(TasksRowID(tab: tab, id: id), palette: tagColouring.palette)
+        let _ = pointer.noteDrawnFocus(TasksRowID(tab: tab, id: id), live.focus.isFocused)
+        #endif
+        // The row redraws only when what it shows changed (round 11):
+        // every change to the page's model reached every row's cell, and
+        // each rebuilt its whole row. An editor or a picker open on the
+        // row always redraws it (they show live state).
+        TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
+                                          isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
+                                          layout: layout, isLive: editing || live.metaPopover != nil)) {
+            #if DEBUG
+            let _ = TasksCellBodyCounts.noteLeaf(TasksRowID(tab: tab, id: id), model: row.model)
+            #endif
+            let drawRow = {
+                AtticTaskRow(
+                    model: row.model,
+                    isSelected: isSelected,
+                    selectionRun: run,
+                    isExpanded: isExpanded,
+                    dropLabel: live.isDropTarget ? (model.services.addFilesToTaskNote != nil ? String(localized: "Add to task's note")
+                                                                                                : String(localized: "Add to page")) : nil,
+                    actions: actions(for: id, in: tab),
+                    onToggleExpanded: { toggleExpanded(id) },
+                    onSelect: { rowClicked(id, tab: tab) },
+                    // Done's rows too (the design's goOn and double-click).
+                    onOpenPage: opensTaskNotes ? { openTaskNote(id) } : nil,
+                    focus: live.focus,
+                    titleEditing: editing ? titleEditing(for: id) : nil,
+                    // Every row, done ones too (round 10): a finished task shows
+                    // no date or tags, but its pickers open from its row.
+                    meta: rowMeta(for: id, open: live.metaPopover),
+                    onActions: { anchor in showActions(for: id, anchor: anchor, tab: tab) },
+                    attachmentTiles: row.model.tileFiles.isEmpty ? nil : AnyView(TasksFileTiles(files: row.model.tileFiles))
+                )
+                // A kept page that is not shown opens no menu.
+                .atticContextMenu { model.isPageShown && model.tab == tab ? taskCommands(row.id, tab: tab) : [] }
+            }
+            if editing {
+                TasksTitleDraftView(draft: model.titleDraft, content: drawRow)
+            } else {
+                drawRow()
+            }
+        }
+        .equatable()
+    }
+
+    /// What opens under a row (Done's details, failures, the quick look):
+    /// run in the wrapper's own body.
+    @ViewBuilder
+    private func cellBelow(_ row: TasksListRow, tab: TasksTab, live: TasksCellLive) -> some View {
+        let id = row.id
+        // Read here, in the cell's own body, as `live.isActive` is.
+        let active = model.tab == tab && model.isPageShown
+        // A Done log task's details open under its row (Esc or the
+        // menu closes them), raised over the list like a pop-over.
+        // Only on Done (round 12's identity: Now's "Completed today"
+        // draws the same task, and never opens these).
+        if tab == .done, model.doneDetailID == id, let detail = model.doneDetail(for: id) {
+            TasksDoneDetailView(detail: detail, store: store, restore: {
+                // The details close only once the restore saved; a
+                // failure shows under the row with Retry (round 4).
+                reportAcknowledged(on: id, retry: { [weak model] in model?.restoreToNow(id) ?? .failed(.taskGone) },
+                                   start: { done in model.restoreToNowAcknowledged([id], settled: done) },
+                                   onSaved: { model.doneDetailID = nil })
+            })
+            .padding(.leading, TasksDesignMetrics.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
+            .padding(.bottom, AtticSpacing.s8)
+            // Raised from its row: it unfolds down from it (O14-02) by
+            // opacity, scale and travel. A Done row holds no view for its
+            // details until they open (the Done Find keystroke budget), so
+            // this is a transition: it does not grow from a row's height
+            // or sharpen its contents as the dropdowns do.
+            .transition(design.reduceMotion ? .opacity.animation(AtticDropdownReveal.fadeAnimation)
+                        : AtticDropdownReveal.transformsOnly(fromTop: true))
+            .onExitCommand { model.doneDetailID = nil }
+        }
+        if model.failedSave == .title(id) {
+            AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitTitle() })
+                .padding(.leading, TasksDesignMetrics.textX)
+        }
+        if let failure = model.rowFailure, failure.id == id {
+            AtticErrorLine(message: failure.canRetry ? String(localized: "Not saved") : failure.message,
+                           actionTitle: failure.canRetry ? String(localized: "Retry") : String(localized: "OK"),
+                           onRetry: { failure.canRetry ? model.retryRowFailure() : model.dismissRowFailure() })
+                .padding(.leading, TasksDesignMetrics.textX)
+                .accessibilityIdentifier("tasks-row-failure")
+        }
+        if model.expanded.contains(id) && row.status != .done {
+            TasksSubtaskDraftView(draft: active && (model.newSubtaskParentID == id || model.renamingSubtaskParentID == id)
+                                  ? model.subtaskDraft : .quiet) {
+                AtticQuickLook(
+                    subtasks: row.subtasks,
+                    onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) } },
+                    onAddSubtask: { model.beginAddingSubtask(to: id) },
+                    commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
+                    onFocusChange: { subtaskID, focused in
+                        if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
+                    },
+                    renaming: (active ? model.renamingSubtaskID : nil).map { renaming in
+                        (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
+                                                     cancel: { model.cancelSubtaskRename() },
+                                                     submit: { model.submitSubtaskRename() },
+                                                     accessibilityLabel: String(localized: "Rename subtask"),
+                                                     emptyBackspace: { model.backspaceEmptySubtask() },
+                                            pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
+                                            pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
+                                            didEdit: { model.noteTextEdit() }))
+                    },
+                    newSubtask: model.newSubtaskParentID == id && active
+                        ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
+                                            cancel: { model.cancelEditing() },
+                                            accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
+                                            placeholder: String(localized: "Add subtask…"),
+                                            emptyBackspace: { model.backspaceEmptySubtask() },
+                                            pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
+                                            pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
+                                            didEdit: { model.noteTextEdit() })
+                        : nil,
+                    popover: movePopover(parentID: id, open: live.metaPopover),
+                    onReorder: { subtaskID, index, group in
+                        let move = { [weak model] in
+                            guard let model else { return CommandOutcome.failed(.taskGone) }
+                            return model.reorderSubtask(subtaskID, toGroupIndex: index, group: group)
+                        }
+                        if model.report(move(), on: id, retry: move).isApplied {
+                            AtticHaptics.tick(enabled: design.hapticsEnabled)
+                            AtticSounds.play(.dropped)
+                        }
+                    }
+                )
+            }
+            // It opens from under its row (a fade in Calm), uncovered
+            // as the rows below make room (V-10).
+            .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top)
+                .combined(with: .atticTopReveal))
+            if model.subtaskRenameFailed, let renaming = model.renamingSubtaskID,
+               row.subtasks.contains(where: { $0.id == renaming }) {
+                AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitSubtaskRename() })
+                    .padding(.leading, TasksDesignMetrics.textX)
+            }
+            if model.failedSave == .newSubtask(id) {
+                AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitNewSubtask() })
+                    .padding(.leading, TasksDesignMetrics.textX)
+            }
+        }
+    }
+
+    /// The rows a drag of `id` moves among, read when the drag starts: its
+    /// date group, Completed today's rows, or the row alone where the list
+    /// has no order to drag to (a sorted view, Done).
+    func dragGroup(of id: UUID, in tab: TasksTab) -> [UUID] {
+        #if DEBUG
+        TasksCellBodyCounts.noteGroupLookup()
+        #endif
+        guard Self.reorders(tab: tab, manual: model.reorders(on: tab)) else { return [id] }
+        let list = model.listSnapshot(for: tab)
+        if let entry = list.entries.first(where: { $0.row?.id == id }) { return entry.reorderIDs }
+        if let row = list.sections.done.first(where: { $0.id == id }) { return list.idsByStatus[row.status] ?? [] }
+        return [id]
+    }
+
+    /// Not the circle column (before the row reports its controls), and
+    /// never one of the row's controls.
+    private func allowsDragStart(at point: CGPoint, of id: UUID, in tab: TasksTab) -> Bool {
+        point.x > cornerInset + TasksDesignMetrics.textX - AtticSpacing.s4
+            && !dragSession.isOnControl(TasksRowID(tab: tab, id: id), at: point,
+                                        rowOrigin: pointer.frame(for: TasksRowID(tab: tab, id: id))?.origin)
+    }
+
+    private func beginRowDrag(_ id: UUID, in tab: TasksTab) {
+        beginDragSession(in: tab)
+        if let origin = pointer.frame(for: TasksRowID(tab: tab, id: id)) {
+            pointer.liftedCard.begin(id: id, tab: tab, origin: origin)
+            // A haptic on pick-up as well as on the drop (Accepted 2026-11-10).
+            AtticHaptics.pickUp(enabled: design.hapticsEnabled)
+            pointer.dayDrop.setLineX((origin.minX + TasksDesignMetrics.textX)...(origin.maxX - TasksDesignMetrics.rowPaddingX))
+        }
+        beginDayDrop(in: tab)
+    }
+
+    private func pushedPastGroup(in tab: TasksTab) {
+        if Self.reorders(tab: tab, manual: model.reorders(on: tab)) { showBoundaryHint() }
     }
 
     /// The quick look opens and closes with the expansion motion (review
@@ -3788,6 +3838,51 @@ final class TasksCellReports {
     var controls: [CGRect]?
 }
 
+/// What a row's wrapper shows (slice 1a): a page pass that leaves it the
+/// same skips the wrapper, and the wrapper keeps the row and the page copy
+/// it was last built with. So the key holds every input the wrapper and its
+/// row builders read that no binding, state object or model publication
+/// delivers: the whole row (every field of its model, the full due date
+/// with its tone and whether it shows, its status, subtasks and due day),
+/// the page's state for the row, the design settings and the palette its
+/// menus read, and the objects it acts on. A row with an editor, a picker
+/// or Done's details open always redraws (they show live state), as
+/// `TasksRowKey`.
+struct TasksCellKey: Equatable {
+    let row: TasksListRow
+    let tab: TasksTab
+    let run: AtticSelectionRun
+    /// Drawn, or kept built and frozen: a frozen page's rows catch up when
+    /// it is drawn again, by this changing.
+    let drawn: Bool
+    let isActive: Bool
+    let isSelected: Bool
+    let isExpanded: Bool
+    let isEditing: Bool
+    let opensTaskNotes: Bool
+    let chromeInsets: EdgeInsets
+    /// The design settings the row's transitions and haptics read.
+    let reduceMotion: Bool
+    let hapticsEnabled: Bool
+    /// The tag colours the row's menus show (the Tags submenu's swatches).
+    let palette: AtticTagPalette
+    let isLive: Bool
+    /// The model, the store, the drag session and the pointer.
+    let references: [ObjectIdentifier]
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // `TasksListRow.==` leaves out parts of the row's model (the due
+        // date's tone, whether it shows): the model is compared whole.
+        !lhs.isLive && !rhs.isLive && lhs.row == rhs.row && lhs.row.model == rhs.row.model
+            && lhs.tab == rhs.tab && lhs.run == rhs.run
+            && lhs.drawn == rhs.drawn && lhs.isActive == rhs.isActive && lhs.isSelected == rhs.isSelected
+            && lhs.isExpanded == rhs.isExpanded && lhs.isEditing == rhs.isEditing
+            && lhs.opensTaskNotes == rhs.opensTaskNotes && lhs.chromeInsets == rhs.chromeInsets
+            && lhs.reduceMotion == rhs.reduceMotion && lhs.hapticsEnabled == rhs.hapticsEnabled
+            && lhs.palette == rhs.palette && lhs.references == rhs.references
+    }
+}
+
 /// Where the page reaches its rows' focus state, which `TasksRowFocusOwner`
 /// holds: set as the owner draws the page, read by the page's handlers.
 @MainActor
@@ -4461,13 +4556,87 @@ final class TasksDragSession {
     }
 }
 
+#if DEBUG
+/// DEBUG count of the row wrapper's bodies per row, beside
+/// `AtticTaskRow.evaluations` for the row leaf, and the drag group each
+/// wrapper would start a drag with (design/tasks-breadth.md, slice 1a).
+/// A generic view cannot keep its own static state.
+@MainActor enum TasksCellBodyCounts {
+    /// Off unless a test turns it on (and clears it after): the
+    /// dictionaries keep row payloads and palettes (Astra R-10).
+    static var records = false
+    static var evaluations: [TasksRowID: Int] = [:]
+    /// Off unless a test reads them: the closures hold the page.
+    static var recordsDragGroups = false
+    static var dragGroups: [TasksRowID: () -> [UUID]] = [:]
+
+    /// The page copy's palette each time a wrapper's row builder runs (the
+    /// palette its menus read), and each leaf build with what it drew.
+    static var builderPalettes: [TasksRowID: AtticTagPalette] = [:]
+    /// The palette each pass that builds a row's wrapper reads.
+    static var passPalettes: [TasksRowID: AtticTagPalette] = [:]
+    static var leaves: [TasksRowID: Int] = [:]
+    static var leafModels: [TasksRowID: AtticTaskRowModel] = [:]
+    /// How many times a row's drag group was worked out.
+    static var groupLookups = 0
+
+    static func notePass(_ row: TasksRowID, palette: AtticTagPalette) {
+        if records { passPalettes[row] = palette }
+    }
+
+    static func noteBuilder(_ row: TasksRowID, palette: AtticTagPalette) {
+        if records { builderPalettes[row] = palette }
+    }
+
+    static func noteLeaf(_ row: TasksRowID, model: AtticTaskRowModel) {
+        guard records else { return }
+        leaves[row, default: 0] += 1
+        leafModels[row] = model
+    }
+
+    static func note(_ row: TasksRowID, dragGroup: @escaping () -> [UUID]) {
+        guard records else { return }
+        evaluations[row, default: 0] += 1
+        if recordsDragGroups { dragGroups[row] = dragGroup }
+    }
+
+    static func noteGroupLookup() {
+        if records { groupLookups += 1 }
+    }
+
+    /// Empties every record (a test's setUp and tearDown).
+    static func reset() {
+        evaluations = [:]
+        dragGroups = [:]
+        builderPalettes = [:]
+        passPalettes = [:]
+        leaves = [:]
+        leafModels = [:]
+        groupLookups = 0
+    }
+}
+#endif
+
+/// The release's check that the group lifted is still whole (Astra R-2):
+/// one set of the group shown, so the work grows with the group, not its
+/// square (Astra R-9).
+enum TasksDragRelease {
+    static func hasLeft<ID: Hashable>(_ lifted: [ID], from group: [ID]) -> Bool {
+        let shown = Set(group)
+        return lifted.contains { !shown.contains($0) }
+    }
+}
+
 /// A row that can be dragged to reorder (owner fix 6, review 1). The lift is
 /// a modifier (the row keeps its identity mid-drag); the translation lives in
 /// `@GestureState`, which resets itself when the system cancels the drag, and
 /// that reset clears the lift, so nothing stays lifted. The drag starts on
 /// the row itself (not its circle, its quick look or a text field), at
 /// once, without a hold, key or not.
-struct TasksReorderCell<Row: View, Below: View>: View {
+struct TasksReorderCell<Row: View, Below: View>: View, Equatable {
+    /// What the row shows (slice 1a): a page pass with the same key skips
+    /// this wrapper.
+    let key: TasksCellKey
     /// The cell redraws itself when the selection, editing or keyboard
     /// focus move (the focus ring lagging a row behind, the computer-use
     /// review's bug 4): it observes every change to the model through
@@ -4478,7 +4647,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     var focus: FocusState<AtticRowFocusID?>.Binding
     let id: UUID
     let tab: TasksTab
-    let group: [UUID]
+    /// The rows a drag moves among, read when the drag starts.
+    let group: () -> [UUID]
     @Binding var drag: TasksDrag?
     /// Page state the row shows (its open picker, a file over it), read in
     /// this cell's own body so the row redraws when they change: a lazy
@@ -4515,6 +4685,9 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     @State private var reports = TasksCellReports()
 
     var body: some View {
+        #if DEBUG
+        let _ = TasksCellBodyCounts.note(TasksRowID(tab: tab, id: id), dragGroup: group)
+        #endif
         let lifted = drag?.id == id && translation != nil
         let hidden = lifted || (drag?.id == id && drag?.landing == true) || dragOutRow == TasksRowID(tab: tab, id: id)
         // Read here, in the cell's own body, so a new target moves the
@@ -4597,8 +4770,11 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                 state = value.translation.height
             }
             .onChanged { value in
-                guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
-                      let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
+                // The press decision first: a refused press never works out
+                // a group. Then the group once, when the drag lifts.
+                guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart) else { return }
+                let group = drag?.id == id ? drag?.group ?? [] : self.group()
+                guard let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
                 session.translation = value.translation.height
                 session.horizontalTranslation = value.translation.width
                 session.location = value.location
@@ -4627,14 +4803,24 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                 // A queued Escape must be read before the release commits.
                 session.cancellation.poll()
                 // A cancelled press never commits on release.
-                guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
-                      let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
+                guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart) else { return }
+                // The release lands among the group as it is now, as on the
+                // trunk; a row that has left it since the lift means the
+                // drop lands back and writes nothing (Astra R-2).
+                let group = self.group()
+                let lifted = drag?.id == id ? drag?.group ?? group : group
+                let left = TasksDragRelease.hasLeft(lifted, from: group)
+                guard let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
                 let moved = value.translation.height + (drag?.id == id ? (drag?.scrolled ?? 0) : 0)
                 let crossing = crossDay(value.location)
-                let target = crossing ? start
+                let target = crossing || left ? start
                     : Self.target(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
                 onEnd(TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target, geometry: session.geometry))
             }
+    }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.key == rhs.key
     }
 
     static func offset(of id: UUID, in drag: TasksDrag, heights: (UUID) -> CGFloat) -> CGFloat {

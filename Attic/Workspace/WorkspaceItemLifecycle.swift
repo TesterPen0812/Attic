@@ -53,7 +53,7 @@ enum WorkspaceItemLifecycle {
     }
     static func stageWritingDeletion(_ rows: [NoteItem], group: UUID, timestamp: Date, in context: ModelContext) throws {
         WorkspaceLegacyBridge.markItemLifecycle(in: context)
-        let attachments = has("NoteAttachment", in: context) ? try context.fetch(FetchDescriptor<NoteAttachment>()) : []
+        let attachments = has("NoteAttachment", in: context) ? try context.fetch(WholeTableRead.all(NoteAttachment.self)) : []
         WorkspaceLegacyBridge.prepareMutations(rows, in: context)
         for row in rows where row.deletedAt == nil {
             row.deletedAt = timestamp
@@ -83,8 +83,8 @@ enum WorkspaceItemLifecycle {
     /// Only matching group rows return, preserving each physical row's fields.
     static func stageRestore(group: UUID, timestamp: Date, in context: ModelContext) throws {
         WorkspaceLegacyBridge.markItemLifecycle(in: context)
-        let tasks = has("TaskItem", in: context) ? try context.fetch(FetchDescriptor<TaskItem>()) : []
-        let notes = has("NoteItem", in: context) ? try context.fetch(FetchDescriptor<NoteItem>()) : []
+        let tasks = has("TaskItem", in: context) ? try context.fetch(WholeTableRead.all(TaskItem.self)) : []
+        let notes = has("NoteItem", in: context) ? try context.fetch(WholeTableRead.all(NoteItem.self)) : []
         let restoringTasks = tasks.filter { $0.deletionGroupID == group }
         let restoringNotes = notes.filter { $0.deletionGroupID == group }
         guard !restoringTasks.isEmpty || !restoringNotes.isEmpty,
@@ -219,8 +219,8 @@ extension WorkspaceItemLifecycle {
             let context = coordinator.freshContext()
             let initial = try WorkspaceLegacyBridge.inventory(in: context, includeCanvas: false)
             let index = try WorkspaceScopeIndex(initial)
-            let allTasks = try context.fetch(FetchDescriptor<TaskItem>())
-            let allNotes = try context.fetch(FetchDescriptor<NoteItem>())
+            let allTasks = try context.fetch(WholeTableRead.all(TaskItem.self))
+            let allNotes = try context.fetch(WholeTableRead.all(NoteItem.self))
             var tasks = allTasks.filter { $0.deletionGroupID == group }
             let notes = allNotes.filter { $0.deletionGroupID == group }
             var taskIDs = Set(tasks.map(\.id))
@@ -274,7 +274,7 @@ extension WorkspaceItemLifecycle {
                           confirmed: primaryTaskIDs.contains(root) ? confirmed : nil),
                       Set(family.map(\.id)).isSubset(of: taskIDs) else { return refused() }
             }
-            let allAttachments = try context.fetch(FetchDescriptor<NoteAttachment>())
+            let allAttachments = try context.fetch(WholeTableRead.all(NoteAttachment.self))
             let attachments = allAttachments.filter { noteIDs.contains($0.noteID) }
             let attachmentIDs = Set(attachments.map(\.id))
             guard allAttachments.filter({ attachmentIDs.contains($0.id) }).allSatisfy({ noteIDs.contains($0.noteID) }) else { return refused() }
@@ -564,17 +564,20 @@ extension WorkspaceItemLifecycle {
         var ids = taskIDs
         if let noteID, let owner = try taskOwner(noteID: noteID, in: context) { ids.insert(owner) }
         if has("TaskItem", in: context) {
-            let all = try context.fetch(FetchDescriptor<TaskItem>())
+            let all = try context.fetch(WholeTableRead.all(TaskItem.self))
             ids.formUnion(all.filter { $0.parentID.map(ids.contains) == true && $0.deletedAt == nil }.map(\.id))
         }
         var notes = Set(try writing(taskIDs: ids, in: context).filter { $0.deletedAt == nil }.map(\.id))
         if let noteID { notes.insert(noteID) }
         return try controller.prepareWholeItemDeletion(noteIDs: notes, taskIDs: ids)
     }
-    static func didCommit(in container: ModelContainer) {
+    /// A whole-item commit reached every store and open note session. `freshTasks` is the task store whose own
+    /// save made this commit and has already presented it from one fresh read of every task row (the stale-context
+    /// rule); only that store, only then, skips its second read. A note-side commit passes nil.
+    static func didCommit(in container: ModelContainer, freshTasks: TaskStore? = nil) {
         guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) else { return }
-        coordinator.lifecycleLibrary?.refreshItemStores()
-        coordinator.lifecycleNotes?.publishWholeItemLifecycle()
+        let freshNotes = coordinator.lifecycleLibrary?.refreshItemStores(freshTasks: freshTasks)
+        coordinator.lifecycleNotes?.publishWholeItemLifecycle(notesReadInThisCommit: freshNotes)
     }
 }
 
@@ -614,13 +617,13 @@ extension AtticLibrary {
     func deletionScope(for taskID: UUID) -> WholeItemDeletionScope? {
         let context = ModelContext(tasks.container)
         do {
-            let all = try context.fetch(FetchDescriptor<TaskItem>())
+            let all = try context.fetch(WholeTableRead.all(TaskItem.self))
             let linked = all.filter { ($0.id == taskID || $0.parentID == taskID) && $0.deletedAt == nil }
             guard linked.contains(where: { $0.id == taskID }) else { return nil }
             let ids = Set(linked.map(\.id))
             let writing = try WorkspaceItemLifecycle.writing(taskIDs: ids, in: context).filter { $0.deletedAt == nil }
             let noteIDs = Set(writing.map(\.id))
-            let attachments = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { noteIDs.contains($0.noteID) }
+            let attachments = try context.fetch(WholeTableRead.all(NoteAttachment.self)).filter { noteIDs.contains($0.noteID) }
             let files = Set(try linked.flatMap(WorkspacePurge.legacyReferences).map(\.id)).union(attachments.map(\.id))
             return .init(hasWriting: !writing.isEmpty, subtaskCount: ids.subtracting([taskID]).count, fileCount: files.count)
         } catch { return nil }
