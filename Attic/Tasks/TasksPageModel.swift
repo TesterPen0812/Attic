@@ -263,6 +263,7 @@ final class TasksTitleDraftState: ObservableObject {
 /// was typed, selected and expanded.
 @MainActor
 final class TasksPageModel: ObservableObject {
+    /// Declared here, so a `@Published` on this class sends nothing: every published value is `@StoredThenSent`.
     let objectWillChange = ObservableObjectPublisher()
     private static let live = NSHashTable<TasksPageModel>.weakObjects()
 
@@ -545,7 +546,7 @@ final class TasksPageModel: ObservableObject {
     }
     /// Search (the menu-bar item) asked for the Done page's search field;
     /// the page puts the keyboard there and clears it.
-    @Published var pendingSearchFocus = false
+    @StoredThenSent var pendingSearchFocus = false
     /// A date group (or a Done day) folding or unfolding, while it turns
     /// (fix round 2, `TasksFoldTurn`). Published on the model, as the
     /// folds themselves are, because the pager rebuilds its pages for the
@@ -563,7 +564,7 @@ final class TasksPageModel: ObservableObject {
         get { addBarState.caret }
         set { addBarState.caret = newValue }
     }
-    @Published var pasteOffer: TaskPasteOffer?
+    @StoredThenSent var pasteOffer: TaskPasteOffer?
     /// The applied result query. Typing lives in its own small field state
     /// so it does not invalidate the page and its rows on every key; the
     /// applied query and its results are published to the Done page alone
@@ -1869,7 +1870,7 @@ final class TasksPageModel: ObservableObject {
 
     /// Back from a task's page: the anchor row takes the keyboard again
     /// (UX plan § 5.3). The page observes the count.
-    @Published private(set) var returnFocusRequest: UInt64 = 0
+    @StoredThenSent private(set) var returnFocusRequest: UInt64 = 0
     private(set) var returnFocusRow: UUID?
 
     func requestReturnFocus(_ id: UUID?) {
@@ -1940,7 +1941,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     /// Counts the panel's hides, for the page's own transient state.
-    @Published private(set) var hides = 0
+    @StoredThenSent private(set) var hides = 0
 
     // MARK: - A failed change, where it was made (review 6)
 
@@ -1986,7 +1987,7 @@ final class TasksPageModel: ObservableObject {
     /// A change made in an open picker (a row's date or tag list) that did
     /// not save: the picker stays open with what was chosen and shows
     /// "Not saved · Retry" inside itself (round 4).
-    @Published private(set) var pickerFailure: RowFailure?
+    @StoredThenSent private(set) var pickerFailure: RowFailure?
     private var pickerRetry: (() -> CommandOutcome)?
     /// What the picker finishes when a retried change saves (a new tag's
     /// typed name is cleared, as a first-time save clears it).
@@ -3546,7 +3547,10 @@ final class TasksPageModel: ObservableObject {
 /// is stored, then `objectWillChange` is sent, then the projected
 /// publisher. Every set is sent, as `@Published` does. Observers run after
 /// the send: whatever a body reads that a `didSet` would change belongs in
-/// `willSet` (as `selection`'s revision).
+/// `willSet` (as `selection`'s revision). A class that declares its own
+/// `objectWillChange` (as `TasksPageModel` does) gets nothing from
+/// `@Published`, which then stores and sends nothing (T7, pr41-fable): every
+/// published value of such a class is `@StoredThenSent`, or sent by hand.
 @MainActor
 @propertyWrapper
 struct StoredThenSent<Value> {

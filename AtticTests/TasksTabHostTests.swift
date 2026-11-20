@@ -333,9 +333,23 @@ final class TasksTabHostTests: XCTestCase {
     /// leaving host's focus state goes nil with the keyboard, unwritten.
     private func assertNoFocusLeftBehind(_ hosted: Hosted, line: UInt = #line) {
         #if DEBUG
-        XCTAssertEqual(TasksRowFocusLink.current?.tabsHoldingFocus(besides: hosted.model.tab), [],
-                       "no row focus is left on a tab not in use", line: line)
+        let link = TasksRowFocusLink.current
+        let left = link?.tabsHoldingFocus(besides: hosted.model.tab) ?? []
+        // HB-479-LEFTOVER-FOCUS (boarded, one sighting): the state the
+        // next sighting needs, named in the message.
+        let state = left.isEmpty ? "" : {
+            let hostStates = hosts(hosted).enumerated().map { index, host in
+                "host\(index)(window=\(host.window != nil) inUse=\(host.isInteractive) hidden=\(host.isHiddenOrHasHiddenAncestor) holds=\(Self.holdsTheKeyboard(host)))"
+            }
+            return "; tab in use \(hosted.model.tab), skippedLetGos \(link?.skippedLetGos ?? -1), first responder \(String(describing: hosted.window.firstResponder)), \(hostStates.joined(separator: " "))"
+        }()
+        XCTAssertEqual(left, [], "no row focus is left on a tab not in use" + state, line: line)
         #endif
+    }
+
+    private static func holdsTheKeyboard(_ host: KeptContentHostingView) -> Bool {
+        guard let responder = host.window?.firstResponder as? NSView else { return false }
+        return responder === host || responder.isDescendant(of: host)
     }
 
     private func assertTheArrivingTabHasTheKeyboard(_ hosted: Hosted, _ tab: TasksTab, line: UInt = #line) throws {
