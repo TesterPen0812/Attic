@@ -2152,25 +2152,53 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     }
 
     /// The last element in tree order (drawn above the earlier ones), deepest
-    /// first, whose frame holds `point`.
+    /// first, whose frame holds `point`, with the shell above the page: a
+    /// tab's content lives in a kept host (host-boundary.md §4), which sits
+    /// in the tree after the top row's controls although it is drawn below
+    /// them, so an element inside a kept host answers only where no shell
+    /// element holds the point. A shell element is framed, real, outside
+    /// every kept host and holds none (a group around the page holds every
+    /// point and would hide every row). Where no real shell element holds
+    /// the point, the shell's stand-in there (the top row's role-less band)
+    /// still covers the page, as it did before kept hosts. One walk keeps
+    /// all three answers.
     static func topmostElement(in root: AnyObject, at point: NSPoint) -> AnyObject? {
-        var best: AnyObject?
+        var shell: AnyObject?
+        var standIn: AnyObject?
+        var page: AnyObject?
         var visited = 0
-        func visit(_ node: AnyObject, depth: Int) {
-            guard depth < 64, visited < 20_000 else { return }
+        /// Visits `node`'s children; returns whether a kept host lies among
+        /// what it walked.
+        func visit(_ node: AnyObject, depth: Int, inPage: Bool) -> Bool {
+            guard depth < 64, visited < 20_000 else { return false }
             visited += 1
+            var holdsAHost = false
             for child in (node.accessibilityChildren?() ?? nil) ?? [] {
                 let element = child as AnyObject
                 let frame = element.accessibilityFrame?() ?? .zero
                 // A framed element holds its own: nothing under it lies
                 // outside it (a frameless group is looked into).
                 guard frame.isEmpty || frame.contains(point) else { continue }
-                if !frame.isEmpty, !isPlaceholder(element) { best = element }
-                visit(element, depth: depth + 1)
+                let isHost = element is KeptContentHostingView
+                let real = !frame.isEmpty && !isPlaceholder(element)
+                if inPage || isHost {
+                    if real { page = element }
+                    _ = visit(element, depth: depth + 1, inPage: true)
+                    holdsAHost = true
+                } else {
+                    let before = shell
+                    if real { shell = element } else if !frame.isEmpty, standIn == nil { standIn = element }
+                    if visit(element, depth: depth + 1, inPage: false) {
+                        holdsAHost = true
+                        // It holds a kept host: not a shell element.
+                        if shell === element { shell = before }
+                    }
+                }
             }
+            return holdsAHost
         }
-        visit(root, depth: 0)
-        return best
+        _ = visit(root, depth: 0, inPage: false)
+        return shell ?? standIn ?? page
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
