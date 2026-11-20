@@ -344,6 +344,10 @@ struct CornerHoverStateMachine {
         isHidePending = false
     }
 
+    /// `untilHotspotExit`: the pointer is in the hotspot as the hide ends,
+    /// so it must leave before the corner can reveal again. Pass it only
+    /// for a pointer there now; nothing else can clear it while the pointer
+    /// is far from the corner and unsampled.
     mutating func forceHidden(untilHotspotExit: Bool = false) {
         reset()
         requiresHotspotExitBeforeReveal = untilHotspotExit

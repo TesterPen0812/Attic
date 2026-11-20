@@ -476,10 +476,28 @@ final class CornerHoverMonitor {
     /// popover or another Attic-owned card. Global clicks carry no window.
     /// A hide that did not come from the pointer leaving (click away, Esc,
     /// menu, swipe, probe) has ordered the panel out.
+    ///
+    /// The exit latch keeps the hide from re-revealing under a pointer
+    /// resting in the corner, so it is set only when the pointer is in the
+    /// hotspot now. A pointer anywhere else is already out: its next
+    /// arrival is a new approach. (Hidden and far from the corner no sample
+    /// runs, so a latch set for such a pointer could only clear on a second
+    /// entry: CORNER-REVEAL-MISS.) A latched pointer is near the corner, so
+    /// the sampling cadence is responsive and its exit is always sampled.
     private func hideCompleted() {
         let location = pointerLocationAtHideForTesting ?? NSEvent.mouseLocation
-        stateMachine.forceHidden(untilHotspotExit: true)
+        stateMachine.forceHidden(untilHotspotExit: isInCornerHotspot(location))
         refreshSamplingCadence(at: location)
+    }
+
+    /// The hotspot by geometry alone, with the same 1 pt edge allowance as a
+    /// sample. No key or display rule: a pointer resting in the corner
+    /// latches whatever the rule; a sample the rule rejects clears it.
+    private func isInCornerHotspot(_ location: CGPoint) -> Bool {
+        guard let screen = screen(containing: location) else { return false }
+        return PanelGeometry.hotspot(in: screen.frame, corner: settings.corner)
+            .insetBy(dx: -1, dy: -1)
+            .contains(location)
     }
 
     private static func isAtticOwnedWindow(_ window: NSWindow?) -> Bool {
