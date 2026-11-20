@@ -180,12 +180,29 @@ final class AtticPanel: NSPanel {
     private var undoParticipants: [NSTextView] = []
 
     override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        if Self.refusesARelease(to: responder, in: self) { return false }
         let changed = super.makeFirstResponder(responder)
         if let textView = firstResponder as? NSTextView, !undoParticipants.contains(where: { $0 === textView }) {
             undoParticipants.append(textView)
         }
         removeDepartedUndoParticipants()
         return changed
+    }
+
+    /// HB-09 (host-boundary.md §5.1): a tab host's SwiftUI pass may release
+    /// only the keyboard that host holds, as `releaseKeyboard` does. Its
+    /// focus system lets go (a row's focus state going nil) by asking for no
+    /// first responder, whoever holds the keyboard; with Find's field on the
+    /// tabs' line, outside the host, that took the field's keyboard. Refused:
+    /// a request for no one (or the panel) during a host's pass while the
+    /// keyboard is held outside that host, a field editor judged by its
+    /// field. Nothing else changes, and nothing is given to anyone.
+    private static func refusesARelease(to responder: NSResponder?, in window: AtticPanel) -> Bool {
+        guard responder == nil || responder === window,
+              let host = KeptContentHostingView.updating, host.window === window,
+              let holder = (window.firstResponder as? NSTextView)?.delegate as? NSView ?? window.firstResponder as? NSView,
+              holder.window === window else { return false }
+        return holder !== host && !holder.isDescendant(of: host)
     }
 
     /// Removes the undo registrations of text views that are no longer in

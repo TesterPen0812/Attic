@@ -22,8 +22,8 @@ final class TasksTabHostTests: XCTestCase {
 
     /// Every tab kept built, each in its own host. Warming waits for idle
     /// input, so this waits, bounded, for the span and the three hosts.
-    private func warmed(laterRows: Int = 0, line: UInt = #line) throws -> Hosted {
-        let hosted = try Hosted(height: 520)
+    private func warmed(laterRows: Int = 0, atticPanel: Bool = false, line: UInt = #line) throws -> Hosted {
+        let hosted = try Hosted(height: 520, atticPanel: atticPanel)
         for index in 0..<laterRows { _ = hosted.store.create(title: "Later \(index + 1)", status: .backlog) }
         waitForTestOperation("every tab kept built, each in its own host", line: line) {
             hosted.spin(0.05)
@@ -597,5 +597,84 @@ final class TasksTabHostTests: XCTestCase {
         hosted.press("\u{F701}", keyCode: 125)
         hosted.spin(0.3)
         XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.now.rawValue, "and on Now again")
+    }
+
+    // MARK: HB-09, a tab host's pass releases only its own keyboard
+
+    /// HB-09 (host-boundary.md §5.1; ScrollEdgeUITests' Find rows): Find's
+    /// field is on the tabs' line, outside every tab host. Back in the field
+    /// from a row (a click does this), the page lets the row go
+    /// (`focusedRow = nil`) while the field already holds the keyboard; the
+    /// tab host's SwiftUI pass applies that, and it must not take the
+    /// keyboard from the field. Driven by the window's own layout pass.
+    func testHB09ARowLettingGoInTheTabsPassLeavesFindsFieldTheKeyboard() throws {
+        try checkARowLettingGo(outsideTheWindowsPass: false)
+    }
+
+    /// HB-09, the same with the row's focus let go by a direct write, outside
+    /// any window layout pass: no release reaches the field there either.
+    func testHB09ARowLettingGoOutsideTheWindowsPassLeavesFindsFieldTheKeyboard() throws {
+        try checkARowLettingGo(outsideTheWindowsPass: true)
+    }
+
+    private func checkARowLettingGo(outsideTheWindowsPass: Bool, line: UInt = #line) throws {
+        try keyWindowOnly()
+        let hosted = try warmed(atticPanel: true, line: line)
+        defer { hosted.close() }
+        XCTAssertTrue(hosted.window is AtticPanel, "the app's panel", line: line)
+        // The app's Edit menu has Find on ⌘F (as TasksRound6Tests sets it up).
+        let saved = NSApp.mainMenu
+        let menu = NSMenu()
+        let edit = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        edit.submenu = NSMenu(title: "Edit")
+        let find = NSMenuItem(title: "Find…", action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "f")
+        find.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
+        edit.submenu?.addItem(find)
+        menu.addItem(edit)
+        NSApp.mainMenu = menu
+        defer { NSApp.mainMenu = saved }
+        // Find, with a query (it stays open whoever has the keyboard).
+        hosted.press("f", keyCode: 3, modifiers: .command)
+        XCTAssertTrue(hosted.searchHasKeyboard, "⌘F gives Find's field the keyboard: \(String(describing: hosted.window.firstResponder))", line: line)
+        hosted.press("e", keyCode: 14)
+        let field = try XCTUnwrap(hosted.window.contentView.flatMap { AtticTabsSearchField.searchField(in: $0, placeholder: "Search Now") },
+                                  "Find's field", line: line)
+        XCTAssertNil(KeptContentHostingView.enclosing(field), "Find's field is outside every tab host", line: line)
+        // ↓: the first match, a row of Now, is selected and takes the
+        // keyboard in Now's host. ↓ out of Find sometimes leaves the keyboard
+        // with the panel (not this rule): the row is then given it directly.
+        let now = try inUse(hosted)
+        down(hosted)
+        #if DEBUG
+        let link = try XCTUnwrap(TasksRowFocusLink.current, line: line)
+        if keyboardHost(hosted) !== now, let selected = hosted.model.selection.first {
+            link.setValue(AtticRowFocusID(page: TasksTab.now.rawValue, id: selected))
+            hosted.spin(0.3)
+        }
+        #endif
+        XCTAssertTrue(keyboardHost(hosted) === now, "a Now row has the keyboard: \(String(describing: hosted.window.firstResponder))", line: line)
+        #if DEBUG
+        _ = try XCTUnwrap(link.value(preferring: .now), "the row's focus state holds the row", line: line)
+        #endif
+        // Back in the field, as a click puts it there (AppKit gives the
+        // field the keyboard; the page then lets the row go).
+        XCTAssertTrue(hosted.window.makeFirstResponder(field), line: line)
+        XCTAssertTrue(hosted.searchHasKeyboard, "the field has the keyboard again", line: line)
+        // The caret at the end, where a click after the text puts it.
+        if let editor = hosted.window.firstResponder as? NSTextView { editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0)) }
+        #if DEBUG
+        if outsideTheWindowsPass {
+            // The row's focus goes from the row to nil by a direct write,
+            // outside any layout pass.
+            link.setValue(nil)
+            XCTAssertTrue(hosted.searchHasKeyboard,
+                          "no release outside a pass: \(String(describing: hosted.window.firstResponder))", line: line)
+        }
+        #endif
+        hosted.spin(0.5)
+        XCTAssertTrue(hosted.searchHasKeyboard, "Find's field keeps the keyboard: \(String(describing: hosted.window.firstResponder))", line: line)
+        XCTAssertEqual(hosted.model.searchQuery(for: .now), "e", "the query is kept", line: line)
+        hosted.press("x", keyCode: 7)
+        XCTAssertEqual(hosted.model.searchQuery(for: .now), "ex", "typing reaches Find's field", line: line)
     }
 }

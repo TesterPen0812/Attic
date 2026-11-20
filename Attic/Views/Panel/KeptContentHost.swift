@@ -155,8 +155,17 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         #if DEBUG
         KeptContentHostCounts.layout(interactive: isInteractive)
         #endif
+        // HB-09: while this host's SwiftUI pass runs, the panel lets it
+        // release only the keyboard it holds (`AtticPanel.makeFirstResponder`).
+        // Saved and restored, not set and cleared: hosts may nest.
+        let outer = Self.updating
+        Self.updating = self
+        defer { Self.updating = outer }
         AtticOverlayHierarchy.layoutPass { super.layout() }
     }
+
+    /// The host whose own SwiftUI pass is running, if any (HB-09).
+    private(set) static weak var updating: KeptContentHostingView?
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         isInteractive ? super.hitTest(point) : nil

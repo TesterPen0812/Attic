@@ -475,7 +475,8 @@ final class Hosted {
     init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false, keyWindow: Bool = true,
          chrome: TasksPageChrome = TasksPageChrome(), services: TasksPageServices = TasksPageServices(),
          design: AtticDesignContext = AtticDesignContext(mode: .light),
-         composerIsOpen: (() -> Bool)? = nil, memory: TasksPageMemory? = nil, warms: Bool = true) throws {
+         composerIsOpen: (() -> Bool)? = nil, memory: TasksPageMemory? = nil, warms: Bool = true,
+         atticPanel: Bool = false) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -488,8 +489,12 @@ final class Hosted {
         page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
                          addBarFocused: Binding(get: { focus.addBar }, set: { focus.addBar = $0 }),
                          chrome: chrome, pointer: pointer)
-        window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
-                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        // `atticPanel`: the app's own panel, for rules that live in its
+        // keyboard function (HB-09).
+        let frame = CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size)
+        window = atticPanel
+            ? AtticPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            : Panel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let route = composerIsOpen.map { isOpen in
             PanelComposerRoute(open: { _, _ in }, isOpen: isOpen)
