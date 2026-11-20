@@ -320,6 +320,8 @@ final class KeptContentHostTests: XCTestCase {
             "colorSchemeContrast", "displayScale", "appearsActive", "isFocused", "undoManager", "openURL", "dismiss",
             // The whole environment, read where it is handed on.
             "self",
+            // The kept host itself, set at its root (HB-09's key).
+            "keptHost",
         ]
         // Declared fileprivate and set where they are read.
         let setInside: Set<String> = ["atticMenuEntranceTime", "atticMaterialProbeID"]
