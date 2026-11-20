@@ -37,8 +37,10 @@ final class TasksBreadthGuardTests: XCTestCase {
     /// wrappers against one leaf per tick turn, 15 against 1 for a priority
     /// edit). The save turn and a direct priority edit reach the rows only
     /// through the page's pass; press and release also reach them through
-    /// the cell broadcast, which slice 1b removes. Only the breadth is an
-    /// expected failure: the tick is drawn on its own row in every turn.
+    /// the cell broadcast, which slice 1b removes. Until then press and
+    /// release pin today's breadth (`tasks-breadth-1b`): every drawn
+    /// unchanged row's wrapper runs. The tick is drawn on its own row in
+    /// every turn.
     func testATickAndAPriorityEditRunOnlyTheWrappersOfTheRowsThatChanged() throws {
         let store = try makeStore(open: 40)
         var services = TasksPageServices()
@@ -54,18 +56,14 @@ final class TasksBreadthGuardTests: XCTestCase {
         let tick = rows[2].id
         let press = turn(hosting, pointer, rows.map(\.id), target: tick) { model.completeAcknowledged(tick) { _ in } }
         assertDelivered(press, "press")
-        XCTExpectFailure("tasks-breadth-1b: the press still reaches every drawn wrapper through the cell broadcast") {
-            assertOnlyChanged(press, "press")
-        }
+        assertBroadcastReachesEveryDrawnRow(press, "press")
         let save = turn(hosting, pointer, rows.map(\.id), target: tick) {
             model.settlePendingCompletionAcknowledgements(through: tick)
         }
         assertOnlyChanged(save, "save")
         assertDelivered(save, "save")
         let release = turn(hosting, pointer, rows.map(\.id), target: tick) { model.releaseHold(tick) }
-        XCTExpectFailure("tasks-breadth-1b: the release still reaches every drawn wrapper through the cell broadcast") {
-            assertOnlyChanged(release, "release")
-        }
+        assertBroadcastReachesEveryDrawnRow(release, "release")
         XCTAssertFalse(model.listSnapshot(for: .now).sections.open.contains { $0.id == tick }, "the released row left the open rows")
 
         let edited = rows[5].id
@@ -405,7 +403,8 @@ final class TasksBreadthGuardTests: XCTestCase {
     /// go. It does not yet, on the trunk's page as well (Air, 2026-11-18,
     /// 19672e10's page): the model outlives a hosted page that leaves, a
     /// leak older than 1a and tracked on the board as
-    /// `tasks-hosted-page-leak`. Strict, so its fix shows here.
+    /// `tasks-hosted-page-leak`. Pinned to today's value (the model stays
+    /// alive), so its fix shows here as a failure to flip.
     func testAHostedPageThatLeavesLetsItsModelGo() throws {
         weak var released: TasksPageModel?
         try autoreleasepool {
@@ -421,9 +420,9 @@ final class TasksBreadthGuardTests: XCTestCase {
             settle(hosting)
         }
         for _ in 0..<20 where released != nil { drain() }
-        XCTExpectFailure("tasks-hosted-page-leak: a hosted Tasks page's model outlives the page (trunk too)") {
-            XCTAssertNil(released, "the page's model outlived the page")
-        }
+        XCTAssertNotNil(released, "tasks-hosted-page-leak: pinned value: a hosted Tasks page's model outlives "
+            + "the page (trunk too). If this fails, the model is now released: the leak is fixed; "
+            + "flip to XCTAssertNil and close the board item.")
     }
 
     /// A page that leaves its window and comes back draws every row and
@@ -484,6 +483,24 @@ final class TasksBreadthGuardTests: XCTestCase {
         print("BREADTH_TURN \(name) \(turn.line)")
         XCTAssertEqual(turn.wrappers.subtracting(turn.changed), [],
                        "\(name): wrappers of unchanged rows ran (\(turn.line))", file: file, line: line)
+    }
+
+    /// Pinned value for `tasks-breadth-1b`: the cell broadcast runs the
+    /// wrapper of every row drawn in the turn, so the unchanged rows whose
+    /// wrapper ran are exactly the drawn unchanged rows (CI batch-3: 14 of
+    /// 14 on press and release). Fewer means slice 1b's narrowing landed:
+    /// switch the turn to `assertOnlyChanged`. More means the breadth grew.
+    private func assertBroadcastReachesEveryDrawnRow(_ turn: Turn, _ name: String,
+                                                     file: StaticString = #filePath, line: UInt = #line) {
+        print("BREADTH_TURN \(name) \(turn.line)")
+        let drawnUnchanged = turn.drawnBefore.union(turn.drawnAfter).subtracting(turn.changed)
+        XCTAssertGreaterThan(drawnUnchanged.count, 5, "\(name): too few drawn rows for the pin to mean anything",
+                             file: file, line: line)
+        XCTAssertEqual(turn.wrappers.subtracting(turn.changed), drawnUnchanged,
+                       "tasks-breadth-1b: pinned value: \(name) runs every drawn unchanged row's wrapper "
+                           + "through the cell broadcast (\(turn.line)). Fewer: 1b landed, switch to "
+                           + "assertOnlyChanged. More: the breadth grew.",
+                       file: file, line: line)
     }
 
     /// The change was delivered: the target's leaf on Now ran.
