@@ -263,6 +263,7 @@ final class TasksTitleDraftState: ObservableObject {
 /// was typed, selected and expanded.
 @MainActor
 final class TasksPageModel: ObservableObject {
+    let objectWillChange = ObservableObjectPublisher()
     private static let live = NSHashTable<TasksPageModel>.weakObjects()
 
     /// Quit must drain the visible acknowledgement before approving exit,
@@ -310,7 +311,7 @@ final class TasksPageModel: ObservableObject {
     /// `ObservableObjectPublisher.send` → `GraphHost.flushTransactions` →
     /// `TasksPage.body`). Sent after the store, a flush in the send reads
     /// the new tab.
-    var tab: TasksTab = .now {
+    @StoredThenSent var tab: TasksTab = .now {
         willSet {
             #if DEBUG
             TasksPageRenderProbe.settingTab = newValue
@@ -326,8 +327,6 @@ final class TasksPageModel: ObservableObject {
             }
         }
         didSet {
-            // As `@Published` did: every set is sent.
-            objectWillChange.send()
             // Remembered across relaunch (L7), where the page has a memory.
             if tab != oldValue { memory?.savePage(tab) }
             #if DEBUG
@@ -335,16 +334,18 @@ final class TasksPageModel: ObservableObject {
             #endif
         }
     }
-    @Published private(set) var selection: Set<UUID> = [] {
-        didSet { if selection != oldValue { selectionRevision += 1 } }
+    @StoredThenSent private(set) var selection: Set<UUID> = [] {
+        // Before the store: a body run inside the send reads the revision
+        // that goes with the selection it reads.
+        willSet { if newValue != selection { selectionRevision += 1 } }
     }
     private var selectionRevision = 0
     private var keyboardFocusSelectionRevision: Int?
     /// The row a Shift-extension grows from (readable for the tests).
     private(set) var selectionAnchor: UUID?
     /// Rows whose quick look is open (remembered per row for the session).
-    @Published private(set) var expanded: Set<UUID> = []
-    @Published private(set) var editingTitleID: UUID?
+    @StoredThenSent private(set) var expanded: Set<UUID> = []
+    @StoredThenSent private(set) var editingTitleID: UUID?
     /// The title being edited, with its shorthand (owner fix 4): what is
     /// typed as `#tag`, a date or `!` becomes a chip and applies on save.
     let titleDraft = TasksTitleDraftState()
@@ -387,14 +388,14 @@ final class TasksPageModel: ObservableObject {
     }
     /// A title, subtask or paste whose save failed: the text stays where it
     /// was typed and the row offers "Not saved · Retry" until a save works.
-    @Published private(set) var failedSave: FailedSave?
+    @StoredThenSent private(set) var failedSave: FailedSave?
 
     enum FailedSave: Equatable {
         case title(UUID)
         case newSubtask(UUID)
         case paste
     }
-    @Published private(set) var newSubtaskParentID: UUID?
+    @StoredThenSent private(set) var newSubtaskParentID: UUID?
     let subtaskDraft = TasksSubtaskDraftState()
     var newSubtaskTitle: String {
         get { subtaskDraft.newTitle }
@@ -402,7 +403,7 @@ final class TasksPageModel: ObservableObject {
     }
     /// A quick-look subtask being renamed in place (round 10), its text,
     /// and whether its save failed ("Not saved · Retry").
-    @Published var renamingSubtaskID: UUID?
+    @StoredThenSent var renamingSubtaskID: UUID?
     /// A rename belongs to the quick look it opened in. A move elsewhere
     /// cannot leave its editor holding that original page's keys.
     var renamingSubtaskParentID: UUID?
@@ -410,7 +411,7 @@ final class TasksPageModel: ObservableObject {
         get { subtaskDraft.rename }
         set { subtaskDraft.rename = newValue }
     }
-    @Published var subtaskRenameFailed = false
+    @StoredThenSent var subtaskRenameFailed = false
     /// The subtask line that has the keyboard (round 10b). Not published: it
     /// only steers which row a shortcut targets, and never redraws.
     var focusedSubtaskID: UUID?
@@ -437,7 +438,7 @@ final class TasksPageModel: ObservableObject {
     }
     /// Finished rows held where they were for about a second, with the
     /// list and index they held (spec: "stays in place, then slides").
-    @Published private(set) var held: [UUID: HeldPlace] = [:]
+    @StoredThenSent private(set) var held: [UUID: HeldPlace] = [:]
     /// A row can acknowledge a press before its family transaction runs.
     /// Retain the intent until that transaction has settled, including failure.
     private var completingAfterAcknowledgement: [(id: UUID, settled: (CommandOutcome) -> Void)] = []
@@ -447,7 +448,7 @@ final class TasksPageModel: ObservableObject {
     private var acknowledgedRows: [UUID: TaskItem] = [:]
     private var acknowledgedDeleted: Set<UUID> = []
     private var acknowledgedCreated: [TaskItem] = []
-    @Published private(set) var acknowledgementRevision: UInt64 = 0
+    @StoredThenSent private(set) var acknowledgementRevision: UInt64 = 0
     private var acknowledgedTaskCommand: (() -> Bool)?
     /// Includes failures from commands that reenter settlement to preserve Undo order.
     private var acknowledgementFailures: UInt64 = 0
@@ -472,18 +473,18 @@ final class TasksPageModel: ObservableObject {
 
     /// Whether Now's "Completed today" shows its rows (remembered for the
     /// session: the model lives as long as the panel).
-    @Published var completedTodayExpanded = false
+    @StoredThenSent var completedTodayExpanded = false
     /// A row is being dragged on Now (Adaptive picks, "Drag a task into
     /// another day"): Today and Tomorrow show as empty headers to drop
     /// under. Set when the drag lifts and cleared when it ends.
-    @Published var dayDragLive = false
+    @StoredThenSent var dayDragLive = false
     /// Today's next event (`TasksNextEventFeed`), shown at the top of Now's
     /// Today; nil without Calendar access, with the switch off, or with no
     /// event still ahead today.
-    @Published var nextEvent: TasksNextEvent?
+    @StoredThenSent var nextEvent: TasksNextEvent?
     /// The date groups folded, per page (the owner's panel design: a
     /// header's click folds or unfolds its group).
-    @Published private(set) var foldedGroups: [TasksTab: Set<String>] = [:]
+    @StoredThenSent private(set) var foldedGroups: [TasksTab: Set<String>] = [:]
 
     func folded(on tab: TasksTab) -> Set<String> { foldedGroups[tab] ?? [] }
 
@@ -550,7 +551,7 @@ final class TasksPageModel: ObservableObject {
     /// folds themselves are, because the pager rebuilds its pages for the
     /// model's changes and not for the page's own state (on the Air a fold
     /// kept in the page's state jumped closed and an unfold stayed closed).
-    @Published var foldTurn: TasksFoldTurn?
+    @StoredThenSent var foldTurn: TasksFoldTurn?
     /// What is typed in the add bar, kept apart from the page's published
     /// state: typing redraws the bar, not the list.
     let addBarState = TasksAddBarState()
@@ -568,10 +569,10 @@ final class TasksPageModel: ObservableObject {
     /// applied query and its results are published to the Done page alone
     /// (`doneResults`), so the first results do not redraw the whole page.
     var doneSearch = "" {
-        willSet { doneResults.objectWillChange.send() }
         didSet {
             doneSearchTask?.cancel()
             doneSearchInput.replace(doneSearch)
+            doneResults.objectWillChange.send()
         }
     }
     let doneSearchInput = TasksDoneSearchInput()
@@ -606,18 +607,18 @@ final class TasksPageModel: ObservableObject {
     }
     /// Now's and Later's Find, per page (follow-up part 2, item 6; Done's
     /// is `doneSearch`). Read through `searchQuery(for:)`.
-    @Published var listSearch: [TasksTab: String] = [:]
+    @StoredThenSent var listSearch: [TasksTab: String] = [:]
     /// Now's and Later's View Options, per page (item 6); a page with the
     /// default view has none. Read through `viewOptions(for:)`.
-    @Published var viewOptionsByTab: [TasksTab: TasksViewOptions] = [:]
+    @StoredThenSent var viewOptionsByTab: [TasksTab: TasksViewOptions] = [:]
     /// The tags picked in the tag bar (owner, 2026-10-28; several since
     /// Accepted 2026-11-13, 2B), shared by Now, Backlog and Done (T6), for
     /// the app's session (not remembered across launches). None is All.
-    @Published var tagPicks: TagPicks = .none {
+    @StoredThenSent var tagPicks: TagPicks = .none {
         // Done draws from its own results (T6). A shared tag change while
         // Now or Later is active must not wake the retained offscreen Done
         // list; opening Done reads the current tags and rebuilds its cache.
-        willSet { if newValue != tagPicks && tab == .done { doneResults.objectWillChange.send() } }
+        didSet { if tagPicks != oldValue && tab == .done { doneResults.objectWillChange.send() } }
     }
     /// Bumped when the library's tags change (their order, a rename): the
     /// tag chips are rebuilt.
@@ -632,16 +633,16 @@ final class TasksPageModel: ObservableObject {
     /// Loaded pages of the Done log (lazily, a page at a time). Published
     /// through `doneResults`, as `doneSearch` is.
     private(set) var doneLogTasks: [TaskItem] = [] {
-        willSet { doneResults.objectWillChange.send() }
+        didSet { doneResults.objectWillChange.send() }
     }
     private(set) var doneLogHasMore = false {
-        willSet { doneResults.objectWillChange.send() }
+        didSet { doneResults.objectWillChange.send() }
     }
     /// A Done log read failed (Astra 18): what was loaded stays, and the
     /// page offers "Couldn't load more · Retry" instead of claiming there
     /// is nothing more.
     private(set) var doneLogFailure: String? {
-        willSet { doneResults.objectWillChange.send() }
+        didSet { doneResults.objectWillChange.send() }
     }
     /// The loaded Done log tasks' subtasks, read with their page (Astra 19):
     /// an archived row shows its checklist from its archived family.
@@ -1851,7 +1852,7 @@ final class TasksPageModel: ObservableObject {
     /// (`resetForReveal`).
     /// The tasks with a live note of their own (Phase 3): their rows show
     /// the note glyph, and deleting one says the note is kept (§ 2.7.1).
-    @Published private(set) var noteOwners: Set<UUID> = []
+    @StoredThenSent private(set) var noteOwners: Set<UUID> = []
     private(set) var noteOwnersRevision: UInt64 = 0
 
     private var noteOwnersObservation: AnyCancellable?
@@ -1953,7 +1954,7 @@ final class TasksPageModel: ObservableObject {
         let token = UUID()
     }
 
-    @Published private(set) var rowFailure: RowFailure?
+    @StoredThenSent private(set) var rowFailure: RowFailure?
     private var rowRetry: (() -> CommandOutcome)?
 
     /// Shows `outcome` under row `id` when it failed (and clears that row's
@@ -2057,7 +2058,7 @@ final class TasksPageModel: ObservableObject {
     /// frames the list already measures, so a row's body does no more work.
     weak var rowPointer: TasksPointer?
 
-    @Published var isPageShown = true {
+    @StoredThenSent var isPageShown = true {
         didSet {
             guard isPageShown != oldValue else { return }
             // Left for Notes or Canvas: the pager lets go (round 10); back
@@ -2260,7 +2261,7 @@ final class TasksPageModel: ObservableObject {
         let token = UUID()
     }
 
-    @Published private(set) var scrollRequest: ScrollRequest?
+    @StoredThenSent private(set) var scrollRequest: ScrollRequest?
 
     /// The last `scrollRequest` a list acted on. A list built after the
     /// request (a page that was not on screen when `show` chose it) acts on
@@ -2826,9 +2827,15 @@ final class TasksPageModel: ObservableObject {
         // Reduce Motion: no travel at all (review 22); a shorter slide is
         // still a slide.
         let reduceMotion = AtticMotionPreference.reducesMotion
+        #if DEBUG
+        TasksPageRenderProbe.releasingHold = id
+        #endif
         withAnimation(reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.doneSlide.animation(reduceMotion: false)) {
             _ = held.removeValue(forKey: id)
         }
+        #if DEBUG
+        TasksPageRenderProbe.releasingHold = nil
+        #endif
         pruneInvisibleSelection(on: place.tab)
     }
 
@@ -3342,7 +3349,7 @@ final class TasksPageModel: ObservableObject {
 
     /// A task (or the first of pasted tasks) just added: the list brings it
     /// into view without selecting it.
-    @Published var addedRequest: ScrollRequest?
+    @StoredThenSent var addedRequest: ScrollRequest?
 
     private var lastPasteAsOne = false
 
@@ -3479,7 +3486,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     /// The Done log task whose details are open.
-    @Published var doneDetailID: UUID?
+    @StoredThenSent var doneDetailID: UUID?
 
     struct DoneDetail: Equatable {
         let title: String
@@ -3527,5 +3534,58 @@ final class TasksPageModel: ObservableObject {
             subtasks: children.map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) },
             files: store.fileMigration.rowFiles(for: task)
         )
+    }
+}
+
+/// A model value sent after it is stored (hb09-key-note §2; TAB-STALL,
+/// host-boundary.md §5.1). `@Published` sends its change before the store:
+/// with a transaction pending on a graph (a plain change just before, then
+/// an animated one), SwiftUI flushed the graph inside that send, so a body
+/// (the page's, a tab's list) read the old value and was marked clean, and
+/// nothing sent again (a released row stayed held: item 4). Here the value
+/// is stored, then `objectWillChange` is sent, then the projected
+/// publisher. Every set is sent, as `@Published` does. Observers run after
+/// the send: whatever a body reads that a `didSet` would change belongs in
+/// `willSet` (as `selection`'s revision).
+@MainActor
+@propertyWrapper
+struct StoredThenSent<Value> {
+    private final class Box {
+        var value: Value
+        let changes = PassthroughSubject<Value, Never>()
+        init(_ value: Value) { self.value = value }
+    }
+
+    private let box: Box
+
+    init(wrappedValue: Value) {
+        box = Box(wrappedValue)
+    }
+
+    @available(*, unavailable, message: "@StoredThenSent is for ObservableObject classes only")
+    var wrappedValue: Value {
+        get { fatalError() }
+        set { fatalError() }
+    }
+
+    /// As `@Published`'s: the current value on subscription, then each new
+    /// value, sent after it is stored.
+    var projectedValue: AnyPublisher<Value, Never> {
+        let box = box
+        return Deferred { Just(box.value) }.append(box.changes).eraseToAnyPublisher()
+    }
+
+    static subscript<Owner: ObservableObject>(
+        _enclosingInstance owner: Owner,
+        wrapped _: ReferenceWritableKeyPath<Owner, Value>,
+        storage storage: ReferenceWritableKeyPath<Owner, StoredThenSent<Value>>
+    ) -> Value where Owner.ObjectWillChangePublisher == ObservableObjectPublisher {
+        get { owner[keyPath: storage].box.value }
+        set {
+            let box = owner[keyPath: storage].box
+            box.value = newValue
+            owner.objectWillChange.send()
+            box.changes.send(newValue)
+        }
     }
 }

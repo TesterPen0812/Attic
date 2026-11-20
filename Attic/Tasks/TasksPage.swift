@@ -198,6 +198,7 @@ struct TasksPage: View {
     var body: some View {
         #if DEBUG
         let _ = TasksPageRenderProbe.rendered(model.tab)
+        let _ = TasksPageRenderProbe.readHeld(model, list: false)
         #endif
         // The link writes only the tab in use (§5.1, KB-CLAIM-RACE).
         let _ = rowFocus.tabInUse = { [model] in model.tab }
@@ -1693,6 +1694,9 @@ struct TasksPage: View {
 
 
     private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
+        #if DEBUG
+        TasksPageRenderProbe.readHeld(model, list: true)
+        #endif
         let (rows, sections, entries, ids, groups, selectionRuns) = model.listSnapshot(for: tab)
         let travel = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false)
         let view = model.viewOptions(for: tab)
@@ -6039,6 +6043,18 @@ private struct TasksSubtaskDraftView<Content: View>: View {
             announcedReads.page += 1
             if tab != setting { staleReads.page += 1 }
         }
+    }
+    /// The held row being released, from its send until the release is
+    /// over: the page's body and a tab's list that read `held` then read it
+    /// inside the send, and those that still saw the row held read it stale.
+    static var releasingHold: UUID?
+    static var heldReads = (page: 0, list: 0)
+    static var staleHeldReads = (page: 0, list: 0)
+    static func readHeld(_ model: TasksPageModel, list: Bool) {
+        guard let id = releasingHold else { return }
+        let stale = model.held[id] != nil
+        if list { heldReads.list += 1; if stale { staleHeldReads.list += 1 } }
+        else { heldReads.page += 1; if stale { staleHeldReads.page += 1 } }
     }
     static func tabBarRendered(_ tab: TasksTab) {
         if let setting = settingTab {

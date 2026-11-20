@@ -113,6 +113,67 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertEqual(stalls, [], "every switch reaches the page's body with the new tab")
     }
 
+    /// Store before send (hb09-key-note §2; item 4, TasksPageUITests
+    /// `testCompletingOnLaterHoldsThenLeaves`): a held row's release sends
+    /// `held`'s change. With a transaction pending on the page's graphs, a
+    /// flush inside that send runs the page and Later's list there; sent
+    /// before the store, they read the row still held and are marked clean,
+    /// so the row stays. Each release here follows a pending transaction:
+    /// a row focus write in Later's host, a plain selection change, both,
+    /// or neither. No read inside the send may see the row held.
+    func testReleasingAHeldRowNeverReadsItHeldInsideTheSend() throws {
+        #if DEBUG
+        try requireKeyWindowTests()
+        var services = TasksPageServices()
+        // The test releases each hold itself.
+        services.doneHold = .seconds(3_600)
+        let hosted = try Hosted(height: 520, services: services)
+        defer { hosted.close() }
+        let stays = (0..<4).compactMap { hosted.store.create(title: "Later stays \($0 + 1)", status: .backlog)?.id }
+        let finished = (0..<12).compactMap { hosted.store.create(title: "Later done \($0 + 1)", status: .backlog)?.id }
+        XCTAssertEqual(stays.count + finished.count, 16)
+        waitForTestOperation("every tab kept built, each in its own host") {
+            hosted.spin(0.05)
+            return hosted.model.pagerSwipe.span.warm == 0...2 && hosts(hosted).count == TasksTab.allCases.count
+        }
+        hosted.go(to: .backlog)
+        hosted.spin(0.3)
+        for id in finished {
+            hosted.model.setStatus(.done, for: [id])
+            hosted.spin(0.05)
+        }
+        hosted.spin(0.5)
+        XCTAssertEqual(Set(hosted.model.held.keys), Set(finished), "every finished row is held on Later")
+        let link = try XCTUnwrap(TasksRowFocusLink.current)
+        TasksPageRenderProbe.heldReads = (0, 0)
+        TasksPageRenderProbe.staleHeldReads = (0, 0)
+        var staleBy: [String] = []
+        for (n, id) in finished.enumerated() {
+            let before = TasksPageRenderProbe.staleHeldReads
+            let other = stays[n % stays.count]
+            switch n % 4 {
+            case 0: link.setValue(AtticRowFocusID(page: TasksTab.backlog.rawValue, id: other))
+            case 1: hosted.model.selectOnly(other)
+            case 2:
+                hosted.model.selectOnly(other)
+                link.setValue(AtticRowFocusID(page: TasksTab.backlog.rawValue, id: other))
+            default: break
+            }
+            hosted.model.releaseHold(id)
+            let after = TasksPageRenderProbe.staleHeldReads
+            if after != before { staleBy.append("\(n % 4):page+\(after.page - before.page),list+\(after.list - before.list)") }
+            hosted.spin(0.3)
+        }
+        let reads = TasksPageRenderProbe.heldReads, stale = TasksPageRenderProbe.staleHeldReads
+        print("HELD-STALL reads inside the send: page \(reads.page) list \(reads.list); still held: page \(stale.page) list \(stale.list); by variant \(staleBy)")
+        XCTAssertTrue(hosted.model.held.isEmpty, "every hold released")
+        XCTAssertEqual(stale.list, 0, "Later's list never reads a released row as held inside the send")
+        XCTAssertEqual(stale.page, 0, "the page's body never reads a released row as held inside the send")
+        #else
+        throw XCTSkip("needs the DEBUG render probe")
+        #endif
+    }
+
     /// The panel's accessibility hit walk (condition 3): it reaches a row in
     /// the tab shown, inside that tab's nested host, and nothing it returns
     /// lies in a host not in use.
