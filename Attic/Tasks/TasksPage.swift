@@ -199,9 +199,6 @@ struct TasksPage: View {
         #if DEBUG
         let _ = TasksPageRenderProbe.rendered(model.tab)
         #endif
-        // A row's focus changes inside its tab's host; the page hears it
-        // here (the outward notification, host-boundary.md §5, HB-02).
-        let _ = rowFocus.changed = { focus in rowFocusChanged(focus) }
         // The link writes only the tab in use (§5.1, KB-CLAIM-RACE).
         let _ = rowFocus.tabInUse = { [model] in model.tab }
         // In three parts (round 10: one chain was too long for the
@@ -1634,7 +1631,12 @@ struct TasksPage: View {
         // alone redraws for focusable rows coming and going, and the
         // content again only when its focused row changes.
         let generation = TasksRowFocusLink.nextGeneration()
-        return TasksRowFocusOwner(tab: tab, link: rowFocus) { focus in
+        // A row's focus changes inside its tab's host; the page hears it
+        // through the owner (the outward notification, host-boundary.md §5,
+        // HB-02). The handler is the owner's, never stored in the link: the
+        // link is the page's state, so a handler of the page kept there
+        // would keep the page, its model and its pointer for good (HB-10).
+        return TasksRowFocusOwner(tab: tab, link: rowFocus, changed: { focus in rowFocusChanged(focus) }) { focus in
             TasksPageFocusedContent(generation: generation, focusedRow: focus.wrappedValue) {
                 pageContent(tab, drawn: drawn)
             }
@@ -3911,8 +3913,9 @@ struct TasksCellKey: Equatable {
 /// Where the page reaches its rows' focus states: one per tab, each held
 /// by that tab's `TasksRowFocusOwner` inside the tab's host
 /// (host-boundary.md §5). Set as each owner draws; read by the page's
-/// handlers, and written only on the tab in use; a change on any tab is
-/// reported through `changed`.
+/// handlers, and written only on the tab in use; a change on any tab goes
+/// to the page through its owner when `reports` says it stands. The link
+/// keeps no closure of the page: it is the page's state (HB-10).
 ///
 /// A tab not in use is never written (§5.1, KB-CLAIM-RACE): SwiftUI applies
 /// a focus-state write at a later update and then resigns the window's
@@ -3923,8 +3926,6 @@ struct TasksCellKey: Equatable {
 @MainActor
 final class TasksRowFocusLink {
     private var bindings: [TasksTab: FocusState<AtticRowFocusID?>.Binding] = [:]
-    /// The page's handler for a focus change on any tab.
-    var changed: ((AtticRowFocusID?) -> Void)?
     /// The tab in use, the only one the link writes (the page sets this).
     var tabInUse: (() -> TasksTab)?
 
@@ -3965,12 +3966,11 @@ final class TasksRowFocusLink {
         if binding.wrappedValue != value { binding.wrappedValue = value }
     }
 
-    /// A tab's owner saw its focus change. A tab letting go while another
-    /// tab's row holds the keyboard says nothing: that tab's own report
-    /// stands, whichever host updated first.
-    func report(_ focus: AtticRowFocusID?, from tab: TasksTab) {
-        if focus == nil, TasksTab.allCases.contains(where: { $0 != tab && bindings[$0]?.wrappedValue != nil }) { return }
-        changed?(focus)
+    /// Whether a tab's owner reports the focus change it saw. A tab letting
+    /// go while another tab's row holds the keyboard says nothing: that
+    /// tab's own report stands, whichever host updated first.
+    func reports(_ focus: AtticRowFocusID?, from tab: TasksTab) -> Bool {
+        focus != nil || !TasksTab.allCases.contains(where: { $0 != tab && bindings[$0]?.wrappedValue != nil })
     }
 
     private static var generation: UInt64 = 0
@@ -3985,18 +3985,22 @@ final class TasksRowFocusLink {
 /// a focus state's owner when the focus system's views change (a list
 /// building or letting go of focusable rows), so the owner is this small
 /// view: it hands the tab's content the binding, and the content is redrawn
-/// only when it was built again or its focused row changed. A change is
-/// reported to the page through the link.
+/// only when it was built again or its focused row changed. A change the
+/// link says stands goes to the page's handler, held here and not in the
+/// link (HB-10).
 struct TasksRowFocusOwner<Content: View>: View {
     @FocusState private var focusedRow: AtticRowFocusID?
     let tab: TasksTab
     let link: TasksRowFocusLink
+    let changed: (AtticRowFocusID?) -> Void
     @ViewBuilder let content: (FocusState<AtticRowFocusID?>.Binding) -> Content
 
     var body: some View {
         let _ = link.set($focusedRow, for: tab)
         content($focusedRow)
-            .onChange(of: focusedRow) { _, focus in link.report(focus, from: tab) }
+            .onChange(of: focusedRow) { _, focus in
+                if link.reports(focus, from: tab) { changed(focus) }
+            }
     }
 }
 

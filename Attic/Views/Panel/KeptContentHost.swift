@@ -53,24 +53,34 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// Joins on the next display frame, after the reveal's frame has been
     /// committed; a window on no screen (draws no frames) joins on the next
     /// turn of the run loop. With `claiming`, it claims the keyboard there
-    /// first.
+    /// first. The link holds only a weak stand-in, never the host (HB-10).
     private func joinAccessibilityAfterTheFirstFrame(claiming: Bool = false) {
         stopJoining()
         isAccessible = false
         claimsAtFirstFrame = claiming
-        guard window?.screen != nil else {
+        guard let window, window.screen != nil else {
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.isInteractive, self.joinLink == nil else { return }
                 self.cameIntoUseAtTheFirstFrame()
             }
             return
         }
-        let link = displayLink(target: self, selector: #selector(joinAccessibility(_:)))
+        let link = displayLink(target: KeptHostJoinTarget(self), selector: #selector(KeptHostJoinTarget.frame(_:)))
         link.add(to: .main, forMode: .common)
         joinLink = link
+        // HB-10: a window not shown draws no frame, so the host is read on
+        // the next turn; a pending claim still waits for the first drawn
+        // frame (when the keyboard moves is not HB-10's to change).
+        guard !window.isVisible || !window.occlusionState.contains(.visible) else { return }
+        let waiting = ObjectIdentifier(link)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isInteractive, self.joinLink.map(ObjectIdentifier.init) == waiting else { return }
+            self.isAccessible = true
+            if !self.claimsAtFirstFrame { self.stopJoining() }
+        }
     }
 
-    @objc private func joinAccessibility(_ link: CADisplayLink) {
+    fileprivate func joinAccessibility(_ link: CADisplayLink) {
         let claiming = claimsAtFirstFrame
         stopJoining()
         claimsAtFirstFrame = claiming
@@ -93,7 +103,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         claimsAtFirstFrame = false
     }
 
-    /// A host taken out of its window stops waiting (the link holds it).
+    /// A host taken out of its window stops waiting.
     /// A host made already in use never turns into use: once it has a
     /// window it comes into use the same way, with its claim deferred to
     /// its first frame, when its content takes keys (a claim at the attach
@@ -508,3 +518,16 @@ enum KeptContentHostCounts {
     }
 }
 #endif
+
+/// The join link's target: it holds the host weakly, so a wait for a frame
+/// never keeps a host its slot let go (HB-10); with the host gone, the link
+/// ends at its next frame.
+@MainActor
+private final class KeptHostJoinTarget: NSObject {
+    weak var host: KeptContentHostingView?
+    init(_ host: KeptContentHostingView) { self.host = host }
+    @objc func frame(_ link: CADisplayLink) {
+        guard let host else { link.invalidate(); return }
+        host.joinAccessibility(link)
+    }
+}
