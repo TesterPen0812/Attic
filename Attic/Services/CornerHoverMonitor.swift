@@ -512,11 +512,15 @@ final class CornerHoverMonitor {
     }
 
     /// Whether the pointer has stayed in a watched hotspot from the hide's
-    /// start (`AtticPanelController.hideBegan`, recorded in `requestHide`,
-    /// which every hide reason goes through) to `location` at its end: in
-    /// the hotspot at both, with no sample outside it in between. A hide
-    /// with no recorded start (one that did not animate) is judged by its
-    /// end alone.
+    /// start to `location` at its end: in the hotspot at both, with no
+    /// sample outside it in between. The start is
+    /// `AtticPanelController.hideBegan`, recorded where `requestHide` begins
+    /// the animation; every hide of this panel animates through there (the
+    /// swipe from its release, `requestInteractiveHide`), and only it bumps
+    /// the `hideCount` this monitor observes (floating pages have their own
+    /// `PanelUIState`). With no record (a show cleared it and the hide did
+    /// not animate) the end alone decides; a stale one only lets an outside
+    /// sample since then count as having left.
     private func pointerStayedInHotspotThroughHide(endingAt location: CGPoint) -> Bool {
         guard isInCornerHotspot(location) else { return false }
         guard let began = panelController.hideBegan else { return true }
