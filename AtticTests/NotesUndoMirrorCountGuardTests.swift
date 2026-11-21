@@ -256,6 +256,12 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
                 rig.page.settlePendingCompletionAcknowledgements()
             }, saved: { rig.tasks.task(withID: ticked)?.status == .done })
 
+            // Printed, not asserted: a toast alone, no Tasks step (the
+            // priority change posts one, the tick does not). It stays up
+            // while the priority change is counted.
+            _ = measure(rig, "toast only", { rig.toasts.show("Counted toast") {} },
+                        saved: { rig.toasts.current?.message == "Counted toast" })
+
             let prioritised = rig.plain[1]
             let priority = measure(rig, "priority", {
                 rig.page.setPriorityAcknowledged(.high, for: [prioritised]) { _ in }
