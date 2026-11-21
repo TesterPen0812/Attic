@@ -845,6 +845,18 @@ extension CornerRevealSettingsTests {
             n.rig.uiState.setInteractionLock(.menuTracking, isActive: true)
             narrowWaitHidden(n)
             XCTAssertFalse(narrowRevealed(n, within: 0.8), "menu tracking holds the reveal")
+            // Closing the menu with the pointer still: a fresh reveal delay,
+            // then the reveal, with no further pointer event.
+            let announced = Corner.Box()
+            n.rig.monitor.onVisibilityChangeExpected = { expected in
+                if let expected, !expected.hiding { announced.revealPending = true }
+            }
+            defer { n.rig.monitor.onVisibilityChangeExpected = nil }
+            n.rig.uiState.setInteractionLock(.menuTracking, isActive: false)
+            let released = Date().addingTimeInterval(1)
+            while !announced.revealPending, Date() < released { spin(0.01) }
+            XCTAssertTrue(announced.revealPending, "closing the menu starts a fresh reveal delay")
+            XCTAssertTrue(narrowRevealed(n, within: 1), "and the panel reveals")
         }
     }
 
@@ -861,6 +873,18 @@ extension CornerRevealSettingsTests {
             NarrowEvents.location = n.corner
             n.rig.monitor.pointerActivityForTesting(at: n.corner)
             XCTAssertFalse(narrowRevealed(n, within: 0.8), "menu tracking holds the reveal")
+            // Closing the menu with the pointer still: a fresh reveal delay,
+            // then the reveal, with no further pointer event.
+            let announced = Corner.Box()
+            n.rig.monitor.onVisibilityChangeExpected = { expected in
+                if let expected, !expected.hiding { announced.revealPending = true }
+            }
+            defer { n.rig.monitor.onVisibilityChangeExpected = nil }
+            n.rig.uiState.setInteractionLock(.menuTracking, isActive: false)
+            let released = Date().addingTimeInterval(1)
+            while !announced.revealPending, Date() < released { spin(0.01) }
+            XCTAssertTrue(announced.revealPending, "closing the menu starts a fresh reveal delay")
+            XCTAssertTrue(narrowRevealed(n, within: 1), "and the panel reveals")
         }
     }
 
