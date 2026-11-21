@@ -157,6 +157,11 @@ final class NoteStore: ObservableObject {
     /// Whole-store reloads (`reloadModels`): every note and attachment read into a fresh context.
     private(set) var fullNoteReloadCount = 0
     func resetFullNoteReloadCount() { fullNoteReloadCount = 0 }
+    /// Test seam: the next N presentation reloads throw before reading (board id undo-unresolved-staging, Notes side).
+    var reloadFailures = 0
+    /// What the last spent context replaced at the staging entry still held that was not durable (build condition
+    /// 5). Empty: replacing it discarded nothing.
+    private(set) var lastSpentContextUnsaved: [String]?
     #endif
 
     /// Warm suggestions read values only, without revisiting the library's
@@ -622,6 +627,7 @@ final class NoteStore: ObservableObject {
     /// newest-first list (its `updatedAt` is kept), on every replica.
     @discardableResult
     func setTags(_ tags: [String], for note: NoteItem) -> Bool {
+        guard prepareNoteEdit() else { return false }
         guard let note = notes.first(where: { $0.id == note.id }) else { return false }
         let encoded = AtticTag.encode(tags)
         let retainedEdits = RetainedNoteEdits()
@@ -646,24 +652,25 @@ final class NoteStore: ObservableObject {
     /// this note is refused when it finishes, as before.
     @discardableResult
     func delete(_ note: NoteItem) -> Bool {
-        guard let note = notes.first(where: { $0.id == note.id }) else { return false }
-        let release: () -> Void
-        do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: note.id, container: container) }
-        catch { lastErrorMessage = error.localizedDescription; return false }
+        guard prepareNoteEdit() else { return false }
+        // Only the id crosses `beginItemDeletion`, which settles editors through this store and may replace its context.
+        let noteID = note.id
+        guard notes.contains(where: { $0.id == noteID }) else { return false }
+        guard let release = beginItemDeletion(noteID: noteID) else { return false }
         defer { release() }
         do {
-            if let taskID = try WorkspaceItemLifecycle.taskOwner(noteID: note.id, in: context) {
+            if let taskID = try WorkspaceItemLifecycle.taskOwner(noteID: noteID, in: context) {
                 try TaskStore.stageItemDeletion(in: context, taskID: taskID, timestamp: now())
             } else {
-                try WorkspaceItemLifecycle.stageWritingDeletion(try storedNotesIncludingDeleted(matching: note.id),
+                try WorkspaceItemLifecycle.stageWritingDeletion(try storedNotesIncludingDeleted(matching: noteID),
                     group: UUID(), timestamp: now(), in: context)
             }
         } catch {
             context.rollback(); lastErrorMessage = error.localizedDescription; return false
         }
-        notes.removeAll { $0.id == note.id }
+        notes.removeAll { $0.id == noteID }
 #if os(macOS)
-        attachmentsByNoteID[note.id] = nil
+        attachmentsByNoteID[noteID] = nil
 #endif
         guard save() else { return false }
         WorkspaceItemLifecycle.didCommit(in: container)
@@ -673,6 +680,7 @@ final class NoteStore: ObservableObject {
     /// Exact inverse of restoring a pre-group independent note deletion.
     /// This is not a user Delete route; it must not hide the surviving task.
     func deleteRestoredLegacyNote(noteID: UUID) -> Bool {
+        guard prepareNoteEdit() else { return false }
         do {
             let rows = try storedNotesIncludingDeleted(matching: noteID)
             guard rows.contains(where: { $0.deletedAt == nil }) else { return false }
@@ -732,24 +740,34 @@ final class NoteStore: ObservableObject {
     /// save. Its place in the list is where it was (its `updatedAt` is kept).
     @discardableResult
     func restoreDeleted(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> Bool {
-        lastRestoreWasSeparate = false
+        restoreDeletedNote(noteID: noteID, staging: staging) != nil
+    }
+
+    /// `restoreDeleted`, returning what this call brought back (nil when refused). The result is this call's own,
+    /// so a restore nested in its refresh callbacks cannot change it.
+    func restoreDeletedNote(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> RestoredNote? {
+        guard prepareNoteEdit() else { return nil }
         let retainedEdits = RetainedNoteEdits()
         var separated = false
+        var owner: UUID?
         do {
             let replicas = try storedNotesIncludingDeleted(matching: noteID)
             guard replicas.contains(where: { $0.deletedAt != nil }) else {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
             }
             retainedEdits.capture(replicas, includingDocument: true)
+            // Read once, before anything is staged or saved: a save may replace the context these rows belong to.
+            owner = replicas.first?.taskID
             let groups = Set(replicas.compactMap(\.deletionGroupID))
             if !groups.isEmpty {
                 guard groups.count == 1, let group = groups.first else { throw WorkspaceFoundationError.conflict }
                 try WorkspaceItemLifecycle.stageRestore(group: group, timestamp: now(), in: context)
                 try staging?(context)
-                guard save(retaining: retainedEdits) else { return false }
+                guard save(retaining: retainedEdits) else { return nil }
+                let restored = RestoredNote(separate: false, group: group, owner: owner)
                 refresh()
                 WorkspaceItemLifecycle.didCommit(in: container)
-                return true
+                return restored
             }
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             // § 2.7.2: a task's note restored while the task has a newer own
@@ -768,7 +786,7 @@ final class NoteStore: ObservableObject {
                 if let materialized { replica.tags = materialized.tags }
                 if normalized != document {
                     Self.stageDocumentContent(try PreparedNoteDocument(normalized), format: normalized.format,
-                        on: [replica], timestamp: currentDate, revision: replica.revision, revisionID: UUID())
+                        on: [replica], timestamp: currentDate, revision: replica.revision, revisionID: UUID(), in: context)
                 }
             }
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
@@ -780,10 +798,10 @@ final class NoteStore: ObservableObject {
         } catch {
             rollback(retaining: retainedEdits)
             lastErrorMessage = error.localizedDescription
-            return false
+            return nil
         }
-        guard save(retaining: retainedEdits) else { return false }
-        lastRestoreWasSeparate = separated
+        guard save(retaining: retainedEdits) else { return nil }
+        let restored = RestoredNote(separate: separated, group: nil, owner: owner)
 #if os(macOS)
         // Reconcile the returning attachments' files in full on the reload.
         reconciledAttachmentSignature = nil
@@ -793,12 +811,21 @@ final class NoteStore: ObservableObject {
         } catch {
             lastErrorMessage = "Restored, but the list could not be refreshed: \(error.localizedDescription)"
         }
-        return true
+        return restored
     }
 
-    /// The last `restoreDeleted` returned a task's note as a separate,
-    /// ordinary note (§ 2.7.2: the task had a newer own note).
-    private(set) var lastRestoreWasSeparate = false
+    /// What a successful `restoreDeletedNote` brought back, read from the
+    /// rows it restored, before its save.
+    /// `group` is the deletion group it restored, nil for a pre-group
+    /// independent deletion; `owner` is the task the note belonged to;
+    /// `separate` says it returned as an ordinary note (§ 2.7.2: the task had
+    /// a newer own note). An Undo for the restore is built from this, never
+    /// from a read taken before the restore's entry.
+    struct RestoredNote: Equatable {
+        let separate: Bool
+        let group: UUID?
+        let owner: UUID?
+    }
 
     /// Stages the "task has a newer note" restore (§ 2.7.2, § 2.12): every
     /// replica becomes ordinary (block 0 the task's title, `taskNote`
@@ -822,7 +849,7 @@ final class NoteStore: ObservableObject {
             let materialized = try WorkspaceTaskNoteMaterializer.materialize(document, taskID: taskID, preservation: preservation)
             let ordinary = materialized.document
             Self.stageDocumentContent(try PreparedNoteDocument(ordinary), format: ordinary.format,
-                on: [replica], timestamp: now, revision: replica.revision, revisionID: UUID())
+                on: [replica], timestamp: now, revision: replica.revision, revisionID: UUID(), in: context)
             if replica.tags.isEmpty { replica.tags = materialized.tags }
             replica.taskID = nil
             replica.associationGeneration += 1
@@ -841,6 +868,7 @@ final class NoteStore: ObservableObject {
     /// save. Refused when the task has no other live own note.
     @discardableResult
     func keepAsSeparateNote(noteID: UUID) -> Bool {
+        guard prepareNoteEdit() else { return false }
         do {
             let replicas = try storedNotesIncludingDeleted(matching: noteID)
             guard !replicas.isEmpty, replicas.allSatisfy({ $0.deletedAt == nil }) else {
@@ -879,6 +907,7 @@ final class NoteStore: ObservableObject {
         confirmed: [UUID: Date]? = nil,
         alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
     ) -> Set<UUID> {
+        guard prepareNoteEdit() else { return [] }
         var purgedIDs = Set<UUID>()
 #if os(macOS)
         var references: [AttachmentFileReference] = []
@@ -990,6 +1019,7 @@ final class NoteStore: ObservableObject {
     }
 
     func removeAttachment(_ attachment: NoteAttachment) -> Bool {
+        guard prepareNoteEdit() else { return false }
         let replicas: [NoteAttachment]
         do {
             replicas = try storedAttachments(matching: attachment.id)
@@ -1096,6 +1126,7 @@ final class NoteStore: ObservableObject {
     /// Brings a removed attachment back to its note, every replica, in one save.
     @discardableResult
     func restoreAttachment(_ attachmentID: UUID) -> Bool {
+        guard prepareNoteEdit() else { return false }
         let family = attachmentFamily(attachmentID)
         guard let row = family.first,
               family.allSatisfy({ $0.noteID == row.noteID }),
@@ -1111,6 +1142,7 @@ final class NoteStore: ObservableObject {
     /// (attachment id and removal time).
     @discardableResult
     func purgeRemovedAttachments(before cutoff: Date, confirmed: [UUID: Date]? = nil) -> Int {
+        guard prepareNoteEdit() else { return 0 }
         var references: [AttachmentFileReference] = []
         do {
             let removed = try context.fetch(FetchDescriptor<NoteAttachment>(
@@ -1469,16 +1501,26 @@ final class NoteStore: ObservableObject {
         } catch { return false }
     }
 
+    /// Prepares deleting `noteID`'s item. Settling the open editors it reaches saves them through this store, and a
+    /// journaled save whose reload fails leaves the context spent, so the deletion gets a usable context again here,
+    /// after that and before it stages. Returns the release, or nil when refused (reported).
+    private func beginItemDeletion(noteID: UUID) -> (() -> Void)? {
+        let release: () -> Void
+        do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: noteID, container: container) }
+        catch { lastErrorMessage = error.localizedDescription; return nil }
+        guard prepareNoteEdit() else { release(); return nil }
+        return release
+    }
+
     /// Reverse an agent's newly created note without deleting the task that
     /// owns its writing. A task note's newly created association is detached
     /// in the same commit, leaving the task available for another own note.
     /// Refuse a changed physical note or association before staging anything.
     @discardableResult
     func undoAgentCreatedNote(_ id: UUID, revision: String, metadata: String) -> Bool {
+        guard prepareNoteEdit() else { return false }
         guard agentCreatedNoteIsUnchanged(id, revision: revision, metadata: metadata) else { return false }
-        let release: () -> Void
-        do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: id, container: container) }
-        catch { lastErrorMessage = error.localizedDescription; return false }
+        guard let release = beginItemDeletion(noteID: id) else { return false }
         defer { release() }
         guard agentCreatedNoteIsUnchanged(id, revision: revision, metadata: metadata) else { return false }
         do {
@@ -1583,6 +1625,40 @@ final class NoteStore: ObservableObject {
         }
     }
     var currentDate: Date { now() }
+
+    /// The store's one staging entry (board id undo-unresolved-staging): every command that stages on `context`
+    /// passes it first. A journaled commit leaves the context spent (it still holds what was committed); when the
+    /// reload after it failed, the spent context is still installed, and staging on it would propose the committed
+    /// inserts again. Replace it with a fresh read, or refuse. The fact is the bridge's, read here; Notes keeps no
+    /// flag of its own.
+    ///
+    /// A context replaced here ends the command (pr40-wall-design.md): whatever the caller decided on the presented
+    /// rows was decided on the old context, which the commit guard can no longer check. `.decision` (the default)
+    /// reloads and refuses once with `refreshedRefusal`; the person or agent repeats it on fresh rows. `.values` goes
+    /// on, and is only for a call whose arguments are the whole write and are rechecked against the fresh rows; each
+    /// such site names its recheck.
+    func prepareNoteEdit(_ entry: NoteEditEntry = .decision) -> Bool {
+        guard WorkspaceLegacyBridge.isSpent(context) else { return true }
+        #if DEBUG
+        lastSpentContextUnsaved = (try? WorkspaceLegacyBridge.unsavedChanges(in: context)) ?? ["unreadable"]
+        #endif
+        do {
+            // A deferred reload, not the tail of this store's own transaction: outside writes may have landed since,
+            // so attachment proofs do not cross it (they belong to the context they were made in).
+            try reloadModels()
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+        guard entry == .values else {
+            lastErrorMessage = Self.refreshedRefusal
+            return false
+        }
+        return true
+    }
+
+    /// The fixed message a command refused at its entry leaves (the list was refreshed; repeat it).
+    static let refreshedRefusal = "The notes list was refreshed. Try again."
 
     /// Saves staged changes; on failure rolls back, reloads and records the
     /// error (the same rule every mutation here follows).
@@ -1745,7 +1821,11 @@ final class NoteStore: ObservableObject {
                 if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
                     if !changedAttachments { changedNoteIDs = changedNotes }
                 } else {
-                    try reloadModels(preservingAttachmentProofs: true)
+                    // A plain commit whose guard update failed left a spent context: its proofs do not cross, so they
+                    // go now, before a reload that can fail (a later document-save reload would otherwise keep them).
+                    let plainGuardFailed = WorkspaceLegacyBridge.plainGuardFailed(in: context)
+                    if plainGuardFailed { clearVerifiedAttachmentCache() }
+                    try reloadModels(preservingAttachmentProofs: !plainGuardFailed)
                 }
                 lastErrorMessage = nil
             } catch {
@@ -1774,15 +1854,19 @@ final class NoteStore: ObservableObject {
     /// store. A reload can follow a note write the inventory never saw (an
     /// outside context, the workspace coordinator's transaction), so a failed one must not leave
     /// the inventory as it was.
+    /// A failed reload also drops every attachment proof: what is installed afterwards is not known to be the context
+    /// the proofs were made in.
     private func reloadModels(preservingAttachmentProofs: Bool = false) throws {
-        #if DEBUG
-        fullNoteReloadCount += 1
-        #endif
         do {
+            #if DEBUG
+            if reloadFailures > 0 { reloadFailures -= 1; throw WorkspaceFoundationError.unknown }
+            fullNoteReloadCount += 1
+            #endif
             let refreshedContext = try makeFreshContext()
             let presentation = try presentationSnapshot(in: refreshedContext)
             installPresentation(presentation, using: refreshedContext, preservingAttachmentProofs: preservingAttachmentProofs)
         } catch {
+            clearVerifiedAttachmentCache()
             tagInventoryNeedsRebuild()
             throw error
         }

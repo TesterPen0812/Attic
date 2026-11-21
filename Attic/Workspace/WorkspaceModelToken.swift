@@ -131,6 +131,8 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
 enum WorkspaceFoundationError: Error, Equatable, LocalizedError {
     case unsupportedField(String), conflict, unknown, pendingPublication, writerAlreadyActive
     case invalidIdentity, damagedEnvelope, protectedOwner, preparationFailed
+    /// A store staged on a context whose changes are already durable (board id undo-unresolved-staging).
+    case spentContext
 
     var errorDescription: String? {
         switch self {
@@ -138,6 +140,8 @@ enum WorkspaceFoundationError: Error, Equatable, LocalizedError {
             String(localized: "This item is protected while its changes are being saved. Try again when saving finishes.")
         case .conflict:
             String(localized: "This item changed elsewhere. Your edit was not saved. Check the latest version before trying again.")
+        case .spentContext:
+            String(localized: "Not saved: Attic was still showing your last change. Try again.")
         default:
             String(localized: "The save could not be confirmed. Your work is being kept while Attic checks it.")
         }
