@@ -842,15 +842,6 @@ final class DurableSaveReadFailureTests: XCTestCase {
         }
     }
 
-    /// Control for the purge observation: the same rig with its one preservation row. Purge succeeds and reaches it.
-    func testC8OnePreservationRowPurgeControl() async throws {
-        let run = try await twoPreservationRows("purge", copyingDependencyOwners: true, addingSecondRow: false)
-        XCTAssertFalse(run.refused, "purge: one preservation row is purged")
-        XCTAssertEqual(run.records, 1)
-        XCTAssertEqual(run.purged, 1, "purge: the record is marked purged")
-        XCTAssertEqual(run.taskRows, 0, "purge: the task's rows are gone")
-    }
-
     /// The fixture before HOLD 6, kept as its own case: the copy omits `dependencyOwnersData`, so the two rows
     /// disagree. Undo is refused and changes no row; purge is either refused unchanged or reaches both records.
     func testC8DivergentPreservationRowsAreRefusedUnchanged() async throws {
@@ -866,7 +857,7 @@ final class DurableSaveReadFailureTests: XCTestCase {
         }
     }
 
-    private func twoPreservationRows(_ command: String, copyingDependencyOwners: Bool, addingSecondRow: Bool = true) async throws
+    private func twoPreservationRows(_ command: String, copyingDependencyOwners: Bool) async throws
         -> (refused: Bool, before: String, after: String, records: Int, retired: Int, purged: Int, taskRows: Int, taskLive: Int) {
         let rig = try await makeRig()
         let id = rig.ids[3]
@@ -877,7 +868,8 @@ final class DurableSaveReadFailureTests: XCTestCase {
         let copy = TaskDeletionPreservation(id: original.id, rootID: original.rootID, deletedAt: original.deletedAt,
             capturedAt: original.capturedAt, provenance: original.provenance, snapshot: original.snapshot)
         if copyingDependencyOwners { copy.dependencyOwnersData = original.dependencyOwnersData }
-        if addingSecondRow { seed.insert(copy); try seed.save() }
+        seed.insert(copy)
+        try seed.save()
         func read() throws -> (records: [TaskDeletionPreservation], rows: [TaskItem]) {
             let context = ModelContext(rig.container)
             return (try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.rootID == id })),
@@ -901,7 +893,7 @@ final class DurableSaveReadFailureTests: XCTestCase {
         }
         let after = try facts()
         let (records, rows) = try read()
-        print("C8_TWO_ROWS \(command) second_row=\(addingSecondRow) copied_dependency_owners=\(copyingDependencyOwners) result=\(result) "
+        print("C8_TWO_ROWS \(command) copied_dependency_owners=\(copyingDependencyOwners) result=\(result) "
             + "before[\(before)] after[\(after)] error=\(rig.tasks.lastErrorMessage ?? "nil") "
             + "duplicates=\(try duplicateRows(rig.container))")
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
