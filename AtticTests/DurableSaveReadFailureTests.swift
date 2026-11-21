@@ -1559,6 +1559,10 @@ final class DurableSaveR5NarrowingTests: XCTestCase {
             outside.insert(newer)
             try outside.save()
             let token = original.revisionToken
+            // By physical row: which rows hold the newer body before the edit (r6 HOLD 4: a correct refusal that
+            // leaves the older row untouched must pass, so the strict expected failure then reports the fix).
+            let newerRows = Set(try noteRows(rig.container, noteID).filter { blocks($0.content)?.last == "Newer body" }
+                .map(\.persistentModelID))
             let presented = rig.notes.note(withID: noteID).map { "\($0.revisionToken == token):\($0.body)" } ?? "nil"
             let request = actions.beginRequest(title: "Rename a note")
             var outcome = "nil"
@@ -1567,10 +1571,12 @@ final class DurableSaveR5NarrowingTests: XCTestCase {
                     "id": noteID.uuidString, "title": "Renamed by agent", "base_revision": token], watching: false, requestID: request)
                 if case let .performed(result) = call { outcome = "performed \(result.text)" } else { outcome = "\(call)" }
             } catch { outcome = "threw \(error)" }
-            let afterAction = try noteRows(rig.container, noteID).map { blocks($0.content) }
+            let actionRows = try noteRows(rig.container, noteID)
+            let afterAction = actionRows.map { blocks($0.content) }
             let steps = actions.changeSet(for: request)?.count ?? 0
             let undone = await actions.undo(changeSet: request)
-            let afterUndo = try noteRows(rig.container, noteID).map { blocks($0.content) }
+            let undoRows = try noteRows(rig.container, noteID)
+            let afterUndo = undoRows.map { blocks($0.content) }
             let versions = try ModelContext(rig.container).fetch(FetchDescriptor<NoteVersion>(predicate: #Predicate { $0.noteID == noteID }))
             let newerVersions = versions.filter { blocks($0.content)?.last == "Newer body" }.count
             print("R5_H2_VERSIONS build=\(R5Seams.build) arm=\(arm) versions=\(versions.count) holding_newer_body=\(newerVersions) "
@@ -1578,9 +1584,12 @@ final class DurableSaveR5NarrowingTests: XCTestCase {
             print("R5_H2 build=\(R5Seams.build) arm=\(arm) spent=\(spent.map { "\($0)" } ?? "n/a") presented=\(presented) "
                 + "outcome=\(outcome.prefix(160)) after_action=\(afterAction) steps=\(steps) undone=\(undone.undone) "
                 + "failures=\(undone.failures) after_undo=\(afterUndo)")
+            XCTAssertEqual(newerRows.count, 1, "\(arm): one physical row holds the newer body before the edit")
             XCTAssertEqual(afterAction.count, 2, "\(arm): both physical rows remain")
-            XCTAssertTrue(afterAction.allSatisfy { $0?.last == "Newer body" }, "\(arm): the newer body survives the title-only edit")
-            XCTAssertTrue(afterUndo.allSatisfy { $0?.last == "Newer body" }, "\(arm): Undo never writes back the older body")
+            XCTAssertTrue(actionRows.filter { newerRows.contains($0.persistentModelID) }.allSatisfy { blocks($0.content)?.last == "Newer body" },
+                          "\(arm): the row that held the newer body still holds it after the edit (none replaced by older content)")
+            XCTAssertTrue(undoRows.filter { newerRows.contains($0.persistentModelID) }.allSatisfy { blocks($0.content)?.last == "Newer body" },
+                          "\(arm): Undo writes nothing older back onto the row that held the newer body")
             await finish(rig)
         }
     }
@@ -1669,6 +1678,8 @@ final class DurableSaveR5NarrowingTests: XCTestCase {
                 + "undone=\(undone) stored=\(stored) error=\(rig.notes.lastErrorMessage ?? "nil")")
             XCTAssertFalse(stored.isEmpty)
             XCTAssertTrue(stored.allSatisfy { $0.contains("keep") }, "\(arm): the tag added elsewhere survives Undo")
+            XCTAssertTrue(stored.allSatisfy { !$0.contains("mine") } || !undone.isApplied,
+                          "\(arm): Undo either removed the tag it added or reported that it did not apply")
             await finish(rig)
         }
     }
@@ -1699,6 +1710,11 @@ final class DurableSaveR5NarrowingTests: XCTestCase {
             case "spent-prepare": installed = R5Seams.prepareNotes(rig.notes)
             // A journaled local save (an unrelated note's delete), which reloads keeping attachment proofs.
             case "local-save": installed = rig.notes.delete(rig.victim)
+            // r6 HOLD 2: an unrelated pin whose plain-commit guard update fails; the save reloads at once.
+            case "plain-guard":
+                R5Seams.armPlainCommitSpend()
+                let other = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 1" })
+                installed = rig.notes.setPinned(true, noteID: other.id) && R5Seams.plainCommitSpendFired() == true
             default: rig.notes.refresh(); installed = true
             }
             let cachedAfter = rig.notes.cachedVerifiedAttachmentBytes(item.id) != nil
@@ -1707,6 +1723,8 @@ final class DurableSaveR5NarrowingTests: XCTestCase {
                 + "spent=\(spent.map { "\($0)" } ?? "n/a") installed=\(installed) cached_after=\(cachedAfter) after=\(after != nil)")
             XCTAssertNotNil(first, "\(arm): the payload verified before the outside write")
             XCTAssertTrue(installed, "\(arm): a fresh context is installed")
+            XCTAssertTrue(try outside.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == itemID }))
+                .allSatisfy { $0.payload == nil }, "\(arm): a fresh read finds no payload")
             XCTAssertNil(after, "\(arm): store-only verification no longer finds the cleared payload")
             await finish(rig)
         }
@@ -1719,7 +1737,7 @@ final class DurableSaveR5NarrowingTests: XCTestCase {
 enum R5Seams {
     static let build = "head"
     static let arms = ["spent", "behind"]
-    static let proofArms = ["spent-prepare", "local-save", "refresh"]
+    static let proofArms = ["spent-prepare", "local-save", "refresh", "plain-guard"]
 
     /// Deletes `victim` (a journaled commit). With `spend`, its reloads fail, so the context stays spent and the
     /// presentation stays behind, as A12 does. Returns whether the bridge marks the context spent.
@@ -1742,4 +1760,162 @@ enum R5Seams {
 
     /// PR 40's staging entry: replaces a spent context, keeping attachment proofs.
     static func prepareNotes(_ notes: NoteStore) -> Bool { notes.prepareNoteEdit() }
+}
+
+/// Astra round 6 on ba6e5986 (pr40-astra-r6-ba6e5986.md): HOLD 1, the sweep's swap-only site and HOLD 3. Each red
+/// leaves the note store's context spent (its reloads fail), so its presentation still shows the old disk, then
+/// changes disk elsewhere; the command's staging entry then swaps the context under a read taken before it.
+@MainActor
+final class DurableSaveR6Tests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        R5Seams.resetFamilyGuard()
+    }
+
+    override func tearDown() {
+        R5Seams.assertFamilyGuard()
+        R5Seams.reset()
+        super.tearDown()
+    }
+
+    private struct Rig {
+        let container: ModelContainer
+        let tasks: TaskStore
+        let notes: NoteStore
+        let library: AtticLibrary?
+        let controller: NotesPageController
+        let victim: NoteItem
+    }
+
+    private func makeRig(library withLibrary: Bool, seed: (ModelContext) throws -> Void = { _ in }) async throws -> Rig {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let context = ModelContext(container)
+        for index in 0..<3 { context.insert(NoteItem(title: "Note \(index)", body: "Body", createdAt: date)) }
+        try seed(context)
+        try context.save()
+        let files = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("R6Rig-\(UUID())"))
+        let tasks = TaskStore(container: container, now: { date }, taskImageFiles: files)
+        let notes = NoteStore(container: container, now: { date }, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = withLibrary ? AtticLibrary(tasks: tasks, notes: notes) : nil
+        let controller = NotesPageController(store: notes, journal: coordinator.journal)
+        await notes.waitForAttachmentReconciliation()
+        await controller.waitForRecoveryWork()
+        let victim = try XCTUnwrap(notes.notes.first { $0.title == "Note 0" })
+        return Rig(container: container, tasks: tasks, notes: notes, library: library, controller: controller, victim: victim)
+    }
+
+    private func finish(_ rig: Rig) async {
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    private func noteRows(_ container: ModelContainer, _ id: UUID) throws -> [NoteItem] {
+        try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+    }
+
+    private func taskRows(_ container: ModelContainer, _ id: UUID) throws -> [TaskItem] {
+        try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+    }
+
+    /// HOLD 1. The presentation shows a task's note deleted on its own (pre-group); disk now holds the task and its
+    /// note deleted together as one group. Restore Note on the task's page brings back the group; its Undo must take
+    /// back exactly that, leaving the task deleted as it was before the Restore.
+    func testR6H1RestoreNoteUndoFollowsTheGroupTheRestoreBroughtBack() async throws {
+        let taskID = UUID(), noteID = UUID()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let rig = try await makeRig(library: true) { context in
+            context.insert(TaskItem(id: taskID, title: "Owner", createdAt: date))
+            let note = NoteItem(id: noteID, title: "Owned", body: "Writing", createdAt: date)
+            note.taskID = taskID
+            context.insert(note)
+        }
+        // A pre-group independent deletion of the note, as the store's context shows it.
+        let legacy = ModelContext(rig.container)
+        for row in try legacy.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) {
+            row.deletedAt = date.addingTimeInterval(10)
+        }
+        try legacy.save()
+        rig.notes.refresh()
+        let shown = try rig.notes.replicasIncludingDeleted(of: noteID)
+        XCTAssertTrue(!shown.isEmpty && shown.allSatisfy { $0.deletedAt != nil && $0.deletionGroupID == nil },
+                      "the store shows the pre-group deletion")
+        let spent = R5Seams.leaveNotesBehind(rig.notes, deleting: rig.victim, spend: true)
+        XCTAssertEqual(spent, true, "the store's context is spent")
+        // Elsewhere: the note comes back and the task is deleted with it, as one group.
+        let outside = ModelContext(rig.container)
+        for row in try outside.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) {
+            row.deletedAt = nil
+        }
+        let group = UUID()
+        try WorkspaceItemLifecycle.stageDeletion(rootID: taskID, tasks: try outside.fetch(
+            FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })), group: group,
+            timestamp: date.addingTimeInterval(20), in: outside)
+        try outside.save()
+        let stale = try rig.notes.replicasIncludingDeleted(of: noteID).map { $0.deletionGroupID == nil }
+        XCTAssertTrue(try noteRows(rig.container, noteID).allSatisfy { $0.deletionGroupID == group }, "disk holds the group")
+
+        let restored = rig.controller.restoreTaskNote(noteID: noteID)
+        let restoredTask = try taskRows(rig.container, taskID).map { $0.deletedAt == nil }
+        let undone = rig.controller.undoRoute.undo(in: .taskWorkspace(taskID))
+        let taskAfter = try taskRows(rig.container, taskID).map { $0.deletedAt != nil }
+        let noteAfter = try noteRows(rig.container, noteID).map { $0.deletedAt != nil }
+        print("R6_H1 stale_independent=\(stale) restored=\(restored.map { "\($0.separate)" } ?? "nil") "
+            + "task_live_after_restore=\(restoredTask) undone=\(undone) task_deleted=\(taskAfter) note_deleted=\(noteAfter)")
+        XCTAssertNotNil(restored, "Restore Note succeeds")
+        XCTAssertEqual(restoredTask, [true], "the restore brought back the task with its note")
+        XCTAssertTrue(undone, "Undo applies")
+        XCTAssertEqual(taskAfter, [true], "Undo leaves the task deleted, as it was before Restore")
+        XCTAssertTrue(!noteAfter.isEmpty && noteAfter.allSatisfy { $0 }, "Undo deletes the note again")
+        await finish(rig)
+    }
+
+    /// Sweep, swap-only site: Delete Note's Undo without a command library. Its guard compares the note's current
+    /// deletion groups with the ones the step owns. The presentation still shows the step's group; disk now holds a
+    /// newer deletion of the note under another group. Undo must not restore a deletion the step does not own.
+    func testR6SweepDeleteNoteUndoChecksTheGroupItWillRestore() async throws {
+        let rig = try await makeRig(library: false)
+        let note = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 1" })
+        let noteID = note.id
+        XCTAssertTrue(rig.controller.deleteNote(noteID: noteID))
+        let owned = Set(try noteRows(rig.container, noteID).compactMap(\.deletionGroupID))
+        XCTAssertEqual(owned.count, 1, "the delete recorded one group")
+        _ = try rig.notes.replicasIncludingDeleted(of: noteID)
+        let spent = R5Seams.leaveNotesBehind(rig.notes, deleting: rig.victim, spend: true)
+        XCTAssertEqual(spent, true, "the store's context is spent")
+        // Elsewhere: restored and deleted again, under a newer group.
+        let newer = UUID()
+        let outside = ModelContext(rig.container)
+        for row in try outside.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) {
+            row.deletedAt = Date(timeIntervalSince1970: 1_700_000_500)
+            row.deletionGroupID = newer
+        }
+        try outside.save()
+        let shown = Set(try rig.notes.replicasIncludingDeleted(of: noteID).compactMap(\.deletionGroupID))
+        let undone = rig.controller.undoRoute.undo(in: .notesLibrary)
+        let after = try noteRows(rig.container, noteID)
+        print("R6_SWEEP shown_is_owned=\(shown == owned) undone=\(undone) "
+            + "deleted_after=\(after.map { $0.deletedAt != nil }) group_after=\(after.map { $0.deletionGroupID == newer })")
+        XCTAssertTrue(!after.isEmpty && after.allSatisfy { $0.deletedAt != nil && $0.deletionGroupID == newer },
+                      "Undo does not restore the newer deletion the step does not own")
+        await finish(rig)
+    }
+
+    /// HOLD 3. The family guard is told which context a document staging writes through. A row carried from an
+    /// older context is counted even when every row of the family came from that same older context.
+    func testR6H3TheGuardCountsAFamilyCarriedFromAnOldContext() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let old = ModelContext(container)
+        old.insert(NoteItem(title: "Carried", body: "Body"))
+        try old.save()
+        let carried = try XCTUnwrap(try old.fetch(FetchDescriptor<NoteItem>()).first)
+        let installed = ModelContext(container)
+        NoteStore.stageDocumentContent(try PreparedNoteDocument(NoteDocument(blocks: [.text("Carried"), .text("New")])),
+            format: 1, on: [carried], timestamp: Date(), revision: carried.revision, revisionID: UUID(), in: installed)
+        let counted = WorkspaceLegacyBridge.foreignRowMutations
+        print("R6_H3 counted=\(counted)")
+        old.rollback()
+        R5Seams.resetFamilyGuard()
+        XCTAssertEqual(counted, 1, "the row from the older context is counted against the installed context")
+    }
 }

@@ -798,7 +798,7 @@ extension NoteStore {
 
     static func stageDocumentContent(_ projection: PreparedNoteDocument, format: Int,
                                      on replicas: [NoteItem], timestamp: Date, revision: Int64,
-                                     revisionID: UUID, tags: String? = nil) {
+                                     revisionID: UUID, tags: String? = nil, in context: ModelContext? = nil) {
         if let context = replicas.first?.modelContext { WorkspaceLegacyBridge.prepareMutations(replicas, in: context) }
         let preferred = canonicalReplicas(from: replicas)
         for replica in replicas {
