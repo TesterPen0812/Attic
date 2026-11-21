@@ -198,6 +198,25 @@ final class LibraryDeleteRefreshTests: XCTestCase {
         await otherNotes.waitForAttachmentReconciliation()
     }
 
+    func testANoteRestoreWhoseOwnReadFailedIsReadAgainByTheLibrary() async throws {
+        let fixedDate = date
+        let otherNotes = NoteStore(container: container, now: { fixedDate }, attachmentFileStore: makeTestAttachmentFileStore())
+        otherLibrary = AtticLibrary(tasks: TaskStore(container: container, now: { fixedDate }), notes: otherNotes,
+            canvases: CanvasStore(container: container))
+        otherController = NotesPageController(store: otherNotes, journal: coordinator.journal)
+        XCTAssertTrue(coordinator.lifecycleLibrary === otherLibrary)
+        await otherNotes.waitForAttachmentReconciliation()
+        XCTAssertTrue(library.delete(AtticItemRef(.note, loose)))
+        // The restore's save reload and the store's own refresh both fail; the
+        // library's refresh is then the read that brings the note back.
+        notes.reloadFailures = 2
+        XCTAssertTrue(library.restore(AtticItemRef(.note, loose)))
+        XCTAssertEqual(notes.reloadFailures, 0, "both failing reads were reached")
+        XCTAssertNotNil(notes.note(withID: loose), "the library read Notes again after the failed read")
+        XCTAssertNil(notes.lastErrorMessage, "and that read succeeded")
+        await otherNotes.waitForAttachmentReconciliation()
+    }
+
     func testRestoringAPreGroupNoteStillReloadsTasks() throws {
         // A note deleted before deletion groups has no commit step on
         // restore, so the library's own refresh is still its Tasks reload.
