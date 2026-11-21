@@ -142,6 +142,36 @@ final class LibraryRestoreRefreshTests: XCTestCase {
         XCTAssertNotNil(controller.store.note(withID: writing), "the writing is back in the Notes controller's own view")
     }
 
+    func testALibraryThatIsNotTheLifecyclesStillRefreshesItsOwnStoresOnRestore() async throws {
+        XCTAssertTrue(library.deleteTasks([plain]).isApplied)
+        XCTAssertTrue(library.delete(AtticItemRef(.note, loose)))
+        // A second library and Notes controller on the same container take
+        // the lifecycle's roles, so the commit step refreshes their stores,
+        // not the first library's.
+        let fixedDate = date
+        let otherTasks = TaskStore(container: container, now: { fixedDate })
+        let otherNotes = NoteStore(container: container, now: { fixedDate }, attachmentFileStore: makeTestAttachmentFileStore())
+        var otherLibrary: AtticLibrary? = AtticLibrary(tasks: otherTasks, notes: otherNotes, canvases: CanvasStore(container: container))
+        var otherController: NotesPageController? = NotesPageController(store: otherNotes, journal: coordinator.journal)
+        XCTAssertTrue(coordinator.lifecycleLibrary === otherLibrary)
+        XCTAssertTrue(coordinator.lifecycleNotes === otherController)
+        await otherNotes.waitForAttachmentReconciliation()
+        // A task restore: the task store's own save reloads Tasks; only the
+        // library's own refresh reaches its note store.
+        let task = counts { XCTAssertTrue(library.restore(AtticItemRef(.task, plain))) }
+        // A grouped note restore: the note store reads itself; only the
+        // library's own refresh reaches its task store.
+        let note = counts { XCTAssertTrue(library.restore(AtticItemRef(.note, loose))) }
+        print("restore-refresh-count other-library task=\(task) note=\(note)")
+        XCTAssertEqual(task.revisions, 1, "the restoring library still re-reads its own Notes once")
+        XCTAssertEqual(note.taskReloads, 1, "the restoring library still re-reads its own Tasks once")
+        XCTAssertNotNil(tasks.task(withID: plain))
+        XCTAssertNotNil(notes.note(withID: loose))
+        await otherController?.waitForRecoveryWork()
+        await otherNotes.waitForAttachmentReconciliation()
+        otherController = nil; otherLibrary = nil
+    }
+
     func testPreGroupNoteRestoreStillRefreshesTheOtherStores() throws {
         XCTAssertNil(notes.note(withID: legacy))
         let restored = counts { XCTAssertTrue(library.restore(AtticItemRef(.note, legacy))) }
