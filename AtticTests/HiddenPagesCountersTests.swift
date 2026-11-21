@@ -272,7 +272,7 @@ final class HiddenPagesCountersTests: XCTestCase {
         tally.count("room.$height", composerState.room.$height.dropFirst())
         tally.count("room.$isOpen", composerState.room.$isOpen.dropFirst())
         tally.count("notesCtl.willChange", draft.pages.objectWillChange)
-        tally.count("notesCtl.$undoRevision", draft.pages.$undoRevision.dropFirst())
+        tally.count("notesCtl.$undoRevision", draft.pages.undoRevisionChanges)
         tally.count("draft.willChange", draft.objectWillChange)
         tally.count("store.total", notes.objectWillChange)
         tally.count("store.inventoryNotice", library.tags.inventoryChanges)
