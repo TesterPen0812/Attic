@@ -7,8 +7,9 @@ import XCTest
 /// The Find guard's method on the long seed: the same tab tour and the same
 /// before-shot, then three rounds of "#" (open the tag bar), the #launch pill,
 /// "#" (close the bar), and the close step: the collapsed bar's ✕ (Clear
-/// tags). Shots at +0.5, +1.0, +1.5 and +2.3 s after the ✕ are compared with
-/// the before-shot exactly as the Find guard compares them.
+/// tags). Shots at 0, +0.2, +0.5, +1.0 and +2.0 s after the ✕ click returns
+/// are compared with the before-shot as the Find guard compares them and
+/// recorded; the last one is asserted.
 final class TasksTagClearRedrawUITests: XCTestCase {
     private var app: XCUIApplication!
     private var launchedAt = Date()
@@ -143,16 +144,28 @@ final class TasksTagClearRedrawUITests: XCTestCase {
             bar("clear").click()
             let clickReturned = Date()
             var line: [String] = []
-            for offset in [0.5, 1.0, 1.5, 2.3] {
-                let at = offset == 2.3 ? clickReturned.addingTimeInterval(2) : clearAt.addingTimeInterval(offset)
-                let wait = at.timeIntervalSinceNow
+            // The ✕ click returns about 2 s after it is asked for and lands
+            // inside that time, so the shots are timed from its return. They
+            // are recorded, and only the last is asserted: on the trunk
+            // (79c06ffc, no kept host) the list is 7/12 at the return and
+            // whole from +0.19 s, and behind the kept host before its fix
+            // it was thin until +0.20 s and whole from +0.35 s (Air, 9
+            // clears each), so no offset tells the two apart with room to
+            // spare. The Find-close guard and
+            // `KeptContentHostTests.testADrawnRootIsLaidOutInThePassThatSetsIt`
+            // carry the timing.
+            for offset in [0.0, 0.2, 0.5, 1.0, 2.0] {
+                // Measurement offset: the shot is taken this long after the click returned.
+                let wait = clickReturned.addingTimeInterval(offset).timeIntervalSinceNow
                 if wait > 0 { usleep(UInt32(wait * 1_000_000)) }
-                let took = Date().timeIntervalSince(clearAt)
+                let took = Date().timeIntervalSince(clickReturned)
                 let got = shot("clear\(round)-\(offset)")
                 let (ok, n) = whole(got, before: before)
                 line.append(String(format: "+%.2f s %@ %d/%d", took, ok ? "whole" : "THIN", got.count, before.count))
-                XCTAssertTrue(ok, String(format: "clear %d, %.2f s after ✕: every Now row drawn before the filter is drawn (%d of %d bands, %d covered: %@)",
-                                         round, took, got.count, before.count, n, text(got)))
+                if offset == 2.0 {
+                    XCTAssertTrue(ok, String(format: "clear %d, %.2f s after the ✕ click returned: every Now row drawn before the filter is drawn (%d of %d bands, %d covered: %@)",
+                                             round, took, got.count, before.count, n, text(got)))
+                }
             }
             print(String(format: "TAGCLEARREDRAW clear %d (click took %.2f s): ", round, clickReturned.timeIntervalSince(clearAt)) + line.joined(separator: " ; "))
         }
