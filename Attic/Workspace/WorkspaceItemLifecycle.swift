@@ -579,6 +579,13 @@ extension WorkspaceItemLifecycle {
         let freshNotes = coordinator.lifecycleLibrary?.refreshItemStores(freshTasks: freshTasks)
         coordinator.lifecycleNotes?.publishWholeItemLifecycle(notesReadInThisCommit: freshNotes)
     }
+
+    /// Whether `didCommit` reads `notes` again: through the lifecycle's library or its Notes controller. A note store
+    /// it does not reach (another library's, or one with no lifecycle) must refresh itself after its commit.
+    static func didCommitRefreshes(_ notes: NoteStore, in container: ModelContainer) -> Bool {
+        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) else { return false }
+        return coordinator.lifecycleLibrary?.notes === notes || coordinator.lifecycleNotes?.store === notes
+    }
 }
 
 extension NotesPageController {
