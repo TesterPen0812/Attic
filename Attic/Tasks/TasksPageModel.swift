@@ -3089,26 +3089,23 @@ final class TasksPageModel: ObservableObject {
             quickLookOrder[id] = subtasks.map(\.id)
             return subtasks
         }
-        let known = subtasks.filter {
-            #if DEBUG
-            quickLookOrderWalks += 1
-            #endif
-            return order.contains($0.id)
-        }
-            .sorted {
-                #if DEBUG
-                quickLookOrderWalks += 2
-                #endif
-                return (order.firstIndex(of: $0.id) ?? 0) < (order.firstIndex(of: $1.id) ?? 0)
+        #if DEBUG
+        quickLookOrderWalks += 1
+        #endif
+        let ranks = Dictionary(order.enumerated().lazy.map { ($0.element, $0.offset) },
+                               uniquingKeysWith: { first, _ in first })
+        var known: [(rank: Int, item: TaskItem)] = []
+        var new: [TaskItem] = []
+        for item in subtasks {
+            if let rank = ranks[item.id] {
+                known.append((rank, item))
+            } else {
+                new.append(item)
             }
-        let new = subtasks.filter {
-            #if DEBUG
-            quickLookOrderWalks += 1
-            #endif
-            return !order.contains($0.id)
         }
+        known.sort { $0.rank < $1.rank }
         if !new.isEmpty { quickLookOrder[id] = order + new.map(\.id) }
-        return known + new
+        return known.map(\.item) + new
     }
 
     /// A subtask moved on purpose (round 10; also its Undo and Redo, round
