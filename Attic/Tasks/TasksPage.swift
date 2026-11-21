@@ -165,12 +165,6 @@ struct TasksPage: View {
     #if DEBUG
     /// Hosted scroll-frame regression, alongside PanelHeader and AtticAddBar.
     static var tabsEvaluations = 0
-    /// Plain-waste count guard: list-page passes, and the times one
-    /// projected its rows' IDs again for the completion focus watch. The
-    /// watch now reads the snapshot's IDs, so nothing adds to the second;
-    /// a pass that projects them again must count itself here.
-    static var listPageEvaluations = 0
-    static var rowIDProjections = 0
     #endif
 
     /// The row that has the keyboard on the page shown, if any. The focus
@@ -1672,9 +1666,6 @@ struct TasksPage: View {
 
 
     private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
-        #if DEBUG
-        Self.listPageEvaluations += 1
-        #endif
         let (rows, sections, entries, ids, groups, selectionRuns) = model.listSnapshot(for: tab)
         let travel = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false)
         let view = model.viewOptions(for: tab)
