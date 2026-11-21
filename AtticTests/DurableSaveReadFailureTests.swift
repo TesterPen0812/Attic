@@ -228,6 +228,39 @@ final class DurableSaveReadFailureTests: XCTestCase {
         XCTAssertEqual(try duplicateRows(rig.container), [])
     }
 
+    /// Astra round 5 on 9952bb65, HOLD 1 (red test for narrowing, no fix). `commitInPlace` commits an insert; capturing
+    /// its permanent identifiers throws (PR 40's seam), and the reconciliation read that follows throws too. The task
+    /// is on disk once, so creation must return it, and the next edit must work.
+    func testR5H1PlainInsertWhoseCaptureAndReconciliationReadFailIsReportedCreated() async throws {
+        let rig = try await makeRig()
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: rig.container)
+        var reconciliationReads = 0
+        coordinator.beforeReconciliationRead = {
+            reconciliationReads += 1
+            throw WorkspaceFoundationError.unknown
+        }
+        WorkspaceLegacyBridge.postSaveCaptureFailures = 1
+        let created = rig.tasks.create(title: "Created before two failed reads")
+        let seamUsed = WorkspaceLegacyBridge.postSaveCaptureFailures == 0
+        WorkspaceLegacyBridge.postSaveCaptureFailures = 0
+        coordinator.beforeReconciliationRead = nil
+        let durable = try durableTitles(rig.container, "Created before two failed reads")
+        let next = rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[8])), to: "The next plain save")
+        let renamedCreated = created.map { rig.tasks.rename($0, to: "Created, then renamed") }
+        print("R5_H1 seam_used=\(seamUsed) reconciliation_reads=\(reconciliationReads) created=\(created != nil) "
+            + "durable=\(durable) next=\(next) renamed_created=\(renamedCreated.map { "\($0)" } ?? "nil") "
+            + "durable_after=\(try durableTitles(rig.container, "Created before two failed reads"))+"
+            + "\(try durableTitles(rig.container, "Created, then renamed")) error=\(rig.tasks.lastErrorMessage ?? "nil") "
+            + "duplicates=\(try duplicateRows(rig.container))")
+        XCTAssertTrue(seamUsed, "The capture after the save failed")
+        XCTAssertGreaterThan(reconciliationReads, 0, "The reconciliation read ran and failed")
+        XCTAssertEqual(durable, 1, "The insert is durable once")
+        XCTAssertNotNil(created, "A durable insert is reported as created")
+        XCTAssertTrue(next, "The next edit works")
+        XCTAssertEqual(try duplicateRows(rig.container), [])
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
     /// Condition 6: an Undo whose save fails before anything is durable is refused, and keeps its history step, so
     /// the owner can press Undo again.
     func testC6RefusedUndoKeepsItsHistoryStep() async throws {
@@ -310,6 +343,9 @@ final class DurableSaveReadFailureTests: XCTestCase {
             + "can_undo=\(rig.library.undo.canUndo(in: .tasks)) error=\(rig.tasks.lastErrorMessage ?? "nil") "
             + "duplicates=\(try duplicateRows(rig.container))")
         XCTAssertTrue(seamUsed)
+        // Astra round 5 (9952bb65), NOTE: both deletes are durable, so both are reported done.
+        XCTAssertTrue(first.isApplied, "The first durable delete is reported done")
+        XCTAssertTrue(second.isApplied, "The second durable delete is reported done")
         XCTAssertEqual(try deleted(rig.ids[5]), "1/1", "The first delete is durable once")
         XCTAssertEqual(try deleted(rig.ids[6]), "1/1", "The second delete is durable once")
         XCTAssertTrue(renamed, "The next plain save works")
@@ -782,49 +818,95 @@ final class DurableSaveReadFailureTests: XCTestCase {
     /// Generated data: a durable delete, then a second physical copy of its preservation record (same id), as R-2
     /// leaves it. Restore (Undo) and purge, each on its own store. A characterization: it records what each does and
     /// requires only that a refusal changes no row. No repair; repairing real data is the owner's decision.
+    /// Astra round 5 (9952bb65), HOLD 6: the second row is a true copy, `dependencyOwnersData` included (deletion
+    /// always encodes it, and restore requires the rows to agree on it). Undo must then restore and retire both
+    /// physical records; a restore that retires only one of them fails here. Purge, when it succeeds, reaches both
+    /// records; a purge refusal changes no row (as before this repair).
     func testC8RestoreAndPurgeOnAStoreThatHoldsTwoPreservationRows() async throws {
         for command in ["undo", "purge"] {
-            let rig = try await makeRig()
-            let id = rig.ids[3]
-            XCTAssertTrue(rig.library.deleteTasks([id]).isApplied)
-            let seed = ModelContext(rig.container)
-            let original = try XCTUnwrap(try seed.fetch(
-                FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.rootID == id })).first)
-            seed.insert(TaskDeletionPreservation(id: original.id, rootID: original.rootID, deletedAt: original.deletedAt,
-                capturedAt: original.capturedAt, provenance: original.provenance, snapshot: original.snapshot))
-            try seed.save()
-            func facts() throws -> String {
-                let context = ModelContext(rig.container)
-                let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.rootID == id }))
-                let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
-                return "records=\(records.count) retired=\(records.filter { $0.retiredAt != nil }.count) "
-                    + "purged=\(records.filter { $0.purgedAt != nil }.count) task_rows=\(rows.count) "
-                    + "task_live=\(rows.filter { $0.deletedAt == nil }.count)"
-            }
-            let before = try facts()
-            let result: String
-            let refused: Bool
+            let run = try await twoPreservationRows(command, copyingDependencyOwners: true)
             if command == "undo" {
-                let outcome = rig.library.undo(in: .tasks)
-                result = "\(outcome)"; refused = !outcome.isApplied
+                XCTAssertFalse(run.refused, "undo: two agreeing preservation rows are restored, not refused")
+                XCTAssertEqual(run.records, 2, "undo: both physical records remain")
+                XCTAssertEqual(run.retired, 2, "undo: both physical records are retired")
+                XCTAssertEqual(run.purged, 0, "undo: neither record is marked purged")
+                XCTAssertGreaterThan(run.taskRows, 0, "undo: the task's rows remain")
+                XCTAssertEqual(run.taskLive, run.taskRows, "undo: every row of the task is live again")
+            } else if run.refused {
+                XCTAssertEqual(run.after, run.before, "purge: a refusal changes no row")
             } else {
-                let purged = rig.tasks.purgeDeleted(before: .distantFuture)
-                result = "\(purged.count)"; refused = purged.isEmpty
+                XCTAssertEqual(run.retired, 2, "purge: both physical records are retired")
+                XCTAssertEqual(run.purged, 2, "purge: both physical records are marked purged")
+                XCTAssertEqual(run.taskRows, 0, "purge: the task's rows are gone")
             }
-            let after = try facts()
-            print("C8_TWO_ROWS \(command) result=\(result) before[\(before)] after[\(after)] "
-                + "error=\(rig.tasks.lastErrorMessage ?? "nil") duplicates=\(try duplicateRows(rig.container))")
-            let rowsAfter = try ModelContext(rig.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
-            if refused {
-                XCTAssertEqual(after, before, "\(command): a refusal changes no row")
-            } else if command == "undo" {
-                XCTAssertFalse(rowsAfter.isEmpty, "undo: the task's rows remain")
-                XCTAssertTrue(rowsAfter.allSatisfy { $0.deletedAt == nil }, "undo: every row of the task is live again")
-            } else {
-                XCTAssertTrue(rowsAfter.isEmpty, "purge: the task's rows are gone")
-            }
-            await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
         }
+    }
+
+    /// Control for the purge observation: the same rig with its one preservation row. Purge succeeds and reaches it.
+    func testC8OnePreservationRowPurgeControl() async throws {
+        let run = try await twoPreservationRows("purge", copyingDependencyOwners: true, addingSecondRow: false)
+        XCTAssertFalse(run.refused, "purge: one preservation row is purged")
+        XCTAssertEqual(run.records, 1)
+        XCTAssertEqual(run.purged, 1, "purge: the record is marked purged")
+        XCTAssertEqual(run.taskRows, 0, "purge: the task's rows are gone")
+    }
+
+    /// The fixture before HOLD 6, kept as its own case: the copy omits `dependencyOwnersData`, so the two rows
+    /// disagree. Undo is refused and changes no row; purge is either refused unchanged or reaches both records.
+    func testC8DivergentPreservationRowsAreRefusedUnchanged() async throws {
+        for command in ["undo", "purge"] {
+            let run = try await twoPreservationRows(command, copyingDependencyOwners: false)
+            if command == "undo" { XCTAssertTrue(run.refused, "undo: divergent preservation rows are refused") }
+            if run.refused {
+                XCTAssertEqual(run.after, run.before, "\(command): a refusal changes no row")
+            } else {
+                XCTAssertEqual(run.retired, 2, "\(command): never one of the two records")
+                XCTAssertEqual(run.purged, 2, "\(command): never one of the two records")
+            }
+        }
+    }
+
+    private func twoPreservationRows(_ command: String, copyingDependencyOwners: Bool, addingSecondRow: Bool = true) async throws
+        -> (refused: Bool, before: String, after: String, records: Int, retired: Int, purged: Int, taskRows: Int, taskLive: Int) {
+        let rig = try await makeRig()
+        let id = rig.ids[3]
+        XCTAssertTrue(rig.library.deleteTasks([id]).isApplied)
+        let seed = ModelContext(rig.container)
+        let original = try XCTUnwrap(try seed.fetch(
+            FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.rootID == id })).first)
+        let copy = TaskDeletionPreservation(id: original.id, rootID: original.rootID, deletedAt: original.deletedAt,
+            capturedAt: original.capturedAt, provenance: original.provenance, snapshot: original.snapshot)
+        if copyingDependencyOwners { copy.dependencyOwnersData = original.dependencyOwnersData }
+        if addingSecondRow { seed.insert(copy); try seed.save() }
+        func read() throws -> (records: [TaskDeletionPreservation], rows: [TaskItem]) {
+            let context = ModelContext(rig.container)
+            return (try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.rootID == id })),
+                    try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })))
+        }
+        func facts() throws -> String {
+            let (records, rows) = try read()
+            return "records=\(records.count) retired=\(records.filter { $0.retiredAt != nil }.count) "
+                + "purged=\(records.filter { $0.purgedAt != nil }.count) task_rows=\(rows.count) "
+                + "task_live=\(rows.filter { $0.deletedAt == nil }.count)"
+        }
+        let before = try facts()
+        let result: String
+        let refused: Bool
+        if command == "undo" {
+            let outcome = rig.library.undo(in: .tasks)
+            result = "\(outcome)"; refused = !outcome.isApplied
+        } else {
+            let purged = rig.tasks.purgeDeleted(before: .distantFuture)
+            result = "\(purged.count)"; refused = purged.isEmpty
+        }
+        let after = try facts()
+        let (records, rows) = try read()
+        print("C8_TWO_ROWS \(command) second_row=\(addingSecondRow) copied_dependency_owners=\(copyingDependencyOwners) result=\(result) "
+            + "before[\(before)] after[\(after)] error=\(rig.tasks.lastErrorMessage ?? "nil") "
+            + "duplicates=\(try duplicateRows(rig.container))")
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+        return (refused, before, after, records.count, records.filter { $0.retiredAt != nil }.count,
+                records.filter { $0.purgedAt != nil }.count, rows.count, rows.filter { $0.deletedAt == nil }.count)
     }
 
     /// Generated data: one note id with two identical physical rows, as R-2 leaves a re-proposed insert. A
@@ -1348,4 +1430,265 @@ final class DurableSaveReadFailureTests: XCTestCase {
 private func durableDocument(_ data: Data?) -> NoteDocument? {
     guard let data, case let .editable(document) = NoteContentCodec.decode(data) else { return nil }
     return document
+}
+
+// R5-SHARED-BEGIN
+/// Astra round 5 on 9952bb65, HOLDs 2–5: red tests for narrowing only (no fix in this pull request). This class uses
+/// no PR 40 symbol: the same text runs on the trunk, where `R5Seams` has trunk bodies. "spent" leaves the note store's
+/// context spent with its presentation behind (PR 40 only); "behind" leaves the presentation behind an outside write
+/// with no spent context, as the trunk does.
+@MainActor
+final class DurableSaveR5NarrowingTests: XCTestCase {
+    override func tearDown() {
+        R5Seams.reset()
+        super.tearDown()
+    }
+
+    private struct Rig {
+        let container: ModelContainer
+        let tasks: TaskStore
+        let notes: NoteStore
+        let library: AtticLibrary
+        let controller: NotesPageController
+        let victim: NoteItem
+    }
+
+    /// Runs `mark` once, right after the next store save, when armed.
+    private final class Between {
+        var armed = false
+        var marked = false
+        var mark: (() throws -> Void)?
+    }
+
+    private final class Clock {
+        var seconds: TimeInterval = 1_700_000_000
+        func next() -> Date { seconds += 1; return Date(timeIntervalSince1970: seconds) }
+    }
+
+    private func makeRig() async throws -> Rig {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let seed = ModelContext(container)
+        for index in 0..<3 { seed.insert(NoteItem(title: "Note \(index)", body: "Body", createdAt: date)) }
+        try seed.save()
+        let files = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("R5Rig-\(UUID())"))
+        let tasks = TaskStore(container: container, now: { date }, taskImageFiles: files)
+        let notes = NoteStore(container: container, now: { date }, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        let controller = NotesPageController(store: notes, journal: coordinator.journal)
+        await notes.waitForAttachmentReconciliation()
+        await controller.waitForRecoveryWork()
+        let victim = try XCTUnwrap(notes.notes.first { $0.title == "Note 0" })
+        return Rig(container: container, tasks: tasks, notes: notes, library: library, controller: controller, victim: victim)
+    }
+
+    private func finish(_ rig: Rig) async {
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    private func blocks(_ data: Data?) -> [String]? {
+        guard let data, case let .editable(document) = NoteContentCodec.decode(data) else { return nil }
+        return document.blocks.map(\.text)
+    }
+
+    private func noteRows(_ container: ModelContainer, _ id: UUID) throws -> [NoteItem] {
+        try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+    }
+
+    /// HOLD 2. A title-only update_note while a newer physical replica (later `updatedAt`, the same revision token,
+    /// another body) is on disk and the presentation is behind it. The newer body survives the edit and its Undo on
+    /// every physical row.
+    func testR5H2TitleOnlyAgentEditKeepsANewerSameRevisionBody() async throws {
+        for arm in R5Seams.arms {
+            let rig = try await makeRig()
+            guard case let .success(created) = rig.notes.createDocumentNote(
+                id: UUID(), document: NoteDocument(blocks: [.text("Target"), .text("Older body")])) else { return XCTFail("create") }
+            let noteID = created.noteID
+            let tools = AgentTaskTools(store: rig.tasks, noteStore: rig.notes, library: rig.library)
+            tools.notesController = { rig.controller }
+            let actions = AgentActions(tasks: tools)
+            let spent = R5Seams.leaveNotesBehind(rig.notes, deleting: rig.victim, spend: arm == "spent")
+            let outside = ModelContext(rig.container)
+            let original = try XCTUnwrap(try outside.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first)
+            let newer = NoteItem(id: noteID, title: original.title, body: "Newer body", createdAt: original.createdAt)
+            newer.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Target"), .text("Newer body")]))
+            newer.revision = original.revision; newer.revisionID = original.revisionID
+            newer.tagsRaw = original.tagsRaw
+            newer.updatedAt = original.updatedAt.addingTimeInterval(60)
+            outside.insert(newer)
+            try outside.save()
+            let token = original.revisionToken
+            let presented = rig.notes.note(withID: noteID).map { "\($0.revisionToken == token):\($0.body)" } ?? "nil"
+            let request = actions.beginRequest(title: "Rename a note")
+            var outcome = "nil"
+            do {
+                let call = try await actions.call(name: "update_note", arguments: [
+                    "id": noteID.uuidString, "title": "Renamed by agent", "base_revision": token], watching: false, requestID: request)
+                if case let .performed(result) = call { outcome = "performed \(result.text)" } else { outcome = "\(call)" }
+            } catch { outcome = "threw \(error)" }
+            let afterAction = try noteRows(rig.container, noteID).map { blocks($0.content) }
+            let steps = actions.changeSet(for: request)?.count ?? 0
+            let undone = await actions.undo(changeSet: request)
+            let afterUndo = try noteRows(rig.container, noteID).map { blocks($0.content) }
+            print("R5_H2 build=\(R5Seams.build) arm=\(arm) spent=\(spent.map { "\($0)" } ?? "n/a") presented=\(presented) "
+                + "outcome=\(outcome.prefix(160)) after_action=\(afterAction) steps=\(steps) undone=\(undone.undone) "
+                + "failures=\(undone.failures) after_undo=\(afterUndo)")
+            XCTAssertEqual(afterAction.count, 2, "\(arm): both physical rows remain")
+            XCTAssertTrue(afterAction.allSatisfy { $0?.last == "Newer body" }, "\(arm): the newer body survives the title-only edit")
+            XCTAssertTrue(afterUndo.allSatisfy { $0?.last == "Newer body" }, "\(arm): Undo never writes back the older body")
+            await finish(rig)
+        }
+    }
+
+    /// HOLD 3. Two proposals: the first is stale (its base is an older revision), the second is current. Applying
+    /// marks the first for review (pass 1's save); right after that save, another context marks the second for
+    /// review, between the passes. Pass 2 must not apply it: its rows and the note's body stay as they were.
+    func testR5H3ApplyingProposalsKeepsOneMarkedForReviewElsewhere() async throws {
+        for arm in R5Seams.arms {
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let clock = Clock()
+            let between = Between()
+            let notes = NoteStore(container: container, now: { clock.next() }, persist: { context in
+                try context.save()
+                if between.armed { between.armed = false; between.marked = (try? between.mark?()) != nil }
+            }, attachmentFileStore: makeTestAttachmentFileStore())
+            await notes.waitForAttachmentReconciliation()
+            guard case let .success(created) = notes.createDocumentNote(
+                id: UUID(), document: NoteDocument(blocks: [.text("Two proposals"), .text("Base")])) else { return XCTFail("create") }
+            let noteID = created.noteID
+            let r0 = try XCTUnwrap(notes.note(withID: noteID)).revisionToken
+            guard case let .success(.pending(staleID)) = notes.agentWrite(noteID: noteID, baseRevisionToken: r0,
+                document: NoteDocument(blocks: [.text("Two proposals"), .text("Stale")]), agentName: "Agent",
+                disposition: .proposal) else { return XCTFail("stale proposal") }
+            XCTAssertTrue(notes.update(try XCTUnwrap(notes.note(withID: noteID)), title: "Two proposals moved"))
+            let current = try XCTUnwrap(notes.note(withID: noteID))
+            let r1 = current.revisionToken
+            let movedBlocks = blocks(current.content)
+            guard case let .success(.pending(reviewID)) = notes.agentWrite(noteID: noteID, baseRevisionToken: r1,
+                document: NoteDocument(blocks: [.text("Two proposals moved"), .text("Fresh")]), agentName: "Agent",
+                disposition: .proposal) else { return XCTFail("current proposal") }
+            notes.refresh()
+            let listed = notes.pendingEdits(noteID: noteID)
+            let listedReview = listed.map { "\($0.id == staleID ? "stale" : "current"):\($0.needsReview)" }
+            between.mark = {
+                let outside = ModelContext(container)
+                for row in try outside.fetch(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { $0.id == reviewID })) {
+                    row.needsReview = true
+                }
+                try outside.save()
+            }
+            between.armed = true
+            if arm == "spent" { R5Seams.armPlainCommitSpend() }
+            let applied = notes.applyPendingEdits(noteID: noteID)
+            between.armed = false
+            let spendFired = R5Seams.plainCommitSpendFired()
+            R5Seams.reset()
+            let pending = try ModelContext(container).fetch(FetchDescriptor<NotePendingEdit>()).filter { $0.noteID == noteID }
+            let reviewRows = pending.filter { $0.id == reviewID }
+            let stale = pending.filter { $0.id == staleID }
+            let stored = try noteRows(container, noteID).map { blocks($0.content) }
+            print("R5_H3 build=\(R5Seams.build) arm=\(arm) r0_ne_r1=\(r0 != r1) listed=\(listedReview) marked_between=\(between.marked) "
+                + "spend_fired=\(spendFired.map { "\($0)" } ?? "n/a") applied=\(applied) "
+                + "review_rows=\(reviewRows.map { "\($0.needsReview)" }) stale_rows=\(stale.map { "\($0.needsReview)" }) "
+                + "stored=\(stored) error=\(notes.lastErrorMessage ?? "nil")")
+            XCTAssertNotEqual(r0, r1, "\(arm): the first proposal's base is stale")
+            XCTAssertTrue(between.marked, "\(arm): the second proposal was marked for review between the passes")
+            XCTAssertEqual(applied, 0, "\(arm): nothing applies")
+            XCTAssertEqual(reviewRows.map(\.needsReview), [true], "\(arm): the proposal marked for review elsewhere keeps its row")
+            XCTAssertEqual(stored, [movedBlocks], "\(arm): the note's document is unchanged")
+            await notes.waitForAttachmentReconciliation()
+        }
+    }
+
+    /// HOLD 4. Add `mine` to a note; the presentation falls behind while another context adds `keep`; undo `mine`.
+    /// Every physical row keeps `keep`.
+    func testR5H4UndoingANoteTagKeepsATagAddedElsewhere() async throws {
+        for arm in R5Seams.arms {
+            let rig = try await makeRig()
+            let note = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 1" })
+            let noteID = note.id
+            let ref = AtticItemRef(.note, noteID)
+            XCTAssertTrue(rig.library.setTags(["mine"], on: ref))
+            let spent = R5Seams.leaveNotesBehind(rig.notes, deleting: rig.victim, spend: arm == "spent")
+            let outside = ModelContext(rig.container)
+            for row in try outside.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) {
+                row.tagsRaw = AtticTag.encode(["keep", "mine"])
+            }
+            try outside.save()
+            let presented = rig.notes.note(withID: noteID)?.tags ?? []
+            let undone = rig.library.undo(in: .note(noteID))
+            let stored = try noteRows(rig.container, noteID).map { AtticTag.decode($0.tagsRaw) }
+            print("R5_H4 build=\(R5Seams.build) arm=\(arm) spent=\(spent.map { "\($0)" } ?? "n/a") presented=\(presented) "
+                + "undone=\(undone) stored=\(stored) error=\(rig.notes.lastErrorMessage ?? "nil")")
+            XCTAssertFalse(stored.isEmpty)
+            XCTAssertTrue(stored.allSatisfy { $0.contains("keep") }, "\(arm): the tag added elsewhere survives Undo")
+            await finish(rig)
+        }
+    }
+
+    /// HOLD 5. A verified attachment proof is cached; another context clears the stored payload (id, digest, size,
+    /// type and owner unchanged); the store then installs a fresh context. Store-only verification returns nil.
+    /// "spent-prepare" is PR 40's recovery swap; "local-save" is a journaled local save, whose reload also keeps
+    /// proofs (on both commits); "refresh" is the store's outside-change refresh (the control). The recovery-copy half
+    /// of the finding is not covered here.
+    func testR5H5AFreshContextDropsAStaleAttachmentProof() async throws {
+        for arm in R5Seams.proofArms {
+            let rig = try await makeRig()
+            let data = Data("file bytes".utf8)
+            let item = StagedNoteAttachment(id: UUID(), filename: "plan.pdf", contentTypeIdentifier: "com.adobe.pdf",
+                byteCount: Int64(data.count), digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), data: data)
+            let document = NoteDocument(blocks: [.text("Files"), .file(attachmentID: item.id, filename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+            guard case .success = rig.notes.createDocumentNote(id: UUID(), document: document, staged: [item]) else { return XCTFail("create") }
+            let first = await rig.notes.verifiedAttachmentBytes(item.id, allowMaterialized: false)
+            let cachedBefore = rig.notes.cachedVerifiedAttachmentBytes(item.id) != nil
+            let spent = arm == "spent-prepare" ? R5Seams.leaveNotesBehind(rig.notes, deleting: rig.victim, spend: true) : nil
+            let outside = ModelContext(rig.container)
+            let itemID = item.id
+            for row in try outside.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == itemID })) { row.payload = nil }
+            try outside.save()
+            let installed: Bool
+            switch arm {
+            case "spent-prepare": installed = R5Seams.prepareNotes(rig.notes)
+            // A journaled local save (an unrelated note's delete), which reloads keeping attachment proofs.
+            case "local-save": installed = rig.notes.delete(rig.victim)
+            default: rig.notes.refresh(); installed = true
+            }
+            let cachedAfter = rig.notes.cachedVerifiedAttachmentBytes(item.id) != nil
+            let after = await rig.notes.verifiedAttachmentBytes(item.id, allowMaterialized: false)
+            print("R5_H5 build=\(R5Seams.build) arm=\(arm) first=\(first != nil) cached_before=\(cachedBefore) "
+                + "spent=\(spent.map { "\($0)" } ?? "n/a") installed=\(installed) cached_after=\(cachedAfter) after=\(after != nil)")
+            XCTAssertNotNil(first, "\(arm): the payload verified before the outside write")
+            XCTAssertTrue(installed, "\(arm): a fresh context is installed")
+            XCTAssertNil(after, "\(arm): store-only verification no longer finds the cleared payload")
+            await finish(rig)
+        }
+    }
+}
+// R5-SHARED-END
+
+/// PR 40 bodies of the seams the R5 narrowing tests use. The trunk copy of this enum has trunk bodies.
+@MainActor
+enum R5Seams {
+    static let build = "head"
+    static let arms = ["spent", "behind"]
+    static let proofArms = ["spent-prepare", "local-save", "refresh"]
+
+    /// Deletes `victim` (a journaled commit). With `spend`, its reloads fail, so the context stays spent and the
+    /// presentation stays behind, as A12 does. Returns whether the bridge marks the context spent.
+    static func leaveNotesBehind(_ notes: NoteStore, deleting victim: NoteItem, spend: Bool) -> Bool? {
+        if spend { notes.reloadFailures = 3 }
+        _ = notes.delete(victim)
+        notes.reloadFailures = 0
+        return WorkspaceLegacyBridge.isSpent(notes.modelContext)
+    }
+
+    /// The next plain commit's baseline update fails, which leaves its context spent.
+    static func armPlainCommitSpend() { WorkspaceLegacyBridge.postCommitPlainFailures = 1 }
+    static func plainCommitSpendFired() -> Bool? { WorkspaceLegacyBridge.postCommitPlainFailures == 0 }
+    static func reset() { WorkspaceLegacyBridge.postCommitPlainFailures = 0 }
+
+    /// PR 40's staging entry: replaces a spent context, keeping attachment proofs.
+    static func prepareNotes(_ notes: NoteStore) -> Bool { notes.prepareNoteEdit() }
 }
