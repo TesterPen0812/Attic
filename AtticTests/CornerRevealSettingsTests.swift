@@ -773,6 +773,21 @@ extension CornerRevealSettingsTests {
         }
     }
 
+    /// Astra r3 H2: a sample resolves the pointer's screen once. With the
+    /// display seam nil, a point outside every display is one miss, not a
+    /// second lookup that could qualify it while the show still has none.
+    func testASampleLooksThePointersScreenUpOnceEvenOffEveryDisplay() throws {
+        try narrow(reduceMotion: true) { n in
+            let union = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
+            let offEveryDisplay = CGPoint(x: union.minX - 5_000, y: union.minY - 5_000)
+            NarrowEvents.location = offEveryDisplay
+            let before = n.rig.monitor.screenLookupCountForTesting
+            n.rig.monitor.sampleForTesting(at: offEveryDisplay)
+            XCTAssertEqual(n.rig.monitor.screenLookupCountForTesting - before, 1, "one lookup per sample")
+            XCTAssertFalse(n.rig.monitor.isInHotspotForTesting(offEveryDisplay, flags: []), "a miss stays a miss")
+        }
+    }
+
     /// Astra 3: hidden with the pointer far, it enters the corner, then a
     /// second hide request while already hidden. Trunk latched on it; the
     /// resting pointer must not reveal.

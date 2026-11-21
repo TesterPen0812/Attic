@@ -712,6 +712,9 @@ final class CornerHoverMonitor {
 
     /// Test seam: how many one-shot follow-ups were scheduled.
     private(set) var followUpCountForTesting = 0
+    /// Test seam: how many times the monitor has looked a point's screen up
+    /// in `NSScreen.screens`.
+    private(set) var screenLookupCountForTesting = 0
     /// A timed reveal (`hiding` false) or hide is due in `delay` seconds
     /// unless the pointer changes course; nil when none is. The panel uses
     /// it to prepare a hide animation's snapshot ahead of the motion.
@@ -849,7 +852,8 @@ final class CornerHoverMonitor {
     }
 
     private func screen(containing point: CGPoint) -> NSScreen? {
-        NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
+        screenLookupCountForTesting += 1
+        return NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
             // Edge-pinned pointer coordinates can land exactly on frame.maxX, outside
             // every screen frame; tolerate a 1 pt overshoot so corners keep working.
             ?? NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(point) }
