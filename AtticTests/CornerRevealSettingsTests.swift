@@ -545,14 +545,16 @@ final class CornerRevealSettingsTests: XCTestCase {
         case .clickAway:
             let panel = rig.controller.visibleContentFrameForTesting
             rig.controller.handlePressForTesting(at: CGPoint(x: panel.midX - 700, y: panel.midY - 700))
-        case .controller, .swipe:
+        case .controller:
             _ = rig.controller.requestHide { _ in }
+        case .swipe:
+            // The real swipe entry point; its own completion tells the monitor.
+            rig.controller.panelForTesting.onTrackpadDismissRequest?()
         case .probe:
             rig.monitor.hideForPerformanceProbe { _ in }
         }
         let deadline = Date().addingTimeInterval(2)
         while rig.controller.isPanelVisible || !rig.monitor.isHiddenForPerformanceProbe, Date() < deadline { spin(0.01) }
-        if path == .swipe { rig.controller.onInteractiveHideCompleted?() }
         XCTAssertFalse(rig.controller.isPanelVisible, "\(path) hid the panel", file: file, line: line)
         XCTAssertTrue(rig.monitor.isHiddenForPerformanceProbe, file: file, line: line)
         return corner
