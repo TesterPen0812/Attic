@@ -940,9 +940,39 @@ extension CornerHoverStateMachineTests {
                            defaults: defaults, suite: suite)
     }
 
+    /// Waits, up to `timeout`, until `condition` holds (checked every
+    /// 10 ms on the main run loop); whether it did.
     @MainActor
-    private func menuGateSpin(_ seconds: TimeInterval) {
-        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    private func menuGateWait(_ timeout: TimeInterval, until condition: @escaping () -> Bool) -> Bool {
+        menuGateWatch(timeout, inverted: false, condition)
+    }
+
+    /// Whether `condition` stays false for all of `duration`, checked every
+    /// 10 ms (an inverted expectation: it fails as soon as it holds).
+    @MainActor
+    private func menuGateStaysFalse(_ duration: TimeInterval, _ condition: @escaping () -> Bool) -> Bool {
+        menuGateWatch(duration, inverted: true, condition)
+    }
+
+    @MainActor
+    private func menuGateWatch(_ timeout: TimeInterval, inverted: Bool, _ condition: @escaping () -> Bool) -> Bool {
+        let met = XCTestExpectation(description: "condition")
+        met.isInverted = inverted
+        // Checked now, then by the timer; each path fulfills at most once.
+        if condition() {
+            met.fulfill()
+            return XCTWaiter().wait(for: [met], timeout: timeout) == .completed
+        }
+        let poll = Timer(timeInterval: 0.01, repeats: true) { timer in
+            MainActor.assumeIsolated {
+                guard condition() else { return }
+                met.fulfill()
+                timer.invalidate()
+            }
+        }
+        RunLoop.main.add(poll, forMode: .common)
+        defer { poll.invalidate() }
+        return XCTWaiter().wait(for: [met], timeout: timeout) == .completed
     }
 
     /// A band-crossing approach (a sample at 50 pt, then the corner, so no
@@ -968,9 +998,9 @@ extension CornerHoverStateMachineTests {
         defer {
             rig.uiState.setInteractionLock(.menuTracking, isActive: false)
             rig.monitor.stop()
-            menuGateSpin(0.3)
+            _ = menuGateWait(1) { !rig.controller.isPanelVisible }
         }
-        menuGateSpin(0.05)
+        XCTAssertTrue(menuGateWait(1) { !rig.monitor.hoverScreenFramesForTesting.isEmpty }, "a watched corner")
         let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first)
         let far = CGPoint(x: frame.midX, y: frame.midY)
         let band = CGPoint(x: frame.maxX - 50, y: frame.maxY - 50)
@@ -978,20 +1008,16 @@ extension CornerHoverStateMachineTests {
         NarrowEvents.location = far
         rig.monitor.pointerActivityForTesting(at: far)
         rig.uiState.setInteractionLock(.menuTracking, isActive: true)
-        menuGateSpin(0.05)
+        XCTAssertTrue(menuGateStaysFalse(0.05) { rig.controller.isPanelVisible }, "far from the corner")
         NarrowEvents.location = band
         rig.monitor.pointerActivityForTesting(at: band)
-        menuGateSpin(0.05)
+        XCTAssertTrue(menuGateStaysFalse(0.05) { rig.controller.isPanelVisible }, "in the band, outside the hotspot")
         NarrowEvents.location = corner
         rig.monitor.pointerActivityForTesting(at: corner)
-        let held = Date().addingTimeInterval(0.8)
-        while !rig.controller.isPanelVisible, Date() < held { menuGateSpin(0.01) }
-        XCTAssertFalse(rig.controller.isPanelVisible, "menu tracking holds the corner reveal")
+        XCTAssertTrue(menuGateStaysFalse(0.8) { rig.controller.isPanelVisible }, "menu tracking holds the corner reveal")
 
         rig.uiState.setInteractionLock(.menuTracking, isActive: false)
-        let released = Date().addingTimeInterval(1)
-        while !rig.controller.isPanelVisible, Date() < released { menuGateSpin(0.01) }
-        XCTAssertTrue(rig.controller.isPanelVisible, "closing the menu reveals for the resting pointer")
+        XCTAssertTrue(menuGateWait(1) { rig.controller.isPanelVisible }, "closing the menu reveals for the resting pointer")
     }
 }
 

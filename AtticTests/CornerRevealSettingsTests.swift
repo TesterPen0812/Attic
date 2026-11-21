@@ -649,3 +649,243 @@ final class CornerRevealSettingsTests: XCTestCase {
         }
     }
 }
+
+// MARK: - PR 43 narrowing (Astra r2 on 190723de): test-only reds, run on 79c06ffc, c8a3f0a9, 52c77361
+
+extension CornerRevealSettingsTests {
+    private struct NarrowRig {
+        let rig: Panel
+        let frame: CGRect
+        var corner: CGPoint { CGPoint(x: frame.maxX - 1, y: frame.maxY - 1) }
+        var cornerNudged: CGPoint { CGPoint(x: frame.maxX - 2, y: frame.maxY - 2) }
+        var far: CGPoint { CGPoint(x: frame.midX, y: frame.midY) }
+    }
+
+    private func narrow(reduceMotion: Bool, mode: PanelDismissMode = .clickAway,
+                        _ body: (NarrowRig) throws -> Void) throws {
+        NarrowEvents.install()
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = reduceMotion
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = previous
+            NarrowEvents.location = nil
+            NarrowEvents.flags = nil
+        }
+        let rig = try makePanel()
+        rig.settings.corner = .topRight
+        rig.settings.panelDismissMode = mode
+        NarrowEvents.flags = []
+        rig.monitor.start()
+        defer {
+            rig.uiState.setInteractionLock(.menuTracking, isActive: false)
+            rig.monitor.stop()
+            spin(0.3)
+        }
+        spin(0.05)
+        let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first)
+        try body(NarrowRig(rig: rig, frame: frame))
+    }
+
+    private func narrowShow(_ n: NarrowRig, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(n.rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown,
+                       file: file, line: line)
+    }
+
+    private func narrowWaitHidden(_ n: NarrowRig, file: StaticString = #filePath, line: UInt = #line) {
+        let deadline = Date().addingTimeInterval(3)
+        while n.rig.controller.isPanelVisible || !n.rig.monitor.isHiddenForPerformanceProbe, Date() < deadline { spin(0.01) }
+        XCTAssertFalse(n.rig.controller.isPanelVisible, "the hide completed", file: file, line: line)
+    }
+
+    private func narrowRevealed(_ n: NarrowRig, within seconds: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !n.rig.controller.isPanelVisible, Date() < deadline { spin(0.01) }
+        return n.rig.controller.isPanelVisible
+    }
+
+    /// Target red: away when the hide begins, in the corner when it ends,
+    /// then resting. That arrival reveals with no further event.
+    func testNarrowTargetArrivalDuringTheHideReveals() throws {
+        try narrow(reduceMotion: false) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            NarrowEvents.location = n.corner
+            n.rig.monitor.pointerActivityForTesting(at: n.corner)
+            narrowWaitHidden(n)
+            XCTAssertTrue(narrowRevealed(n, within: 1), "an arrival during the hide reveals by itself")
+        }
+    }
+
+    /// Astra 1: resting in the corner at the hide's start, an exit and a
+    /// return inside one 33 ms coalescing interval, back in the corner at
+    /// its end. The pointer left, so its return is an approach.
+    func testNarrow1ExitAndReturnWithinOneSampleIntervalIsAnApproach() throws {
+        try narrow(reduceMotion: false) { n in
+            NarrowEvents.location = n.corner
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            n.rig.monitor.sampleForTesting(at: n.corner)
+            NarrowEvents.location = n.far
+            n.rig.monitor.pointerActivityForTesting(at: n.far) // coalesced: within 33 ms of the sample
+            NarrowEvents.location = n.corner                    // back before the trailing sample runs
+            narrowWaitHidden(n)
+            XCTAssertTrue(narrowRevealed(n, within: 1), "a delivered exit and return is an approach")
+        }
+    }
+
+    // Astra 2 (two watched corners are not one) needs two displays, so it
+    // is covered by the resting hotspot's unit test on two frames
+    // (CornerHoverStateMachineTests) and an on-screen two-display row.
+
+    /// Astra 3: hidden with the pointer far, it enters the corner, then a
+    /// second hide request while already hidden. Trunk latched on it; the
+    /// resting pointer must not reveal.
+    func testNarrow3AnAlreadyHiddenRequestDoesNotReopenUnderARestingPointer() throws {
+        try narrow(reduceMotion: true) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            narrowWaitHidden(n)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.sampleForTesting(at: n.corner)
+            n.rig.monitor.hideForPerformanceProbe { _ in }
+            XCTAssertFalse(narrowRevealed(n, within: 0.6), "the second request stays hidden through the dwell")
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertFalse(n.rig.controller.isPanelVisible, "and at a later sample")
+        }
+    }
+
+    /// Astra 4: Option-to-reveal, dismissed with the pointer resting in the
+    /// corner and Option up. Holding Option and moving one point within the
+    /// hotspot (never leaving it) must not reopen the panel.
+    func testNarrow4AStationaryPointerKeepsItsLatchWhateverTheKey() throws {
+        try narrow(reduceMotion: true) { n in
+            n.rig.settings.revealModifier = .option
+            spin(0.1)
+            NarrowEvents.location = n.corner
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            narrowWaitHidden(n)
+            spin(0.1)
+            NarrowEvents.flags = [.option]
+            NarrowEvents.location = n.cornerNudged
+            n.rig.monitor.pointerActivityForTesting(at: n.cornerNudged)
+            n.rig.monitor.sampleForTesting(at: n.cornerNudged, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertFalse(n.rig.controller.isPanelVisible, "a pointer that never left stays latched")
+        }
+    }
+
+    /// Astra 5: a controller hide begun away from the corner, an arrival
+    /// during the animation, and menu tracking held through the dwell.
+    func testNarrow5NoRevealWhileMenuTrackingAfterAnArrivalDuringTheHide() throws {
+        try narrow(reduceMotion: false) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            NarrowEvents.location = n.corner
+            n.rig.monitor.pointerActivityForTesting(at: n.corner)
+            n.rig.uiState.setInteractionLock(.menuTracking, isActive: true)
+            narrowWaitHidden(n)
+            XCTAssertFalse(narrowRevealed(n, within: 0.8), "menu tracking holds the reveal")
+        }
+    }
+
+    /// Control for 5: a plain approach after the hide, menu tracking held.
+    /// Shows whether the hidden branch consults the lock on any commit.
+    func testNarrow5ControlNoRevealWhileMenuTrackingOnAPlainApproach() throws {
+        try narrow(reduceMotion: true) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            narrowWaitHidden(n)
+            n.rig.uiState.setInteractionLock(.menuTracking, isActive: true)
+            spin(0.05)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.pointerActivityForTesting(at: n.corner)
+            XCTAssertFalse(narrowRevealed(n, within: 0.8), "menu tracking holds the reveal")
+        }
+    }
+
+    /// Astra 6: Move cursor away; the pointer returns to the corner during
+    /// the timed hide and rests. It reveals with no further event.
+    func testNarrow6CursorAwayReturnDuringTheHideReveals() throws {
+        try narrow(reduceMotion: false, mode: .moveCursorAway) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            let time = ProcessInfo.processInfo.systemUptime + 10
+            n.rig.monitor.sampleForTesting(at: n.far, uptime: time)
+            n.rig.monitor.sampleForTesting(at: n.far, uptime: time + n.rig.settings.hideDelay + 1)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.pointerActivityForTesting(at: n.corner)
+            narrowWaitHidden(n)
+            XCTAssertTrue(narrowRevealed(n, within: 1), "a return during the hide reveals by itself")
+        }
+    }
+
+    /// Astra 7 (a): the swipe through its real entry point, pointer resting
+    /// in the corner: it hides, stays latched, then leaving and returning
+    /// reveals.
+    func testNarrow7aSwipeKeepThroughTheRealEntryPoint() throws {
+        try narrow(reduceMotion: true) { n in
+            NarrowEvents.location = n.corner
+            narrowShow(n)
+            n.rig.controller.panelForTesting.onTrackpadDismissRequest?()
+            narrowWaitHidden(n)
+            XCTAssertFalse(narrowRevealed(n, within: 0.4), "no re-reveal under the resting pointer")
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertFalse(n.rig.controller.isPanelVisible, "still latched")
+            NarrowEvents.location = n.far
+            n.rig.monitor.sampleForTesting(at: n.far)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.sampleForTesting(at: n.corner)
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "leaving and returning reveals")
+        }
+    }
+
+    /// Astra 7 (b): the swipe through its real entry point with the pointer
+    /// far; the first sample back in the corner sets the dwell.
+    func testNarrow7bSwipeFastApproachThroughTheRealEntryPoint() throws {
+        try narrow(reduceMotion: true) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            n.rig.controller.panelForTesting.onTrackpadDismissRequest?()
+            narrowWaitHidden(n)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.sampleForTesting(at: n.corner)
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "the first approach reveals")
+        }
+    }
+}
+
+extension CornerRevealSettingsTests {
+    /// Keep (Fable, 21 Nov): revealed by the corner, the pointer goes into
+    /// the panel and back to the corner, then Esc. It has rested in the
+    /// corner since the hide began, so the panel stays hidden under it.
+    func testNarrowKeepCornerIntoThePanelBackToTheCornerThenEscStaysHidden() throws {
+        try narrow(reduceMotion: true) { n in
+            NarrowEvents.location = n.corner
+            n.rig.monitor.sampleForTesting(at: n.corner)
+            n.rig.monitor.sampleForTesting(at: n.corner,
+                                           uptime: ProcessInfo.processInfo.systemUptime + n.rig.settings.revealDelay + 0.05)
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "the corner reveals")
+            let panel = n.rig.controller.visibleContentFrameForTesting
+            let inside = CGPoint(x: panel.midX, y: panel.midY)
+            spin(0.05)
+            NarrowEvents.location = inside
+            n.rig.monitor.pointerActivityForTesting(at: inside)
+            spin(0.05)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.pointerActivityForTesting(at: n.corner)
+            spin(0.05)
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "still shown")
+            _ = n.rig.controller.requestHide { _ in } // Esc
+            narrowWaitHidden(n)
+            XCTAssertFalse(narrowRevealed(n, within: 0.6), "no re-reveal under the resting pointer")
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertFalse(n.rig.controller.isPanelVisible, "still latched")
+        }
+    }
+}
