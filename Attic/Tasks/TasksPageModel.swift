@@ -305,15 +305,23 @@ final class TasksPageModel: ObservableObject {
         didSet { if tab != oldValue { memory?.savePage(tab) } }
     }
     @Published private(set) var selection: Set<UUID> = [] {
-        didSet { if selection != oldValue { selectionRevision += 1 } }
+        didSet {
+            guard selection != oldValue else { return }
+            selectionRevision += 1
+            rowStatesChanged(selection.symmetricDifference(oldValue), runs: true)
+        }
     }
     private var selectionRevision = 0
     private var keyboardFocusSelectionRevision: Int?
     /// The row a Shift-extension grows from (readable for the tests).
     private(set) var selectionAnchor: UUID?
     /// Rows whose quick look is open (remembered per row for the session).
-    @Published private(set) var expanded: Set<UUID> = []
-    @Published private(set) var editingTitleID: UUID?
+    @Published private(set) var expanded: Set<UUID> = [] {
+        didSet { if expanded != oldValue { rowStatesChanged(expanded.symmetricDifference(oldValue), runs: true) } }
+    }
+    @Published private(set) var editingTitleID: UUID? {
+        didSet { if editingTitleID != oldValue { rowStatesChanged([oldValue, editingTitleID]) } }
+    }
     /// The title being edited, with its shorthand (owner fix 4): what is
     /// typed as `#tag`, a date or `!` becomes a chip and applies on save.
     let titleDraft = TasksTitleDraftState()
@@ -356,14 +364,26 @@ final class TasksPageModel: ObservableObject {
     }
     /// A title, subtask or paste whose save failed: the text stays where it
     /// was typed and the row offers "Not saved · Retry" until a save works.
-    @Published private(set) var failedSave: FailedSave?
+    @Published private(set) var failedSave: FailedSave? {
+        didSet { if failedSave != oldValue { rowStatesChanged([oldValue?.rowID, failedSave?.rowID]) } }
+    }
 
     enum FailedSave: Equatable {
         case title(UUID)
         case newSubtask(UUID)
         case paste
+
+        /// The row whose "Not saved" line it is.
+        var rowID: UUID? {
+            switch self {
+            case let .title(id), let .newSubtask(id): id
+            case .paste: nil
+            }
+        }
     }
-    @Published private(set) var newSubtaskParentID: UUID?
+    @Published private(set) var newSubtaskParentID: UUID? {
+        didSet { if newSubtaskParentID != oldValue { rowStatesChanged([oldValue, newSubtaskParentID]) } }
+    }
     let subtaskDraft = TasksSubtaskDraftState()
     var newSubtaskTitle: String {
         get { subtaskDraft.newTitle }
@@ -371,22 +391,43 @@ final class TasksPageModel: ObservableObject {
     }
     /// A quick-look subtask being renamed in place (round 10), its text,
     /// and whether its save failed ("Not saved · Retry").
-    @Published var renamingSubtaskID: UUID?
+    @Published var renamingSubtaskID: UUID? {
+        // Its row is whichever lists the subtask: every live row is asked.
+        didSet { if renamingSubtaskID != oldValue { rowStatesChanged(nil) } }
+    }
     /// A rename belongs to the quick look it opened in. A move elsewhere
     /// cannot leave its editor holding that original page's keys.
-    var renamingSubtaskParentID: UUID?
+    var renamingSubtaskParentID: UUID? {
+        didSet { if renamingSubtaskParentID != oldValue { rowStatesChanged([oldValue, renamingSubtaskParentID]) } }
+    }
     var subtaskRename: String {
         get { subtaskDraft.rename }
         set { subtaskDraft.rename = newValue }
     }
-    @Published var subtaskRenameFailed = false
+    @Published var subtaskRenameFailed = false {
+        didSet { if subtaskRenameFailed != oldValue { rowStatesChanged(nil) } }
+    }
     /// The subtask line that has the keyboard (round 10b). Not published: it
     /// only steers which row a shortcut targets, and never redraws.
     var focusedSubtaskID: UUID?
     /// The task row that has the keyboard: the page's focus, copied here as
     /// it changes so the rows' cells read it as they draw (deep review
-    /// P2-04). Not published: the page tells the cells (`cellUpdates`).
-    var keyboardFocus: AtticRowFocusID?
+    /// P2-04). Not published: the rows of the old and the new focus are
+    /// told through their row states (slice 1b).
+    var keyboardFocus: AtticRowFocusID? {
+        didSet { if keyboardFocus != oldValue { rowStatesChanged([oldValue?.id, keyboardFocus?.id]) } }
+    }
+
+    /// Each listed row's state, per tab (slice 1b, `TasksRowState`): made
+    /// when its cell first builds, dropped when its row leaves the tab's
+    /// list. One entry per (tab, id): a task's physical replicas (one UUID)
+    /// are one row in the list, so one state.
+    private var rowStates: [TasksTab: [UUID: TasksRowState]] = [:]
+    #if DEBUG
+    /// The state each mounted cell holds (the oracle's second check).
+    private var rowStateMounts: [ObjectIdentifier: RowStateMount] = [:]
+    private var rowStateCheckQueued = false
+    #endif
 
     /// Shared by native focus observation and the headless regression tests.
     func receiveKeyboardFocus(_ focus: AtticRowFocusID?, keyboardDriving: Bool) {
@@ -1063,6 +1104,7 @@ final class TasksPageModel: ObservableObject {
         rowsCache[tab] = snapshot
         rowsChangedSinceBuild[tab] = nil
         rowsChangeUnknown.remove(tab)
+        rowStatesListed(tab)
         return snapshot
     }
 
@@ -1400,6 +1442,7 @@ final class TasksPageModel: ObservableObject {
             return TasksDoneDay(id: day.id, title: day.title, rows: folded ? [] : day.rows, total: day.rows.count, folded: folded)
         }
         doneCache = (key, days)
+        rowStatesListed(.done)
         return days
     }
 
@@ -1922,7 +1965,9 @@ final class TasksPageModel: ObservableObject {
         let token = UUID()
     }
 
-    @Published private(set) var rowFailure: RowFailure?
+    @Published private(set) var rowFailure: RowFailure? {
+        didSet { if rowFailure != oldValue { rowStatesChanged([oldValue?.id, rowFailure?.id]) } }
+    }
     private var rowRetry: (() -> CommandOutcome)?
 
     /// Shows `outcome` under row `id` when it failed (and clears that row's
@@ -3448,7 +3493,9 @@ final class TasksPageModel: ObservableObject {
     }
 
     /// The Done log task whose details are open.
-    @Published var doneDetailID: UUID?
+    @Published var doneDetailID: UUID? {
+        didSet { if doneDetailID != oldValue { rowStatesChanged([oldValue, doneDetailID]) } }
+    }
 
     struct DoneDetail: Equatable {
         let title: String
@@ -3497,4 +3544,211 @@ final class TasksPageModel: ObservableObject {
             files: store.fileMigration.rowFiles(for: task)
         )
     }
+}
+
+// MARK: - Row states (slice 1b)
+
+extension TasksPageModel {
+    /// What the tab's list holds now, read without building anything: the
+    /// rows as last built and the selection runs over them. Nil rows: the
+    /// list is not built (each state keeps its row until it is).
+    private struct RowStateList {
+        let rows: [TasksListRow]?
+        let runs: [UUID: AtticSelectionRun]
+        private var index: [UUID: Int]?
+
+        init(rows: [TasksListRow]?, ids: [UUID], selected: Set<UUID>, expanded: Set<UUID>) {
+            self.rows = rows
+            runs = rows == nil ? [:] : TasksSelectionRuns.make(ids: ids, selected: selected, expanded: expanded)
+        }
+
+        mutating func row(_ id: UUID) -> TasksListRow? {
+            guard let rows else { return nil }
+            if index == nil {
+                var built: [UUID: Int] = [:]
+                built.reserveCapacity(rows.count)
+                for (offset, row) in rows.enumerated() where built[row.id] == nil { built[row.id] = offset }
+                index = built
+            }
+            return index?[id].map { rows[$0] }
+        }
+
+        var isBuilt: Bool { rows != nil }
+    }
+
+    /// Side-effect free: reads the caches, builds and counts nothing.
+    private func rowStateList(_ tab: TasksTab) -> RowStateList {
+        if tab == .done {
+            let rows = doneCache?.days.flatMap(\.rows)
+            return RowStateList(rows: rows, ids: rows?.map(\.id) ?? [], selected: selection, expanded: expanded)
+        }
+        let snapshot = rowsCache[tab]
+        return RowStateList(rows: snapshot?.rows, ids: snapshot?.ids ?? [], selected: selection, expanded: expanded)
+    }
+
+    /// The one derivation of a row's state from the model. Every writer
+    /// and the DEBUG oracle call it; nothing sets a field by hand.
+    private func derivedRowState(_ id: UUID, tab: TasksTab, row: TasksListRow, run: AtticSelectionRun) -> TasksRowStateValue {
+        let renaming = renamingSubtaskID.flatMap { subtask in row.subtasks.contains { $0.id == subtask } ? subtask : nil }
+        return TasksRowStateValue(
+            row: row,
+            isSelected: selection.contains(id),
+            run: run,
+            isExpanded: expanded.contains(id) && row.status != .done,
+            isEditingTitle: editingTitleID == id,
+            isFocused: keyboardFocus == AtticRowFocusID(page: tab.rawValue, id: id),
+            failure: TasksRowFailureState(titleNotSaved: failedSave == .title(id),
+                                          newSubtaskNotSaved: failedSave == .newSubtask(id),
+                                          row: rowFailure?.id == id ? rowFailure : nil),
+            isDoneDetailOpen: tab == .done && doneDetailID == id,
+            subtaskEditing: TasksRowSubtaskEditing(isNewSubtaskParent: newSubtaskParentID == id,
+                                                   isRenameParent: renamingSubtaskParentID == id,
+                                                   renamingID: renaming,
+                                                   renameFailed: subtaskRenameFailed && renaming != nil))
+    }
+
+    private func derived(_ state: TasksRowState, in list: inout RowStateList) -> TasksRowStateValue {
+        let row = list.row(state.id) ?? state.value.row
+        return derivedRowState(state.id, tab: state.tab, row: row, run: list.runs[state.id] ?? .single)
+    }
+
+    /// The state a cell of `row` on `tab` observes: its live entry, or a
+    /// new one (the row's cell builds for the first time, or again after
+    /// the row left the list and came back).
+    func rowState(for row: TasksListRow, tab: TasksTab) -> TasksRowState {
+        if let state = rowStates[tab]?[row.id] { return state }
+        var list = rowStateList(tab)
+        let state = TasksRowState(id: row.id, tab: tab, value: derivedRowState(
+            row.id, tab: tab, row: list.row(row.id) ?? row, run: list.runs[row.id] ?? .single))
+        rowStates[tab, default: [:]][row.id] = state
+        return state
+    }
+
+    /// The model changed what `ids` show (nil: any listed row), on every
+    /// tab: their live states are worked out again. `runs`: the selection
+    /// or the quick looks changed, so any row whose selection run moved is
+    /// written too. Equal values notify nobody.
+    func rowStatesChanged(_ ids: [UUID?]) {
+        rowStatesChanged(Set(ids.compactMap { $0 }))
+    }
+
+    func rowStatesChanged(_ ids: Set<UUID>?, runs: Bool = false) {
+        guard !rowStates.isEmpty, ids?.isEmpty != true || runs else { return }
+        for (tab, states) in rowStates where !states.isEmpty {
+            var list = rowStateList(tab)
+            if ids == nil || runs {
+                for state in states.values where ids?.contains(state.id) ?? true
+                    || (list.runs[state.id] ?? .single) != state.value.run {
+                    state.apply(derived(state, in: &list))
+                }
+            } else if let ids {
+                for id in ids { if let state = states[id] { state.apply(derived(state, in: &list)) } }
+            }
+        }
+        queueRowStateCheck()
+    }
+
+    /// The tab's list was built again (`keep`, or Done's days): states of
+    /// rows that left it go, so an "all rows" route never grows with the
+    /// rows ever built; every other state is brought up to the new list
+    /// (its row, its run). A row that comes back gets a fresh state.
+    private func rowStatesListed(_ tab: TasksTab) {
+        guard let states = rowStates[tab], !states.isEmpty else { return }
+        var list = rowStateList(tab)
+        guard let rows = list.rows else { return }
+        let listed = Set(rows.map(\.id))
+        var kept: [UUID: TasksRowState] = [:]
+        kept.reserveCapacity(min(states.count, listed.count))
+        for (id, state) in states where listed.contains(id) {
+            state.apply(derived(state, in: &list))
+            kept[id] = state
+        }
+        rowStates[tab] = kept
+        queueRowStateCheck()
+    }
+
+    #if DEBUG
+    struct RowStateMount {
+        let row: TasksRowID
+        weak var state: TasksRowState?
+        let drawn: Bool
+    }
+
+    /// A cell's body ran with this state (`cell` is the cell's own
+    /// reports object, so a Done slot that draws another task replaces its
+    /// entry).
+    func noteRowStateMount(_ cell: AnyObject, row: TasksRowID, state: TasksRowState, drawn: Bool) {
+        guard TasksRowStateOracle.isOn else { return }
+        rowStateMounts[ObjectIdentifier(cell)] = RowStateMount(row: row, state: state, drawn: drawn)
+    }
+
+    func noteRowStateUnmount(_ cell: AnyObject) {
+        rowStateMounts[ObjectIdentifier(cell)] = nil
+    }
+
+    /// Tests: the live states (the registry's size and membership).
+    var rowStateIDsForTesting: [TasksTab: Set<UUID>] { rowStates.mapValues { Set($0.keys) } }
+
+    /// The oracle: each live state against a fresh derivation, field by
+    /// field; each state's untracked mirror against its tracked fields; and
+    /// each cell drawn on the shown tab, whose row is still listed, holds
+    /// that row's current state. Builds nothing and counts nothing.
+    func rowStateMismatches() -> [String] {
+        var found: [String] = []
+        for (tab, states) in rowStates {
+            var list = rowStateList(tab)
+            for (id, state) in states {
+                if !state.isFrozen, state.read(drawn: true) != state.value {
+                    found.append("row \(id) on \(tab): the untracked mirror differs from its fields")
+                }
+                if list.isBuilt, list.row(id) == nil {
+                    found.append("row \(id) on \(tab): its state lives but the row left the list")
+                    continue
+                }
+                let fields = state.value.differences(from: derived(state, in: &list))
+                if !fields.isEmpty {
+                    found.append("row \(id) on \(tab): \(fields.joined(separator: ", ")) not as the model says")
+                }
+            }
+        }
+        if isPageShown {
+            var lists: [TasksTab: RowStateList] = [:]
+            for mount in rowStateMounts.values where mount.drawn && mount.row.tab == self.tab {
+                var list = lists[mount.row.tab] ?? rowStateList(mount.row.tab)
+                let listed = list.row(mount.row.id) != nil
+                lists[mount.row.tab] = list
+                guard listed, let state = mount.state else { continue }
+                if rowStates[mount.row.tab]?[mount.row.id] !== state {
+                    found.append("row \(mount.row.id) on \(mount.row.tab): a drawn cell holds a state the model dropped")
+                }
+            }
+        }
+        return found
+    }
+
+    /// Runs the oracle on every page model alive (a test's settle).
+    static func checkLiveRowStates() {
+        live.allObjects.forEach { $0.checkRowStates() }
+    }
+
+    /// Runs the oracle now and reports each difference.
+    func checkRowStates() {
+        guard let report = TasksRowStateOracle.report else { return }
+        rowStateMismatches().forEach(report)
+    }
+
+    /// After a write, the oracle runs once the main queue turns (every
+    /// writer finished its mutation by then).
+    private func queueRowStateCheck() {
+        guard TasksRowStateOracle.isOn, !rowStateCheckQueued else { return }
+        rowStateCheckQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            rowStateCheckQueued = false
+            checkRowStates()
+        }
+    }
+    #else
+    private func queueRowStateCheck() {}
+    #endif
 }

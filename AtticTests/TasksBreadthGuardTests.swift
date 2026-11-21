@@ -169,6 +169,142 @@ final class TasksBreadthGuardTests: XCTestCase {
         XCTAssertEqual(drawnA?.isSelected, false, "A lost the tint")
     }
 
+    /// Lead's condition 4: rows of tabs that are not drawn change while
+    /// Done is shown (Backlog beside it kept built and frozen, Now let go):
+    /// selected, ticked, renamed, a failed command. No wrapper of either
+    /// tab runs drawn meanwhile, and the first frame drawn when each tab is
+    /// shown again draws every change as the model holds it.
+    func testRowsChangedWhileTheirTabIsUndrawnDrawRightOnTheFirstDrawnFrame() throws {
+        let store = try makeStore(open: 8, backlog: 6)
+        var services = TasksPageServices()
+        services.doneHold = .seconds(25)
+        services.acknowledgementDelay = .seconds(25)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        let now = model.rows(for: .now).map(\.id)
+        XCTAssertEqual(drawnRows(pointer, now).count, now.count, "Now drew its rows")
+        for tab in [TasksTab.backlog, .done] {
+            TasksCellBodyCounts.drawnRuns = []
+            model.select(tab: tab)
+            // The pages a move passed are let go once it has rested (the
+            // pager's `restDelay`).
+            settle(hosting, until: { model.pagerSwipe.span.pages == tab.rawValue...tab.rawValue })
+            settle(hosting)
+        }
+        let later = model.rows(for: .backlog).map(\.id)
+        XCTAssertEqual(later.count, 6)
+        print("BREADTH_UNDRAWN_KEPT backlog_states=\(model.rowStateIDsForTesting[.backlog, default: []].count) "
+              + "now_states=\(model.rowStateIDsForTesting[.now, default: []].count)")
+        TasksCellBodyCounts.drawnRuns = []
+
+        // Now: a selection, a tick, a rename, a failure. Backlog: a rename,
+        // a failure, a quick look.
+        model.selectOnly(now[0])
+        model.completeAcknowledged(now[1]) { _ in }
+        model.settlePendingCompletionAcknowledgements(through: now[1])
+        for (id, title) in [(now[2], "Renamed while hidden"), (later[2], "Later renamed while hidden")] {
+            model.beginEditingTitle(id)
+            model.editingTitle = title
+            XCTAssertTrue(model.commitTitle())
+        }
+        _ = model.report(.failed(.taskGone), on: later[3], retry: { .failed(.taskGone) })
+        model.setExpanded(later[4], true)
+        settle(hosting)
+        settle(hosting)
+        let hiddenRuns = TasksCellBodyCounts.drawnRuns.filter { $0.row.tab != .done }
+        print("BREADTH_UNDRAWN_RUNS drawn=\(hiddenRuns.filter(\.drawn).count) undrawn=\(hiddenRuns.filter { !$0.drawn }.map { run in "\(run.row.tab):\((now + later).firstIndex(of: run.row.id).map { $0 < now.count ? "now\($0)" : "later\($0 - now.count)" } ?? "?")" }) "
+              + "warm=\(String(describing: model.pagerSwipe.span.warm))")
+        // No row state reaches a hidden cell (the freeze): the selection's
+        // and the failure's rows, which change only in their row states, do
+        // not run. A change to a hidden row's key (its title, its quick
+        // look) still re-runs its wrapper undrawn, through the frozen page's
+        // own list pass (slice 1a's route; slices 2 and 3 narrow it).
+        let keyChanged: Set<UUID> = [now[2], later[2], later[4]]
+        XCTAssertEqual(hiddenRuns.filter(\.drawn).count, 0, "a wrapper of an undrawn tab ran as drawn")
+        XCTAssertEqual(Set(hiddenRuns.map(\.row.id)).subtracting(keyChanged), [],
+                       "a hidden wrapper ran on a row-state write (freeze bypass)")
+
+        func drew(_ tab: TasksTab, _ id: UUID) -> TasksRowStateValue? { TasksCellBodyCounts.cellStates[TasksRowID(tab: tab, id: id)] }
+        func assertFirstFrame(_ tab: TasksTab, _ ids: [UUID]) {
+            TasksCellBodyCounts.cellStates = [:]
+            model.select(tab: tab)
+            settle(hosting)
+            let listed = model.listSnapshot(for: tab).rows
+            XCTAssertEqual(model.rowStateMismatches(), [], "\(tab): the states agree with the model")
+            for row in listed where pointer.frame(for: TasksRowID(tab: tab, id: row.id)) != nil {
+                guard let state = drew(tab, row.id) else { XCTFail("\(tab): row \(row.id) drew no state"); continue }
+                XCTAssertTrue(TasksRowStateValue.sameRow(state.row, row), "\(tab): row \(row.model.title) drew its row as listed")
+                XCTAssertEqual(state.isSelected, model.selection.contains(row.id), "\(tab): \(row.model.title)'s selection")
+                XCTAssertEqual(state.isExpanded, model.expanded.contains(row.id) && row.status != .done)
+                XCTAssertEqual(state.failure.row?.id, model.rowFailure?.id == row.id ? row.id : nil)
+            }
+            for id in ids where !listed.contains(where: { $0.id == id }) {
+                XCTAssertNil(pointer.frame(for: TasksRowID(tab: tab, id: id)), "\(tab): a row that left draws nowhere")
+            }
+        }
+        assertFirstFrame(.backlog, later)
+        XCTAssertEqual(drew(.backlog, later[2])?.row.model.title, "Later renamed while hidden", "the frozen page's rename")
+        XCTAssertEqual(drew(.backlog, later[3])?.failure.row?.id, later[3], "the frozen page's failure line")
+        XCTAssertEqual(drew(.backlog, later[4])?.isExpanded, true, "the frozen page's quick look")
+        settle(hosting, until: { model.pagerSwipe.motion.position == CGFloat(TasksTab.backlog.rawValue) })
+        settle(hosting, until: { !TasksCellBodyCounts.drawnRuns.isEmpty })
+        assertFirstFrame(.now, now)
+        XCTAssertEqual(drew(.now, now[2])?.row.model.title, "Renamed while hidden", "the rename")
+        XCTAssertEqual(TasksCellBodyCounts.leafModels[TasksRowID(tab: .now, id: now[2])]?.title, "Renamed while hidden")
+        XCTAssertEqual(store.task(withID: now[1])?.status, .done)
+        print("BREADTH_UNDRAWN selected=\(String(describing: drew(.now, now[0])?.isSelected)) model_selected=\(model.selection.contains(now[0])) "
+              + "ticked_listed=\(model.listSnapshot(for: .now).rows.contains { $0.id == now[1] })")
+    }
+
+    /// Lead's condition 3: a row's state goes when the row leaves its tab
+    /// (delete, filter) and is made fresh when it returns (Undo); the live
+    /// states are only listed rows, however many rows were ever drawn.
+    func testARowStateGoesWithItsRowAndIsMadeFreshWhenItReturns() throws {
+        let store = try makeStore(open: 30, tracker: true)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        let ids = model.rows(for: .now).map(\.id)
+        let gone = ids[2]
+        let first = try XCTUnwrap(liveState(model, gone), "a drawn row has a state")
+
+        XCTAssertTrue(model.delete([gone]).isApplied)
+        settle(hosting)
+        settle(hosting)
+        XCTAssertFalse(model.rowStateIDsForTesting[.now, default: []].contains(gone), "a deleted row's state went")
+        XCTAssertTrue(model.rowStateIDsForTesting[.now, default: []].isSubset(of: Set(model.rows(for: .now).map(\.id))),
+                      "only listed rows have states")
+
+        XCTAssertTrue(model.undo().isApplied)
+        settle(hosting)
+        settle(hosting)
+        let back = try XCTUnwrap(liveState(model, gone), "the row came back with a state")
+        XCTAssertFalse(back === first, "a returning row gets a fresh state")
+        XCTAssertEqual(TasksCellBodyCounts.cellStates[TasksRowID(tab: .now, id: gone)]?.row.id, gone, "its cell draws again")
+        XCTAssertEqual(model.rowStateMismatches(), [])
+    }
+
+    /// The oracle finds a missed route: a state written by hand (as a
+    /// missing writer would leave it) is reported by row and field.
+    func testTheOracleNamesTheRowAndFieldOfAStaleState() throws {
+        let store = try makeStore(open: 6)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        _ = page(model, store, pointer: pointer)
+        let id = model.rows(for: .now)[1].id
+        let state = try XCTUnwrap(liveState(model, id))
+        XCTAssertEqual(model.rowStateMismatches(), [])
+        var stale = state.value
+        stale.isSelected.toggle()
+        state.apply(stale)
+        let found = model.rowStateMismatches()
+        XCTAssertEqual(found.count, 1)
+        XCTAssertTrue(found.first?.contains("row \(id)") == true && found.first?.contains("isSelected") == true, "\(found)")
+        model.rowStatesChanged([id])
+        XCTAssertEqual(model.rowStateMismatches(), [], "the writer's derivation puts it right")
+    }
+
     /// A wrapper that skips a page pass still starts a drag with its date
     /// group as it is now, in order, through the callback it was built
     /// with: a task added to the group, the dragged row itself unchanged.
@@ -627,7 +763,13 @@ final class TasksBreadthGuardTests: XCTestCase {
 
     /// `tracker`: the tracker-shaped seed (TaskPerformanceGateTests: long
     /// titles, two tags a task).
-    private func makeStore(open: Int, due: DueDay? = nil, tracker: Bool = false) throws -> TaskStore {
+    private func liveState(_ model: TasksPageModel, _ id: UUID, tab: TasksTab = .now) -> TasksRowState? {
+        guard model.rowStateIDsForTesting[tab]?.contains(id) == true,
+              let row = model.listSnapshot(for: tab).rows.first(where: { $0.id == id }) else { return nil }
+        return model.rowState(for: row, tab: tab)
+    }
+
+    private func makeStore(open: Int, due: DueDay? = nil, tracker: Bool = false, backlog: Int = 0) throws -> TaskStore {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let context = ModelContext(container)
         let now = Date()
@@ -639,6 +781,12 @@ final class TasksBreadthGuardTests: XCTestCase {
             item.listOrderVersion = TaskItem.currentListOrderVersion
             if tracker { item.tags = ["tag\(index % 7)", "area\(index % 3)"] }
             if index == 0 { item.dueDay = due }
+            context.insert(item)
+        }
+        for index in 0..<backlog {
+            order -= 1_024
+            let item = TaskItem(title: "Later task \(index)", status: .backlog, createdAt: now, manualOrder: order)
+            item.listOrderVersion = TaskItem.currentListOrderVersion
             context.insert(item)
         }
         try context.save()
@@ -668,10 +816,19 @@ final class TasksBreadthGuardTests: XCTestCase {
         wait(for: [drained], timeout: 5)
     }
 
+    /// Settles until `condition` holds (the pager's slide ends on its own
+    /// clock), at most 3 s.
+    private func settle(_ hosting: NSView, file: StaticString = #filePath, line: UInt = #line, until condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(3)
+        while !condition(), Date() < deadline { settle(hosting) }
+        XCTAssertTrue(condition(), "the page settled", file: file, line: line)
+    }
+
     /// The main queue drains, then the page lays out and draws.
     private func settle(_ hosting: NSView) {
         drain()
         hosting.layoutSubtreeIfNeeded()
         hosting.window?.displayIfNeeded()
+        TasksPageModel.checkLiveRowStates()
     }
 }
