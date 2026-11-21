@@ -1953,7 +1953,8 @@ struct TasksPage: View {
                                           isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
                                           layout: layout, isLive: editing || live.metaPopover != nil)) {
             #if DEBUG
-            let _ = TasksCellBodyCounts.noteLeaf(TasksRowID(tab: tab, id: id), model: row.model)
+            let _ = TasksCellBodyCounts.noteLeaf(TasksRowID(tab: tab, id: id), model: row.model,
+                                                 isSelected: isSelected, isFocused: live.focus.isFocused)
             #endif
             let drawRow = {
                 AtticTaskRow(
@@ -4577,6 +4578,9 @@ final class TasksDragSession {
     static var passPalettes: [TasksRowID: AtticTagPalette] = [:]
     static var leaves: [TasksRowID: Int] = [:]
     static var leafModels: [TasksRowID: AtticTaskRowModel] = [:]
+    /// What each row's leaf last drew of the page's state for it: the
+    /// selection tint (and its actions button) and the keyboard's ring.
+    static var leafStates: [TasksRowID: (isSelected: Bool, isFocused: Bool)] = [:]
     /// How many times a row's drag group was worked out.
     static var groupLookups = 0
 
@@ -4588,10 +4592,11 @@ final class TasksDragSession {
         if records { builderPalettes[row] = palette }
     }
 
-    static func noteLeaf(_ row: TasksRowID, model: AtticTaskRowModel) {
+    static func noteLeaf(_ row: TasksRowID, model: AtticTaskRowModel, isSelected: Bool = false, isFocused: Bool = false) {
         guard records else { return }
         leaves[row, default: 0] += 1
         leafModels[row] = model
+        leafStates[row] = (isSelected, isFocused)
     }
 
     static func note(_ row: TasksRowID, dragGroup: @escaping () -> [UUID]) {
@@ -4612,10 +4617,23 @@ final class TasksDragSession {
         passPalettes = [:]
         leaves = [:]
         leafModels = [:]
+        leafStates = [:]
         groupLookups = 0
     }
 }
 #endif
+
+extension View {
+    /// DEBUG: the row a cell's context-menu body runs are counted under.
+    @ViewBuilder
+    func tasksCountTag(_ row: TasksRowID) -> some View {
+        #if DEBUG
+        environment(\.atticContextMenuCountTag, AnyHashable(row))
+        #else
+        self
+        #endif
+    }
+}
 
 /// The release's check that the group lifted is still whole (Astra R-2):
 /// one set of the group shown, so the work grows with the group, not its
@@ -4712,6 +4730,7 @@ struct TasksReorderCell<Row: View, Below: View>: View, Equatable {
             // date, the tags, the checklist) keep their clicks; a press that
             // moves 4 pt drags at once, with no hold.
             row(live)
+                .tasksCountTag(TasksRowID(tab: tab, id: id))
                 .onAtticRowControlFramesChange { [session, id, tab, reports] frames in
                     MainActor.assumeIsolated {
                         reports.controls = frames

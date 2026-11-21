@@ -18,6 +18,8 @@ final class TasksBreadthGuardTests: XCTestCase {
         try await super.setUp()
         TasksCellBodyCounts.reset()
         TasksCellBodyCounts.records = true
+        AtticContextMenuBodyCounts.reset()
+        AtticContextMenuBodyCounts.records = true
     }
 
     override func tearDown() async throws {
@@ -26,6 +28,8 @@ final class TasksBreadthGuardTests: XCTestCase {
         TasksCellBodyCounts.recordsDragGroups = false
         TasksCellBodyCounts.records = false
         TasksCellBodyCounts.reset()
+        AtticContextMenuBodyCounts.records = false
+        AtticContextMenuBodyCounts.reset()
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
         try await super.tearDown()
@@ -35,12 +39,10 @@ final class TasksBreadthGuardTests: XCTestCase {
 
     /// The proof as a test (rig `speed/count-guards` 7ff3eb4b: 15/15/16
     /// wrappers against one leaf per tick turn, 15 against 1 for a priority
-    /// edit). The save turn and a direct priority edit reach the rows only
-    /// through the page's pass; press and release also reach them through
-    /// the cell broadcast, which slice 1b removes. Until then press and
-    /// release pin today's breadth (`tasks-breadth-1b`): every drawn
-    /// unchanged row's wrapper runs. The tick is drawn on its own row in
-    /// every turn.
+    /// edit). Each turn reaches the row it changed (and rows scrolled in),
+    /// through the page's pass and the row's own state (slice 1b: no cell
+    /// observes the model's every change). The tick is drawn on its own row
+    /// in every turn.
     func testATickAndAPriorityEditRunOnlyTheWrappersOfTheRowsThatChanged() throws {
         let store = try makeStore(open: 40)
         var services = TasksPageServices()
@@ -56,14 +58,14 @@ final class TasksBreadthGuardTests: XCTestCase {
         let tick = rows[2].id
         let press = turn(hosting, pointer, rows.map(\.id), target: tick) { model.completeAcknowledged(tick) { _ in } }
         assertDelivered(press, "press")
-        assertBroadcastReachesEveryDrawnRow(press, "press")
+        assertOnlyChanged(press, "press")
         let save = turn(hosting, pointer, rows.map(\.id), target: tick) {
             model.settlePendingCompletionAcknowledgements(through: tick)
         }
         assertOnlyChanged(save, "save")
         assertDelivered(save, "save")
         let release = turn(hosting, pointer, rows.map(\.id), target: tick) { model.releaseHold(tick) }
-        assertBroadcastReachesEveryDrawnRow(release, "release")
+        assertOnlyChanged(release, "release")
         XCTAssertFalse(model.listSnapshot(for: .now).sections.open.contains { $0.id == tick }, "the released row left the open rows")
 
         let edited = rows[5].id
@@ -107,6 +109,64 @@ final class TasksBreadthGuardTests: XCTestCase {
         XCTAssertGreaterThan(store.revision, revision, "the reload published a new revision")
         XCTAssertNil(store.revisionChangedTaskIDs, "the reload named no tasks")
         XCTAssertEqual(reload.wrappers, [], "a reload that changed no row ran wrappers: \(reload.wrappers.count)")
+    }
+
+    // MARK: - Slice 1b: row state
+
+    /// The 21 Nov measure (optimized app, tracker seed): with row A
+    /// selected, one click on row B re-ran every mounted wrapper three
+    /// times on the cell broadcast, and a context-menu body with each.
+    /// Selecting B runs A's and B's wrappers once each, no other, and the
+    /// menus only with their own row's wrapper; B draws the tint, A not.
+    func testSelectingAnotherRowRunsOnlyTheTwoRowsWrappersOnceEach() throws {
+        let store = try makeStore(open: 83, tracker: true)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        let ids = model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(drawnRows(pointer, ids).count, 5, "the hosted page drew too few rows for the count to mean anything")
+        let a = ids[1], b = ids[3]
+        model.selectOnly(a)
+        settle(hosting)
+        settle(hosting)
+
+        let select = turn(hosting, pointer, ids, target: b) { model.click(b, modifiers: [], visible: ids) }
+        assertOnlyTheseRanOnce(select, [a, b], "select")
+        XCTAssertEqual(TasksCellBodyCounts.leafStates[TasksRowID(tab: .now, id: b)]?.isSelected, true, "B draws the tint")
+        XCTAssertEqual(TasksCellBodyCounts.leafStates[TasksRowID(tab: .now, id: a)]?.isSelected, false, "A lost the tint")
+    }
+
+    /// A keyboard move from A to B (the page's focus route: the model's
+    /// copy of the focus, then the page's word to the rows, as
+    /// `TasksPage`'s `onChange(of: focusedRow)` does): the wrappers that
+    /// run are exactly A's and B's, once each; the ring, the tint and the
+    /// actions button land on B in the same run, and leave A.
+    func testAKeyboardFocusMoveRunsOnlyTheOldAndNewRowsWrappers() throws {
+        let store = try makeStore(open: 83, tracker: true)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        let ids = model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(drawnRows(pointer, ids).count, 5, "the hosted page drew too few rows for the count to mean anything")
+        let a = ids[2], b = ids[3]
+        func focus(_ id: UUID) {
+            model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: id), keyboardDriving: true)
+            model.cellUpdates.objectWillChange.send()
+        }
+        model.selectOnly(a)
+        focus(a)
+        settle(hosting)
+        settle(hosting)
+        XCTAssertEqual(TasksCellBodyCounts.leafStates[TasksRowID(tab: .now, id: a)]?.isFocused, true, "A has the ring")
+
+        let move = turn(hosting, pointer, ids, target: b) { focus(b) }
+        assertOnlyTheseRanOnce(move, [a, b], "focus move")
+        let drawnB = TasksCellBodyCounts.leafStates[TasksRowID(tab: .now, id: b)]
+        let drawnA = TasksCellBodyCounts.leafStates[TasksRowID(tab: .now, id: a)]
+        XCTAssertEqual(drawnB?.isFocused, true, "B draws the ring")
+        XCTAssertEqual(drawnB?.isSelected, true, "B draws the tint in the same run as the ring")
+        XCTAssertEqual(drawnA?.isFocused, false, "A lost the ring")
+        XCTAssertEqual(drawnA?.isSelected, false, "A lost the tint")
     }
 
     /// A wrapper that skips a page pass still starts a drag with its date
@@ -452,6 +512,10 @@ final class TasksBreadthGuardTests: XCTestCase {
 
     private struct Turn {
         let target: UUID?
+        /// How many times each row's wrapper, and each row's context-menu
+        /// body, ran in the turn (Now's rows).
+        let wrapperRuns: [UUID: Int]
+        let menuRuns: [UUID: Int]
         let wrappers: Set<UUID>
         let leaves: Set<UUID>
         let drawnBefore: Set<UUID>
@@ -467,14 +531,25 @@ final class TasksBreadthGuardTests: XCTestCase {
     private func turn(_ hosting: NSView, _ pointer: TasksPointer, _ ids: [UUID], target: UUID?,
                       _ action: () -> Void) -> Turn {
         let wrappers = TasksCellBodyCounts.evaluations, leaves = TasksCellBodyCounts.leaves
+        let menus = AtticContextMenuBodyCounts.runs
         let before = drawnRows(pointer, ids)
         action()
         settle(hosting)
         settle(hosting)
         func ran(_ counts: [TasksRowID: Int], _ base: [TasksRowID: Int]) -> Set<UUID> {
-            Set(counts.compactMap { row, count in row.tab == .now && count > base[row, default: 0] ? row.id : nil })
+            Set(runs(counts, base).keys)
         }
-        return Turn(target: target, wrappers: ran(TasksCellBodyCounts.evaluations, wrappers),
+        func runs(_ counts: [TasksRowID: Int], _ base: [TasksRowID: Int]) -> [UUID: Int] {
+            Dictionary(uniqueKeysWithValues: counts.compactMap { row, count in
+                row.tab == .now && count > base[row, default: 0] ? (row.id, count - base[row, default: 0]) : nil
+            })
+        }
+        func rowKeyed(_ counts: [AnyHashable: Int]) -> [TasksRowID: Int] {
+            Dictionary(uniqueKeysWithValues: counts.compactMap { tag, count in (tag.base as? TasksRowID).map { ($0, count) } })
+        }
+        return Turn(target: target, wrapperRuns: runs(TasksCellBodyCounts.evaluations, wrappers),
+                    menuRuns: runs(rowKeyed(AtticContextMenuBodyCounts.runs), rowKeyed(menus)),
+                    wrappers: ran(TasksCellBodyCounts.evaluations, wrappers),
                     leaves: ran(TasksCellBodyCounts.leaves, leaves), drawnBefore: before, drawnAfter: drawnRows(pointer, ids))
     }
 
@@ -485,22 +560,19 @@ final class TasksBreadthGuardTests: XCTestCase {
                        "\(name): wrappers of unchanged rows ran (\(turn.line))", file: file, line: line)
     }
 
-    /// Pinned value for `tasks-breadth-1b`: the cell broadcast runs the
-    /// wrapper of every row drawn in the turn, so the unchanged rows whose
-    /// wrapper ran are exactly the drawn unchanged rows (CI batch-3: 14 of
-    /// 14 on press and release). Fewer means slice 1b's narrowing landed:
-    /// switch the turn to `assertOnlyChanged`. More means the breadth grew.
-    private func assertBroadcastReachesEveryDrawnRow(_ turn: Turn, _ name: String,
-                                                     file: StaticString = #filePath, line: UInt = #line) {
-        print("BREADTH_TURN \(name) \(turn.line)")
-        let drawnUnchanged = turn.drawnBefore.union(turn.drawnAfter).subtracting(turn.changed)
-        XCTAssertGreaterThan(drawnUnchanged.count, 5, "\(name): too few drawn rows for the pin to mean anything",
-                             file: file, line: line)
-        XCTAssertEqual(turn.wrappers.subtracting(turn.changed), drawnUnchanged,
-                       "tasks-breadth-1b: pinned value: \(name) runs every drawn unchanged row's wrapper "
-                           + "through the cell broadcast (\(turn.line)). Fewer: 1b landed, switch to "
-                           + "assertOnlyChanged. More: the breadth grew.",
-                       file: file, line: line)
+    /// Exactly `rows`' wrappers ran, once each; menus ran only with their
+    /// own row's wrapper, never more often.
+    private func assertOnlyTheseRanOnce(_ turn: Turn, _ rows: Set<UUID>, _ name: String,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        let menus = turn.menuRuns.values.reduce(0, +)
+        print("BREADTH_ROWS \(name) wrappers=\(turn.wrapperRuns.values.reduce(0, +)) rows=\(turn.wrapperRuns.count) "
+              + "menus=\(menus) menu_rows=\(turn.menuRuns.count) other_wrappers=\(turn.wrappers.subtracting(rows).count)")
+        XCTAssertEqual(turn.wrapperRuns, Dictionary(uniqueKeysWithValues: rows.map { ($0, 1) }),
+                       "\(name): the wrappers that ran, and how often (\(turn.line))", file: file, line: line)
+        for (row, count) in turn.menuRuns where count > turn.wrapperRuns[row, default: 0] {
+            XCTFail("\(name): row \(row)'s menu body ran \(count) times, its wrapper \(turn.wrapperRuns[row, default: 0])",
+                    file: file, line: line)
+        }
     }
 
     /// The change was delivered: the target's leaf on Now ran.
@@ -553,15 +625,19 @@ final class TasksBreadthGuardTests: XCTestCase {
         return view.subviews.flatMap(scrollViews)
     }
 
-    private func makeStore(open: Int, due: DueDay? = nil) throws -> TaskStore {
+    /// `tracker`: the tracker-shaped seed (TaskPerformanceGateTests: long
+    /// titles, two tags a task).
+    private func makeStore(open: Int, due: DueDay? = nil, tracker: Bool = false) throws -> TaskStore {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let context = ModelContext(container)
         let now = Date()
         var order: Int64 = 10_000_000
         for index in 0..<open {
             order -= 1_024
-            let item = TaskItem(title: "Open task \(index)", status: .todo, createdAt: now, manualOrder: order)
+            let title = tracker ? "Open task \(index) with a longer title like the tracker's" : "Open task \(index)"
+            let item = TaskItem(title: title, status: .todo, createdAt: now, manualOrder: order)
             item.listOrderVersion = TaskItem.currentListOrderVersion
+            if tracker { item.tags = ["tag\(index % 7)", "area\(index % 3)"] }
             if index == 0 { item.dueDay = due }
             context.insert(item)
         }
