@@ -525,17 +525,17 @@ final class CornerRevealSettingsTests: XCTestCase {
     }
 
     /// Reveals, then hides by `path`. The pointer is at `begin(…)` as the
-    /// hide begins and at `end(…)` as it ends, where it then rests (the
-    /// monitor's timed follow-up reads it there too).
+    /// hide begins (the monitor reads it once, through its one seam, when
+    /// the controller calls `onHideBegan`) and at `end(…)` as it ends, where
+    /// it then rests. Begin and end differ only across an animated hide, so
+    /// the latch rig runs with Reduce Motion off.
     private func reveal(_ rig: Panel, thenHideBy path: LatchingHide,
                         pointerAtBegin begin: (Corner) -> CGPoint, atEnd end: (Corner) -> CGPoint,
                         file: StaticString = #filePath, line: UInt = #line) throws -> Corner {
         let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first, file: file, line: line)
         let box = Corner.Box()
         let corner = Corner(rig: rig, frame: frame, announced: box)
-        let beginLocation = begin(corner)
-        rig.controller.pointerLocation = { beginLocation }
-        rig.monitor.pointerLocationForTesting = end(corner)
+        rig.monitor.pointerLocationForTesting = begin(corner)
         XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown,
                        file: file, line: line)
         rig.monitor.onVisibilityChangeExpected = { expected in
@@ -553,6 +553,9 @@ final class CornerRevealSettingsTests: XCTestCase {
         case .probe:
             rig.monitor.hideForPerformanceProbe { _ in }
         }
+        XCTAssertTrue(rig.controller.isPanelVisible, "\(path): the hide is animated, so it is still running",
+                      file: file, line: line)
+        rig.monitor.pointerLocationForTesting = end(corner)
         let deadline = Date().addingTimeInterval(2)
         while rig.controller.isPanelVisible || !rig.monitor.isHiddenForPerformanceProbe, Date() < deadline { spin(0.01) }
         XCTAssertFalse(rig.controller.isPanelVisible, "\(path) hid the panel", file: file, line: line)
@@ -577,7 +580,7 @@ final class CornerRevealSettingsTests: XCTestCase {
 
     private func withLatchRig(_ body: (Panel) throws -> Void) throws {
         let previous = AtticMotionPreference.systemReduceMotionOverride
-        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticMotionPreference.systemReduceMotionOverride = false
         defer { AtticMotionPreference.systemReduceMotionOverride = previous }
         let rig = try makePanel()
         rig.settings.corner = .topRight

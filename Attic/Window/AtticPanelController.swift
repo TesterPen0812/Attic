@@ -403,12 +403,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     var onInteractiveHideCompleted: (() -> Void)?
     /// Where the pointer is, for the click-through hit test. Tests place it.
     var pointerLocation: () -> CGPoint = { NSEvent.mouseLocation }
-    /// When the latest animated hide began and where the pointer was then.
-    /// Every hide reason (click away, Esc, menu, swipe, probe) starts its
-    /// animation here, in `requestHide`; a show clears it. The corner
-    /// monitor reads it when the hide ends to tell a pointer resting in the
-    /// corner from one that arrived during the hide (CORNER-REVEAL-MISS).
-    private(set) var hideBegan: (uptime: TimeInterval, pointer: CGPoint)?
+    /// A hide is starting: called in `requestHide` at the two places a
+    /// `.hidden` completion can follow (the already-hidden return and the
+    /// start of the animation), so the corner monitor can note where the
+    /// pointer rests as the hide begins (CORNER-REVEAL-MISS).
+    var onHideBegan: (() -> Void)?
     private var isResamplingPassthrough = false
     /// O14-01: the panel became key under a press; its key look waits for
     /// the release.
@@ -693,7 +692,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// nothing) when the screen has no usable area for it.
     @discardableResult
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) -> Bool {
-        hideBegan = nil
         supersedeCalendarHide()
         cancelPageRelease()
         // Build the pages now, before the first frame is shown, so the panel
@@ -854,6 +852,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard panel.isVisible else {
             stopPointerPassthroughMonitoring()
             stopOutsidePressMonitoring()
+            onHideBegan?()
             completion(.hidden)
             return .accepted
         }
@@ -931,7 +930,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.setInteractionLock(.windowMove, isActive: false)
         uiState.setInteractionLock(.windowResize, isActive: false)
         let generation = visibilityTransition.beginHideTransition(completion: completion)
-        hideBegan = (ProcessInfo.processInfo.systemUptime, pointerLocation())
+        onHideBegan?()
         isShowing = false
         needsResizeAfterShowing = false
         let safeFrame = PanelGeometry.constrainedFrame(panel.visibleContentFrame, to: usableFrame(on: screen, corner: currentCorner))

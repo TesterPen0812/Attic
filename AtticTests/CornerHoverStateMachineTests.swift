@@ -1055,3 +1055,40 @@ extension CornerHoverStateMachineTests {
         XCTAssertNil(latched.nextRevealDeadline(revealDelay: 0.2), "the menu closing does not release the latch")
     }
 }
+
+// MARK: - PR 43: the resting hotspot (narrowing red 2, by the value type)
+
+extension CornerHoverStateMachineTests {
+    /// Two watched displays side by side, each with its own corner. The
+    /// pointer rests in display A's corner as the hide begins; a pointer
+    /// seen in display B's corner is outside A's, so it is an approach
+    /// there, and returning to A no longer counts as resting.
+    func testTheRestingHotspotIsOneRectangleSoAnotherDisplaysCornerIsOutside() {
+        let screenA = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let screenB = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
+        let hotspotA = PanelGeometry.hotspot(in: screenA, corner: .topRight).insetBy(dx: -1, dy: -1)
+        let hotspotB = PanelGeometry.hotspot(in: screenB, corner: .topRight).insetBy(dx: -1, dy: -1)
+        let cornerA = CGPoint(x: screenA.maxX - 1, y: screenA.maxY - 1)
+        let cornerB = CGPoint(x: screenB.maxX - 1, y: screenB.maxY - 1)
+        XCTAssertTrue(hotspotA.contains(cornerA))
+        XCTAssertTrue(hotspotB.contains(cornerB))
+        XCTAssertFalse(hotspotA.contains(cornerB))
+
+        var resting = CornerHoverRestingHotspot()
+        XCTAssertFalse(resting.holds(cornerA), "no hide began: nothing rests")
+        resting.hideBegan(in: hotspotA)
+        resting.pointerObserved(at: CGPoint(x: cornerA.x - 1, y: cornerA.y))
+        XCTAssertTrue(resting.holds(cornerA), "moves inside A keep it")
+        XCTAssertTrue(resting.holds(cornerA), "reading does not consume it")
+        XCTAssertFalse(resting.holds(cornerB), "B's corner is not A's")
+        resting.pointerObserved(at: cornerB)
+        XCTAssertNil(resting.rect, "seen in B's corner: cleared")
+        resting.pointerObserved(at: cornerA)
+        XCTAssertFalse(resting.holds(cornerA), "back in A after leaving: an approach")
+
+        resting.hideBegan(in: hotspotB)
+        XCTAssertTrue(resting.holds(cornerB))
+        resting.hideBegan(in: nil)
+        XCTAssertFalse(resting.holds(cornerB), "a hide begun outside every watched hotspot holds nothing")
+    }
+}

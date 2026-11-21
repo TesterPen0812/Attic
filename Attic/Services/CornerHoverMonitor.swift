@@ -106,10 +106,9 @@ final class CornerHoverMonitor {
     private var lockObservation: AnyCancellable?
     private var hideObservation: AnyCancellable?
     private var lockSampleScheduled = false
-    /// The last sample that found the pointer outside a watched hotspot.
-    /// While the panel is shown (and through its hide) every pointer event
-    /// samples, so this tells whether the pointer left during a hide.
-    private var lastOutsideHotspotSampleAt: TimeInterval = -.infinity
+    /// The watched hotspot the pointer has rested in since the latest hide
+    /// began; the one thing the exit latch reads (CORNER-REVEAL-MISS).
+    private var restingHotspot = CornerHoverRestingHotspot()
     private static let eventSampleInterval: TimeInterval = 1.0 / 30
     /// Test seam: how many full pointer samples ran.
     private(set) var sampleCount = 0
@@ -136,6 +135,7 @@ final class CornerHoverMonitor {
             hideCompleted()
         }
         panelController.onOutsidePress = { [weak self] location, window in self?.outsidePress(at: location, in: window) }
+        panelController.onHideBegan = { [weak self] in self?.hideBegan() }
     }
 
     func start() {
@@ -366,8 +366,7 @@ final class CornerHoverMonitor {
         sampleCount += 1
         lastEventSampleAt = uptime
         defer { refreshSamplingCadence(at: location) }
-        // On the real clock, to compare with the controller's `hideBegan`.
-        if !isInCornerHotspot(location) { lastOutsideHotspotSampleAt = ProcessInfo.processInfo.systemUptime }
+        restingHotspot.pointerObserved(at: location)
         let activeScreen = screen(containing: location)
         // When the cursor is pinned against a screen edge, mouseLocation sits exactly on
         // the frame boundary (e.g. y == maxY at the top), which CGRect.contains excludes.
@@ -440,7 +439,12 @@ final class CornerHoverMonitor {
                 stateMachine.resolveHideCompletion(
                     didOrderOut: completion == .hidden
                 )
-                refreshSamplingCadence(at: NSEvent.mouseLocation)
+                let location = pointerLocationForTesting ?? NSEvent.mouseLocation
+                refreshSamplingCadence(at: location)
+                // A cursor-away hide never latches (the pointer leaving is
+                // its reason); a pointer back in the corner by its end
+                // still needs the one sample that starts its dwell.
+                if completion == .hidden { scheduleHideEndSample(at: location) }
             }
             if !result.isAccepted {
                 stateMachine.resolveHideCompletion(didOrderOut: false)
@@ -483,26 +487,43 @@ final class CornerHoverMonitor {
     /// Local mouse-down events carry their AppKit window; the pointer can be
     /// far outside the panel while the click is in Settings, a sheet, alert,
     /// popover or another Attic-owned card. Global clicks carry no window.
+    /// A hide is beginning (`AtticPanelController.onHideBegan`): note the
+    /// watched hotspot the pointer rests in now, or none.
+    private func hideBegan() {
+        let location = pointerLocationForTesting ?? NSEvent.mouseLocation
+        restingHotspot.hideBegan(in: watchedHotspot(containing: location))
+    }
+
     /// A hide that did not come from the pointer leaving (click away, Esc,
     /// menu, swipe, probe) has ordered the panel out.
     ///
     /// The exit latch keeps the hide from re-revealing under a pointer that
-    /// rested in the corner through it, so it is set only for a pointer
-    /// that has stayed in the hotspot since the hide began. A pointer that
-    /// was elsewhere then is an approach, wherever it is now. (Hidden and
-    /// far from the corner no sample runs, so a latch set for an approach
-    /// could only clear on a second entry: CORNER-REVEAL-MISS.) A latched
-    /// pointer is near the corner, so the sampling cadence is responsive
-    /// and its exit is always sampled.
+    /// has rested in the corner since the hide began, so it is set only
+    /// while `restingHotspot` still holds the pointer. That state is set
+    /// when the hide begins and cleared by any pointer event or sample
+    /// outside it, before coalescing, so a pointer that was elsewhere at
+    /// the start, left during the hide or moved to another display's corner
+    /// is an approach. (Hidden and far from the corner no sample runs, so a
+    /// latch set for an approach could only clear on a second entry.) The
+    /// read does not consume it: a swipe or Esc completes twice, through
+    /// the `hideCount` sink and `onInteractiveHideCompleted`.
     private func hideCompleted() {
         let location = pointerLocationForTesting ?? NSEvent.mouseLocation
-        stateMachine.forceHidden(untilHotspotExit: pointerStayedInHotspotThroughHide(endingAt: location))
+        let latched = restingHotspot.holds(location)
+        stateMachine.forceHidden(untilHotspotExit: latched)
         refreshSamplingCadence(at: location)
-        // A pointer resting in the hotspot sends no more events, so one
-        // sample starts its reveal dwell (or, latched, leaves it waiting for
-        // an exit). It runs on the next turn, outside the hide's completion,
-        // so even a zero reveal delay cannot show the panel from inside it.
-        guard isInCornerHotspot(location) else { return }
+        // Latched, no sample: as on the trunk, so nothing at the hide's end
+        // (a key not held, say) can release the latch of a resting pointer.
+        guard !latched else { return }
+        scheduleHideEndSample(at: location)
+    }
+
+    /// A pointer resting in the hotspot as a hide ends sends no more events,
+    /// so one sample starts its reveal dwell. It runs on the next turn,
+    /// outside the hide's completion, so even a zero reveal delay cannot
+    /// show the panel from inside it.
+    private func scheduleHideEndSample(at location: CGPoint) {
+        guard watchedHotspot(containing: location) != nil else { return }
         followUpWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isRunning, !self.stateMachine.isVisible else { return }
@@ -513,35 +534,18 @@ final class CornerHoverMonitor {
         DispatchQueue.main.async(execute: work)
     }
 
-    /// Whether the pointer has stayed in a watched hotspot from the hide's
-    /// start to `location` at its end: in the hotspot at both, with no
-    /// sample outside it in between. The start is
-    /// `AtticPanelController.hideBegan`, recorded where `requestHide` begins
-    /// the animation; every hide of this panel animates through there (the
-    /// swipe from its release, `requestInteractiveHide`), and only it bumps
-    /// the `hideCount` this monitor observes (floating pages have their own
-    /// `PanelUIState`). With no record (a show cleared it and the hide did
-    /// not animate) the end alone decides; a stale one only lets an outside
-    /// sample since then count as having left.
-    private func pointerStayedInHotspotThroughHide(endingAt location: CGPoint) -> Bool {
-        guard isInCornerHotspot(location) else { return false }
-        guard let began = panelController.hideBegan else { return true }
-        return isInCornerHotspot(began.pointer) && lastOutsideHotspotSampleAt < began.uptime
-    }
-
     /// The hotspot of a watched display (one whose corner answers hover, so
-    /// it is in `cachedScreenFrames` and samples near the corner), with the
-    /// same 1 pt edge allowance as a sample. The key is left out: a pointer
-    /// resting in the corner latches whether or not it is held, and a
-    /// sample without it clears the latch as before. An unwatched corner
-    /// never reveals, so it needs no latch, and one set there would sit
-    /// under an idle cadence and block the next watched corner.
-    private func isInCornerHotspot(_ location: CGPoint) -> Bool {
+    /// it is in `cachedScreenFrames` and samples near the corner) that holds
+    /// `location`, with the same 1 pt edge allowance as a sample; nil when
+    /// none does. The key is left out: a pointer resting in the corner
+    /// latches whether or not it is held. An unwatched corner never
+    /// reveals, so it needs no latch, and one set there would sit under an
+    /// idle cadence and block the next watched corner.
+    private func watchedHotspot(containing location: CGPoint) -> CGRect? {
         guard let screen = screen(containing: location),
-              revealPolicy.answers(displayID: displayID(of: screen)) else { return false }
-        return PanelGeometry.hotspot(in: screen.frame, corner: settings.corner)
-            .insetBy(dx: -1, dy: -1)
-            .contains(location)
+              revealPolicy.answers(displayID: displayID(of: screen)) else { return nil }
+        let hotspot = PanelGeometry.hotspot(in: screen.frame, corner: settings.corner).insetBy(dx: -1, dy: -1)
+        return hotspot.contains(location) ? hotspot : nil
     }
 
     private static func isAtticOwnedWindow(_ window: NSWindow?) -> Bool {
@@ -555,6 +559,9 @@ final class CornerHoverMonitor {
 
     private func pointerActivityObserved(at location: CGPoint, eventTimestamp: TimeInterval? = nil) {
         guard isRunning else { return }
+        // Before the cadence guard and the coalescing: an exit delivered
+        // inside one coalescing interval still counts as leaving.
+        restingHotspot.pointerObserved(at: location)
         #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
         let callbackNS = DispatchTime.now().uptimeNanoseconds
         #endif
