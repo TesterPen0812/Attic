@@ -250,6 +250,7 @@ final class CanvasUITests: XCTestCase {
     private func launch(resetCanvasStore: Bool) {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] = "1"
         // The old Canvas page: Draw has its place unless the hidden switch is off.
         app.launchArguments += ["-AtticDraw.enabled", "NO"]

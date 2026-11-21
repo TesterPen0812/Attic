@@ -12,6 +12,7 @@ final class NotesFormatUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launch()
         app.activate()
         XCTAssertTrue(app.buttons["panel-pin-button"].waitForExistence(timeout: 10))

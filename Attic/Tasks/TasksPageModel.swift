@@ -3597,6 +3597,16 @@ extension TasksPageModel {
         /// Every listed row's id (the lifetime's membership).
         mutating func listedIDs() -> Set<UUID> { Set(rows().map(\.id)) }
 
+        /// Whether any of `ids` is listed: a scan of the list as it is,
+        /// building and counting nothing.
+        func lists(any ids: Set<UUID>) -> Bool {
+            switch source {
+            case .none: return false
+            case let .list(_, listIDs): return listIDs.contains(where: ids.contains)
+            case let .done(days): return days.contains { $0.rows.contains { ids.contains($0.id) } }
+            }
+        }
+
         mutating func row(_ id: UUID) -> TasksListRow? {
             guard isBuilt else { return nil }
             lookups += 1
@@ -3674,42 +3684,32 @@ extension TasksPageModel {
                                                    renameFailed: subtaskRenameFailed && renaming != nil))
     }
 
+    /// A list not built (its cache emptied until the next pass) keeps the
+    /// state's row and run as they are.
     private func derived(_ state: TasksRowState, in list: inout RowStateList) -> TasksRowStateValue {
+        guard list.isBuilt else { return derivedRowState(state.id, tab: state.tab, row: state.value.row, run: state.value.run) }
         let row = list.row(state.id) ?? state.value.row
         return derivedRowState(state.id, tab: state.tab, row: row, run: list.run(state.id))
     }
 
     /// The state a cell of `row` on `tab` observes: its live entry, or a
     /// new one (the row's cell builds for the first time, or again after
-    /// the row left the list and came back).
-    func rowState(for row: TasksListRow, tab: TasksTab) -> TasksRowState {
+    /// the row left the list and came back), worked out from the row and
+    /// run the page's pass already has: no list is read.
+    func rowState(for row: TasksListRow, tab: TasksTab, run: AtticSelectionRun) -> TasksRowState {
         if let state = rowStates[tab]?[row.id] { return state }
-        var list = rowStateList(tab)
-        let state = TasksRowState(id: row.id, tab: tab, value: derivedRowState(
-            row.id, tab: tab, row: list.row(row.id) ?? row, run: list.run(row.id)))
+        let state = TasksRowState(id: row.id, tab: tab, value: derivedRowState(row.id, tab: tab, row: row, run: run))
         rowStates[tab, default: [:]][row.id] = state
         return state
-    }
-
-    /// The page's pass that builds a cell says whether its page is drawn.
-    /// A hidden page's state freezes: no writer touches it (`apply` is
-    /// skipped), so a selection or any other change costs nothing on a
-    /// page nobody sees. Drawn again, it is worked out afresh from the
-    /// model (the one derivation) before its fields thaw.
-    func setRowState(_ state: TasksRowState, drawn: Bool) {
-        guard drawn else { state.setDrawn(false); return }
-        guard state.isFrozen else { return }
-        var list = rowStateList(state.tab)
-        state.apply(derived(state, in: &list))
-        state.setDrawn(true)
-        queueRowStateCheck()
     }
 
     /// The model changed what `ids` show (nil: any listed row), on every
     /// tab: their live states are worked out again. `runs`: the selection
     /// or the quick looks changed, so any row whose selection run moved is
-    /// written too. Equal values notify nobody; frozen states wait for
-    /// their page to draw (`setRowState`).
+    /// written too. Equal values notify nobody; a frozen state takes the
+    /// value in its mirror only. A tab is skipped, its list unread, when
+    /// none of `ids` has a state there or is listed there: a run is made
+    /// from its own list's rows only.
     func rowStatesChanged(_ ids: [UUID?]) {
         rowStatesChanged(Set(ids.compactMap { $0 }))
     }
@@ -3720,17 +3720,17 @@ extension TasksPageModel {
             if let ids, !runs {
                 // An id-only change: a tab that has none of the ids is
                 // skipped without reading its list.
-                let touched = ids.compactMap { states[$0] }.filter { !$0.isFrozen }
+                let touched = ids.compactMap { states[$0] }
                 guard !touched.isEmpty else { continue }
                 var list = rowStateList(tab)
                 for state in touched { state.apply(derived(state, in: &list)) }
                 continue
             }
-            var list: RowStateList?
-            for state in states.values where !state.isFrozen {
-                if list == nil { list = rowStateList(tab) }
-                if ids?.contains(state.id) ?? true || list!.run(state.id) != state.value.run {
-                    state.apply(derived(state, in: &list!))
+            var list = rowStateList(tab)
+            if let ids, !ids.contains(where: { states[$0] != nil }), !list.lists(any: ids) { continue }
+            for state in states.values {
+                if ids?.contains(state.id) ?? true || list.run(state.id) != state.value.run {
+                    state.apply(derived(state, in: &list))
                 }
             }
         }
@@ -3739,7 +3739,7 @@ extension TasksPageModel {
 
     /// The tab's list was built again (`keep`, or Done's days): states of
     /// rows that left it go, so an "all rows" route never grows with the
-    /// rows ever built; every other drawn state is brought up to the new
+    /// rows ever built; every other state is brought up to the new
     /// list (its row, its run). A row that comes back gets a fresh state.
     private func rowStatesListed(_ tab: TasksTab) {
         guard let states = rowStates[tab], !states.isEmpty else { return }
@@ -3749,7 +3749,7 @@ extension TasksPageModel {
         var kept: [UUID: TasksRowState] = [:]
         kept.reserveCapacity(min(states.count, listed.count))
         for (id, state) in states where listed.contains(id) {
-            if !state.isFrozen { state.apply(derived(state, in: &list)) }
+            state.apply(derived(state, in: &list))
             kept[id] = state
         }
         rowStates[tab] = kept
@@ -3792,10 +3792,9 @@ extension TasksPageModel {
                     found.append("row \(id) on \(tab): its state lives but the row left the list")
                     continue
                 }
-                // A frozen state is worked out afresh when its page draws
-                // (`setRowState`); until then nobody reads its fields.
-                guard !state.isFrozen else { continue }
-                if state.read(drawn: true) != state.value {
+                // A frozen state's fields wait for the thaw; its mirror is
+                // checked below like any other.
+                if !state.isFrozen, state.read(drawn: true) != state.value {
                     found.append("row \(id) on \(tab): the untracked mirror differs from its fields")
                 }
                 let fields = state.value.differences(from: derived(state, in: &list))
@@ -3805,15 +3804,17 @@ extension TasksPageModel {
             }
         }
         if isPageShown {
-            var lists: [TasksTab: RowStateList] = [:]
+            // A row's old cell can stay mounted while it animates out (a
+            // delete undone mid-exit): a row is wrong only when none of its
+            // drawn cells holds its current state.
+            var holds: [UUID: Bool] = [:]
             for mount in rowStateMounts.values where mount.drawn && mount.row.tab == self.tab {
-                var list = lists[mount.row.tab] ?? rowStateList(mount.row.tab)
-                let listed = list.row(mount.row.id) != nil
-                lists[mount.row.tab] = list
-                guard listed, let state = mount.state else { continue }
-                if rowStates[mount.row.tab]?[mount.row.id] !== state {
-                    found.append("row \(mount.row.id) on \(mount.row.tab): a drawn cell holds a state the model dropped")
-                }
+                let current = mount.state != nil && rowStates[mount.row.tab]?[mount.row.id] === mount.state
+                holds[mount.row.id] = (holds[mount.row.id] ?? false) || current
+            }
+            var list = rowStateList(self.tab)
+            for (id, held) in holds where !held && list.row(id) != nil {
+                found.append("row \(id) on \(self.tab): no drawn cell holds its current state")
             }
         }
         return found

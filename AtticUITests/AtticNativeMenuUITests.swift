@@ -14,6 +14,7 @@ final class AtticNativeMenuUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchArguments += ["--attic-gallery", "--attic-gallery-menus"]
         var opened = false
         for _ in 0..<2 where !opened {

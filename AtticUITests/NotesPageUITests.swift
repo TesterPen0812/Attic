@@ -9,7 +9,7 @@ final class NotesHistoryImageUITests: XCTestCase {
             throw XCTSkip("Requires the isolated history-image preview (run_local_ui_tests.zsh).")
         }
         let app = XCUIApplication()
-        app.launchEnvironment = ["ATTIC_UI_TESTING": "1", "ATTIC_UI_TEST_NONKEY_REVEAL": "1",
+        app.launchEnvironment = ["ATTIC_UI_TESTING": "1", "ATTIC_ROW_STATE_ORACLE": "1", "ATTIC_UI_TEST_NONKEY_REVEAL": "1",
             "ATTIC_UI_TEST_PAGE": "notes", "ATTIC_UI_TEST_NOTES_SCENE": "history-open"]
         app.launchArguments = ["-AtticUseNewNotesEditor", "YES", "-appearancePreference", "dark"]
         app.launch()
@@ -57,6 +57,7 @@ final class NotesPageUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launch()
         app.activate()
         XCTAssertTrue(app.buttons["panel-pin-button"].waitForExistence(timeout: 10))

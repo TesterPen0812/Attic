@@ -172,16 +172,14 @@ final class TasksRowState {
 /// holds its row's current state. A difference names the row and the field.
 ///
 /// The unit test host points `report` at the running test
-/// (`InvisibleHostObserver`); an app run under `ATTIC_UI_TESTING=1` (the
-/// UI lanes) stops on the first difference, so the UI test fails, except
-/// a timed run (`ATTIC_PERF_UI_TEST=1`), whose windows the oracle's work
-/// would enter; any other run checks nothing.
+/// (`InvisibleHostObserver`); an app the UI-test targets launch with
+/// `ATTIC_ROW_STATE_ORACLE=1` stops on the first difference, so the UI test
+/// fails. Nothing else sets it: timed on-screen runs, probes and previews
+/// (`ATTIC_UI_TESTING=1` alone, Local builds with DEBUG) check nothing.
 @MainActor enum TasksRowStateOracle {
-    static var report: ((String) -> Void)? = {
-        let environment = ProcessInfo.processInfo.environment
-        guard environment["ATTIC_UI_TESTING"] == "1", environment["ATTIC_PERF_UI_TEST"] != "1" else { return nil }
-        return { message in fatalError("Row state oracle: \(message)") }
-    }()
+    static var report: ((String) -> Void)? = ProcessInfo.processInfo.environment["ATTIC_ROW_STATE_ORACLE"] == "1"
+        ? { message in fatalError("Row state oracle: \(message)") }
+        : nil
 
     /// Checks run after each settle while someone listens.
     static var isOn: Bool { report != nil }

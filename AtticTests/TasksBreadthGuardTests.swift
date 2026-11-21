@@ -299,16 +299,21 @@ final class TasksBreadthGuardTests: XCTestCase {
               + "ticked_listed=\(model.listSnapshot(for: .now).rows.contains { $0.id == now[1] })")
     }
 
-    /// A keyboard move and a selection change do no list work for a tab
-    /// that has none of the rows (a tab whose states are frozen, Backlog
-    /// behind Now): no index, no flattening, no selection runs. On Now, a
+    /// The first build of a page's cells makes their states from the rows
+    /// and runs its pass has, reading no list. A keyboard move and a
+    /// selection change do no list work for a tab
+    /// that has none of the rows (Backlog, kept built behind Now): no index,
+    /// no flattening, no selection runs; one that reaches a Backlog row with
+    /// one row selected reads it by a scan only. On Now, a
     /// focus move with one row selected reads no list either (two lookups,
     /// no runs).
     func testAKeyboardMoveOrSelectionReadsNoListOfATabWithoutItsRows() throws {
         let store = try makeStore(open: 12, backlog: 6)
         let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
         let pointer = TasksPointer()
+        TasksPageModel.rowStateListWork = [:]
         let hosting = page(model, store, pointer: pointer)
+        XCTAssertEqual(TasksPageModel.rowStateListWork, [:], "the first build made its cells' states without reading a list")
         for tab in [TasksTab.backlog, .now] {
             model.select(tab: tab)
             settle(hosting, until: { model.pagerSwipe.span.pages == tab.rawValue...tab.rawValue })
@@ -342,7 +347,7 @@ final class TasksBreadthGuardTests: XCTestCase {
         model.click(ids[6], modifiers: .command, visible: ids)
         model.selectOnly(later[1])
         print("BREADTH_LIST_WORK select=\(TasksPageModel.rowStateListWork)")
-        XCTAssertNil(TasksPageModel.rowStateListWork[.backlog], "a selection change worked on Backlog's frozen states")
+        XCTAssertNil(TasksPageModel.rowStateListWork[.backlog], "a selection change reaching one Backlog row built or indexed Backlog's list")
         settle(hosting)
         XCTAssertEqual(model.rowStateMismatches(), [])
     }
@@ -393,6 +398,35 @@ final class TasksBreadthGuardTests: XCTestCase {
         XCTAssertTrue(found.first?.contains("row \(id)") == true && found.first?.contains("isSelected") == true, "\(found)")
         model.rowStatesChanged([id])
         XCTAssertEqual(model.rowStateMismatches(), [], "the writer's derivation puts it right")
+    }
+
+    /// The mounted-cell check: a row's old cell kept drawn while it animates
+    /// out (a delete undone mid-exit) holds a state the registry dropped;
+    /// it is not reported while a drawn cell holds the row's current state,
+    /// and a row whose only drawn cell holds a dropped state still is.
+    func testTheOracleReportsADrawnRowOnlyWhenNoCellHoldsItsCurrentState() throws {
+        let store = try makeStore(open: 60)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        settle(hosting)
+        XCTAssertEqual(model.rowStateMismatches(), [])
+        let ids = model.rows(for: .now).map(\.id)
+        let built = model.rowStateIDsForTesting[.now, default: []]
+        let mounted = try XCTUnwrap(ids.first { built.contains($0) })
+        let unbuilt = try XCTUnwrap(ids.last { !built.contains($0) }, "every row's cell was built")
+        let current = try XCTUnwrap(liveState(model, mounted))
+        let exiting = NSObject()
+        let dropped = TasksRowState(id: mounted, tab: .now, value: current.value)
+        model.noteRowStateMount(exiting, row: TasksRowID(tab: .now, id: mounted), state: dropped, drawn: true)
+        XCTAssertEqual(model.rowStateMismatches(), [], "an exiting cell beside the row's current cell is not reported")
+        let lone = NSObject()
+        model.noteRowStateMount(lone, row: TasksRowID(tab: .now, id: unbuilt), state: dropped, drawn: true)
+        let found = model.rowStateMismatches()
+        XCTAssertEqual(found, ["row \(unbuilt) on now: no drawn cell holds its current state"])
+        model.noteRowStateUnmount(exiting)
+        model.noteRowStateUnmount(lone)
+        XCTAssertEqual(model.rowStateMismatches(), [])
     }
 
     /// A wrapper that skips a page pass still starts a drag with its date
@@ -856,7 +890,7 @@ final class TasksBreadthGuardTests: XCTestCase {
     private func liveState(_ model: TasksPageModel, _ id: UUID, tab: TasksTab = .now) -> TasksRowState? {
         guard model.rowStateIDsForTesting[tab]?.contains(id) == true,
               let row = model.listSnapshot(for: tab).rows.first(where: { $0.id == id }) else { return nil }
-        return model.rowState(for: row, tab: tab)
+        return model.rowState(for: row, tab: tab, run: .single)
     }
 
     private func makeStore(open: Int, due: DueDay? = nil, tracker: Bool = false, backlog: Int = 0) throws -> TaskStore {

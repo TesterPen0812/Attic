@@ -1,3 +1,11 @@
+## 2026-11-21 · Context-menu body count seam (DEBUG, tasks-breadth-1b)
+
+`atticContextMenu`'s modifier counts its body runs in DEBUG builds, per tag
+(`AtticContextMenuBodyCounts`, keyed by the `atticContextMenuCountTag`
+environment value; off unless a test turns it on). A task row's cell tags its
+menus with its row so the breadth guards can check that a menu runs only with
+its own row. Release builds read no tag and count nothing; nothing drawn changes.
+
 ## 2026-11-17 · Task rows hold their hover while the list scrolls (the tint hold)
 
 While a Tasks list (Now, Later or Done) scrolls under a still pointer, live
