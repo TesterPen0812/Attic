@@ -292,6 +292,52 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertEqual(titles(), ["A", "C", "B"])
     }
 
+    func testHeldSubtaskOrderPreservesReturningChildrenAndPhysicalReplicas() {
+        let parent = UUID()
+        let a = TaskItem(title: "A"), b = TaskItem(title: "B"), c = TaskItem(title: "C")
+        let otherA = TaskItem(id: a.id, title: "Second A")
+        let otherC = TaskItem(id: c.id, title: "Second C")
+        let d = TaskItem(title: "D")
+        func titles(_ children: [TaskItem]) -> [String] {
+            model.quickLookSubtasks(of: parent, children).map(\.title)
+        }
+        XCTAssertEqual(titles([a, b, otherA]), ["A", "B", "Second A"])
+        XCTAssertEqual(titles([c, b, d, otherC]), ["B", "C", "D", "Second C"])
+        XCTAssertEqual(titles([otherC, b, otherA, d, c, a]), ["Second A", "A", "B", "Second C", "C", "D"])
+        XCTAssertEqual(titles([]), [])
+        XCTAssertEqual(titles([d, a, c]), ["A", "C", "D"])
+        model.releaseQuickLookOrder(of: parent)
+        XCTAssertEqual(titles([d, a, c]), ["D", "A", "C"])
+    }
+
+    /// Plain-waste count guard (the Pro night job's 713e9012): projecting an
+    /// open family again walks its held order once, whatever the family's
+    /// size. The trunk walked it for each child twice and twice more in
+    /// every sort comparison. A physical replica keeps its place beside the
+    /// row it shares an ID with (duplicate-safe IDs, AGENTS.md).
+    func testReprojectingAnOpenFamilyWalksItsHeldOrderOnce() {
+        var walksBySize: [Int: Int] = [:]
+        for size in [25, 100] {
+            let parent = UUID()
+            let children = (0..<size).map { TaskItem(title: "Subtask \($0)") }
+            let replica = TaskItem(id: children[size / 2].id, title: "Replica")
+            _ = model.quickLookSubtasks(of: parent, children)  // the quick look opens and holds this order
+            let before = model.quickLookOrderWalks
+            // The store's order after some ticks: a fixed scramble (37 is
+            // coprime to both sizes), then the replica.
+            let scrambled = (0..<size).map { children[($0 * 37) % size] }
+            let shown = model.quickLookSubtasks(of: parent, scrambled + [replica])
+            let walks = model.quickLookOrderWalks - before
+            walksBySize[size] = walks
+            var expected = children.map(\.title)
+            expected.insert("Replica", at: size / 2 + 1)
+            XCTAssertEqual(shown.map(\.title), expected, "the held order, the replica beside its twin")
+            print("GUARD_QUICKLOOK_ORDER size=\(size) held_order_walks=\(walks)")
+            XCTAssertEqual(walks, 1, "one projection of \(size) subtasks walked the held order \(walks) times")
+        }
+        XCTAssertEqual(walksBySize[25], walksBySize[100], "the walks grew with the family")
+    }
+
     /// Round 10b, finding 3's other half: ticking a box keeps the quick
     /// look's held order (review 21), and a move released only its own.
     func testTickingASubtaskKeepsTheQuickLooksOrder() throws {

@@ -3078,15 +3078,35 @@ final class TasksPageModel: ObservableObject {
     /// it opened (review 21): ticking several never moves one away from the
     /// pointer. New ones join at the end; closing it lets the order settle.
     private var quickLookOrder: [UUID: [UUID]] = [:]
+    #if DEBUG
+    /// Walks of a held quick-look order while projecting its family (the
+    /// plain-waste count guard): one walk per projection is the bound.
+    private(set) var quickLookOrderWalks = 0
+    #endif
 
     func quickLookSubtasks(of id: UUID, _ subtasks: [TaskItem]) -> [TaskItem] {
         guard let order = quickLookOrder[id] else {
             quickLookOrder[id] = subtasks.map(\.id)
             return subtasks
         }
-        let known = subtasks.filter { order.contains($0.id) }
-            .sorted { (order.firstIndex(of: $0.id) ?? 0) < (order.firstIndex(of: $1.id) ?? 0) }
-        let new = subtasks.filter { !order.contains($0.id) }
+        let known = subtasks.filter {
+            #if DEBUG
+            quickLookOrderWalks += 1
+            #endif
+            return order.contains($0.id)
+        }
+            .sorted {
+                #if DEBUG
+                quickLookOrderWalks += 2
+                #endif
+                return (order.firstIndex(of: $0.id) ?? 0) < (order.firstIndex(of: $1.id) ?? 0)
+            }
+        let new = subtasks.filter {
+            #if DEBUG
+            quickLookOrderWalks += 1
+            #endif
+            return !order.contains($0.id)
+        }
         if !new.isEmpty { quickLookOrder[id] = order + new.map(\.id) }
         return known + new
     }
