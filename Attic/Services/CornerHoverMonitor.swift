@@ -368,7 +368,7 @@ final class CornerHoverMonitor {
         defer { refreshSamplingCadence(at: location) }
         restingHotspot.pointerObserved(at: location)
         let activeScreen = screen(containing: location)
-        let activeFrame = screenFrame(containing: location, on: activeScreen)
+        let activeFrame = screenFrame(of: activeScreen, at: location)
         // When the cursor is pinned against a screen edge, mouseLocation sits exactly on
         // the frame boundary (e.g. y == maxY at the top), which CGRect.contains excludes.
         // Expand the hotspot outward so edge-pinned coordinates still count as inside.
@@ -838,17 +838,23 @@ final class CornerHoverMonitor {
         }
     }
 
-    /// The display holding `point` as (frame, id), for sampling and the
-    /// latch: from `screensForTesting` when a test sets it (the same 1 pt
-    /// fallback), else `screen` (looked up when not passed) with its id
-    /// from `displayID(of:)`, as before the seam.
-    private func screenFrame(containing point: CGPoint, on screen: NSScreen? = nil) -> (frame: CGRect, id: String?)? {
+    /// The display holding `point` as (frame, id), for the latch and the
+    /// test seam: from `screensForTesting` when a test sets it, else the
+    /// one `screen(containing:)` lookup with its id from `displayID(of:)`.
+    private func screenFrame(containing point: CGPoint) -> (frame: CGRect, id: String?)? {
+        if screensForTesting != nil { return screenFrame(of: nil, at: point) }
+        return screenFrame(of: screen(containing: point), at: point)
+    }
+
+    /// `screen`, already looked up by the caller for `point`, as (frame, id):
+    /// a miss stays a miss, with no second lookup. With `screensForTesting`
+    /// set, its stand-ins answer instead (the same 1 pt fallback).
+    private func screenFrame(of screen: NSScreen?, at point: CGPoint) -> (frame: CGRect, id: String?)? {
         if let screensForTesting {
             return screensForTesting.first { NSMouseInRect(point, $0.frame, false) }
                 ?? screensForTesting.first { $0.frame.insetBy(dx: -1, dy: -1).contains(point) }
         }
-        guard let screen = screen ?? self.screen(containing: point) else { return nil }
-        return (screen.frame, displayID(of: screen))
+        return screen.map { ($0.frame, displayID(of: $0)) }
     }
 
     private func screen(containing point: CGPoint) -> NSScreen? {
