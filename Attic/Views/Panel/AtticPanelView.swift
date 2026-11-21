@@ -12,6 +12,17 @@ import SwiftData
 }
 #endif
 
+#if DEBUG
+/// Test seam (NotesUndoMirrorCountGuardTests): the view that pads the
+/// shell's notices above the page's bottom controls.
+@MainActor enum PanelNoticeClearanceProbe {
+    /// How many times the notices' bottom padding was applied (body runs).
+    static var applications = 0
+    /// The bottom padding last given to the notices.
+    static var lastBottomPadding: CGFloat = 0
+}
+#endif
+
 /// Settings for the panel's geometry, motion and appearance. Other settings
 /// (such as the global quick-capture shortcut) must not rebuild retained pages.
 @MainActor
@@ -310,7 +321,11 @@ struct AtticPanelView: View {
     }
 
     private var notices: some View {
-        PanelCurrentNoticeOverlay(
+        #if DEBUG
+        PanelNoticeClearanceProbe.applications += 1
+        PanelNoticeClearanceProbe.lastBottomPadding = pageLayout.contentInsets.bottom + noticeClearance
+        #endif
+        return PanelCurrentNoticeOverlay(
             store: store, noteStore: noteStore, canvasSession: canvasSession,
             toasts: toasts, page: currentPage
         )
