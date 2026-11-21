@@ -113,6 +113,7 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertEqual(stalls, [], "every switch reaches the page's body with the new tab")
     }
 
+    #if DEBUG
     /// Store before send (hb09-key-note §2; item 4, TasksPageUITests
     /// `testCompletingOnLaterHoldsThenLeaves`): a held row's release sends
     /// `held`'s change. With a transaction pending on the page's graphs, a
@@ -122,7 +123,6 @@ final class TasksTabHostTests: XCTestCase {
     /// a row focus write in Later's host, a plain selection change, both,
     /// or neither. No read inside the send may see the row held.
     func testReleasingAHeldRowNeverReadsItHeldInsideTheSend() throws {
-        #if DEBUG
         try requireKeyWindowTests()
         var services = TasksPageServices()
         // The test releases each hold itself.
@@ -169,10 +169,8 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertTrue(hosted.model.held.isEmpty, "every hold released")
         XCTAssertEqual(stale.list, 0, "Later's list never reads a released row as held inside the send")
         XCTAssertEqual(stale.page, 0, "the page's body never reads a released row as held inside the send")
-        #else
-        throw XCTSkip("needs the DEBUG render probe")
-        #endif
     }
+    #endif
 
     /// The panel's accessibility hit walk (condition 3): it reaches a row in
     /// the tab shown, inside that tab's nested host, and nothing it returns
@@ -692,12 +690,12 @@ final class TasksTabHostTests: XCTestCase {
         try checkARowLettingGo(outsideTheWindowsPass: true)
     }
 
+    #if DEBUG
     /// HB-09's key (hb09-key-note §1), at the write: back in Find's field
     /// from a row, the page's nil for the row is not written, as a view
     /// outside Now's host holds the keyboard. The row's focus state goes nil
     /// by itself (the row lost the keyboard), and Find keeps the keyboard.
     func testHB09ANilIsNotWrittenWhileFindHoldsTheKeyboardAndTheRowLetsGoByItself() throws {
-        #if DEBUG
         try keyWindowOnly()
         let hosted = try warmed(atticPanel: true)
         defer { hosted.close() }
@@ -738,10 +736,8 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertTrue(hosted.searchHasKeyboard, "Find's field keeps the keyboard: \(String(describing: hosted.window.firstResponder))")
         hosted.press("x", keyCode: 7)
         XCTAssertEqual(hosted.model.searchQuery(for: .now), "ex", "typing reaches Find's field")
-        #else
-        throw XCTSkip("needs the DEBUG link")
-        #endif
     }
+    #endif
 
     private func checkARowLettingGo(outsideTheWindowsPass: Bool, line: UInt = #line) throws {
         try keyWindowOnly()
