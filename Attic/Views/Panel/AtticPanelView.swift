@@ -109,7 +109,10 @@ struct AtticPanelView: View {
     @State private var topRowState = PanelTopRowState()
     /// The bars every page shares, drawn once above the pages.
     @State private var sharedChrome = PanelSharedChrome()
-    @State private var noticeHeight: CGFloat = 0
+    /// The notices' measured height, held and not observed here: only the
+    /// Canvas host reads it, so a toast coming or going never runs this
+    /// body and every page host in it (SPEED-TOAST-HIDDEN-CALENDAR).
+    @State private var noticeHeight = PanelNoticeHeight()
     @State private var noticeClearance = PanelPageNoticeClearancePreferenceKey.defaultValue
     @State var hasRestoredNoteSession = false
 
@@ -697,7 +700,7 @@ struct AtticPanelView: View {
             }
             .onPreferenceChange(PanelNoticeHeightPreferenceKey.self) { measured in
                 let resolved = max(0, measured.isFinite ? measured : 0)
-                if abs(noticeHeight - resolved) >= 0.5 { noticeHeight = resolved }
+                if abs(noticeHeight.value - resolved) >= 0.5 { noticeHeight.value = resolved }
             }
     }
 
@@ -959,7 +962,7 @@ struct PanelCanvasNoticeAwareHost: View {
     @ObservedObject var drawPage: DrawPageModel = .shared
     let uiState: PanelUIState
     let layout: PanelPageLayout
-    let noticeHeight: CGFloat
+    @ObservedObject var noticeHeight: PanelNoticeHeight
     let headerControlRects: [CGRect]
     let headerBottom: CGFloat
 
@@ -968,7 +971,7 @@ struct PanelCanvasNoticeAwareHost: View {
         let _ = Self.bodyEvaluations += 1
         #endif
         let hasNotice = AtticDraw.isEnabled ? drawPage.saveNotice != nil : canvasSession.lastErrorMessage != nil
-        let errorBannerHeight = hasNotice || toasts.current != nil ? noticeHeight : 0
+        let errorBannerHeight = hasNotice || toasts.current != nil ? noticeHeight.value : 0
         #if DEBUG
         let _ = Self.lastErrorBannerHeight = errorBannerHeight
         #endif
@@ -1063,6 +1066,13 @@ enum PanelKeyTreatment {
     static func controls(isPanelKey: Bool, surface: PanelSurfaceStyle = .solid) -> AtticControlMaterial {
         .liquidGlass
     }
+}
+
+/// The notices' measured height. The shell writes it and does not observe
+/// it; the Canvas host, its one reader, does.
+@MainActor
+final class PanelNoticeHeight: ObservableObject {
+    @Published var value: CGFloat = 0
 }
 
 private struct PanelNoticeHeightPreferenceKey: PreferenceKey {
