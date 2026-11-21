@@ -640,8 +640,10 @@ final class AtticLibrary {
             if !committed || !lifecycleRefreshed(after: ref) {
                 // The store that restored has already read itself: a task store's save from a fresh read, or a note
                 // store after a grouped restore (the commit step's refresh, or its own where that step misses it).
+                // Each such read ends in `NoteStore.refresh()`, which clears `lastErrorMessage` only on success, so
+                // a failed one is read again here.
                 refreshItemStores(freshTasks: ref.kind == .task ? tasks.freshAfterSave : nil,
-                                  freshNotes: ref.kind == .note && committed ? notes : nil)
+                                  freshNotes: ref.kind == .note && committed && notes?.lastErrorMessage == nil ? notes : nil)
             }
             return UndoStep(
                 name: "Restore \(Self.noun(for: ref.kind))",
