@@ -10,6 +10,75 @@ import XCTest
 /// a real menu, never by calling the handlers.
 @MainActor
 final class TasksRound13Tests: XCTestCase {
+    /// host-boundary.md §5.1 row, as the user's sequence: a tab switch while
+    /// the panel is not key, then the panel becomes key and ↓. Wanted: a row
+    /// of the shown tab takes the keyboard. Today no row does, on step 1 as
+    /// on the trunk (`4b55a9e8`, the same test): pinned, KB-DOWN-AFTER-NOTKEY-SWITCH.
+    /// Its fix flips this assertion.
+    func testDownAfterASwitchMadeWhileThePanelWasNotKeyIsPinned() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.now.rawValue, "↓ on Now reaches a Now row")
+        let other = NSWindow(contentRect: CGRect(x: -3_000, y: -3_000, width: 80, height: 80),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        other.makeKeyAndOrderFront(nil)
+        hosted.spin(0.2)
+        XCTAssertFalse(hosted.window.isKeyWindow, "another window is key")
+        hosted.go(to: .backlog)
+        hosted.window.makeKey()
+        hosted.spin(0.3)
+        XCTAssertTrue(hosted.window.isKeyWindow, "the panel is key again")
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertNil(hosted.model.keyboardFocus?.page, "KB-DOWN-AFTER-NOTKEY-SWITCH: today ↓ reaches no row (pinned; the fix makes it a row of the shown tab)")
+    }
+
+    /// host-boundary.md §5.1 row, as the user's sequence: a rename on Now,
+    /// a switch to Later (which saves it), then ↓. Wanted: a Later row takes
+    /// the keyboard. Today no row does, on step 1 as on the trunk
+    /// (`4b55a9e8`, the same test): pinned, KB-DOWN-AFTER-RENAME-SWITCH. Its
+    /// fix flips this assertion.
+    func testDownAfterASwitchThatSavedARenameIsPinned() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        hosted.press("\u{F701}", keyCode: 125)
+        let row = try XCTUnwrap(hosted.model.keyboardFocus?.id, "↓ on Now reaches a Now row")
+        hosted.model.beginEditingTitle(row)
+        hosted.spin(0.4)
+        XCTAssertEqual(hosted.model.editingTitleID, row, "the rename is open")
+        hosted.go(to: .backlog)
+        XCTAssertNil(hosted.model.editingTitleID, "the switch saved the rename")
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertNil(hosted.model.keyboardFocus?.page, "KB-DOWN-AFTER-RENAME-SWITCH: today ↓ reaches no row (pinned; the fix makes it a Later row)")
+    }
+
+    /// host-boundary.md §5.1 row: a responder in the panel outside the tabs
+    /// (as an open dropdown's host) keeps the keyboard across a switch. The
+    /// trunk runs the same test as the reference.
+    func testAResponderOutsideTheTabsKeepsTheKeyboardAcrossASwitch() throws {
+        final class StandIn: NSView { override var acceptsFirstResponder: Bool { true } }
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.now.rawValue, "↓ on Now reaches a Now row")
+        let standIn = StandIn(frame: CGRect(x: 0, y: 0, width: 10, height: 10))
+        hosted.window.contentView?.addSubview(standIn)
+        defer { standIn.removeFromSuperview() }
+        XCTAssertTrue(hosted.window.makeFirstResponder(standIn))
+        hosted.spin(0.2)
+        XCTAssertTrue(hosted.window.firstResponder === standIn, "it holds the keyboard before the switch")
+        hosted.go(to: .backlog)
+        XCTAssertTrue(hosted.window.firstResponder === standIn, "and after it: \(String(describing: hosted.window.firstResponder))")
+    }
+
     // H12-06: native Tab focus must supersede a previous arrow selection.
     func testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {

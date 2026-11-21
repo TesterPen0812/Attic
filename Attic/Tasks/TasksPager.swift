@@ -632,8 +632,13 @@ struct TasksPagerPages<Page: View>: View {
     @ObservedObject var store: TaskStore
     let motion: TasksPagerMotion
     let count: Int
-    let shown: Int
     let size: CGSize
+    /// The page shown: the model's tab, read here from the model this view
+    /// observes. It was a value the page computed and passed in, and when
+    /// the page's own pass did not run after a switch, the pager re-rendered
+    /// with the new tab and the old index: the arriving tab was drawn but
+    /// never in use (locate runs e6bf266c+hb-locate, -trace-1).
+    private var shown: Int { TasksTab.allCases.firstIndex(of: model.tab) ?? 0 }
     /// A page, and whether it is drawn (the one shown, or one a move
     /// passes); a page kept built but not drawn hides its list.
     let page: (Int, Bool) -> Page
@@ -664,8 +669,18 @@ struct TasksPagerPages<Page: View>: View {
                     (index == shown || (span.pages.contains(index) && span.skipped != index))
                 Group {
                     if drawn || span.warm?.contains(index) == true {
-                        TasksKeptPage(frozen: !drawn) { page(index, drawn) }
-                            .equatable()
+                        // Each built tab in a host of its own
+                        // (host-boundary.md §4): a hidden tab's graph is
+                        // not run, laid out or walked by the panel's
+                        // updates, nor by the tab shown.
+                        // Drawn and in use are two states (HB-01): a
+                        // neighbour a swipe shows, or Tasks leaving in a
+                        // shell switch, is drawn and takes no input or read.
+                        KeptContentHost(drawn: drawn, interactive: index == shown && model.isPageShown,
+                                        space: TasksPagerSlot.localSpace(index)) {
+                            TasksKeptPage(frozen: !drawn) { page(index, drawn) }
+                                .equatable()
+                        }
                     } else {
                         Color.clear
                     }
