@@ -177,6 +177,27 @@ struct CornerHoverSamplingState {
     }
 }
 
+/// The watched hotspot the pointer has rested in since the latest hide
+/// began, or nil once the pointer has been seen anywhere outside it. A
+/// rectangle, not a flag, so another display's corner counts as outside.
+/// No clock: the hide's start sets it, any pointer event or sample outside
+/// clears it, and the hide's end reads it (CORNER-REVEAL-MISS).
+struct CornerHoverRestingHotspot: Equatable {
+    private(set) var rect: CGRect?
+
+    /// `hotspot`: the watched hotspot holding the pointer as the hide
+    /// begins, or nil when it holds none.
+    mutating func hideBegan(in hotspot: CGRect?) { rect = hotspot }
+
+    mutating func pointerObserved(at location: CGPoint) {
+        if let rect, !rect.contains(location) { self.rect = nil }
+    }
+
+    /// Whether the pointer at `location` has rested in the stored hotspot
+    /// since the hide began. Reading does not consume it.
+    func holds(_ location: CGPoint) -> Bool { rect?.contains(location) ?? false }
+}
+
 struct CornerHoverStateMachine {
     enum Transition: Equatable {
         case none
@@ -193,6 +214,10 @@ struct CornerHoverStateMachine {
     private var wasRevealedByCorner = false
     private var leaveBeganAt: TimeInterval?
     private var requiresHotspotExitBeforeReveal = false
+    /// Hidden, the pointer is in the hotspot but an open menu holds the
+    /// reveal. The monitor samples once when a lock changes while this is
+    /// set, so closing the menu reveals for a pointer resting there.
+    private(set) var isRevealWaitingOnMenu = false
     /// An accidental corner skim can still close itself in Click away mode.
     /// This is fixed, independent of the user-adjustable cursor hide delay.
     private static let abandonedCornerHideDelay: TimeInterval = 0.3
@@ -243,17 +268,27 @@ struct CornerHoverStateMachine {
         isInPanel: Bool,
         isInteractionLocked: Bool,
         isPinned: Bool = false,
+        isRevealHeldByMenu: Bool = false,
         revealDelay: TimeInterval,
         hideDelay: TimeInterval = 0.3,
         dismissMode: PanelDismissMode = .moveCursorAway
     ) -> Transition {
         if !isVisible {
+            isRevealWaitingOnMenu = false
             if requiresHotspotExitBeforeReveal {
                 guard !isInHotspot else {
                     hotspotEnteredAt = nil
                     return .none
                 }
                 requiresHotspotExitBeforeReveal = false
+            }
+            // A tracking menu holds a hidden reveal: no dwell runs under it.
+            // Only the menu lock: a pressed button or a focused editor must
+            // not stop a drag into the corner from revealing.
+            if isRevealHeldByMenu {
+                hotspotEnteredAt = nil
+                isRevealWaitingOnMenu = isInHotspot
+                return .none
             }
             guard isInHotspot else {
                 hotspotEnteredAt = nil
@@ -341,9 +376,14 @@ struct CornerHoverStateMachine {
         leaveBeganAt = nil
         hotspotEnteredAt = nil
         requiresHotspotExitBeforeReveal = false
+        isRevealWaitingOnMenu = false
         isHidePending = false
     }
 
+    /// `untilHotspotExit`: the pointer has rested in the hotspot since the
+    /// hide began, so it must leave before the corner can reveal again.
+    /// Pass it only for such a pointer: while the pointer is far from the
+    /// corner and unsampled, nothing else can clear it.
     mutating func forceHidden(untilHotspotExit: Bool = false) {
         reset()
         requiresHotspotExitBeforeReveal = untilHotspotExit
@@ -357,6 +397,7 @@ struct CornerHoverStateMachine {
         wasRevealedByCorner = false
         leaveBeganAt = nil
         requiresHotspotExitBeforeReveal = false
+        isRevealWaitingOnMenu = false
         isHidePending = false
     }
 }
