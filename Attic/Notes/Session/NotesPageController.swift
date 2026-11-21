@@ -4226,14 +4226,14 @@ extension NotesPageController {
     /// separate, ordinary note (the task had a newer own note) and the
     /// step's id (the toast's Undo targets exactly that step).
     func restoreTaskNote(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> (separate: Bool, stepID: UUID?)? {
-        // Read before the restore clears the record of what came back. With a
-        // command library this reads fresh contexts; the store-context
-        // fallback's groups are replaced below from what the restore did.
+        // Read before the restore. With a command library this reads fresh
+        // contexts; the store-context fallback's groups are replaced below
+        // from what the restore did.
         let owned = noteHistoryOwnership(noteID, deleted: true)
-        guard store.restoreDeleted(noteID: noteID, staging: staging), let restored = store.lastRestore else { return nil }
-        // The owner and the kind of deletion come from the rows the restore
-        // brought back (after its staging entry), not from the presentation
-        // read before it, which a context swap can leave behind.
+        guard let restored = store.restoreDeletedNote(noteID: noteID, staging: staging) else { return nil }
+        // The owner and the kind of deletion come from this restore's own
+        // result (the rows it brought back), not from a store-wide record a
+        // nested restore could change.
         let owner = restored.owner, separate = restored.separate
         let independent = restored.group == nil
         if lifecycleHistoryLibrary == nil { owned.groups = restored.group.map { [$0] } ?? [] }

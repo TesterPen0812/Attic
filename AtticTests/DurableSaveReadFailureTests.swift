@@ -1092,7 +1092,8 @@ final class DurableSaveReadFailureTests: XCTestCase {
             XCTAssertTrue(spent, "\(arm): the tool starts on a spent note context")
             XCTAssertTrue(presentedBehind, "\(arm): the store's presentation is behind")
             XCTAssertEqual(revision, durableRevision, "\(arm): the agent read the current revision")
-            XCTAssertTrue(first.contains("changed since"), "\(arm): the first write is refused as stale, with a retryable reason")
+            // r7 (pr40-wall-design.md): the tool's entry replaced the spent context, so the write is refused once.
+            XCTAssertTrue(first.contains(R7Rows.refusal), "\(arm): the first write is refused at its entry, with a retryable reason")
             XCTAssertEqual(proposalsAfterFirst, 0, "\(arm): the refused write leaves no proposal")
             XCTAssertEqual(bodiesAfterFirst, ["Changed elsewhere"], "\(arm): the body on disk stays as it was")
             XCTAssertFalse(spentAfterFirst, "\(arm): the first attempt replaced the spent context")
@@ -1265,9 +1266,20 @@ final class DurableSaveReadFailureTests: XCTestCase {
             let stepsBefore = rig.library.undo.steps(in: .note(noteID), redo: false).count
             let refusalsBefore = WorkspaceLegacyBridge.spentContextRefusals
             rig.notes.reloadFailures = failures
-            let deleted = rig.library.delete(AtticItemRef(.note, noteID))
+            var deleted = rig.library.delete(AtticItemRef(.note, noteID))
             let reloadsFailed = failures - rig.notes.reloadFailures
             rig.notes.reloadFailures = 0
+            if failures > 0 {
+                // r7: the editor's save spent the context and the delete's entry replaced it, so the delete is refused
+                // once (the text and the file are saved); repeated, it applies.
+                let firstError = rig.notes.lastErrorMessage
+                let firstRows = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+                XCTAssertFalse(deleted, "\(failures): the first delete is refused")
+                XCTAssertEqual(firstError, R7Rows.refusal, "\(failures): refused at its entry")
+                XCTAssertTrue(!firstRows.isEmpty && firstRows.allSatisfy { $0.deletedAt == nil }, "\(failures): the refused delete wrote nothing")
+                XCTAssertEqual(rig.library.undo.steps(in: .note(noteID), redo: false).count, stepsBefore, "\(failures): and recorded no step")
+                deleted = rig.library.delete(AtticItemRef(.note, noteID))
+            }
             let refusals = WorkspaceLegacyBridge.spentContextRefusals - refusalsBefore
             let replaced = rig.notes.lastSpentContextUnsaved
             let itemID = item.id
@@ -1411,9 +1423,19 @@ final class DurableSaveReadFailureTests: XCTestCase {
                 predicate: #Predicate { $0.noteID == agentNoteID })).filter { $0.detachedAt == nil }.map(\.id))
             let refusalsBefore = WorkspaceLegacyBridge.spentContextRefusals
             rig.notes.reloadFailures = failures
-            let undone = rig.notes.undoAgentCreatedNote(agentNoteID, revision: revision, metadata: metadata)
+            var undone = rig.notes.undoAgentCreatedNote(agentNoteID, revision: revision, metadata: metadata)
             let reloadsFailed = failures - rig.notes.reloadFailures
             rig.notes.reloadFailures = 0
+            if failures > 0 {
+                // r7: the family editor's save spent the context and the deletion's entry replaced it, so Undo is
+                // refused once (the subtask's file is saved); repeated, it applies.
+                let firstError = rig.notes.lastErrorMessage
+                let firstRows = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == agentNoteID }))
+                XCTAssertFalse(undone, "\(failures): the first Undo is refused")
+                XCTAssertEqual(firstError, R7Rows.refusal, "\(failures): refused at its entry")
+                XCTAssertTrue(!firstRows.isEmpty && firstRows.allSatisfy { $0.deletedAt == nil }, "\(failures): the refused Undo wrote nothing")
+                undone = rig.notes.undoAgentCreatedNote(agentNoteID, revision: revision, metadata: metadata)
+            }
             let refusals = WorkspaceLegacyBridge.spentContextRefusals - refusalsBefore
             let itemID = item.id
             let agentRows = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == agentNoteID }))
@@ -2163,7 +2185,8 @@ final class DurableSaveR7Tests: XCTestCase {
 
     /// HOLD 3. `update_note` and `update_note_table` decide from the presented note that it is not a task's note, so
     /// they ask for no workspace tokens. Another context made it task-owned without changing its revision. Each tool
-    /// is refused and writes nothing; repeated, it reads the fresh note and asks for the tokens.
+    /// is refused and writes nothing; repeated, the agent layer reads the fresh note, supplies the task's workspace
+    /// tokens (AgentActions+Convenience) and the write applies to the task-owned note.
     func testR7H3AgentToolsRefuseANoteThatBecameTaskOwned() async throws {
         for tool in ["update_note", "update_note_table"] {
             let taskID = UUID(), tableID = UUID()
@@ -2203,15 +2226,21 @@ final class DurableSaveR7Tests: XCTestCase {
             let first = await attempt()
             let afterFirst = try R7Rows.snapshot(rig.container)
             let firstError = rig.notes.lastErrorMessage
+            let presentedOwner = rig.notes.note(withID: noteID)?.taskID
             let second = await attempt()
             let afterSecond = try R7Rows.snapshot(rig.container)
+            print("R7_H3_OWNER tool=\(tool) presented_after_first=\(presentedOwner.map { "\($0 == taskID)" } ?? "nil") "
+                + "disk=\(try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).map { "\($0.taskID == taskID)" })")
             print("R7_H3 tool=\(tool) first=\(first.prefix(140)) second=\(second.prefix(140)) "
                 + "first_wrote=\(afterFirst != before) second_wrote=\(afterSecond != before)")
             XCTAssertTrue(first.hasPrefix("threw"), "\(tool): the first call is refused")
             XCTAssertEqual(firstError, R7Rows.refusal, "\(tool): refused at the entry")
             XCTAssertEqual(afterFirst, before, "\(tool): the refused call wrote nothing (note, table and proposal rows)")
-            XCTAssertTrue(second.contains("base_note_token"), "\(tool): repeated, it asks for the task's workspace tokens")
-            XCTAssertEqual(afterSecond, before, "\(tool): without the tokens it still writes nothing")
+            XCTAssertEqual(presentedOwner, taskID, "\(tool): after the refusal the presented note shows its task")
+            XCTAssertEqual(second, "performed", "\(tool): repeated, it applies with the task's workspace tokens")
+            XCTAssertNotEqual(afterSecond, before, "\(tool): the repeated call wrote")
+            let rows = try ModelContext(rig.container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+            XCTAssertTrue(!rows.isEmpty && rows.allSatisfy { $0.taskID == taskID }, "\(tool): the note keeps its task owner")
             await finish(rig)
         }
     }

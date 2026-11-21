@@ -243,6 +243,9 @@ enum NoteAgentWriteOutcome: Equatable {
     case pending(editID: UUID)
 }
 
+/// How a note-store command's entry treats a context replaced there (pr40-wall-design.md).
+enum NoteEditEntry { case decision, values }
+
 enum NoteAgentWriteDisposition: Equatable {
     case proposal, direct, refuse(String)
 }
@@ -551,7 +554,9 @@ extension NoteStore {
         creatingTask: TaskDraft? = nil,
         pinned: Bool = false
     ) -> Result<(noteID: UUID, revisionID: UUID), NoteDocumentStoreError> {
-        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
+        // .values for a new note: the id is checked unused and the document validated against the fresh rows below.
+        // Resolving a proposal decides on the reviewed one, so it is a decision.
+        guard prepareNoteEdit(resolvingProposal == nil ? .values : .decision) else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let context = modelContext
         if let existing = try? replicasIncludingDeleted(of: id), !existing.isEmpty {
             if existing.contains(where: { $0.deletedAt != nil }) { return .failure(.noteMissing(id)) }
@@ -674,7 +679,8 @@ extension NoteStore {
         prepared: PreparedNoteDocument? = nil,
         tags: [String]? = nil
     ) -> Result<UUID, NoteDocumentStoreError> {
-        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
+        // .values: the document is the whole write; baseRevisionID is checked against the fresh rows' preflight.
+        guard prepareNoteEdit(.values) else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let preflight: NoteMutationPreflight
         do {
             preflight = try noteMutationPreflight(noteID, format: .document)
@@ -1033,7 +1039,7 @@ extension NoteStore {
         catch { recordError(error.localizedDescription); return false }
         if inserted == 0 { return true }
         guard commitStagedChanges() else { return false }
-        thinVersions(noteID: noteID)
+        thinVersions(noteID: noteID, entry: .values)
         return true
     }
 
@@ -1041,8 +1047,10 @@ extension NoteStore {
     /// for a week and each day for a month. Proposal bases and recovery bases
     /// remain until their owner is gone. Safety versions taken at exactly the
     /// same instant are kept together so divergent replicas are not collapsed.
-    func thinVersions(noteID: UUID) {
-        guard prepareNoteEdit() else { return }
+    func thinVersions(noteID: UUID, entry: NoteEditEntry = .decision) {
+        // recordVersion passes .values after its own commit (only the id crosses): which versions go is read from the
+        // fresh rows below.
+        guard prepareNoteEdit(entry) else { return }
         let day: TimeInterval = 86_400
         let now = currentDate
         let targetID = noteID
@@ -1473,7 +1481,9 @@ extension NoteStore {
         // read from that pass's fresh rows (proposalEligible makes them agree; any row marked for review holds it).
         for editID in pendingEdits(noteID: noteID).map(\.id) {
             // Each pass commits; a journaled commit whose reload failed leaves the context spent for the next.
-            guard prepareNoteEdit() else { break }
+            // .values after this command's first commit: only the id crosses; pendingEditRows, proposalEligible and
+            // the review/deletion/workspace checks below read the fresh rows.
+            guard prepareNoteEdit(.values) else { break }
             guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { break }
             let replicas = preflight.replicas
             let current = preflight.canonical
