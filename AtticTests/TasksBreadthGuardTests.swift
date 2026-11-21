@@ -169,6 +169,48 @@ final class TasksBreadthGuardTests: XCTestCase {
         XCTAssertEqual(drawnA?.isSelected, false, "A lost the tint")
     }
 
+    /// Key window only (the Air): the real routes, through the page's
+    /// focus state. With A selected, a click on B, then ↓, then Tab: each
+    /// runs only the old and the new row's wrappers, and the new row's last
+    /// run draws the tint and the ring together (the click's selection and
+    /// its focus land in one update: B's wrapper runs once).
+    func testARealClickArrowAndTabRunOnlyTheOldAndNewRows() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.window.makeKey()
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(ids.count, 4)
+        let a = ids[0], b = ids[1], c = ids[2]
+        try hosted.clickRow(a, tab: .now)
+        hosted.spin(0.3)
+        func runs(_ name: String, _ body: () throws -> Void) rethrows -> [UUID: Int] {
+            let base = TasksCellBodyCounts.evaluations
+            try body()
+            hosted.spin(0.3)
+            let ran = Dictionary(uniqueKeysWithValues: TasksCellBodyCounts.evaluations.compactMap { row, count in
+                row.tab == .now && count > base[row, default: 0] ? (row.id, count - base[row, default: 0]) : nil
+            })
+            print("BREADTH_KEY \(name) rows=\(ran.count) runs=\(ran.values.reduce(0, +))")
+            return ran
+        }
+        func drawn(_ id: UUID) -> (isSelected: Bool, isFocused: Bool)? { TasksCellBodyCounts.leafStates[TasksRowID(tab: .now, id: id)] }
+
+        let click = try runs("click") { try hosted.clickRow(b, tab: .now) }
+        XCTAssertEqual(click, [a: 1, b: 1], "a click: the old and the new row, once each")
+        XCTAssertTrue(drawn(b).map { $0.isSelected && $0.isFocused } == true, "B draws the tint and the ring")
+        XCTAssertTrue(drawn(a).map { !$0.isSelected && !$0.isFocused } == true, "A draws neither")
+
+        let arrow = runs("arrow") { hosted.press(String(UnicodeScalar(NSDownArrowFunctionKey)!), keyCode: 125) }
+        XCTAssertEqual(arrow, [b: 1, c: 1], "↓: the old and the new row, once each")
+        XCTAssertTrue(drawn(c).map { $0.isSelected && $0.isFocused } == true, "C draws the tint and the ring")
+
+        let tab = runs("tab") { hosted.press("\t", keyCode: 48) }
+        let next = try XCTUnwrap(hosted.model.keyboardFocus?.id, "Tab reached a row")
+        XCTAssertEqual(tab, [c: 1, next: 1], "Tab: the old and the new row, once each")
+        XCTAssertTrue(drawn(next).map(\.isFocused) == true, "the ring moved with Tab")
+    }
+
     /// Lead's condition 4: rows of tabs that are not drawn change while
     /// Done is shown (Backlog beside it kept built and frozen, Now let go):
     /// selected, ticked, renamed, a failed command. No wrapper of either
