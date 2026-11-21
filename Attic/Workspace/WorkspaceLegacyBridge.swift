@@ -6,6 +6,26 @@ import SwiftData
 /// fresh-context envelope/receipt path and full publication refresh.
 @MainActor
 enum WorkspaceLegacyBridge {
+    #if DEBUG
+    /// Test seam (board ids delete-postcommit-owner-read, undo-unresolved-staging): the next N reads of the written
+    /// owners that follow a journaled commit throw, after the writer has already committed.
+    static var postCommitOwnerReadFailures = 0
+    /// Test seam: the next N plain saves throw after `commitInPlace` returned `.committed`, where the bridge updates
+    /// its scope guards and baseline.
+    static var postCommitPlainFailures = 0
+    /// Test seam: the next N in-place saves throw after `gatedSave` returned, where the coordinator captures the
+    /// permanent identifiers of inserted rows.
+    static var postSaveCaptureFailures = 0
+    /// Test seam: after the writer threw and reconciliation proved the plain commit durable, the next N reads of the
+    /// committed owners (the confirmed guards) throw.
+    static var postReconcileReadFailures = 0
+    /// Persists refused because their context was spent (board id undo-unresolved-staging). Ordinary saves never
+    /// reach the refusal: the full suite counts 0 outside the failure tests.
+    private(set) static var spentContextRefusals = 0
+    /// Rows staged through a context they do not belong to: a row carried across a context replacement
+    /// (pr40-fable.md §3, the family guard). A counter, not an assert; each one prints its site. 0 in ordinary use.
+    static var foreignRowMutations = 0
+    #endif
     private final class WeakCoordinator {
         weak var value: WorkspaceOperationCoordinator?
         init(_ value: WorkspaceOperationCoordinator) { self.value = value }
@@ -55,6 +75,12 @@ enum WorkspaceLegacyBridge {
         var captureFailed = false
         let includeCanvas: Bool
         var plainCommit = false
+        /// The context's changes are durable and it must not be staged on again: set when a journaled commit made
+        /// from it returns (the context itself is never saved and still holds what was committed), or when a plain
+        /// commit's after-commit step failed (its guards are stale). Stores replace a spent context before staging.
+        var spent = false
+        /// A plain commit was durable but its guards could not be updated (the context is spent).
+        var plainGuardFailed = false
         var itemLifecycle = false
         var itemLifecycleScopes: Set<WorkspaceScope> = []
         var scopeBaseline: ScopeBaseline?
@@ -184,6 +210,9 @@ enum WorkspaceLegacyBridge {
     static func withDeclaredReadSet<T>(tokens: [WorkspaceModelToken], scopes: [WorkspaceScopeToken],
                                        in source: ModelContext, _ body: () throws -> T) throws -> T {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
+        // A store replaces a spent context at its next staging entry, which would leave these tokens on a context
+        // that no longer commits. The caller makes the store's context usable first; this refuses one that is not.
+        guard !state.spent else { throw WorkspaceFoundationError.spentContext }
         let oldTokens = state.declaredTokens, oldScopes = state.declaredScopes
         state.declaredTokens = tokens; state.declaredScopes = scopes
         defer { state.declaredTokens = oldTokens; state.declaredScopes = oldScopes }
@@ -196,6 +225,14 @@ enum WorkspaceLegacyBridge {
         prepareMutations([row], in: source)
     }
     static func prepareMutations(_ rows: [any PersistentModel], in source: ModelContext) {
+        #if DEBUG
+        for row in rows {
+            if let owner = row.modelContext, owner !== source {
+                foreignRowMutations += 1
+                print("FOREIGN_ROW_MUTATION \(type(of: row)) at \(Thread.callStackSymbols.dropFirst(2).prefix(3).joined(separator: " | "))")
+            }
+        }
+        #endif
         captureBeforeMutations(rows, in: source)
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState, !state.captureFailed else { return }
         do {
@@ -342,6 +379,59 @@ enum WorkspaceLegacyBridge {
         do { _ = try scopeTokens(scopes, state: state, in: source); state.itemLifecycleScopes.formUnion(scopes) }
         catch { state.captureFailed = true }
     }
+    /// Whether this context has been spent by a commit (see `ContextState.spent`). A store's staging entry replaces
+    /// a spent context with a fresh read before it stages anything.
+    static func isSpent(_ source: ModelContext) -> Bool {
+        (objc_getAssociatedObject(source, &contextKey) as? ContextState)?.spent == true
+    }
+
+    #if DEBUG
+    /// Whether some staged row (its fields) is not among the durable rows.
+    /// Compared as multisets: two staged copies of one row need two durable copies.
+    static func stagedRowsMissing(staged: [[String: Data]], durable: [[String: Data]]) -> Bool {
+        var remaining = Dictionary(durable.map { ($0, 1) }, uniquingKeysWith: +)
+        for row in staged {
+            guard let count = remaining[row], count > 0 else { return true }
+            remaining[row] = count - 1
+        }
+        return false
+    }
+
+    /// What a spent context still holds that is not durable (build condition 5): every pending insert and change,
+    /// by owner, compared field by field with a fresh read, and every pending delete checked absent. Empty means
+    /// replacing it discards nothing. Physical ids are ignored: committed inserts have permanent ids on disk.
+    static func unsavedChanges(in source: ModelContext) throws -> [String] {
+        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { return [] }
+        let fresh = state.coordinator.freshContext()
+        var unsaved: [String] = []
+        let pending = source.insertedModelsArray + source.changedModelsArray
+        let owners = Set(try pending.map { row -> WorkspaceOwner in
+            guard let owner = WorkspaceOperationCoordinator.owner(row) else { throw WorkspaceFoundationError.conflict }
+            return owner
+        })
+        let staged = try WorkspaceModelToken.capture(owners: owners, models: pending)
+        let durable = try WorkspaceModelToken.read(owners: owners, in: fresh)
+        for owner in owners where stagedRowsMissing(staged: staged[owner]?.replicas.map(\.fields) ?? [],
+                                                    durable: durable[owner]?.replicas.map(\.fields) ?? []) {
+            unsaved.append("\(owner.entity.rawValue) \(owner.id)")
+        }
+        for row in source.deletedModelsArray {
+            guard let owner = WorkspaceOperationCoordinator.owner(row) else { continue }
+            let durableRows = try WorkspaceModelToken.read(owners: [owner], in: fresh)[owner]?.replicas ?? []
+            if durableRows.contains(where: { $0.physicalID == row.persistentModelID }) {
+                unsaved.append("deleted \(owner.entity.rawValue) \(owner.id)")
+            }
+        }
+        return unsaved.sorted()
+    }
+    #endif
+
+    /// The last commit was plain and durable, but updating its guards failed, so the context is spent and its
+    /// immediate reload must not carry attachment proofs across (r6 HOLD 2).
+    static func plainGuardFailed(in source: ModelContext) -> Bool {
+        (objc_getAssociatedObject(source, &contextKey) as? ContextState)?.plainGuardFailed == true
+    }
+
     static func wasPlainCommit(in source: ModelContext) throws -> Bool {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         return state.plainCommit
@@ -374,6 +464,17 @@ enum WorkspaceLegacyBridge {
             throw WorkspaceFoundationError.unknown
         }
         guard !state.captureFailed else { throw WorkspaceFoundationError.unknown }
+        // A spent context still holds changes that are already durable. Staging on it again would propose them a
+        // second time (a second physical row with the same id), so nothing is saved: the store's catch rolls it back
+        // and installs a fresh read. Stores replace a spent context before staging; this is the backstop.
+        if state.spent {
+            #if DEBUG
+            spentContextRefusals += 1
+            print("SPENT_REUSE source=\(sourceName) has_changes=\(source.hasChanges) inserted=\(source.insertedModelsArray.count) "
+                + "changed=\(source.changedModelsArray.count) deleted=\(source.deletedModelsArray.count)")
+            #endif
+            throw WorkspaceFoundationError.spentContext
+        }
         let call = state.itemLifecycle ? AgentWorkspaceCall.current : nil
         defer { state.itemLifecycle = false; state.itemLifecycleScopes = [] }
         if let call {
@@ -458,7 +559,8 @@ enum WorkspaceLegacyBridge {
             before: writes.map { before[$0]! }, after: writes.map { after[$0]! }, in: source)
         let requiredScopes = WorkspaceScopeToken.scopes(for: reads).union(declaredScopes.map(\.scope)).union(state.itemLifecycleScopes)
         if plain {
-            var confirmed: [WorkspaceOwner: WorkspaceModelToken] = [:]
+            // nil once committed: the save is durable but its guards could not be built.
+            var confirmed: [WorkspaceOwner: WorkspaceModelToken]?
             var writeError: Error?
             let result = state.coordinator.commitInPlace(source, before: reads, requiredScopes: requiredScopes,
                 scopes: { try scopeTokens(requiredScopes, state: state, in: source) },
@@ -471,11 +573,23 @@ enum WorkspaceLegacyBridge {
                 if result == .notCommitted, let writeError { throw writeError }
                 throw result == .conflict ? WorkspaceFoundationError.conflict : WorkspaceFoundationError.unknown
             }
-            try updateScopeGuards(confirmed, state: state, in: source)
-            state.baseline.merge(confirmed) { _, saved in saved }
-            try state.scopeBaseline?.replace(confirmed)
-            state.capturedOwners.removeAll()
-            state.plainCommit = true
+            // The save is durable: nothing after it throws. If the guards cannot be updated, the context is spent
+            // and not a plain commit, so the store presents from a fresh read and replaces it before staging again.
+            do {
+                #if DEBUG
+                if postCommitPlainFailures > 0 { postCommitPlainFailures -= 1; throw WorkspaceFoundationError.unknown }
+                #endif
+                guard let confirmed else { throw WorkspaceFoundationError.unknown }
+                try updateScopeGuards(confirmed, state: state, in: source)
+                state.baseline.merge(confirmed) { _, saved in saved }
+                try state.scopeBaseline?.replace(confirmed)
+                state.capturedOwners.removeAll()
+                state.plainCommit = true
+            } catch {
+                state.spent = true
+                state.plainCommit = false
+                state.plainGuardFailed = true
+            }
             return
         }
         let scopes = try scopeTokens(requiredScopes, state: state, in: source)
@@ -534,15 +648,29 @@ enum WorkspaceLegacyBridge {
                     }
                 }
             })
-        // The source context remains presentation/staging only; stores replace
-        // it with a fresh presentation after a confirmed commit.
+        // The source context remains presentation/staging only, still holding
+        // what was just committed, so it is spent: stores replace it with a
+        // fresh presentation before staging again.
+        // The commit is durable, so nothing after it throws: a failed read of
+        // the written owners leaves the baseline empty (a spent context never
+        // proposes again) instead of reporting a durable save as failed.
         // An ambiguous-save reconciliation or journaled operation still
         // confirms from disk. Successful plain saves already returned guards
         // of every saved instance, including its now-permanent physical ID.
-        let updates = try confirmed ?? WorkspaceModelToken.read(owners: writes, in: state.coordinator.freshContext())
-        state.baseline = updates
+        state.spent = true
         state.scopes.removeAll()
         state.plainCommit = false
+        do {
+            #if DEBUG
+            if confirmed == nil, postCommitOwnerReadFailures > 0 {
+                postCommitOwnerReadFailures -= 1
+                throw WorkspaceFoundationError.unknown
+            }
+            #endif
+            state.baseline = try confirmed ?? WorkspaceModelToken.read(owners: writes, in: state.coordinator.freshContext())
+        } catch {
+            state.baseline = [:]
+        }
     }
     static func persistSharedChanges(_ source: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
         if (source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray).contains(where: { $0 is ItemLink || $0 is TaskItem || $0 is NoteItem }) {
