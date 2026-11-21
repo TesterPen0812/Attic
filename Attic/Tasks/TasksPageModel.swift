@@ -3551,39 +3551,106 @@ final class TasksPageModel: ObservableObject {
 extension TasksPageModel {
     /// What the tab's list holds now, read without building anything: the
     /// rows as last built and the selection runs over them. Nil rows: the
-    /// list is not built (each state keeps its row until it is).
+    /// list is not built (each state keeps its row until it is). Lazy: an
+    /// index of the rows only once more than a few are looked up, the runs
+    /// only when a run is asked for with more than one row selected, Done's
+    /// days flattened only for those.
     private struct RowStateList {
-        let rows: [TasksListRow]?
-        let runs: [UUID: AtticSelectionRun]
-        private var index: [UUID: Int]?
-
-        init(rows: [TasksListRow]?, ids: [UUID], selected: Set<UUID>, expanded: Set<UUID>) {
-            self.rows = rows
-            runs = rows == nil ? [:] : TasksSelectionRuns.make(ids: ids, selected: selected, expanded: expanded)
+        private enum Source {
+            case none
+            case list(rows: [TasksListRow], ids: [UUID])
+            case done([TasksDoneDay])
         }
 
+        let tab: TasksTab
+        private let source: Source
+        private let selected: Set<UUID>
+        private let expanded: Set<UUID>
+        private var flat: [TasksListRow]?
+        private var index: [UUID: Int]?
+        private var runs: [UUID: AtticSelectionRun]?
+        private var lookups = 0
+
+        init(tab: TasksTab, list: (rows: [TasksListRow], ids: [UUID])?, done: [TasksDoneDay]?,
+             selected: Set<UUID>, expanded: Set<UUID>) {
+            self.tab = tab
+            if let list { source = .list(rows: list.rows, ids: list.ids) } else if let done { source = .done(done) } else { source = .none }
+            self.selected = selected
+            self.expanded = expanded
+        }
+
+        var isBuilt: Bool { if case .none = source { false } else { true } }
+
+        private mutating func rows() -> [TasksListRow] {
+            switch source {
+            case .none: return []
+            case let .list(rows, _): return rows
+            case let .done(days):
+                if let flat { return flat }
+                let rows = days.flatMap(\.rows)
+                flat = rows
+                TasksPageModel.noteRowStateListWork(tab)
+                return rows
+            }
+        }
+
+        /// Every listed row's id (the lifetime's membership).
+        mutating func listedIDs() -> Set<UUID> { Set(rows().map(\.id)) }
+
         mutating func row(_ id: UUID) -> TasksListRow? {
-            guard let rows else { return nil }
+            guard isBuilt else { return nil }
+            lookups += 1
+            if index == nil, lookups <= 4 {
+                if case let .done(days) = source, flat == nil {
+                    for day in days { if let row = day.rows.first(where: { $0.id == id }) { return row } }
+                    return nil
+                }
+                return rows().first { $0.id == id }
+            }
             if index == nil {
+                let rows = rows()
                 var built: [UUID: Int] = [:]
                 built.reserveCapacity(rows.count)
                 for (offset, row) in rows.enumerated() where built[row.id] == nil { built[row.id] = offset }
                 index = built
+                TasksPageModel.noteRowStateListWork(tab)
             }
-            return index?[id].map { rows[$0] }
+            return index?[id].map { rows()[$0] }
         }
 
-        var isBuilt: Bool { rows != nil }
+        /// `TasksSelectionRuns.make`'s run for `id` (single with one row
+        /// or none selected, without building anything).
+        mutating func run(_ id: UUID) -> AtticSelectionRun {
+            guard isBuilt, selected.count > 1 else { return .single }
+            if runs == nil {
+                let ids: [UUID]
+                if case let .list(_, listIDs) = source { ids = listIDs } else { ids = rows().map(\.id) }
+                runs = TasksSelectionRuns.make(ids: ids, selected: selected, expanded: expanded)
+                TasksPageModel.noteRowStateListWork(tab)
+            }
+            return runs?[id] ?? .single
+        }
+    }
+
+    #if DEBUG
+    /// Tests: how many times a tab's rows were indexed, flattened or had
+    /// their runs worked out for row states.
+    nonisolated(unsafe) static var rowStateListWork: [TasksTab: Int] = [:]
+    #endif
+
+    nonisolated fileprivate static func noteRowStateListWork(_ tab: TasksTab) {
+        #if DEBUG
+        rowStateListWork[tab, default: 0] += 1
+        #endif
     }
 
     /// Side-effect free: reads the caches, builds and counts nothing.
     private func rowStateList(_ tab: TasksTab) -> RowStateList {
         if tab == .done {
-            let rows = doneCache?.days.flatMap(\.rows)
-            return RowStateList(rows: rows, ids: rows?.map(\.id) ?? [], selected: selection, expanded: expanded)
+            return RowStateList(tab: tab, list: nil, done: doneCache?.days, selected: selection, expanded: expanded)
         }
         let snapshot = rowsCache[tab]
-        return RowStateList(rows: snapshot?.rows, ids: snapshot?.ids ?? [], selected: selection, expanded: expanded)
+        return RowStateList(tab: tab, list: snapshot.map { ($0.rows, $0.ids) }, done: nil, selected: selection, expanded: expanded)
     }
 
     /// The one derivation of a row's state from the model. Every writer
@@ -3609,7 +3676,7 @@ extension TasksPageModel {
 
     private func derived(_ state: TasksRowState, in list: inout RowStateList) -> TasksRowStateValue {
         let row = list.row(state.id) ?? state.value.row
-        return derivedRowState(state.id, tab: state.tab, row: row, run: list.runs[state.id] ?? .single)
+        return derivedRowState(state.id, tab: state.tab, row: row, run: list.run(state.id))
     }
 
     /// The state a cell of `row` on `tab` observes: its live entry, or a
@@ -3619,15 +3686,30 @@ extension TasksPageModel {
         if let state = rowStates[tab]?[row.id] { return state }
         var list = rowStateList(tab)
         let state = TasksRowState(id: row.id, tab: tab, value: derivedRowState(
-            row.id, tab: tab, row: list.row(row.id) ?? row, run: list.runs[row.id] ?? .single))
+            row.id, tab: tab, row: list.row(row.id) ?? row, run: list.run(row.id)))
         rowStates[tab, default: [:]][row.id] = state
         return state
+    }
+
+    /// The page's pass that builds a cell says whether its page is drawn.
+    /// A hidden page's state freezes: no writer touches it (`apply` is
+    /// skipped), so a selection or any other change costs nothing on a
+    /// page nobody sees. Drawn again, it is worked out afresh from the
+    /// model (the one derivation) before its fields thaw.
+    func setRowState(_ state: TasksRowState, drawn: Bool) {
+        guard drawn else { state.setDrawn(false); return }
+        guard state.isFrozen else { return }
+        var list = rowStateList(state.tab)
+        state.apply(derived(state, in: &list))
+        state.setDrawn(true)
+        queueRowStateCheck()
     }
 
     /// The model changed what `ids` show (nil: any listed row), on every
     /// tab: their live states are worked out again. `runs`: the selection
     /// or the quick looks changed, so any row whose selection run moved is
-    /// written too. Equal values notify nobody.
+    /// written too. Equal values notify nobody; frozen states wait for
+    /// their page to draw (`setRowState`).
     func rowStatesChanged(_ ids: [UUID?]) {
         rowStatesChanged(Set(ids.compactMap { $0 }))
     }
@@ -3635,14 +3717,21 @@ extension TasksPageModel {
     func rowStatesChanged(_ ids: Set<UUID>?, runs: Bool = false) {
         guard !rowStates.isEmpty, ids?.isEmpty != true || runs else { return }
         for (tab, states) in rowStates where !states.isEmpty {
-            var list = rowStateList(tab)
-            if ids == nil || runs {
-                for state in states.values where ids?.contains(state.id) ?? true
-                    || (list.runs[state.id] ?? .single) != state.value.run {
-                    state.apply(derived(state, in: &list))
+            if let ids, !runs {
+                // An id-only change: a tab that has none of the ids is
+                // skipped without reading its list.
+                let touched = ids.compactMap { states[$0] }.filter { !$0.isFrozen }
+                guard !touched.isEmpty else { continue }
+                var list = rowStateList(tab)
+                for state in touched { state.apply(derived(state, in: &list)) }
+                continue
+            }
+            var list: RowStateList?
+            for state in states.values where !state.isFrozen {
+                if list == nil { list = rowStateList(tab) }
+                if ids?.contains(state.id) ?? true || list!.run(state.id) != state.value.run {
+                    state.apply(derived(state, in: &list!))
                 }
-            } else if let ids {
-                for id in ids { if let state = states[id] { state.apply(derived(state, in: &list)) } }
             }
         }
         queueRowStateCheck()
@@ -3650,17 +3739,17 @@ extension TasksPageModel {
 
     /// The tab's list was built again (`keep`, or Done's days): states of
     /// rows that left it go, so an "all rows" route never grows with the
-    /// rows ever built; every other state is brought up to the new list
-    /// (its row, its run). A row that comes back gets a fresh state.
+    /// rows ever built; every other drawn state is brought up to the new
+    /// list (its row, its run). A row that comes back gets a fresh state.
     private func rowStatesListed(_ tab: TasksTab) {
         guard let states = rowStates[tab], !states.isEmpty else { return }
         var list = rowStateList(tab)
-        guard let rows = list.rows else { return }
-        let listed = Set(rows.map(\.id))
+        guard list.isBuilt else { return }
+        let listed = list.listedIDs()
         var kept: [UUID: TasksRowState] = [:]
         kept.reserveCapacity(min(states.count, listed.count))
         for (id, state) in states where listed.contains(id) {
-            state.apply(derived(state, in: &list))
+            if !state.isFrozen { state.apply(derived(state, in: &list)) }
             kept[id] = state
         }
         rowStates[tab] = kept
@@ -3698,12 +3787,16 @@ extension TasksPageModel {
         for (tab, states) in rowStates {
             var list = rowStateList(tab)
             for (id, state) in states {
-                if !state.isFrozen, state.read(drawn: true) != state.value {
-                    found.append("row \(id) on \(tab): the untracked mirror differs from its fields")
-                }
                 if list.isBuilt, list.row(id) == nil {
+                    // Frozen or not, a state lives only while its row is listed.
                     found.append("row \(id) on \(tab): its state lives but the row left the list")
                     continue
+                }
+                // A frozen state is worked out afresh when its page draws
+                // (`setRowState`); until then nobody reads its fields.
+                guard !state.isFrozen else { continue }
+                if state.read(drawn: true) != state.value {
+                    found.append("row \(id) on \(tab): the untracked mirror differs from its fields")
                 }
                 let fields = state.value.differences(from: derived(state, in: &list))
                 if !fields.isEmpty {

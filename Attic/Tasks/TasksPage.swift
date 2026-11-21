@@ -1891,7 +1891,7 @@ struct TasksPage: View {
         // The row's own state (slice 1b): the cell observes it, and nothing
         // else of the model, so a change runs only the cells it changed.
         let state = model.rowState(for: row, tab: tab)
-        let _ = state.setDrawn(drawn)
+        let _ = model.setRowState(state, drawn: drawn)
         #if DEBUG
         let _ = TasksCellBodyCounts.notePass(TasksRowID(tab: tab, id: id), palette: tagColouring.palette)
         #endif

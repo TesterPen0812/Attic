@@ -299,6 +299,54 @@ final class TasksBreadthGuardTests: XCTestCase {
               + "ticked_listed=\(model.listSnapshot(for: .now).rows.contains { $0.id == now[1] })")
     }
 
+    /// A keyboard move and a selection change do no list work for a tab
+    /// that has none of the rows (a tab whose states are frozen, Backlog
+    /// behind Now): no index, no flattening, no selection runs. On Now, a
+    /// focus move with one row selected reads no list either (two lookups,
+    /// no runs).
+    func testAKeyboardMoveOrSelectionReadsNoListOfATabWithoutItsRows() throws {
+        let store = try makeStore(open: 12, backlog: 6)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        for tab in [TasksTab.backlog, .now] {
+            model.select(tab: tab)
+            settle(hosting, until: { model.pagerSwipe.span.pages == tab.rawValue...tab.rawValue })
+            settle(hosting)
+        }
+        XCTAssertFalse(model.rowStateIDsForTesting[.backlog, default: []].isEmpty, "Backlog's rows have states")
+        let ids = model.rows(for: .now).map(\.id)
+        let later = model.rows(for: .backlog).map(\.id)
+        func focus(_ id: UUID) {
+            model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: id), keyboardDriving: false)
+        }
+        model.selectOnly(ids[1])
+        focus(ids[1])
+        settle(hosting)
+
+        TasksPageModel.rowStateListWork = [:]
+        focus(ids[2])
+        XCTAssertEqual(TasksPageModel.rowStateListWork, [:], "a focus move with one row selected reads no list")
+
+        model.click(ids[4], modifiers: .command, visible: ids)
+        settle(hosting)
+        TasksPageModel.rowStateListWork = [:]
+        focus(ids[3])
+        focus(ids[4])
+        print("BREADTH_LIST_WORK focus_multi=\(TasksPageModel.rowStateListWork)")
+        XCTAssertNil(TasksPageModel.rowStateListWork[.backlog], "a focus move read Backlog's list")
+        XCTAssertNil(TasksPageModel.rowStateListWork[.done], "a focus move read Done's list")
+        XCTAssertLessThanOrEqual(TasksPageModel.rowStateListWork[.now, default: 0], 2, "one run map a move on Now")
+
+        TasksPageModel.rowStateListWork = [:]
+        model.click(ids[6], modifiers: .command, visible: ids)
+        model.selectOnly(later[1])
+        print("BREADTH_LIST_WORK select=\(TasksPageModel.rowStateListWork)")
+        XCTAssertNil(TasksPageModel.rowStateListWork[.backlog], "a selection change worked on Backlog's frozen states")
+        settle(hosting)
+        XCTAssertEqual(model.rowStateMismatches(), [])
+    }
+
     /// Lead's condition 3: a row's state goes when the row leaves its tab
     /// (delete, filter) and is made fresh when it returns (Undo); the live
     /// states are only listed rows, however many rows were ever drawn.
