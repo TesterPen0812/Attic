@@ -613,6 +613,13 @@ final class CornerRevealSettingsTests: XCTestCase {
                 let corner = try reveal(rig, thenHideBy: path, pointerAtBegin: \.corner, atEnd: \.corner)
                 XCTAssertFalse(revealsWithin(rig, 0.5), "\(path): a hide never re-reveals under a resting pointer")
                 XCTAssertFalse(corner.announced.revealPending, "\(path): a resting pointer gets no reveal deadline")
+                // The latch itself, before any exit: two in-corner samples a
+                // full reveal delay apart; the first starts no dwell.
+                let t0 = ProcessInfo.processInfo.systemUptime
+                rig.monitor.sampleForTesting(at: corner.corner, uptime: t0)
+                XCTAssertFalse(corner.announced.revealPending, "\(path): an in-corner sample starts no dwell")
+                rig.monitor.sampleForTesting(at: corner.corner, uptime: t0 + rig.settings.revealDelay + 0.05)
+                XCTAssertFalse(rig.controller.isPanelVisible, "\(path): a full reveal delay later it is still latched")
                 rig.monitor.pointerLocationForTesting = corner.far
                 rig.monitor.sampleForTesting(at: corner.far)
                 arrive(at: corner)
@@ -970,11 +977,23 @@ extension CornerRevealSettingsTests {
             n.rig.monitor.pointerActivityForTesting(at: n.corner)
             spin(0.05)
             XCTAssertTrue(n.rig.controller.isPanelVisible, "still shown")
-            _ = n.rig.controller.requestHide { _ in } // Esc
+            let announced = Corner.Box()
+            n.rig.monitor.onVisibilityChangeExpected = { expected in
+                if let expected, !expected.hiding { announced.revealPending = true }
+            }
+            defer { n.rig.monitor.onVisibilityChangeExpected = nil }
+            // The real Esc entry: the panel's unhandled Esc.
+            XCTAssertEqual(n.rig.controller.panelForTesting.onUnhandledEscape?(), true, "Esc hides the panel")
             narrowWaitHidden(n)
             XCTAssertFalse(narrowRevealed(n, within: 0.6), "no re-reveal under the resting pointer")
-            n.rig.monitor.sampleForTesting(at: n.corner, uptime: ProcessInfo.processInfo.systemUptime + 10)
-            XCTAssertFalse(n.rig.controller.isPanelVisible, "still latched")
+            XCTAssertFalse(announced.revealPending, "a resting pointer gets no reveal deadline")
+            // Two in-corner samples a full reveal delay apart: the first
+            // starts no dwell, and the second reveals nothing.
+            let t0 = ProcessInfo.processInfo.systemUptime
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: t0)
+            XCTAssertFalse(announced.revealPending, "an in-corner sample starts no dwell")
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: t0 + n.rig.settings.revealDelay + 0.05)
+            XCTAssertFalse(n.rig.controller.isPanelVisible, "a full reveal delay later it is still latched")
         }
     }
 }
