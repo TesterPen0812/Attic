@@ -765,7 +765,8 @@ final class NoteStore: ObservableObject {
                 try staging?(context)
                 guard save(retaining: retainedEdits) else { return nil }
                 let restored = RestoredNote(separate: false, group: group, owner: owner)
-                refresh()
+                // The commit step refreshes this store when it reaches it; only a store it misses refreshes itself.
+                if !WorkspaceItemLifecycle.didCommitRefreshes(self, in: container) { refresh() }
                 WorkspaceItemLifecycle.didCommit(in: container)
                 return restored
             }
