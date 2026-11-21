@@ -293,9 +293,12 @@ final class NotesPageController: ObservableObject {
     /// Moves on each `present()`: the page puts the keyboard back in the
     /// note (Notes reopens where you left it, caret included).
     @Published private(set) var presentationCount = 0
-    /// Follows the undo route's revision, so menus that read the library's
-    /// undo names redraw when a step is recorded, undone or dropped.
-    @Published private(set) var undoRevision: UInt64 = 0
+    /// Each change of the undo route's history (a step recorded, undone or
+    /// dropped, in any page), sent without invalidating the controller:
+    /// the menus read the library's undo names when they open, and only the
+    /// delete toast's check runs on every change.
+    var undoRevisionChanges: AnyPublisher<UInt64, Never> { undoRevisionSubject.eraseToAnyPublisher() }
+    private let undoRevisionSubject = PassthroughSubject<UInt64, Never>()
 
     let store: NoteStore
     let librarySummaries = NotesLibrarySummaryCache()
@@ -4398,9 +4401,10 @@ extension NotesPageController {
     /// Follows `route` for the library's actions from now on.
     func attachUndoRoute(_ route: UndoRoute) {
         undoRoute = route
-        undoRevision = route.revision
+        // The first value is the new route's own: a toast tied to the old
+        // route's history is checked against it.
         undoRevisionSubscription = route.$revision.sink { [weak self] revision in
-            self?.undoRevision = revision
+            self?.undoRevisionSubject.send(revision)
         }
     }
 
