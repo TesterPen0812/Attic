@@ -274,9 +274,10 @@ struct NotesEditorPage: View {
             // leaves no note on screen, and its toast stays.)
             if opened != nil { dismissOwnToast() }
         }
-        .onChange(of: controller.undoRevision) { _, _ in
-            // Another action (or an Undo) moved the history on: a toast for
-            // a delete that Undo no longer reaches goes away.
+        .onReceive(controller.undoRevisionChanges) { _ in
+            // Another action (or an Undo) moved the history on, here or in
+            // a hidden page: a toast for a delete that Undo no longer
+            // reaches goes away. Runs without running the page's body.
             if let step = postedToastStep, controller.libraryUndoStepID != step { dismissOwnToast() }
         }
         .onChange(of: controller.presentationCount) { _, _ in

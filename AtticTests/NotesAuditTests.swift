@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CryptoKit
 import SwiftData
 import SwiftUI
@@ -298,14 +299,24 @@ final class NotesAuditTests: XCTestCase {
         let route = UndoRoute()
         controller.attachUndoRoute(route)
         let a = try create([.text("Alpha")])
-        let before = controller.undoRevision
+        // Pinned until speed-mech5: a published `undoRevision` on the whole
+        // controller rose; now `undoRevisionChanges` announces each change
+        // and the controller's observers are not invalidated by it.
+        var announced = 0
+        var invalidated = 0
+        let changes = controller.undoRevisionChanges.sink { _ in announced += 1 }
+        let willChange = controller.objectWillChange.sink { _ in invalidated += 1 }
+        defer { changes.cancel(); willChange.cancel() }
         controller.setPinned(true, noteID: a)
-        XCTAssertGreaterThan(controller.undoRevision, before, "menus redraw when a step is recorded")
+        XCTAssertEqual(announced, 1, "the toast check hears a recorded step")
         XCTAssertTrue(route.canUndo(in: .notesLibrary))
         XCTAssertFalse(route.canUndo(in: .library), "apart from Recently Deleted and tag changes")
-        let recorded = controller.undoRevision
         controller.undoLibrary()
-        XCTAssertGreaterThan(controller.undoRevision, recorded)
+        XCTAssertEqual(announced, 2, "and an Undo")
+        invalidated = 0
+        route.record(UndoStep(name: "Complete Task", undo: { true }, redo: { true }), in: .tasks)
+        XCTAssertEqual(announced, 3, "and another page's step")
+        XCTAssertEqual(invalidated, 0, "another page's step does not invalidate the Notes controller")
     }
 
     func testTheUndoKeysBelongToTheLibraryUnlessTheSearchFieldHasTextToUndo() async {
