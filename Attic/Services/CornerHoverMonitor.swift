@@ -368,13 +368,14 @@ final class CornerHoverMonitor {
         defer { refreshSamplingCadence(at: location) }
         restingHotspot.pointerObserved(at: location)
         let activeScreen = screen(containing: location)
+        let activeFrame = screenFrame(containing: location, on: activeScreen)
         // When the cursor is pinned against a screen edge, mouseLocation sits exactly on
         // the frame boundary (e.g. y == maxY at the top), which CGRect.contains excludes.
         // Expand the hotspot outward so edge-pinned coordinates still count as inside.
         // Only a corner that answers hover, with the chosen key held now
         // (Settings › Panel › Corner; control audit item 10).
-        let isInHotspot = activeScreen.map {
-            revealPolicy.reveals(displayID: displayID(of: $0), flags: NSEvent.modifierFlags)
+        let isInHotspot = activeFrame.map {
+            revealPolicy.reveals(displayID: $0.id, flags: NSEvent.modifierFlags)
                 && PanelGeometry.hotspot(in: $0.frame, corner: settings.corner)
                     .insetBy(dx: -1, dy: -1)
                     .contains(location)
@@ -542,8 +543,8 @@ final class CornerHoverMonitor {
     /// reveals, so it needs no latch, and one set there would sit under an
     /// idle cadence and block the next watched corner.
     private func watchedHotspot(containing location: CGPoint) -> CGRect? {
-        guard let screen = screen(containing: location),
-              revealPolicy.answers(displayID: displayID(of: screen)) else { return nil }
+        guard let screen = screenFrame(containing: location),
+              revealPolicy.answers(displayID: screen.id) else { return nil }
         let hotspot = PanelGeometry.hotspot(in: screen.frame, corner: settings.corner).insetBy(dx: -1, dy: -1)
         return hotspot.contains(location) ? hotspot : nil
     }
@@ -735,7 +736,7 @@ final class CornerHoverMonitor {
     }
 
     private func refreshCachedScreenFrames() {
-        cachedScreens = NSScreen.screens.map { ($0.frame, AtticDisplay.identifier(for: $0)) }
+        cachedScreens = screensForTesting ?? NSScreen.screens.map { ($0.frame, AtticDisplay.identifier(for: $0)) }
         revealPolicy = settings.cornerRevealPolicy
         cachedScreenFrames = cachedScreens.filter { revealPolicy.answers(displayID: $0.id) }.map(\.frame)
     }
@@ -773,11 +774,15 @@ final class CornerHoverMonitor {
     /// Test seam: where the monitor's own samples (follow-ups, lock
     /// changes, a hide's end) read the pointer; nil reads the real pointer.
     var pointerLocationForTesting: CGPoint?
+    /// Test seam: the displays the monitor's sampling and latch read, as
+    /// (frame, id); nil reads `NSScreen.screens`. Set it before `start()`.
+    /// Showing the panel always uses a real `NSScreen`.
+    var screensForTesting: [(frame: CGRect, id: String?)]?
     /// Test seam: whether a pointer at `location` counts as in the hotspot
     /// with `flags` held, as a sample decides it.
     func isInHotspotForTesting(_ location: CGPoint, flags: NSEvent.ModifierFlags) -> Bool {
-        guard let screen = screen(containing: location) else { return false }
-        return revealPolicy.reveals(displayID: displayID(of: screen), flags: flags)
+        guard let screen = screenFrame(containing: location) else { return false }
+        return revealPolicy.reveals(displayID: screen.id, flags: flags)
             && PanelGeometry.hotspot(in: screen.frame, corner: settings.corner).insetBy(dx: -1, dy: -1).contains(location)
     }
 
@@ -828,6 +833,19 @@ final class CornerHoverMonitor {
             NSEvent.removeMonitor(globalPointerMonitor)
             self.globalPointerMonitor = nil
         }
+    }
+
+    /// The display holding `point` as (frame, id), for sampling and the
+    /// latch: from `screensForTesting` when a test sets it (the same 1 pt
+    /// fallback), else `screen` (looked up when not passed) with its id
+    /// from `displayID(of:)`, as before the seam.
+    private func screenFrame(containing point: CGPoint, on screen: NSScreen? = nil) -> (frame: CGRect, id: String?)? {
+        if let screensForTesting {
+            return screensForTesting.first { NSMouseInRect(point, $0.frame, false) }
+                ?? screensForTesting.first { $0.frame.insetBy(dx: -1, dy: -1).contains(point) }
+        }
+        guard let screen = screen ?? self.screen(containing: point) else { return nil }
+        return (screen.frame, displayID(of: screen))
     }
 
     private func screen(containing point: CGPoint) -> NSScreen? {
