@@ -360,8 +360,9 @@ final class CornerHoverMonitor {
         return nil
     }
 
-    private func samplePointer(at location: CGPoint = NSEvent.mouseLocation,
+    private func samplePointer(at requestedLocation: CGPoint? = nil,
                                uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        let location = requestedLocation ?? pointerLocationForTesting ?? NSEvent.mouseLocation
         sampleCount += 1
         lastEventSampleAt = uptime
         defer { refreshSamplingCadence(at: location) }
@@ -504,7 +505,7 @@ final class CornerHoverMonitor {
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isRunning, !self.stateMachine.isVisible else { return }
             self.followUpWork = nil
-            self.samplePointer(at: self.pointerLocationForTesting ?? NSEvent.mouseLocation)
+            self.samplePointer()
         }
         followUpWork = work
         DispatchQueue.main.async(execute: work)
@@ -652,7 +653,7 @@ final class CornerHoverMonitor {
             guard let self, self.isRunning else { return }
             self.followUpWork = nil
             IdleLatencyTrace.followUpFired(scheduled: due)
-            self.samplePointer(at: self.pointerLocationForTesting ?? NSEvent.mouseLocation)
+            self.samplePointer()
         }
         followUpWork = work
         followUpCountForTesting += 1
@@ -750,8 +751,8 @@ final class CornerHoverMonitor {
         samplePointer(at: location, uptime: uptime)
     }
     func pointerActivityForTesting(at location: CGPoint) { pointerActivityObserved(at: location) }
-    /// Test seam: where a hide's end and the timed follow-up read the
-    /// pointer; nil reads the real pointer.
+    /// Test seam: where the monitor's own samples (follow-ups, lock
+    /// changes, a hide's end) read the pointer; nil reads the real pointer.
     var pointerLocationForTesting: CGPoint?
     /// Test seam: whether a pointer at `location` counts as in the hotspot
     /// with `flags` held, as a sample decides it.
