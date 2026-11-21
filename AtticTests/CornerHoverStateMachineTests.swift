@@ -873,3 +873,222 @@ final class PanelUIStateTests: XCTestCase {
         XCTAssertFalse(state.isInteractionLocked)
     }
 }
+
+// MARK: - Menu tracking holds a hidden corner reveal (PR 43 gate)
+
+/// Test-only control of `NSEvent.mouseLocation` and `NSEvent.modifierFlags`
+/// for this process, so every commit's monitor (with or without its own
+/// seams) reads the same scripted pointer and keys. nil reads the real one.
+enum NarrowEvents {
+    // Read from any thread AppKit asks on; written only by the tests on main.
+    nonisolated(unsafe) static var location: CGPoint?
+    nonisolated(unsafe) static var flags: NSEvent.ModifierFlags?
+    nonisolated(unsafe) private static var installed = false
+
+    static func install() {
+        guard !installed else { return }
+        installed = true
+        let locationSelector = #selector(getter: NSEvent.mouseLocation)
+        if let method = class_getClassMethod(NSEvent.self, locationSelector) {
+            typealias Original = @convention(c) (AnyClass, Selector) -> NSPoint
+            let original = unsafeBitCast(method_getImplementation(method), to: Original.self)
+            let block: @convention(block) (AnyClass) -> NSPoint = { cls in
+                NarrowEvents.location ?? original(cls, locationSelector)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(block))
+        }
+        let flagsSelector = #selector(getter: NSEvent.modifierFlags)
+        if let method = class_getClassMethod(NSEvent.self, flagsSelector) {
+            typealias Original = @convention(c) (AnyClass, Selector) -> UInt
+            let original = unsafeBitCast(method_getImplementation(method), to: Original.self)
+            let block: @convention(block) (AnyClass) -> UInt = { cls in
+                NarrowEvents.flags?.rawValue ?? original(cls, flagsSelector)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(block))
+        }
+    }
+}
+
+@MainActor
+private struct MenuGateRig {
+    let settings: AppSettings
+    let uiState: PanelUIState
+    let controller: AtticPanelController
+    let monitor: CornerHoverMonitor
+    let defaults: UserDefaults
+    let suite: String
+}
+
+extension CornerHoverStateMachineTests {
+    @MainActor
+    private func makeMenuGateRig() throws -> MenuGateRig {
+        let suite = "CornerMenuGate.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let canvasStore = CanvasStore(container: container)
+        let canvasSession = CanvasSession(store: canvasStore)
+        let noteDraft = NoteDraftController(noteStore: notes)
+        let settings = AppSettings(defaults: defaults)
+        let uiState = PanelUIState()
+        let controller = AtticPanelController(store: store, noteStore: notes, canvasSession: canvasSession,
+                                              noteDraft: noteDraft, settings: settings, uiState: uiState)
+        let monitor = CornerHoverMonitor(settings: settings, panelController: controller, uiState: uiState,
+                                         store: store, noteStore: notes, canvasStore: canvasStore, noteDraft: noteDraft)
+        return MenuGateRig(settings: settings, uiState: uiState, controller: controller, monitor: monitor,
+                           defaults: defaults, suite: suite)
+    }
+
+    /// Waits, up to `timeout`, until `condition` holds (checked every
+    /// 10 ms on the main run loop); whether it did.
+    @MainActor
+    private func menuGateWait(_ timeout: TimeInterval, until condition: @escaping () -> Bool) -> Bool {
+        menuGateWatch(timeout, inverted: false, condition)
+    }
+
+    /// Whether `condition` stays false for all of `duration`, checked every
+    /// 10 ms (an inverted expectation: it fails as soon as it holds).
+    @MainActor
+    private func menuGateStaysFalse(_ duration: TimeInterval, _ condition: @escaping () -> Bool) -> Bool {
+        menuGateWatch(duration, inverted: true, condition)
+    }
+
+    @MainActor
+    private func menuGateWatch(_ timeout: TimeInterval, inverted: Bool, _ condition: @escaping () -> Bool) -> Bool {
+        let met = XCTestExpectation(description: "condition")
+        met.isInverted = inverted
+        // Checked now, then by the timer; each path fulfills at most once.
+        if condition() {
+            met.fulfill()
+            return XCTWaiter().wait(for: [met], timeout: timeout) == .completed
+        }
+        let poll = Timer(timeInterval: 0.01, repeats: true) { timer in
+            MainActor.assumeIsolated {
+                guard condition() else { return }
+                met.fulfill()
+                timer.invalidate()
+            }
+        }
+        RunLoop.main.add(poll, forMode: .common)
+        defer { poll.invalidate() }
+        return XCTWaiter().wait(for: [met], timeout: timeout) == .completed
+    }
+
+    /// A band-crossing approach (a sample at 50 pt, then the corner, so no
+    /// exit latch is involved) while a menu is tracking: the corner must not
+    /// reveal the panel over the open menu. Releasing the menu with the
+    /// pointer still resting in the corner then reveals it with no further
+    /// pointer event.
+    @MainActor
+    func testMenuTrackingHoldsACornerRevealUntilTheMenuCloses() throws {
+        NarrowEvents.install()
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = previous
+            NarrowEvents.location = nil
+            NarrowEvents.flags = nil
+        }
+        let rig = try makeMenuGateRig()
+        defer { rig.defaults.removePersistentDomain(forName: rig.suite) }
+        rig.settings.corner = .topRight
+        NarrowEvents.flags = []
+        rig.monitor.start()
+        defer {
+            rig.uiState.setInteractionLock(.menuTracking, isActive: false)
+            rig.monitor.stop()
+            _ = menuGateWait(1) { !rig.controller.isPanelVisible }
+        }
+        XCTAssertTrue(menuGateWait(1) { !rig.monitor.hoverScreenFramesForTesting.isEmpty }, "a watched corner")
+        let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first)
+        let far = CGPoint(x: frame.midX, y: frame.midY)
+        let band = CGPoint(x: frame.maxX - 50, y: frame.maxY - 50)
+        let corner = CGPoint(x: frame.maxX - 1, y: frame.maxY - 1)
+        NarrowEvents.location = far
+        rig.monitor.pointerActivityForTesting(at: far)
+        rig.uiState.setInteractionLock(.menuTracking, isActive: true)
+        XCTAssertTrue(menuGateStaysFalse(0.05) { rig.controller.isPanelVisible }, "far from the corner")
+        NarrowEvents.location = band
+        rig.monitor.pointerActivityForTesting(at: band)
+        XCTAssertTrue(menuGateStaysFalse(0.05) { rig.controller.isPanelVisible }, "in the band, outside the hotspot")
+        NarrowEvents.location = corner
+        rig.monitor.pointerActivityForTesting(at: corner)
+        XCTAssertTrue(menuGateStaysFalse(0.8) { rig.controller.isPanelVisible }, "menu tracking holds the corner reveal")
+
+        rig.uiState.setInteractionLock(.menuTracking, isActive: false)
+        XCTAssertTrue(menuGateWait(1) { rig.controller.isPanelVisible }, "closing the menu reveals for the resting pointer")
+    }
+}
+
+extension CornerHoverStateMachineTests {
+    /// The gate at the state machine: a held reveal starts no dwell and is
+    /// recorded as waiting; the exit latch is checked first and wins; once
+    /// the menu closes the dwell starts from that sample.
+    func testAHiddenRevealHeldByAMenuStartsNoDwellAndTheLatchStillComesFirst() {
+        var machine = CornerHoverStateMachine()
+        XCTAssertEqual(machine.update(at: 1, isInHotspot: true, isInPanel: false, isInteractionLocked: true,
+                                      isRevealHeldByMenu: true, revealDelay: 0.2), .none)
+        XCTAssertNil(machine.nextRevealDeadline(revealDelay: 0.2), "no dwell under a tracking menu")
+        XCTAssertTrue(machine.isRevealWaitingOnMenu)
+        XCTAssertEqual(machine.update(at: 5, isInHotspot: true, isInPanel: false, isInteractionLocked: true,
+                                      isRevealHeldByMenu: true, revealDelay: 0.2), .none, "however long it rests")
+        XCTAssertEqual(machine.update(at: 6, isInHotspot: true, isInPanel: false, isInteractionLocked: false,
+                                      revealDelay: 0.2), .none)
+        XCTAssertFalse(machine.isRevealWaitingOnMenu)
+        XCTAssertEqual(machine.nextRevealDeadline(revealDelay: 0.2), 6.2, "the dwell starts when the menu closes")
+        XCTAssertEqual(machine.update(at: 6.2, isInHotspot: true, isInPanel: false, isInteractionLocked: false,
+                                      revealDelay: 0.2), .reveal)
+
+        var away = CornerHoverStateMachine()
+        _ = away.update(at: 1, isInHotspot: false, isInPanel: false, isInteractionLocked: true,
+                        isRevealHeldByMenu: true, revealDelay: 0.2)
+        XCTAssertFalse(away.isRevealWaitingOnMenu, "nothing waits for a pointer outside the hotspot")
+
+        var latched = CornerHoverStateMachine()
+        latched.forceVisible(at: 0, grace: 0)
+        latched.forceHidden(untilHotspotExit: true)
+        _ = latched.update(at: 1, isInHotspot: true, isInPanel: false, isInteractionLocked: true,
+                           isRevealHeldByMenu: true, revealDelay: 0.2)
+        XCTAssertFalse(latched.isRevealWaitingOnMenu, "a latched pointer is not a held reveal")
+        _ = latched.update(at: 2, isInHotspot: true, isInPanel: false, isInteractionLocked: false, revealDelay: 0.2)
+        XCTAssertNil(latched.nextRevealDeadline(revealDelay: 0.2), "the menu closing does not release the latch")
+    }
+}
+
+// MARK: - PR 43: the resting hotspot (narrowing red 2, by the value type)
+
+extension CornerHoverStateMachineTests {
+    /// Two watched displays side by side, each with its own corner. The
+    /// pointer rests in display A's corner as the hide begins; a pointer
+    /// seen in display B's corner is outside A's, so it is an approach
+    /// there, and returning to A no longer counts as resting.
+    func testTheRestingHotspotIsOneRectangleSoAnotherDisplaysCornerIsOutside() {
+        let screenA = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let screenB = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
+        let hotspotA = PanelGeometry.hotspot(in: screenA, corner: .topRight).insetBy(dx: -1, dy: -1)
+        let hotspotB = PanelGeometry.hotspot(in: screenB, corner: .topRight).insetBy(dx: -1, dy: -1)
+        let cornerA = CGPoint(x: screenA.maxX - 1, y: screenA.maxY - 1)
+        let cornerB = CGPoint(x: screenB.maxX - 1, y: screenB.maxY - 1)
+        XCTAssertTrue(hotspotA.contains(cornerA))
+        XCTAssertTrue(hotspotB.contains(cornerB))
+        XCTAssertFalse(hotspotA.contains(cornerB))
+
+        var resting = CornerHoverRestingHotspot()
+        XCTAssertFalse(resting.holds(cornerA), "no hide began: nothing rests")
+        resting.hideBegan(in: hotspotA)
+        resting.pointerObserved(at: CGPoint(x: cornerA.x - 1, y: cornerA.y))
+        XCTAssertTrue(resting.holds(cornerA), "moves inside A keep it")
+        XCTAssertTrue(resting.holds(cornerA), "reading does not consume it")
+        XCTAssertFalse(resting.holds(cornerB), "B's corner is not A's")
+        resting.pointerObserved(at: cornerB)
+        XCTAssertNil(resting.rect, "seen in B's corner: cleared")
+        resting.pointerObserved(at: cornerA)
+        XCTAssertFalse(resting.holds(cornerA), "back in A after leaving: an approach")
+
+        resting.hideBegan(in: hotspotB)
+        XCTAssertTrue(resting.holds(cornerB))
+        resting.hideBegan(in: nil)
+        XCTAssertFalse(resting.holds(cornerB), "a hide begun outside every watched hotspot holds nothing")
+    }
+}

@@ -506,4 +506,518 @@ final class CornerRevealSettingsTests: XCTestCase {
         XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown,
                        "the menu bar icon, quick capture and agents still open it")
     }
+
+    // MARK: - CORNER-REVEAL-MISS: the exit latch means "resting since the hide began"
+
+    /// Every hide that is not a cursor exit: click away, a controller hide
+    /// (Esc, menu; the `hideCount` path), the interactive swipe and the probe.
+    private enum LatchingHide: CaseIterable { case clickAway, controller, swipe, probe }
+
+    private struct Corner {
+        let rig: Panel
+        let frame: CGRect
+        var corner: CGPoint { CGPoint(x: frame.maxX - 1, y: frame.maxY - 1) }
+        var far: CGPoint { CGPoint(x: frame.midX, y: frame.midY) }
+        var band: CGPoint { CGPoint(x: frame.maxX - 50, y: frame.maxY - 50) }
+        /// Whether the monitor has announced a reveal deadline since the last reset.
+        let announced: Box
+        final class Box { var revealPending = false }
+    }
+
+    /// Reveals, then hides by `path`. The pointer is at `begin(…)` as the
+    /// hide begins (the monitor reads it once, through its one seam, when
+    /// the controller calls `onHideBegan`) and at `end(…)` as it ends, where
+    /// it then rests. Begin and end differ only across an animated hide, so
+    /// the latch rig runs with Reduce Motion off.
+    private func reveal(_ rig: Panel, thenHideBy path: LatchingHide,
+                        pointerAtBegin begin: (Corner) -> CGPoint, atEnd end: (Corner) -> CGPoint,
+                        file: StaticString = #filePath, line: UInt = #line) throws -> Corner {
+        let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first, file: file, line: line)
+        let box = Corner.Box()
+        let corner = Corner(rig: rig, frame: frame, announced: box)
+        rig.monitor.pointerLocationForTesting = begin(corner)
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown,
+                       file: file, line: line)
+        rig.monitor.onVisibilityChangeExpected = { expected in
+            if let expected, !expected.hiding { box.revealPending = true }
+        }
+        switch path {
+        case .clickAway:
+            let panel = rig.controller.visibleContentFrameForTesting
+            rig.controller.handlePressForTesting(at: CGPoint(x: panel.midX - 700, y: panel.midY - 700))
+        case .controller:
+            _ = rig.controller.requestHide { _ in }
+        case .swipe:
+            // The real swipe entry point; its own completion tells the monitor.
+            rig.controller.panelForTesting.onTrackpadDismissRequest?()
+        case .probe:
+            rig.monitor.hideForPerformanceProbe { _ in }
+        }
+        XCTAssertTrue(rig.controller.isPanelVisible, "\(path): the hide is animated, so it is still running",
+                      file: file, line: line)
+        rig.monitor.pointerLocationForTesting = end(corner)
+        let deadline = Date().addingTimeInterval(2)
+        while rig.controller.isPanelVisible || !rig.monitor.isHiddenForPerformanceProbe, Date() < deadline { spin(0.01) }
+        XCTAssertFalse(rig.controller.isPanelVisible, "\(path) hid the panel", file: file, line: line)
+        XCTAssertTrue(rig.monitor.isHiddenForPerformanceProbe, file: file, line: line)
+        return corner
+    }
+
+    /// Runs the run loop until the panel is visible or `timeout` passes.
+    private func revealsWithin(_ rig: Panel, _ timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !rig.controller.isPanelVisible, Date() < deadline { spin(0.01) }
+        return rig.controller.isPanelVisible
+    }
+
+    /// The pointer arrives in the corner: the first sample after the hide
+    /// is already in the hotspot, then the pointer rests there.
+    private func arrive(at corner: Corner) {
+        corner.announced.revealPending = false
+        corner.rig.monitor.pointerLocationForTesting = corner.corner
+        corner.rig.monitor.sampleForTesting(at: corner.corner)
+    }
+
+    private func withLatchRig(_ body: (Panel) throws -> Void) throws {
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = previous }
+        let rig = try makePanel()
+        rig.settings.corner = .topRight
+        rig.monitor.start()
+        defer { rig.monitor.onVisibilityChangeExpected = nil; rig.monitor.stop(); spin(0.3) }
+        try body(rig)
+    }
+
+    /// The owner's miss (20 Nov): the pointer is far from the corner when
+    /// the hide begins and ends, no samples run there, and the first sample
+    /// near the corner is already in the hotspot. That is a new approach,
+    /// not a resting pointer, so the reveal is pending at once.
+    func testCornerRevealMissFastApproachAfterAHideRevealsOnTheFirstHotspotSample() throws {
+        for path in LatchingHide.allCases {
+            try withLatchRig { rig in
+                let corner = try reveal(rig, thenHideBy: path, pointerAtBegin: \.far, atEnd: \.far)
+                arrive(at: corner)
+                XCTAssertTrue(corner.announced.revealPending, "\(path): the first hotspot sample sets the reveal deadline")
+                XCTAssertTrue(revealsWithin(rig, 1), "\(path): the panel reveals without a second entry")
+            }
+        }
+    }
+
+    /// The guarantee the latch exists for: the pointer rests in the corner
+    /// from the hide's start to its end, so the hide must not re-reveal
+    /// under it. Leaving and coming back then reveals.
+    func testCornerRevealMissPointerStillInTheCornerAtAHideMustLeaveFirst() throws {
+        for path in LatchingHide.allCases {
+            try withLatchRig { rig in
+                let corner = try reveal(rig, thenHideBy: path, pointerAtBegin: \.corner, atEnd: \.corner)
+                XCTAssertFalse(revealsWithin(rig, 0.5), "\(path): a hide never re-reveals under a resting pointer")
+                XCTAssertFalse(corner.announced.revealPending, "\(path): a resting pointer gets no reveal deadline")
+                // The latch itself, before any exit: two in-corner samples a
+                // full reveal delay apart; the first starts no dwell.
+                let t0 = ProcessInfo.processInfo.systemUptime
+                rig.monitor.sampleForTesting(at: corner.corner, uptime: t0)
+                XCTAssertFalse(corner.announced.revealPending, "\(path): an in-corner sample starts no dwell")
+                rig.monitor.sampleForTesting(at: corner.corner, uptime: t0 + rig.settings.revealDelay + 0.05)
+                XCTAssertFalse(rig.controller.isPanelVisible, "\(path): a full reveal delay later it is still latched")
+                rig.monitor.pointerLocationForTesting = corner.far
+                rig.monitor.sampleForTesting(at: corner.far)
+                arrive(at: corner)
+                XCTAssertTrue(corner.announced.revealPending, "\(path): after leaving, the next entry is a fresh approach")
+                XCTAssertTrue(revealsWithin(rig, 1), "\(path)")
+            }
+        }
+    }
+
+    /// The sibling: a pointer still near the corner but outside the hotspot
+    /// at the hide (inside the 96 pt band) is not resting in the corner; a
+    /// flick into the hotspot is a new approach.
+    func testCornerRevealMissPointerNearButOutsideTheHotspotAtAHideDoesNotLatch() throws {
+        for path in LatchingHide.allCases {
+            try withLatchRig { rig in
+                let corner = try reveal(rig, thenHideBy: path, pointerAtBegin: \.band, atEnd: \.band)
+                arrive(at: corner)
+                XCTAssertTrue(corner.announced.revealPending, "\(path)")
+                XCTAssertTrue(revealsWithin(rig, 1), "\(path)")
+            }
+        }
+    }
+
+    /// Round 2 (lead, 21 Nov): the pointer is away when the hide begins
+    /// and reaches the corner before it ends (0.22 s on Slide, 0.80 s on
+    /// Genie). That is an approach, not a resting pointer: it is not
+    /// latched, and since a resting pointer sends no more events, a sample
+    /// at the hide's end starts its dwell and the panel reveals with no
+    /// further pointer event.
+    func testCornerRevealMissPointerArrivingDuringTheHideRevealsWithoutAnotherEvent() throws {
+        for path in LatchingHide.allCases {
+            try withLatchRig { rig in
+                let corner = try reveal(rig, thenHideBy: path, pointerAtBegin: \.far, atEnd: \.corner)
+                XCTAssertTrue(revealsWithin(rig, 1), "\(path): the arrival reveals by itself")
+                XCTAssertTrue(corner.announced.revealPending, "\(path): a reveal deadline was set at the hide's end")
+            }
+        }
+    }
+}
+
+// MARK: - PR 43 narrowing (Astra r2 on 190723de): test-only reds, run on 79c06ffc, c8a3f0a9, 52c77361
+
+extension CornerRevealSettingsTests {
+    private struct NarrowRig {
+        let rig: Panel
+        let frame: CGRect
+        var corner: CGPoint { CGPoint(x: frame.maxX - 1, y: frame.maxY - 1) }
+        var cornerNudged: CGPoint { CGPoint(x: frame.maxX - 2, y: frame.maxY - 2) }
+        var far: CGPoint { CGPoint(x: frame.midX, y: frame.midY) }
+    }
+
+    private func narrow(reduceMotion: Bool, mode: PanelDismissMode = .clickAway,
+                        screens: [(frame: CGRect, id: String?)]? = nil,
+                        _ body: (NarrowRig) throws -> Void) throws {
+        NarrowEvents.install()
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = reduceMotion
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = previous
+            NarrowEvents.location = nil
+            NarrowEvents.flags = nil
+        }
+        let rig = try makePanel()
+        rig.settings.corner = .topRight
+        rig.settings.panelDismissMode = mode
+        NarrowEvents.flags = []
+        rig.monitor.screensForTesting = screens
+        rig.monitor.start()
+        defer {
+            rig.uiState.setInteractionLock(.menuTracking, isActive: false)
+            rig.monitor.stop()
+            spin(0.3)
+        }
+        spin(0.05)
+        let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first)
+        try body(NarrowRig(rig: rig, frame: frame))
+    }
+
+    private func narrowShow(_ n: NarrowRig, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(n.rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown,
+                       file: file, line: line)
+    }
+
+    private func narrowWaitHidden(_ n: NarrowRig, file: StaticString = #filePath, line: UInt = #line) {
+        let deadline = Date().addingTimeInterval(3)
+        while n.rig.controller.isPanelVisible || !n.rig.monitor.isHiddenForPerformanceProbe, Date() < deadline { spin(0.01) }
+        XCTAssertFalse(n.rig.controller.isPanelVisible, "the hide completed", file: file, line: line)
+    }
+
+    private func narrowRevealed(_ n: NarrowRig, within seconds: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !n.rig.controller.isPanelVisible, Date() < deadline { spin(0.01) }
+        return n.rig.controller.isPanelVisible
+    }
+
+    /// Target red: away when the hide begins, in the corner when it ends,
+    /// then resting. That arrival reveals with no further event.
+    func testNarrowTargetArrivalDuringTheHideReveals() throws {
+        try narrow(reduceMotion: false) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            NarrowEvents.location = n.corner
+            n.rig.monitor.pointerActivityForTesting(at: n.corner)
+            narrowWaitHidden(n)
+            XCTAssertTrue(narrowRevealed(n, within: 1), "an arrival during the hide reveals by itself")
+        }
+    }
+
+    /// Astra 1: resting in the corner at the hide's start, an exit and a
+    /// return inside one 33 ms coalescing interval, back in the corner at
+    /// its end. The pointer left, so its return is an approach.
+    func testNarrow1ExitAndReturnWithinOneSampleIntervalIsAnApproach() throws {
+        try narrow(reduceMotion: false) { n in
+            NarrowEvents.location = n.corner
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            n.rig.monitor.sampleForTesting(at: n.corner)
+            NarrowEvents.location = n.far
+            n.rig.monitor.pointerActivityForTesting(at: n.far) // coalesced: within 33 ms of the sample
+            NarrowEvents.location = n.corner                    // back before the trailing sample runs
+            narrowWaitHidden(n)
+            XCTAssertTrue(narrowRevealed(n, within: 1), "a delivered exit and return is an approach")
+        }
+    }
+
+    /// Astra 2, through the monitor: two watched displays (the real one as
+    /// A and a stand-in B beside it, through `screensForTesting`). A hide
+    /// begins with the pointer resting in A's hotspot; the pointer is next
+    /// seen in B's corner; the hide completes. B's corner is not A's, so it
+    /// is an approach: its reveal delay starts with no further event. The
+    /// show itself needs a real screen, so the test asserts the reveal
+    /// deadline (the on-screen two-display row covers the show).
+    func testNarrow2TwoWatchedCornersAreNotOne() throws {
+        let real = try XCTUnwrap(NSScreen.screens.first)
+        let a = real.frame
+        let b = CGRect(x: a.maxX, y: a.maxY - 900, width: 1440, height: 900)
+        let screens: [(frame: CGRect, id: String?)] = [(a, AtticDisplay.identifier(for: real)), (b, "pr43-stand-in-b")]
+        try narrow(reduceMotion: false, screens: screens) { n in
+            XCTAssertEqual(n.rig.monitor.hoverScreenFramesForTesting, [a, b], "both corners are watched")
+            let bCorner = CGPoint(x: b.maxX - 1, y: b.maxY - 1)
+            XCTAssertTrue(n.rig.monitor.isInHotspotForTesting(n.corner, flags: []), "A's corner is a hotspot")
+            XCTAssertTrue(n.rig.monitor.isInHotspotForTesting(bCorner, flags: []), "B's corner is a hotspot")
+            NarrowEvents.location = n.corner
+            narrowShow(n)
+            let announced = Corner.Box()
+            n.rig.monitor.onVisibilityChangeExpected = { expected in
+                if let expected, !expected.hiding { announced.revealPending = true }
+            }
+            defer { n.rig.monitor.onVisibilityChangeExpected = nil }
+            _ = n.rig.controller.requestHide { _ in }
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "the hide is animated, so it is still running")
+            NarrowEvents.location = bCorner
+            narrowWaitHidden(n)
+            let deadline = Date().addingTimeInterval(1)
+            while !announced.revealPending, Date() < deadline { spin(0.01) }
+            XCTAssertTrue(announced.revealPending, "another display's corner is an approach: its reveal delay starts")
+        }
+    }
+
+    /// Astra r3 H2: a sample resolves the pointer's screen once. With the
+    /// display seam nil, a point outside every display is one miss, not a
+    /// second lookup that could qualify it while the show still has none.
+    func testASampleLooksThePointersScreenUpOnceEvenOffEveryDisplay() throws {
+        try narrow(reduceMotion: true) { n in
+            let union = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
+            let offEveryDisplay = CGPoint(x: union.minX - 5_000, y: union.minY - 5_000)
+            NarrowEvents.location = offEveryDisplay
+            let before = n.rig.monitor.screenLookupCountForTesting
+            n.rig.monitor.sampleForTesting(at: offEveryDisplay)
+            XCTAssertEqual(n.rig.monitor.screenLookupCountForTesting - before, 1, "one lookup per sample")
+            XCTAssertFalse(n.rig.monitor.isInHotspotForTesting(offEveryDisplay, flags: []), "a miss stays a miss")
+        }
+    }
+
+    /// Astra 3: hidden with the pointer far, it enters the corner, then a
+    /// second hide request while already hidden. Trunk latched on it; the
+    /// resting pointer must not reveal.
+    func testNarrow3AnAlreadyHiddenRequestDoesNotReopenUnderARestingPointer() throws {
+        try narrow(reduceMotion: true) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            narrowWaitHidden(n)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.sampleForTesting(at: n.corner)
+            n.rig.monitor.hideForPerformanceProbe { _ in }
+            XCTAssertFalse(narrowRevealed(n, within: 0.6), "the second request stays hidden through the dwell")
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertFalse(n.rig.controller.isPanelVisible, "and at a later sample")
+        }
+    }
+
+    /// Astra 4: Option-to-reveal, dismissed with the pointer resting in the
+    /// corner and Option up. Holding Option and moving one point within the
+    /// hotspot (never leaving it) must not reopen the panel.
+    func testNarrow4AStationaryPointerKeepsItsLatchWhateverTheKey() throws {
+        try narrow(reduceMotion: true) { n in
+            n.rig.settings.revealModifier = .option
+            spin(0.1)
+            NarrowEvents.location = n.corner
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            narrowWaitHidden(n)
+            spin(0.1)
+            NarrowEvents.flags = [.option]
+            NarrowEvents.location = n.cornerNudged
+            n.rig.monitor.pointerActivityForTesting(at: n.cornerNudged)
+            n.rig.monitor.sampleForTesting(at: n.cornerNudged, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertFalse(n.rig.controller.isPanelVisible, "a pointer that never left stays latched")
+        }
+    }
+
+    /// Astra 5: a controller hide begun away from the corner, an arrival
+    /// during the animation, and menu tracking held through the dwell.
+    func testNarrow5NoRevealWhileMenuTrackingAfterAnArrivalDuringTheHide() throws {
+        try narrow(reduceMotion: false) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            NarrowEvents.location = n.corner
+            n.rig.monitor.pointerActivityForTesting(at: n.corner)
+            n.rig.uiState.setInteractionLock(.menuTracking, isActive: true)
+            narrowWaitHidden(n)
+            XCTAssertFalse(narrowRevealed(n, within: 0.8), "menu tracking holds the reveal")
+            // Closing the menu with the pointer still: a fresh reveal delay,
+            // then the reveal, with no further pointer event.
+            let announced = Corner.Box()
+            n.rig.monitor.onVisibilityChangeExpected = { expected in
+                if let expected, !expected.hiding { announced.revealPending = true }
+            }
+            defer { n.rig.monitor.onVisibilityChangeExpected = nil }
+            n.rig.uiState.setInteractionLock(.menuTracking, isActive: false)
+            let released = Date().addingTimeInterval(1)
+            while !announced.revealPending, Date() < released { spin(0.01) }
+            XCTAssertTrue(announced.revealPending, "closing the menu starts a fresh reveal delay")
+            XCTAssertTrue(narrowRevealed(n, within: 1), "and the panel reveals")
+        }
+    }
+
+    /// Control for 5: a plain approach after the hide, menu tracking held.
+    /// Shows whether the hidden branch consults the lock on any commit.
+    func testNarrow5ControlNoRevealWhileMenuTrackingOnAPlainApproach() throws {
+        try narrow(reduceMotion: true) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            _ = n.rig.controller.requestHide { _ in }
+            narrowWaitHidden(n)
+            n.rig.uiState.setInteractionLock(.menuTracking, isActive: true)
+            spin(0.05)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.pointerActivityForTesting(at: n.corner)
+            XCTAssertFalse(narrowRevealed(n, within: 0.8), "menu tracking holds the reveal")
+            // Closing the menu with the pointer still: a fresh reveal delay,
+            // then the reveal, with no further pointer event.
+            let announced = Corner.Box()
+            n.rig.monitor.onVisibilityChangeExpected = { expected in
+                if let expected, !expected.hiding { announced.revealPending = true }
+            }
+            defer { n.rig.monitor.onVisibilityChangeExpected = nil }
+            n.rig.uiState.setInteractionLock(.menuTracking, isActive: false)
+            let released = Date().addingTimeInterval(1)
+            while !announced.revealPending, Date() < released { spin(0.01) }
+            XCTAssertTrue(announced.revealPending, "closing the menu starts a fresh reveal delay")
+            XCTAssertTrue(narrowRevealed(n, within: 1), "and the panel reveals")
+        }
+    }
+
+    /// Astra 6: Move cursor away; the pointer returns to the corner during
+    /// the timed hide and rests. It reveals with no further event.
+    func testNarrow6CursorAwayReturnDuringTheHideReveals() throws {
+        try narrow(reduceMotion: false, mode: .moveCursorAway) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            let time = ProcessInfo.processInfo.systemUptime + 10
+            n.rig.monitor.sampleForTesting(at: n.far, uptime: time)
+            n.rig.monitor.sampleForTesting(at: n.far, uptime: time + n.rig.settings.hideDelay + 1)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.pointerActivityForTesting(at: n.corner)
+            narrowWaitHidden(n)
+            XCTAssertTrue(narrowRevealed(n, within: 1), "a return during the hide reveals by itself")
+        }
+    }
+
+    /// Astra r3 H6: Option-to-reveal and Move cursor away, shown on A. The
+    /// pointer rests in B's watched corner with Option up, so the timed
+    /// hide starts; Option goes down during the hide with no movement. The
+    /// pointer has rested in B since the hide began, so the hide's end must
+    /// not start a reveal under it.
+    func testNarrowH6CursorAwayHideEndingUnderARestingPointerStartsNoReveal() throws {
+        let real = try XCTUnwrap(NSScreen.screens.first)
+        let a = real.frame
+        let b = CGRect(x: a.maxX, y: a.maxY - 900, width: 1440, height: 900)
+        let screens: [(frame: CGRect, id: String?)] = [(a, AtticDisplay.identifier(for: real)), (b, "pr43-stand-in-b")]
+        try narrow(reduceMotion: false, mode: .moveCursorAway, screens: screens) { n in
+            n.rig.settings.revealModifier = .option
+            spin(0.1)
+            let bCorner = CGPoint(x: b.maxX - 1, y: b.maxY - 1)
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            NarrowEvents.location = bCorner
+            NarrowEvents.flags = []
+            XCTAssertFalse(n.rig.monitor.isInHotspotForTesting(bCorner, flags: []), "Option up: not the hotspot")
+            XCTAssertTrue(n.rig.monitor.isInHotspotForTesting(bCorner, flags: [.option]), "Option down: B's hotspot")
+            let time = ProcessInfo.processInfo.systemUptime + 10
+            n.rig.monitor.pointerActivityForTesting(at: bCorner)
+            n.rig.monitor.sampleForTesting(at: bCorner, uptime: time)
+            n.rig.monitor.sampleForTesting(at: bCorner, uptime: time + n.rig.settings.hideDelay + 1)
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "the timed hide is animating")
+            let announced = Corner.Box()
+            n.rig.monitor.onVisibilityChangeExpected = { expected in
+                if let expected, !expected.hiding { announced.revealPending = true }
+            }
+            defer { n.rig.monitor.onVisibilityChangeExpected = nil }
+            NarrowEvents.flags = [.option]
+            narrowWaitHidden(n)
+            let quiet = Date().addingTimeInterval(1)
+            while !announced.revealPending, Date() < quiet { spin(0.01) }
+            XCTAssertFalse(announced.revealPending, "no reveal starts under a pointer resting since the hide began")
+            XCTAssertFalse(n.rig.controller.isPanelVisible)
+        }
+    }
+
+    /// Astra 7 (a): the swipe through its real entry point, pointer resting
+    /// in the corner: it hides, stays latched, then leaving and returning
+    /// reveals.
+    func testNarrow7aSwipeKeepThroughTheRealEntryPoint() throws {
+        try narrow(reduceMotion: true) { n in
+            NarrowEvents.location = n.corner
+            narrowShow(n)
+            n.rig.controller.panelForTesting.onTrackpadDismissRequest?()
+            narrowWaitHidden(n)
+            XCTAssertFalse(narrowRevealed(n, within: 0.4), "no re-reveal under the resting pointer")
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertFalse(n.rig.controller.isPanelVisible, "still latched")
+            NarrowEvents.location = n.far
+            n.rig.monitor.sampleForTesting(at: n.far)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.sampleForTesting(at: n.corner)
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "leaving and returning reveals")
+        }
+    }
+
+    /// Astra 7 (b): the swipe through its real entry point with the pointer
+    /// far; the first sample back in the corner sets the dwell.
+    func testNarrow7bSwipeFastApproachThroughTheRealEntryPoint() throws {
+        try narrow(reduceMotion: true) { n in
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            n.rig.controller.panelForTesting.onTrackpadDismissRequest?()
+            narrowWaitHidden(n)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.sampleForTesting(at: n.corner)
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: ProcessInfo.processInfo.systemUptime + 10)
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "the first approach reveals")
+        }
+    }
+}
+
+extension CornerRevealSettingsTests {
+    /// Keep (Fable, 21 Nov): revealed by the corner, the pointer goes into
+    /// the panel and back to the corner, then Esc. It has rested in the
+    /// corner since the hide began, so the panel stays hidden under it.
+    func testNarrowKeepCornerIntoThePanelBackToTheCornerThenEscStaysHidden() throws {
+        try narrow(reduceMotion: true) { n in
+            NarrowEvents.location = n.corner
+            n.rig.monitor.sampleForTesting(at: n.corner)
+            n.rig.monitor.sampleForTesting(at: n.corner,
+                                           uptime: ProcessInfo.processInfo.systemUptime + n.rig.settings.revealDelay + 0.05)
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "the corner reveals")
+            let panel = n.rig.controller.visibleContentFrameForTesting
+            let inside = CGPoint(x: panel.midX, y: panel.midY)
+            spin(0.05)
+            NarrowEvents.location = inside
+            n.rig.monitor.pointerActivityForTesting(at: inside)
+            spin(0.05)
+            NarrowEvents.location = n.corner
+            n.rig.monitor.pointerActivityForTesting(at: n.corner)
+            spin(0.05)
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "still shown")
+            let announced = Corner.Box()
+            n.rig.monitor.onVisibilityChangeExpected = { expected in
+                if let expected, !expected.hiding { announced.revealPending = true }
+            }
+            defer { n.rig.monitor.onVisibilityChangeExpected = nil }
+            // The real Esc entry: the panel's unhandled Esc.
+            XCTAssertEqual(n.rig.controller.panelForTesting.onUnhandledEscape?(), true, "Esc hides the panel")
+            narrowWaitHidden(n)
+            XCTAssertFalse(narrowRevealed(n, within: 0.6), "no re-reveal under the resting pointer")
+            XCTAssertFalse(announced.revealPending, "a resting pointer gets no reveal deadline")
+            // Two in-corner samples a full reveal delay apart: the first
+            // starts no dwell, and the second reveals nothing.
+            let t0 = ProcessInfo.processInfo.systemUptime
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: t0)
+            XCTAssertFalse(announced.revealPending, "an in-corner sample starts no dwell")
+            n.rig.monitor.sampleForTesting(at: n.corner, uptime: t0 + n.rig.settings.revealDelay + 0.05)
+            XCTAssertFalse(n.rig.controller.isPanelVisible, "a full reveal delay later it is still latched")
+        }
+    }
 }

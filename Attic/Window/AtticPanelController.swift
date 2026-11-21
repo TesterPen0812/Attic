@@ -403,6 +403,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     var onInteractiveHideCompleted: (() -> Void)?
     /// Where the pointer is, for the click-through hit test. Tests place it.
     var pointerLocation: () -> CGPoint = { NSEvent.mouseLocation }
+    /// A hide is starting: called in `requestHide` at the two places a
+    /// `.hidden` completion can follow (the already-hidden return and the
+    /// start of the animation), so the corner monitor can note where the
+    /// pointer rests as the hide begins (CORNER-REVEAL-MISS).
+    var onHideBegan: (() -> Void)?
     private var isResamplingPassthrough = false
     /// O14-01: the panel became key under a press; its key look waits for
     /// the release.
@@ -847,6 +852,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard panel.isVisible else {
             stopPointerPassthroughMonitoring()
             stopOutsidePressMonitoring()
+            onHideBegan?()
             completion(.hidden)
             return .accepted
         }
@@ -924,6 +930,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.setInteractionLock(.windowMove, isActive: false)
         uiState.setInteractionLock(.windowResize, isActive: false)
         let generation = visibilityTransition.beginHideTransition(completion: completion)
+        onHideBegan?()
         isShowing = false
         needsResizeAfterShowing = false
         let safeFrame = PanelGeometry.constrainedFrame(panel.visibleContentFrame, to: usableFrame(on: screen, corner: currentCorner))
