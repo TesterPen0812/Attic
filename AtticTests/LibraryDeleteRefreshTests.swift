@@ -108,6 +108,126 @@ final class LibraryDeleteRefreshTests: XCTestCase {
         XCTAssertTrue(shown.notes.contains { $0.id == writing })
     }
 
+    // A restore from Recently Deleted (`AtticLibrary.restore`) reloads each
+    // store once, as a delete does: the library adds its own refresh only
+    // where the restore's commit step does not reach its stores, and never
+    // reloads Tasks after a task store's save that already read them fresh.
+
+    /// Whole Tasks reloads (what `TaskStore.refresh()` runs) of `store` (TaskStore by default) while `body` runs;
+    /// an incremental task commit names its IDs and is not counted.
+    private func taskReloads(of store: TaskStore? = nil, _ body: () -> Void) -> Int {
+        let store: TaskStore = store ?? tasks
+        var count = 0
+        let watch = store.$revision.dropFirst().sink { _ in if store.revisionChangedTaskIDs == nil { count += 1 } }
+        body()
+        watch.cancel()
+        return count
+    }
+
+    func testRecentlyDeletedTaskRestoreReloadsEachStoreOnce() throws {
+        XCTAssertTrue(library.deleteTasks([plain]).isApplied)
+        var notesPublished = 0
+        let reloads = taskReloads {
+            notesPublished = revisionPublishes { XCTAssertTrue(library.restore(AtticItemRef(.task, plain))) }
+        }
+        XCTAssertEqual(reloads, 1, "the task store's own save is the restore's one Tasks reload")
+        XCTAssertEqual(notesPublished, 1, "the commit step is the restore's one Notes refresh")
+        XCTAssertNotNil(tasks.task(withID: plain), "the task is back in Tasks")
+    }
+
+    func testRecentlyDeletedNoteRestoreAddsNoRefreshToItsCommitStep() throws {
+        // The same note restore with and without the library's step around
+        // it: Undo of a delete reaches the store directly.
+        XCTAssertTrue(library.delete(AtticItemRef(.note, loose)))
+        var direct = 0
+        let directReloads = taskReloads { direct = revisionPublishes { XCTAssertTrue(library.undo.undo(in: .note(loose))) } }
+        XCTAssertNotNil(notes.note(withID: loose))
+        XCTAssertTrue(library.delete(AtticItemRef(.note, loose)))
+        var restored = 0
+        let restoredReloads = taskReloads {
+            restored = revisionPublishes { XCTAssertTrue(library.restore(AtticItemRef(.note, loose))) }
+        }
+        XCTAssertEqual(restored, direct, "Recently Deleted's restore refreshes Notes as the store's own restore does")
+        XCTAssertEqual(restoredReloads, directReloads, "and reloads Tasks as it does")
+        XCTAssertEqual(restoredReloads, 1, "the commit step's refresh is the one Tasks reload")
+        XCTAssertNotNil(notes.note(withID: loose))
+    }
+
+    func testTaskRestoreThroughALibraryThatIsNotTheLifecyclesReloadsItsTasksOnce() async throws {
+        let fixedDate = date
+        let otherTasks = TaskStore(container: container, now: { fixedDate })
+        let otherNotes = NoteStore(container: container, now: { fixedDate }, attachmentFileStore: makeTestAttachmentFileStore())
+        otherLibrary = AtticLibrary(tasks: otherTasks, notes: otherNotes, canvases: CanvasStore(container: container))
+        otherController = NotesPageController(store: otherNotes, journal: coordinator.journal)
+        XCTAssertTrue(coordinator.lifecycleLibrary === otherLibrary)
+        await otherNotes.waitForAttachmentReconciliation()
+        XCTAssertTrue(library.deleteTasks([plain]).isApplied)
+        var notesPublished = 0, otherReloads = 0
+        let reloads = taskReloads {
+            otherReloads = taskReloads(of: otherTasks) {
+                notesPublished = revisionPublishes { XCTAssertTrue(library.restore(AtticItemRef(.task, plain))) }
+            }
+        }
+        XCTAssertEqual(reloads, 1, "the restoring library's Tasks reload once: its own save")
+        XCTAssertEqual(notesPublished, 1, "its Notes, which the commit step misses, refresh once")
+        XCTAssertEqual(otherReloads, 1, "the commit step reloads the lifecycle's Tasks once")
+        XCTAssertNotNil(tasks.task(withID: plain))
+        XCTAssertNotNil(otherTasks.task(withID: plain))
+        await otherNotes.waitForAttachmentReconciliation()
+    }
+
+    func testNoteRestoreThroughALibraryThatIsNotTheLifecyclesRefreshesItsNotesOnce() async throws {
+        let fixedDate = date
+        let otherTasks = TaskStore(container: container, now: { fixedDate })
+        let otherNotes = NoteStore(container: container, now: { fixedDate }, attachmentFileStore: makeTestAttachmentFileStore())
+        otherLibrary = AtticLibrary(tasks: otherTasks, notes: otherNotes, canvases: CanvasStore(container: container))
+        otherController = NotesPageController(store: otherNotes, journal: coordinator.journal)
+        XCTAssertTrue(coordinator.lifecycleLibrary === otherLibrary)
+        await otherNotes.waitForAttachmentReconciliation()
+        XCTAssertTrue(library.delete(AtticItemRef(.note, loose)))
+        var published = 0
+        let reloads = taskReloads {
+            published = revisionPublishes { XCTAssertTrue(library.restore(AtticItemRef(.note, loose))) }
+        }
+        // The note store's own save publishes twice and, as the commit step
+        // misses it, its own refresh once; the library adds no Notes refresh.
+        XCTAssertEqual(published, 3, "the restoring library's Notes refresh once after the save")
+        XCTAssertEqual(reloads, 1, "its Tasks, which the commit step misses, reload once")
+        XCTAssertNotNil(notes.note(withID: loose))
+        XCTAssertNotNil(otherNotes.note(withID: loose))
+        await otherNotes.waitForAttachmentReconciliation()
+    }
+
+    func testRestoringAPreGroupNoteStillReloadsTasks() throws {
+        // A note deleted before deletion groups has no commit step on
+        // restore, so the library's own refresh is still its Tasks reload.
+        let context = ModelContext(container)
+        let id = loose
+        for row in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })) {
+            row.deletedAt = date
+            row.deletionGroupID = nil
+        }
+        try context.save()
+        XCTAssertTrue(notes.refresh())
+        XCTAssertNil(notes.note(withID: loose))
+        let reloads = taskReloads { XCTAssertTrue(library.restore(AtticItemRef(.note, loose))) }
+        XCTAssertEqual(reloads, 1, "a pre-group note restore still reloads Tasks once")
+        XCTAssertNotNil(notes.note(withID: loose))
+    }
+
+    func testRecentlyDeletedCanvasRestoreStillRefreshesTheOtherStores() throws {
+        let board = try XCTUnwrap(canvases.createCanvas(name: "Board"))
+        _ = try XCTUnwrap(canvases.createCanvas(name: "Spare"))
+        XCTAssertTrue(library.delete(AtticItemRef(.canvas, board.id)))
+        var notesPublished = 0
+        let reloads = taskReloads {
+            notesPublished = revisionPublishes { XCTAssertTrue(library.restore(AtticItemRef(.canvas, board.id))) }
+        }
+        XCTAssertEqual(reloads, 1, "a canvas restore still reloads Tasks once")
+        XCTAssertEqual(notesPublished, 1, "a canvas restore still refreshes Notes once")
+        XCTAssertTrue(canvases.canvases.contains { $0.id == board.id })
+    }
+
     func testNoteDeletePublishesItsSaveAndItsCommitStepOnly() throws {
         let deleted = revisionPublishes { XCTAssertTrue(library.delete(AtticItemRef(.note, loose))) }
         // The note store's own save publishes twice (its reload, then the
