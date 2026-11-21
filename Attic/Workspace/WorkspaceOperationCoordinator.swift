@@ -709,7 +709,7 @@ final class WorkspaceOperationCoordinator {
     func commitInPlace(_ context: ModelContext, before: [WorkspaceModelToken],
                        requiredScopes: Set<WorkspaceScope>, scopes: () throws -> [WorkspaceScopeToken], after: [WorkspaceModelToken],
                        capturedOwners: Set<WorkspaceOwner>, using writer: (ModelContext) throws -> Void,
-                       confirmed: ([WorkspaceOwner: WorkspaceModelToken]) -> Void) -> Outcome {
+                       confirmed: ([WorkspaceOwner: WorkspaceModelToken]?) -> Void) -> Outcome {
         let writes = Set(after.map(\.owner))
         let affected = Set(before.map(\.owner)).union(writes)
         guard retryHeldWrites(affecting: affected) else { return .conflict }
@@ -758,24 +758,12 @@ final class WorkspaceOperationCoordinator {
             let physicalIDs = Dictionary(uniqueKeysWithValues: previous.map { ($0.owner, Set($0.replicas.map(\.physicalID))) })
             let stagedTokens = Dictionary(uniqueKeysWithValues: before.map { ($0.owner, $0) })
             let stagedModels = inserted.isEmpty ? [] : try WorkspaceModelToken.stagedModels(owners: writes, before: stagedTokens, in: context)
+            // Two failures, two answers: a throwing writer leaves the outcome unknown, so reconciliation reads the
+            // disk; once the save has returned (or reconciliation has proved it), the commit is durable and nothing
+            // after it changes the outcome. Guards that cannot be built are reported as nil: the bridge then spends
+            // the context instead of marking a plain commit over stale guards.
             do {
                 try gatedSave(context, before: previous, using: writer)
-                #if DEBUG
-                if WorkspaceLegacyBridge.postSaveCaptureFailures > 0 {
-                    WorkspaceLegacyBridge.postSaveCaptureFailures -= 1
-                    throw WorkspaceFoundationError.unknown
-                }
-                #endif
-                // Existing rows keep their physical identifiers through save.
-                // Their already-computed after tokens are the confirmed baseline;
-                // only inserts need their permanent identifiers captured now.
-                var saved = afterByOwner
-                if !inserted.isEmpty {
-                    let newFamilies = stagedModels.filter { Self.owner($0).map(inserted.contains) == true }
-                    saved.merge(try WorkspaceModelToken.capture(owners: inserted, models: newFamilies)) { _, permanent in permanent }
-                }
-                confirmed(saved)
-                return .committed
             } catch {
                 if previous == after { return .notCommitted }
                 let attempt = UUID()
@@ -783,16 +771,36 @@ final class WorkspaceOperationCoordinator {
                 heldOwners.formUnion(affected)
                 let outcome = reconcilePlain(attempt)
                 if outcome == .committed {
-                    #if DEBUG
-                    if WorkspaceLegacyBridge.postReconcileReadFailures > 0 {
-                        WorkspaceLegacyBridge.postReconcileReadFailures -= 1
-                        throw WorkspaceFoundationError.unknown
-                    }
-                    #endif
-                    confirmed(try WorkspaceModelToken.read(owners: writes, in: freshContext()))
+                    confirmed(try? {
+                        #if DEBUG
+                        if WorkspaceLegacyBridge.postReconcileReadFailures > 0 {
+                            WorkspaceLegacyBridge.postReconcileReadFailures -= 1
+                            throw WorkspaceFoundationError.unknown
+                        }
+                        #endif
+                        return try WorkspaceModelToken.read(owners: writes, in: freshContext())
+                    }())
                 }
                 return outcome
             }
+            // Existing rows keep their physical identifiers through save.
+            // Their already-computed after tokens are the confirmed baseline;
+            // only inserts need their permanent identifiers captured now.
+            confirmed(try? {
+                #if DEBUG
+                if WorkspaceLegacyBridge.postSaveCaptureFailures > 0 {
+                    WorkspaceLegacyBridge.postSaveCaptureFailures -= 1
+                    throw WorkspaceFoundationError.unknown
+                }
+                #endif
+                var saved = afterByOwner
+                if !inserted.isEmpty {
+                    let newFamilies = stagedModels.filter { Self.owner($0).map(inserted.contains) == true }
+                    saved.merge(try WorkspaceModelToken.capture(owners: inserted, models: newFamilies)) { _, permanent in permanent }
+                }
+                return saved
+            }())
+            return .committed
         } catch { return .notCommitted }
     }
 

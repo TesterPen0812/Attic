@@ -22,6 +22,9 @@ enum WorkspaceLegacyBridge {
     /// Persists refused because their context was spent (board id undo-unresolved-staging). Ordinary saves never
     /// reach the refusal: the full suite counts 0 outside the failure tests.
     private(set) static var spentContextRefusals = 0
+    /// Rows staged through a context they do not belong to: a row carried across a context replacement
+    /// (pr40-fable.md §3, the family guard). A counter, not an assert; each one prints its site. 0 in ordinary use.
+    static var foreignRowMutations = 0
     #endif
     private final class WeakCoordinator {
         weak var value: WorkspaceOperationCoordinator?
@@ -220,6 +223,14 @@ enum WorkspaceLegacyBridge {
         prepareMutations([row], in: source)
     }
     static func prepareMutations(_ rows: [any PersistentModel], in source: ModelContext) {
+        #if DEBUG
+        for row in rows {
+            if let owner = row.modelContext, owner !== source {
+                foreignRowMutations += 1
+                print("FOREIGN_ROW_MUTATION \(type(of: row)) at \(Thread.callStackSymbols.dropFirst(2).prefix(3).joined(separator: " | "))")
+            }
+        }
+        #endif
         captureBeforeMutations(rows, in: source)
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState, !state.captureFailed else { return }
         do {
@@ -540,7 +551,8 @@ enum WorkspaceLegacyBridge {
             before: writes.map { before[$0]! }, after: writes.map { after[$0]! }, in: source)
         let requiredScopes = WorkspaceScopeToken.scopes(for: reads).union(declaredScopes.map(\.scope)).union(state.itemLifecycleScopes)
         if plain {
-            var confirmed: [WorkspaceOwner: WorkspaceModelToken] = [:]
+            // nil once committed: the save is durable but its guards could not be built.
+            var confirmed: [WorkspaceOwner: WorkspaceModelToken]?
             var writeError: Error?
             let result = state.coordinator.commitInPlace(source, before: reads, requiredScopes: requiredScopes,
                 scopes: { try scopeTokens(requiredScopes, state: state, in: source) },
@@ -559,6 +571,7 @@ enum WorkspaceLegacyBridge {
                 #if DEBUG
                 if postCommitPlainFailures > 0 { postCommitPlainFailures -= 1; throw WorkspaceFoundationError.unknown }
                 #endif
+                guard let confirmed else { throw WorkspaceFoundationError.unknown }
                 try updateScopeGuards(confirmed, state: state, in: source)
                 state.baseline.merge(confirmed) { _, saved in saved }
                 try state.scopeBaseline?.replace(confirmed)

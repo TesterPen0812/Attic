@@ -653,22 +653,24 @@ final class NoteStore: ObservableObject {
     @discardableResult
     func delete(_ note: NoteItem) -> Bool {
         guard prepareNoteEdit() else { return false }
-        guard let note = notes.first(where: { $0.id == note.id }) else { return false }
-        guard let release = beginItemDeletion(noteID: note.id) else { return false }
+        // Only the id crosses `beginItemDeletion`, which settles editors through this store and may replace its context.
+        let noteID = note.id
+        guard notes.contains(where: { $0.id == noteID }) else { return false }
+        guard let release = beginItemDeletion(noteID: noteID) else { return false }
         defer { release() }
         do {
-            if let taskID = try WorkspaceItemLifecycle.taskOwner(noteID: note.id, in: context) {
+            if let taskID = try WorkspaceItemLifecycle.taskOwner(noteID: noteID, in: context) {
                 try TaskStore.stageItemDeletion(in: context, taskID: taskID, timestamp: now())
             } else {
-                try WorkspaceItemLifecycle.stageWritingDeletion(try storedNotesIncludingDeleted(matching: note.id),
+                try WorkspaceItemLifecycle.stageWritingDeletion(try storedNotesIncludingDeleted(matching: noteID),
                     group: UUID(), timestamp: now(), in: context)
             }
         } catch {
             context.rollback(); lastErrorMessage = error.localizedDescription; return false
         }
-        notes.removeAll { $0.id == note.id }
+        notes.removeAll { $0.id == noteID }
 #if os(macOS)
-        attachmentsByNoteID[note.id] = nil
+        attachmentsByNoteID[noteID] = nil
 #endif
         guard save() else { return false }
         WorkspaceItemLifecycle.didCommit(in: container)
@@ -1617,7 +1619,9 @@ final class NoteStore: ObservableObject {
         lastSpentContextUnsaved = (try? WorkspaceLegacyBridge.unsavedChanges(in: context)) ?? ["unreadable"]
         #endif
         do {
-            try reloadModels(preservingAttachmentProofs: true)
+            // A deferred reload, not the tail of this store's own transaction: outside writes may have landed since,
+            // so attachment proofs do not cross it (they belong to the context they were made in).
+            try reloadModels()
             return true
         } catch {
             lastErrorMessage = error.localizedDescription

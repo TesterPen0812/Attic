@@ -9,7 +9,13 @@ import XCTest
 /// reused. Red tests first; the fix is its own pull request.
 @MainActor
 final class DurableSaveReadFailureTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        WorkspaceLegacyBridge.foreignRowMutations = 0
+    }
+
     override func tearDown() {
+        XCTAssertEqual(WorkspaceLegacyBridge.foreignRowMutations, 0, "No row is staged through a context it does not belong to")
         WorkspaceLegacyBridge.postCommitOwnerReadFailures = 0
         WorkspaceLegacyBridge.postCommitPlainFailures = 0
         WorkspaceLegacyBridge.postSaveCaptureFailures = 0
@@ -1465,7 +1471,13 @@ private func durableDocument(_ data: Data?) -> NoteDocument? {
 /// with no spent context, as the trunk does.
 @MainActor
 final class DurableSaveR5NarrowingTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        R5Seams.resetFamilyGuard()
+    }
+
     override func tearDown() {
+        R5Seams.assertFamilyGuard()
         R5Seams.reset()
         super.tearDown()
     }
@@ -1722,6 +1734,11 @@ enum R5Seams {
     static func armPlainCommitSpend() { WorkspaceLegacyBridge.postCommitPlainFailures = 1 }
     static func plainCommitSpendFired() -> Bool? { WorkspaceLegacyBridge.postCommitPlainFailures == 0 }
     static func reset() { WorkspaceLegacyBridge.postCommitPlainFailures = 0 }
+    /// PR 40's family guard (pr40-fable.md §3): no row is staged through a context it does not belong to.
+    static func resetFamilyGuard() { WorkspaceLegacyBridge.foreignRowMutations = 0 }
+    static func assertFamilyGuard() {
+        XCTAssertEqual(WorkspaceLegacyBridge.foreignRowMutations, 0, "No row is staged through a context it does not belong to")
+    }
 
     /// PR 40's staging entry: replaces a spent context, keeping attachment proofs.
     static func prepareNotes(_ notes: NoteStore) -> Bool { notes.prepareNoteEdit() }
