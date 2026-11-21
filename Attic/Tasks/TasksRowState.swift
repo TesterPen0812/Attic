@@ -173,12 +173,15 @@ final class TasksRowState {
 ///
 /// The unit test host points `report` at the running test
 /// (`InvisibleHostObserver`); an app run under `ATTIC_UI_TESTING=1` (the
-/// UI lanes) stops on the first difference, so the UI test fails; any other
-/// run checks nothing.
+/// UI lanes) stops on the first difference, so the UI test fails, except
+/// a timed run (`ATTIC_PERF_UI_TEST=1`), whose windows the oracle's work
+/// would enter; any other run checks nothing.
 @MainActor enum TasksRowStateOracle {
-    static var report: ((String) -> Void)? = ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
-        ? { message in fatalError("Row state oracle: \(message)") }
-        : nil
+    static var report: ((String) -> Void)? = {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["ATTIC_UI_TESTING"] == "1", environment["ATTIC_PERF_UI_TEST"] != "1" else { return nil }
+        return { message in fatalError("Row state oracle: \(message)") }
+    }()
 
     /// Checks run after each settle while someone listens.
     static var isOn: Bool { report != nil }
