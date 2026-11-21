@@ -129,6 +129,19 @@ final class LibraryRestoreRefreshTests: XCTestCase {
         XCTAssertNotNil(controller.store.note(withID: loose))
     }
 
+    func testTaskOwnedNoteRestoreBringsItsTaskBackThroughItsCommitStep() throws {
+        XCTAssertTrue(library.delete(AtticItemRef(.note, writing)))
+        XCTAssertNil(tasks.task(withID: owner), "deleting a task's note takes the task out of Tasks")
+        XCTAssertFalse(library.tags.names.contains(Self.tag))
+        let restored = counts { XCTAssertTrue(library.restore(AtticItemRef(.note, writing))) }
+        print("restore-refresh-count task-owned-note=\(restored)")
+        // The note's commit step is the only refresh that reaches Tasks.
+        XCTAssertEqual(restored.taskReloads, 1, "a task-owned note restore reloads Tasks once, through its commit step")
+        XCTAssertNotNil(tasks.task(withID: owner), "the owner task is back in Tasks")
+        XCTAssertTrue(library.tags.names.contains(Self.tag), "the owner's tag is back in the inventory")
+        XCTAssertNotNil(controller.store.note(withID: writing), "the writing is back in the Notes controller's own view")
+    }
+
     func testPreGroupNoteRestoreStillRefreshesTheOtherStores() throws {
         XCTAssertNil(notes.note(withID: legacy))
         let restored = counts { XCTAssertTrue(library.restore(AtticItemRef(.note, legacy))) }
