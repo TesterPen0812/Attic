@@ -470,6 +470,52 @@ final class KeptContentHostTests: XCTestCase {
     /// HB-03: a nested host's own update runs inside the overlay layout
     /// guard, as the panel's root does, so an overlay anchor made or
     /// dismantled there changes the hierarchy only after the pass.
+    /// Counts the placements of what it lays out.
+    private struct CountingLayout: Layout {
+        final class Count { var placements = 0 }
+        let count: Count
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            proposal.replacingUnspecifiedDimensions()
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            count.placements += 1
+            for subview in subviews { subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size)) }
+        }
+    }
+
+    /// PR 41 (Find close): a drawn root is laid out in the pass that sets
+    /// it, under that pass's transaction. Left to AppKit, the layout came
+    /// about 0.1 s later in an un-animated pass of its own, and the Now
+    /// list's returning rows were drawn thin for about 1.3 s.
+    func testADrawnRootIsLaidOutInThePassThatSetsIt() {
+        let count = CountingLayout.Count()
+        func root(_ rows: Int) -> AnyView {
+            AnyView(CountingLayout(count: count) {
+                VStack { ForEach(0..<rows, id: \.self) { Text("row \($0)") } }
+            })
+        }
+        let host = KeptContentHostingView(rootView: root(2))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 300), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        host.frame = window.contentLayoutRect
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        let before = count.placements
+        XCTAssertGreaterThan(before, 0, "the first root was placed, so the count means something")
+
+        host.setRoot(root(5), laidOut: true, under: Transaction(animation: .default))
+        XCTAssertGreaterThan(count.placements, before, "the new root was placed before the pass that set it returned")
+        XCTAssertFalse(host.needsLayout, "no layout of the new root is left for a later pass")
+
+        let drawn = count.placements
+        host.setRoot(root(7), laidOut: false, under: Transaction())
+        XCTAssertEqual(count.placements, drawn, "a hidden root is not laid out by the pass that sets it")
+    }
+
     func testANestedHostsOwnUpdateRunsInsideTheOverlayLayoutGuard() {
         let fixture = makeFixture()
         defer { fixture.window.close() }

@@ -157,6 +157,22 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// A new root, laid out in the pass that sets it (PR 41, Find close).
+    /// The root alone only marks the host for layout, and AppKit laid it out
+    /// about 0.1 s later, in a pass of its own with no animation: the rows
+    /// had by then taken the update under the list's animation, the late
+    /// pass gave every row a second, un-animated update, and the lazy list
+    /// drew its returning rows thin for about 1.3 s. Laid out here, under
+    /// the update's transaction, the content takes one pass, as it does
+    /// without a host. A hidden root is not laid out: its graph does not
+    /// run until it is drawn (host-boundary.md §4.2).
+    func setRoot(_ root: AnyView, laidOut: Bool, under transaction: Transaction) {
+        withTransaction(transaction) {
+            rootView = root
+            if laidOut, window != nil { layoutSubtreeIfNeeded() }
+        }
+    }
+
     /// As the panel's root host (`AtticPanelHostingView.layout`): this host's
     /// SwiftUI update runs here, and overlay hierarchy changes from it wait
     /// for the next turn (HB-03). The root's pass is not on the stack when
@@ -278,9 +294,10 @@ final class KeptContentContainer: NSView {
 /// Two states: `drawn` decides the root (not drawn, it is set once, on the
 /// update that hides it, and not again until it is drawn, so the parent's
 /// updates do not invalidate the hidden graph); `interactive` decides input,
-/// keyboard and accessibility. The root is set under the update's
-/// transaction, so an animation or its suppression crosses the boundary
-/// (HB-08).
+/// keyboard and accessibility. The root is set, and a drawn one laid out,
+/// under the update's transaction, so an animation or its suppression
+/// crosses the boundary (HB-08) and the content takes the change in one
+/// pass (`KeptContentHostingView.setRoot`).
 struct KeptContentHost<Content: View>: NSViewRepresentable {
     let drawn: Bool
     let interactive: Bool
@@ -326,7 +343,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         // equality, which this boundary carries across the host).
         if drawn || !coordinator.hiddenRootSet {
             let root = root(context)
-            withTransaction(context.transaction) { host.rootView = root }
+            host.setRoot(root, laidOut: drawn, under: context.transaction)
             #if DEBUG
             KeptContentHostCounts.root(drawn: drawn)
             #endif
