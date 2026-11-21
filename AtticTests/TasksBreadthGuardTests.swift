@@ -404,7 +404,8 @@ final class TasksBreadthGuardTests: XCTestCase {
     /// The mounted-cell check: a row's old cell kept drawn while it animates
     /// out (a delete undone mid-exit) holds a state the registry dropped;
     /// it is not reported while a drawn cell holds the row's current state,
-    /// and a row whose only drawn cell holds a dropped state still is.
+    /// nor while its row has no state yet (relisted before its cell's next
+    /// pass); a row with a state whose only drawn cell holds another still is.
     func testTheOracleReportsADrawnRowOnlyWhenNoCellHoldsItsCurrentState() throws {
         let store = try makeStore(open: 60)
         let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
@@ -423,8 +424,11 @@ final class TasksBreadthGuardTests: XCTestCase {
         XCTAssertEqual(model.rowStateMismatches(), [], "an exiting cell beside the row's current cell is not reported")
         let lone = NSObject()
         model.noteRowStateMount(lone, row: TasksRowID(tab: .now, id: unbuilt), state: dropped, drawn: true)
+        XCTAssertEqual(model.rowStateMismatches(), [], "a listed row with no state yet waits for its cell's pass")
+        let row = try XCTUnwrap(model.rows(for: .now).first { $0.id == unbuilt })
+        _ = model.rowState(for: row, tab: .now, run: .single)
         let found = model.rowStateMismatches()
-        XCTAssertEqual(found, ["row \(unbuilt) on now: no drawn cell holds its current state"])
+        XCTAssertEqual(found, ["row \(unbuilt) on now: no drawn cell holds its current state"], "a row with a state whose only drawn cell holds another")
         model.noteRowStateUnmount(exiting)
         model.noteRowStateUnmount(lone)
         XCTAssertEqual(model.rowStateMismatches(), [])

@@ -3817,7 +3817,10 @@ extension TasksPageModel {
                 holds[mount.row.id] = (holds[mount.row.id] ?? false) || current
             }
             var list = rowStateList(self.tab); list.counts = false
-            for (id, held) in holds where !held && list.row(id) != nil {
+            // A listed row with no state yet (relisted by a read before its
+            // cell's next pass, a delete undone mid-exit) is skipped: that
+            // pass makes its state. A real stale cell's row has a state.
+            for (id, held) in holds where !held && rowStates[self.tab]?[id] != nil && list.row(id) != nil {
                 found.append("row \(id) on \(self.tab): no drawn cell holds its current state")
             }
         }
