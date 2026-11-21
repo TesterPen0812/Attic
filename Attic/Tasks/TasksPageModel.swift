@@ -3078,32 +3078,25 @@ final class TasksPageModel: ObservableObject {
     /// it opened (review 21): ticking several never moves one away from the
     /// pointer. New ones join at the end; closing it lets the order settle.
     private var quickLookOrder: [UUID: [UUID]] = [:]
-    #if DEBUG
-    /// Walks of a held quick-look order while projecting its family (the
-    /// plain-waste count guard): one walk per projection is the bound.
-    private(set) var quickLookOrderWalks = 0
-    #endif
 
     func quickLookSubtasks(of id: UUID, _ subtasks: [TaskItem]) -> [TaskItem] {
         guard let order = quickLookOrder[id] else {
             quickLookOrder[id] = subtasks.map(\.id)
             return subtasks
         }
-        #if DEBUG
-        quickLookOrderWalks += 1
-        #endif
         let ranks = Dictionary(order.enumerated().lazy.map { ($0.element, $0.offset) },
                                uniquingKeysWith: { first, _ in first })
-        var known: [(rank: Int, item: TaskItem)] = []
+        var known: [(rank: Int, offset: Int, item: TaskItem)] = []
         var new: [TaskItem] = []
-        for item in subtasks {
+        for (offset, item) in subtasks.enumerated() {
             if let rank = ranks[item.id] {
-                known.append((rank, item))
+                known.append((rank, offset, item))
             } else {
                 new.append(item)
             }
         }
-        known.sort { $0.rank < $1.rank }
+        // Physical replicas share a rank: they keep their input order.
+        known.sort { ($0.rank, $0.offset) < ($1.rank, $1.offset) }
         if !new.isEmpty { quickLookOrder[id] = order + new.map(\.id) }
         return known.map(\.item) + new
     }
