@@ -3570,6 +3570,8 @@ extension TasksPageModel {
         private var index: [UUID: Int]?
         private var runs: [UUID: AtticSelectionRun]?
         private var lookups = 0
+        /// The DEBUG oracle's lists do not count as list work.
+        var counts = true
 
         init(tab: TasksTab, list: (rows: [TasksListRow], ids: [UUID])?, done: [TasksDoneDay]?,
              selected: Set<UUID>, expanded: Set<UUID>) {
@@ -3589,13 +3591,13 @@ extension TasksPageModel {
                 if let flat { return flat }
                 let rows = days.flatMap(\.rows)
                 flat = rows
-                TasksPageModel.noteRowStateListWork(tab)
+                if counts { TasksPageModel.noteRowStateListWork(tab) }
                 return rows
             }
         }
 
-        /// Every listed row's id (the lifetime's membership).
-        mutating func listedIDs() -> Set<UUID> { Set(rows().map(\.id)) }
+        /// Every listed row, in order (Done's days flattened once).
+        mutating func listedRows() -> [TasksListRow] { rows() }
 
         /// Whether any of `ids` is listed: a scan of the list as it is,
         /// building and counting nothing.
@@ -3623,7 +3625,7 @@ extension TasksPageModel {
                 built.reserveCapacity(rows.count)
                 for (offset, row) in rows.enumerated() where built[row.id] == nil { built[row.id] = offset }
                 index = built
-                TasksPageModel.noteRowStateListWork(tab)
+                if counts { TasksPageModel.noteRowStateListWork(tab) }
             }
             return index?[id].map { rows()[$0] }
         }
@@ -3636,7 +3638,7 @@ extension TasksPageModel {
                 let ids: [UUID]
                 if case let .list(_, listIDs) = source { ids = listIDs } else { ids = rows().map(\.id) }
                 runs = TasksSelectionRuns.make(ids: ids, selected: selected, expanded: expanded)
-                TasksPageModel.noteRowStateListWork(tab)
+                if counts { TasksPageModel.noteRowStateListWork(tab) }
             }
             return runs?[id] ?? .single
         }
@@ -3745,12 +3747,14 @@ extension TasksPageModel {
         guard let states = rowStates[tab], !states.isEmpty else { return }
         var list = rowStateList(tab)
         guard list.isBuilt else { return }
-        let listed = list.listedIDs()
+        // One walk of the list, the states looked up by id: no index. A
+        // duplicated id takes its first row, as `row(_:)` does.
         var kept: [UUID: TasksRowState] = [:]
-        kept.reserveCapacity(min(states.count, listed.count))
-        for (id, state) in states where listed.contains(id) {
-            state.apply(derived(state, in: &list))
-            kept[id] = state
+        kept.reserveCapacity(states.count)
+        for row in list.listedRows() where kept[row.id] == nil {
+            guard let state = states[row.id] else { continue }
+            state.apply(derivedRowState(row.id, tab: tab, row: row, run: list.run(row.id)))
+            kept[row.id] = state
         }
         rowStates[tab] = kept
         queueRowStateCheck()
@@ -3781,11 +3785,11 @@ extension TasksPageModel {
     /// The oracle: each live state against a fresh derivation, field by
     /// field; each state's untracked mirror against its tracked fields; and
     /// each cell drawn on the shown tab, whose row is still listed, holds
-    /// that row's current state. Builds nothing and counts nothing.
+    /// that row's current state. Rebuilds no cache and counts nothing.
     func rowStateMismatches() -> [String] {
         var found: [String] = []
         for (tab, states) in rowStates {
-            var list = rowStateList(tab)
+            var list = rowStateList(tab); list.counts = false
             for (id, state) in states {
                 if list.isBuilt, list.row(id) == nil {
                     // Frozen or not, a state lives only while its row is listed.
@@ -3812,7 +3816,7 @@ extension TasksPageModel {
                 let current = mount.state != nil && rowStates[mount.row.tab]?[mount.row.id] === mount.state
                 holds[mount.row.id] = (holds[mount.row.id] ?? false) || current
             }
-            var list = rowStateList(self.tab)
+            var list = rowStateList(self.tab); list.counts = false
             for (id, held) in holds where !held && list.row(id) != nil {
                 found.append("row \(id) on \(self.tab): no drawn cell holds its current state")
             }

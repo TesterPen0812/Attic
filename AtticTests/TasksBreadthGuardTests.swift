@@ -313,6 +313,7 @@ final class TasksBreadthGuardTests: XCTestCase {
         let pointer = TasksPointer()
         TasksPageModel.rowStateListWork = [:]
         let hosting = page(model, store, pointer: pointer)
+        print("BREADTH_LIST_WORK first_build=\(TasksPageModel.rowStateListWork)")
         XCTAssertEqual(TasksPageModel.rowStateListWork, [:], "the first build made its cells' states without reading a list")
         for tab in [TasksTab.backlog, .now] {
             model.select(tab: tab)
