@@ -873,6 +873,45 @@ extension CornerRevealSettingsTests {
         }
     }
 
+    /// Astra r3 H6: Option-to-reveal and Move cursor away, shown on A. The
+    /// pointer rests in B's watched corner with Option up, so the timed
+    /// hide starts; Option goes down during the hide with no movement. The
+    /// pointer has rested in B since the hide began, so the hide's end must
+    /// not start a reveal under it.
+    func testNarrowH6CursorAwayHideEndingUnderARestingPointerStartsNoReveal() throws {
+        let real = try XCTUnwrap(NSScreen.screens.first)
+        let a = real.frame
+        let b = CGRect(x: a.maxX, y: a.maxY - 900, width: 1440, height: 900)
+        let screens: [(frame: CGRect, id: String?)] = [(a, AtticDisplay.identifier(for: real)), (b, "pr43-stand-in-b")]
+        try narrow(reduceMotion: false, mode: .moveCursorAway, screens: screens) { n in
+            n.rig.settings.revealModifier = .option
+            spin(0.1)
+            let bCorner = CGPoint(x: b.maxX - 1, y: b.maxY - 1)
+            NarrowEvents.location = n.far
+            narrowShow(n)
+            NarrowEvents.location = bCorner
+            NarrowEvents.flags = []
+            XCTAssertFalse(n.rig.monitor.isInHotspotForTesting(bCorner, flags: []), "Option up: not the hotspot")
+            XCTAssertTrue(n.rig.monitor.isInHotspotForTesting(bCorner, flags: [.option]), "Option down: B's hotspot")
+            let time = ProcessInfo.processInfo.systemUptime + 10
+            n.rig.monitor.pointerActivityForTesting(at: bCorner)
+            n.rig.monitor.sampleForTesting(at: bCorner, uptime: time)
+            n.rig.monitor.sampleForTesting(at: bCorner, uptime: time + n.rig.settings.hideDelay + 1)
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "the timed hide is animating")
+            let announced = Corner.Box()
+            n.rig.monitor.onVisibilityChangeExpected = { expected in
+                if let expected, !expected.hiding { announced.revealPending = true }
+            }
+            defer { n.rig.monitor.onVisibilityChangeExpected = nil }
+            NarrowEvents.flags = [.option]
+            narrowWaitHidden(n)
+            let quiet = Date().addingTimeInterval(1)
+            while !announced.revealPending, Date() < quiet { spin(0.01) }
+            XCTAssertFalse(announced.revealPending, "no reveal starts under a pointer resting since the hide began")
+            XCTAssertFalse(n.rig.controller.isPanelVisible)
+        }
+    }
+
     /// Astra 7 (a): the swipe through its real entry point, pointer resting
     /// in the corner: it hides, stays latched, then leaving and returning
     /// reveals.
