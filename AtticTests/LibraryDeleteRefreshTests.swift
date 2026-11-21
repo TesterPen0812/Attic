@@ -119,6 +119,74 @@ final class LibraryDeleteRefreshTests: XCTestCase {
         XCTAssertNil(notes.note(withID: loose))
     }
 
+    // A grouped note restore refreshes NoteStore once, through its commit step
+    // (`WorkspaceItemLifecycle.didCommit`), as a note delete does: it publishes
+    // for its own save (twice) and the commit step (once). The store's own
+    // refresh is kept only for a store that commit step does not reach.
+
+    func testUndoOfANoteDeleteRefreshesNotesOnceThroughItsCommitStep() throws {
+        XCTAssertTrue(library.delete(AtticItemRef(.note, loose)))
+        XCTAssertTrue(try deletedInAGroup(loose), "the restore below takes the grouped branch")
+        let undone = revisionPublishes { XCTAssertTrue(library.undo.undo(in: .note(loose))) }
+        XCTAssertEqual(undone, 3, "Undo of a note delete publishes for its own save and its commit step only")
+        XCTAssertNotNil(notes.note(withID: loose), "Undo brought the note back")
+        XCTAssertNotNil(controller.store.note(withID: loose), "the Notes controller shows it")
+    }
+
+    func testToastRestoreOfADeletedNoteRefreshesNotesOnceThroughItsCommitStep() throws {
+        XCTAssertTrue(library.delete(AtticItemRef(.note, loose)))
+        XCTAssertTrue(try deletedInAGroup(loose))
+        let restored = revisionPublishes { XCTAssertTrue(controller.restoreDeletedNote(noteID: loose, reopen: false)) }
+        XCTAssertEqual(restored, 3, "the toast's Undo publishes for its own save and its commit step only")
+        XCTAssertNotNil(notes.note(withID: loose))
+    }
+
+    func testRestoreThroughAStoreOnlyTheNotesControllerReachesRefreshesItOnce() async throws {
+        // A second Notes controller takes the lifecycle's Notes role; the
+        // library is still this one, so the commit step reaches `otherNotes`
+        // only through the controller's whole-item publish.
+        let fixedDate = date
+        let otherNotes = NoteStore(container: container, now: { fixedDate }, attachmentFileStore: makeTestAttachmentFileStore())
+        otherController = NotesPageController(store: otherNotes, journal: coordinator.journal)
+        XCTAssertTrue(coordinator.lifecycleLibrary === library)
+        XCTAssertTrue(coordinator.lifecycleNotes === otherController)
+        await otherNotes.waitForAttachmentReconciliation()
+        XCTAssertTrue(otherNotes.delete(try XCTUnwrap(otherNotes.note(withID: loose))))
+        XCTAssertTrue(try deletedInAGroup(loose))
+        let restored = revisionPublishes(of: otherNotes) {
+            XCTAssertNotNil(otherNotes.restoreDeletedNote(noteID: loose)?.group, "a grouped restore")
+        }
+        XCTAssertEqual(restored, 3, "the controller's publish is the restore's one refresh")
+        XCTAssertNotNil(otherNotes.note(withID: loose))
+        await otherNotes.waitForAttachmentReconciliation()
+    }
+
+    func testRestoreThroughAStoreTheCommitStepDoesNotReachStillRefreshesItself() async throws {
+        // Another library and Notes controller take both lifecycle roles, so
+        // the commit step never reads `notes`: its own refresh stays.
+        let fixedDate = date
+        let otherNotes = NoteStore(container: container, now: { fixedDate }, attachmentFileStore: makeTestAttachmentFileStore())
+        otherLibrary = AtticLibrary(tasks: TaskStore(container: container, now: { fixedDate }), notes: otherNotes,
+            canvases: CanvasStore(container: container))
+        otherController = NotesPageController(store: otherNotes, journal: coordinator.journal)
+        XCTAssertTrue(coordinator.lifecycleLibrary === otherLibrary)
+        XCTAssertTrue(coordinator.lifecycleNotes === otherController)
+        await otherNotes.waitForAttachmentReconciliation()
+        XCTAssertTrue(notes.delete(try XCTUnwrap(notes.note(withID: loose))))
+        XCTAssertTrue(try deletedInAGroup(loose))
+        var reachedOther = 0
+        let restored = revisionPublishes {
+            reachedOther = revisionPublishes(of: otherNotes) {
+                XCTAssertNotNil(notes.restoreDeletedNote(noteID: loose)?.group, "a grouped restore")
+            }
+        }
+        XCTAssertEqual(restored, 3, "a store the commit step misses publishes for its save and its own refresh")
+        XCTAssertEqual(reachedOther, 1, "the commit step refreshes the lifecycle's store once")
+        XCTAssertNotNil(notes.note(withID: loose), "the restoring store lists the note again")
+        XCTAssertNotNil(otherNotes.note(withID: loose))
+        await otherNotes.waitForAttachmentReconciliation()
+    }
+
     func testDeletingATaskOwnedNoteTakesTheTaskOutOfTasks() throws {
         XCTAssertNotNil(tasks.task(withID: owner))
         XCTAssertTrue(library.delete(AtticItemRef(.note, writing)))
@@ -173,6 +241,11 @@ final class LibraryDeleteRefreshTests: XCTestCase {
         XCTAssertEqual(deleted, 1, "a canvas delete still refreshes Notes once")
         XCTAssertEqual(taskReloads, 1, "a canvas delete still reloads Tasks once")
         XCTAssertFalse(canvases.canvases.contains { $0.id == board.id })
+    }
+
+    private func deletedInAGroup(_ id: UUID) throws -> Bool {
+        let rows = try ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+        return !rows.isEmpty && rows.allSatisfy { $0.deletedAt != nil && $0.deletionGroupID != nil }
     }
 
     private func rowDeleted(_ id: UUID) throws -> Bool {
