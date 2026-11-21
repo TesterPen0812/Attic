@@ -443,9 +443,14 @@ final class CornerHoverMonitor {
                 let location = pointerLocationForTesting ?? NSEvent.mouseLocation
                 refreshSamplingCadence(at: location)
                 // A cursor-away hide never latches (the pointer leaving is
-                // its reason); a pointer back in the corner by its end
-                // still needs the one sample that starts its dwell.
-                if completion == .hidden { scheduleHideEndSample(at: location) }
+                // its reason). A pointer that arrived in a corner during it
+                // still needs the one sample that starts its dwell; one that
+                // has rested there since the hide began (an Option-to-reveal
+                // corner with the key up, say) gets none, as with every
+                // other hide.
+                if completion == .hidden, !restingHotspot.holds(location) {
+                    scheduleHideEndSample(at: location)
+                }
             }
             if !result.isAccepted {
                 stateMachine.resolveHideCompletion(didOrderOut: false)
