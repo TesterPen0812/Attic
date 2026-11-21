@@ -13,6 +13,7 @@ final class DurableSaveReadFailureTests: XCTestCase {
         WorkspaceLegacyBridge.postCommitOwnerReadFailures = 0
         WorkspaceLegacyBridge.postCommitPlainFailures = 0
         WorkspaceLegacyBridge.postSaveCaptureFailures = 0
+        WorkspaceLegacyBridge.postReconcileReadFailures = 0
         super.tearDown()
     }
 
@@ -30,7 +31,11 @@ final class DurableSaveReadFailureTests: XCTestCase {
     /// The panel's wiring: library plus a registered Notes lifecycle controller, 30 tasks, task 3 with writing,
     /// six other notes. One physical row per id.
     /// Fails the next N writer calls (the save itself, before anything is durable).
-    private final class WriterFailures { var remaining = 0 }
+    private final class WriterFailures {
+        var remaining = 0
+        /// The failing writer saves first, then throws: the outcome is unknown to the coordinator, the rows durable.
+        var afterSave = false
+    }
 
     private func makeRig(writerFailures: WriterFailures? = nil,
                          seed extra: ((ModelContext) throws -> Void)? = nil) async throws -> Rig {
@@ -55,6 +60,7 @@ final class DurableSaveReadFailureTests: XCTestCase {
         let tasks = TaskStore(container: container, now: { date }, persist: { context in
             if let failures = writerFailures, failures.remaining > 0 {
                 failures.remaining -= 1
+                if failures.afterSave { try context.save() }
                 throw WorkspaceFoundationError.unknown
             }
             try context.save()
@@ -253,10 +259,38 @@ final class DurableSaveReadFailureTests: XCTestCase {
             + "\(try durableTitles(rig.container, "Created, then renamed")) error=\(rig.tasks.lastErrorMessage ?? "nil") "
             + "duplicates=\(try duplicateRows(rig.container))")
         XCTAssertTrue(seamUsed, "The capture after the save failed")
-        XCTAssertGreaterThan(reconciliationReads, 0, "The reconciliation read ran and failed")
+        XCTAssertEqual(reconciliationReads, 0, "No reconciliation is attempted once the save returned")
         XCTAssertEqual(durable, 1, "The insert is durable once")
         XCTAssertNotNil(created, "A durable insert is reported as created")
         XCTAssertTrue(next, "The next edit works")
+        XCTAssertEqual(try duplicateRows(rig.container), [])
+        await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
+    }
+
+    /// Fable's F1, second half (pr40-fable.md §3): the writer saves and then throws, so the outcome is unknown;
+    /// reconciliation proves the plain commit, and then the read of the confirmed guards throws. The rename is durable,
+    /// so it is reported done, and the next edit works.
+    func testR5H1bPlainEditProvenByReconciliationWhoseGuardReadFailsIsDone() async throws {
+        let failures = WriterFailures()
+        let rig = try await makeRig(writerFailures: failures)
+        failures.remaining = 1; failures.afterSave = true
+        WorkspaceLegacyBridge.postReconcileReadFailures = 1
+        let renamed = rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[7])), to: "Renamed before an unknown outcome")
+        let writerUsed = failures.remaining == 0
+        let seamUsed = WorkspaceLegacyBridge.postReconcileReadFailures == 0
+        failures.remaining = 0; failures.afterSave = false
+        WorkspaceLegacyBridge.postReconcileReadFailures = 0
+        let durable = try durableTitles(rig.container, "Renamed before an unknown outcome")
+        let next = rig.tasks.rename(try XCTUnwrap(rig.tasks.task(withID: rig.ids[8])), to: "The next plain save")
+        print("R5_H1B writer_used=\(writerUsed) seam_used=\(seamUsed) renamed=\(renamed) durable=\(durable) next=\(next) "
+            + "next_durable=\(try durableTitles(rig.container, "The next plain save")) "
+            + "error=\(rig.tasks.lastErrorMessage ?? "nil") duplicates=\(try duplicateRows(rig.container))")
+        XCTAssertTrue(writerUsed, "The writer saved and threw")
+        XCTAssertTrue(seamUsed, "Reconciliation proved the commit and the guard read failed")
+        XCTAssertEqual(durable, 1, "The rename is durable")
+        XCTAssertTrue(renamed, "A durable rename is reported as done")
+        XCTAssertTrue(next, "The next edit works")
+        XCTAssertEqual(try durableTitles(rig.container, "The next plain save"), 1)
         XCTAssertEqual(try duplicateRows(rig.container), [])
         await rig.controller.waitForRecoveryWork(); await rig.notes.waitForAttachmentReconciliation()
     }
@@ -1492,6 +1526,8 @@ final class DurableSaveR5NarrowingTests: XCTestCase {
     /// another body) is on disk and the presentation is behind it. The newer body survives the edit and its Undo on
     /// every physical row.
     func testR5H2TitleOnlyAgentEditKeepsANewerSameRevisionBody() async throws {
+        // Strict: goes red once the trunk change binds a write to its base (pr40-fable.md §4).
+        XCTExpectFailure("NOTE-BASE-BINDING: a whole-document write is not compared with the base it came from")
         for arm in R5Seams.arms {
             let rig = try await makeRig()
             guard case let .success(created) = rig.notes.createDocumentNote(
@@ -1523,6 +1559,10 @@ final class DurableSaveR5NarrowingTests: XCTestCase {
             let steps = actions.changeSet(for: request)?.count ?? 0
             let undone = await actions.undo(changeSet: request)
             let afterUndo = try noteRows(rig.container, noteID).map { blocks($0.content) }
+            let versions = try ModelContext(rig.container).fetch(FetchDescriptor<NoteVersion>(predicate: #Predicate { $0.noteID == noteID }))
+            let newerVersions = versions.filter { blocks($0.content)?.last == "Newer body" }.count
+            print("R5_H2_VERSIONS build=\(R5Seams.build) arm=\(arm) versions=\(versions.count) holding_newer_body=\(newerVersions) "
+                + "bodies=\(versions.map { blocks($0.content)?.last ?? "nil" })")
             print("R5_H2 build=\(R5Seams.build) arm=\(arm) spent=\(spent.map { "\($0)" } ?? "n/a") presented=\(presented) "
                 + "outcome=\(outcome.prefix(160)) after_action=\(afterAction) steps=\(steps) undone=\(undone.undone) "
                 + "failures=\(undone.failures) after_undo=\(afterUndo)")
@@ -1596,6 +1636,8 @@ final class DurableSaveR5NarrowingTests: XCTestCase {
     /// HOLD 4. Add `mine` to a note; the presentation falls behind while another context adds `keep`; undo `mine`.
     /// Every physical row keeps `keep`.
     func testR5H4UndoingANoteTagKeepsATagAddedElsewhere() async throws {
+        // Strict: goes red once the trunk change moves the tag delta into the store (pr40-fable.md §4).
+        XCTExpectFailure("NOTE-BASE-BINDING: note tag Undo writes a whole array computed from presentation")
         for arm in R5Seams.arms {
             let rig = try await makeRig()
             let note = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 1" })

@@ -16,6 +16,9 @@ enum WorkspaceLegacyBridge {
     /// Test seam: the next N in-place saves throw after `gatedSave` returned, where the coordinator captures the
     /// permanent identifiers of inserted rows.
     static var postSaveCaptureFailures = 0
+    /// Test seam: after the writer threw and reconciliation proved the plain commit durable, the next N reads of the
+    /// committed owners (the confirmed guards) throw.
+    static var postReconcileReadFailures = 0
     /// Persists refused because their context was spent (board id undo-unresolved-staging). Ordinary saves never
     /// reach the refusal: the full suite counts 0 outside the failure tests.
     private(set) static var spentContextRefusals = 0

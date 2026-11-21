@@ -783,6 +783,12 @@ final class WorkspaceOperationCoordinator {
                 heldOwners.formUnion(affected)
                 let outcome = reconcilePlain(attempt)
                 if outcome == .committed {
+                    #if DEBUG
+                    if WorkspaceLegacyBridge.postReconcileReadFailures > 0 {
+                        WorkspaceLegacyBridge.postReconcileReadFailures -= 1
+                        throw WorkspaceFoundationError.unknown
+                    }
+                    #endif
                     confirmed(try WorkspaceModelToken.read(owners: writes, in: freshContext()))
                 }
                 return outcome
