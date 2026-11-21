@@ -398,6 +398,8 @@ final class CornerHoverMonitor {
             isInPanel: isInPanel,
             isInteractionLocked: isInteractionLocked,
             isPinned: uiState.isPanelPinned,
+            isRevealHeldByMenu: uiState.interactionLockReasons.contains(.menuTracking)
+                || panelController.floatingInteractionLockReasons.contains(.menuTracking),
             revealDelay: settings.revealDelay,
             hideDelay: settings.hideDelay,
             dismissMode: settings.panelDismissMode
@@ -595,16 +597,22 @@ final class CornerHoverMonitor {
     }
 
     /// Locks and the pin changed: one coalesced sample on the next turn.
+    /// Visible, every lock change samples. Hidden, only a reveal an open
+    /// menu is holding does: not every hidden lock change, because
+    /// `objectWillChange` also fires for `hideCount` one turn after each
+    /// hide, and a sample there could release an exit latch just set.
     private func scheduleLockSample() {
-        guard isRunning, stateMachine.isVisible, !lockSampleScheduled else { return }
+        guard isRunning, samplesOnLockChange, !lockSampleScheduled else { return }
         lockSampleScheduled = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.lockSampleScheduled = false
-            guard self.isRunning, self.stateMachine.isVisible else { return }
+            guard self.isRunning, self.samplesOnLockChange else { return }
             self.samplePointer()
         }
     }
+
+    private var samplesOnLockChange: Bool { stateMachine.isVisible || stateMachine.isRevealWaitingOnMenu }
 
     /// The only timed work: a single follow-up at the next decision
     /// deadline. Hidden, that is the reveal delay of a pointer resting in the

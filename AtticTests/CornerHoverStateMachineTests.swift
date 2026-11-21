@@ -873,3 +873,159 @@ final class PanelUIStateTests: XCTestCase {
         XCTAssertFalse(state.isInteractionLocked)
     }
 }
+
+// MARK: - Menu tracking holds a hidden corner reveal (PR 43 gate)
+
+/// Test-only control of `NSEvent.mouseLocation` and `NSEvent.modifierFlags`
+/// for this process, so every commit's monitor (with or without its own
+/// seams) reads the same scripted pointer and keys. nil reads the real one.
+enum NarrowEvents {
+    // Read from any thread AppKit asks on; written only by the tests on main.
+    nonisolated(unsafe) static var location: CGPoint?
+    nonisolated(unsafe) static var flags: NSEvent.ModifierFlags?
+    nonisolated(unsafe) private static var installed = false
+
+    static func install() {
+        guard !installed else { return }
+        installed = true
+        let locationSelector = #selector(getter: NSEvent.mouseLocation)
+        if let method = class_getClassMethod(NSEvent.self, locationSelector) {
+            typealias Original = @convention(c) (AnyClass, Selector) -> NSPoint
+            let original = unsafeBitCast(method_getImplementation(method), to: Original.self)
+            let block: @convention(block) (AnyClass) -> NSPoint = { cls in
+                NarrowEvents.location ?? original(cls, locationSelector)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(block))
+        }
+        let flagsSelector = #selector(getter: NSEvent.modifierFlags)
+        if let method = class_getClassMethod(NSEvent.self, flagsSelector) {
+            typealias Original = @convention(c) (AnyClass, Selector) -> UInt
+            let original = unsafeBitCast(method_getImplementation(method), to: Original.self)
+            let block: @convention(block) (AnyClass) -> UInt = { cls in
+                NarrowEvents.flags?.rawValue ?? original(cls, flagsSelector)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(block))
+        }
+    }
+}
+
+@MainActor
+private struct MenuGateRig {
+    let settings: AppSettings
+    let uiState: PanelUIState
+    let controller: AtticPanelController
+    let monitor: CornerHoverMonitor
+    let defaults: UserDefaults
+    let suite: String
+}
+
+extension CornerHoverStateMachineTests {
+    @MainActor
+    private func makeMenuGateRig() throws -> MenuGateRig {
+        let suite = "CornerMenuGate.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let canvasStore = CanvasStore(container: container)
+        let canvasSession = CanvasSession(store: canvasStore)
+        let noteDraft = NoteDraftController(noteStore: notes)
+        let settings = AppSettings(defaults: defaults)
+        let uiState = PanelUIState()
+        let controller = AtticPanelController(store: store, noteStore: notes, canvasSession: canvasSession,
+                                              noteDraft: noteDraft, settings: settings, uiState: uiState)
+        let monitor = CornerHoverMonitor(settings: settings, panelController: controller, uiState: uiState,
+                                         store: store, noteStore: notes, canvasStore: canvasStore, noteDraft: noteDraft)
+        return MenuGateRig(settings: settings, uiState: uiState, controller: controller, monitor: monitor,
+                           defaults: defaults, suite: suite)
+    }
+
+    @MainActor
+    private func menuGateSpin(_ seconds: TimeInterval) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// A band-crossing approach (a sample at 50 pt, then the corner, so no
+    /// exit latch is involved) while a menu is tracking: the corner must not
+    /// reveal the panel over the open menu. Releasing the menu with the
+    /// pointer still resting in the corner then reveals it with no further
+    /// pointer event.
+    @MainActor
+    func testMenuTrackingHoldsACornerRevealUntilTheMenuCloses() throws {
+        NarrowEvents.install()
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = previous
+            NarrowEvents.location = nil
+            NarrowEvents.flags = nil
+        }
+        let rig = try makeMenuGateRig()
+        defer { rig.defaults.removePersistentDomain(forName: rig.suite) }
+        rig.settings.corner = .topRight
+        NarrowEvents.flags = []
+        rig.monitor.start()
+        defer {
+            rig.uiState.setInteractionLock(.menuTracking, isActive: false)
+            rig.monitor.stop()
+            menuGateSpin(0.3)
+        }
+        menuGateSpin(0.05)
+        let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first)
+        let far = CGPoint(x: frame.midX, y: frame.midY)
+        let band = CGPoint(x: frame.maxX - 50, y: frame.maxY - 50)
+        let corner = CGPoint(x: frame.maxX - 1, y: frame.maxY - 1)
+        NarrowEvents.location = far
+        rig.monitor.pointerActivityForTesting(at: far)
+        rig.uiState.setInteractionLock(.menuTracking, isActive: true)
+        menuGateSpin(0.05)
+        NarrowEvents.location = band
+        rig.monitor.pointerActivityForTesting(at: band)
+        menuGateSpin(0.05)
+        NarrowEvents.location = corner
+        rig.monitor.pointerActivityForTesting(at: corner)
+        let held = Date().addingTimeInterval(0.8)
+        while !rig.controller.isPanelVisible, Date() < held { menuGateSpin(0.01) }
+        XCTAssertFalse(rig.controller.isPanelVisible, "menu tracking holds the corner reveal")
+
+        rig.uiState.setInteractionLock(.menuTracking, isActive: false)
+        let released = Date().addingTimeInterval(1)
+        while !rig.controller.isPanelVisible, Date() < released { menuGateSpin(0.01) }
+        XCTAssertTrue(rig.controller.isPanelVisible, "closing the menu reveals for the resting pointer")
+    }
+}
+
+extension CornerHoverStateMachineTests {
+    /// The gate at the state machine: a held reveal starts no dwell and is
+    /// recorded as waiting; the exit latch is checked first and wins; once
+    /// the menu closes the dwell starts from that sample.
+    func testAHiddenRevealHeldByAMenuStartsNoDwellAndTheLatchStillComesFirst() {
+        var machine = CornerHoverStateMachine()
+        XCTAssertEqual(machine.update(at: 1, isInHotspot: true, isInPanel: false, isInteractionLocked: true,
+                                      isRevealHeldByMenu: true, revealDelay: 0.2), .none)
+        XCTAssertNil(machine.nextRevealDeadline(revealDelay: 0.2), "no dwell under a tracking menu")
+        XCTAssertTrue(machine.isRevealWaitingOnMenu)
+        XCTAssertEqual(machine.update(at: 5, isInHotspot: true, isInPanel: false, isInteractionLocked: true,
+                                      isRevealHeldByMenu: true, revealDelay: 0.2), .none, "however long it rests")
+        XCTAssertEqual(machine.update(at: 6, isInHotspot: true, isInPanel: false, isInteractionLocked: false,
+                                      revealDelay: 0.2), .none)
+        XCTAssertFalse(machine.isRevealWaitingOnMenu)
+        XCTAssertEqual(machine.nextRevealDeadline(revealDelay: 0.2), 6.2, "the dwell starts when the menu closes")
+        XCTAssertEqual(machine.update(at: 6.2, isInHotspot: true, isInPanel: false, isInteractionLocked: false,
+                                      revealDelay: 0.2), .reveal)
+
+        var away = CornerHoverStateMachine()
+        _ = away.update(at: 1, isInHotspot: false, isInPanel: false, isInteractionLocked: true,
+                        isRevealHeldByMenu: true, revealDelay: 0.2)
+        XCTAssertFalse(away.isRevealWaitingOnMenu, "nothing waits for a pointer outside the hotspot")
+
+        var latched = CornerHoverStateMachine()
+        latched.forceVisible(at: 0, grace: 0)
+        latched.forceHidden(untilHotspotExit: true)
+        _ = latched.update(at: 1, isInHotspot: true, isInPanel: false, isInteractionLocked: true,
+                           isRevealHeldByMenu: true, revealDelay: 0.2)
+        XCTAssertFalse(latched.isRevealWaitingOnMenu, "a latched pointer is not a held reveal")
+        _ = latched.update(at: 2, isInHotspot: true, isInPanel: false, isInteractionLocked: false, revealDelay: 0.2)
+        XCTAssertNil(latched.nextRevealDeadline(revealDelay: 0.2), "the menu closing does not release the latch")
+    }
+}

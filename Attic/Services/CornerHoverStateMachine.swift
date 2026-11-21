@@ -193,6 +193,10 @@ struct CornerHoverStateMachine {
     private var wasRevealedByCorner = false
     private var leaveBeganAt: TimeInterval?
     private var requiresHotspotExitBeforeReveal = false
+    /// Hidden, the pointer is in the hotspot but an open menu holds the
+    /// reveal. The monitor samples once when a lock changes while this is
+    /// set, so closing the menu reveals for a pointer resting there.
+    private(set) var isRevealWaitingOnMenu = false
     /// An accidental corner skim can still close itself in Click away mode.
     /// This is fixed, independent of the user-adjustable cursor hide delay.
     private static let abandonedCornerHideDelay: TimeInterval = 0.3
@@ -243,17 +247,27 @@ struct CornerHoverStateMachine {
         isInPanel: Bool,
         isInteractionLocked: Bool,
         isPinned: Bool = false,
+        isRevealHeldByMenu: Bool = false,
         revealDelay: TimeInterval,
         hideDelay: TimeInterval = 0.3,
         dismissMode: PanelDismissMode = .moveCursorAway
     ) -> Transition {
         if !isVisible {
+            isRevealWaitingOnMenu = false
             if requiresHotspotExitBeforeReveal {
                 guard !isInHotspot else {
                     hotspotEnteredAt = nil
                     return .none
                 }
                 requiresHotspotExitBeforeReveal = false
+            }
+            // A tracking menu holds a hidden reveal: no dwell runs under it.
+            // Only the menu lock: a pressed button or a focused editor must
+            // not stop a drag into the corner from revealing.
+            if isRevealHeldByMenu {
+                hotspotEnteredAt = nil
+                isRevealWaitingOnMenu = isInHotspot
+                return .none
             }
             guard isInHotspot else {
                 hotspotEnteredAt = nil
@@ -341,6 +355,7 @@ struct CornerHoverStateMachine {
         leaveBeganAt = nil
         hotspotEnteredAt = nil
         requiresHotspotExitBeforeReveal = false
+        isRevealWaitingOnMenu = false
         isHidePending = false
     }
 
@@ -361,6 +376,7 @@ struct CornerHoverStateMachine {
         wasRevealedByCorner = false
         leaveBeganAt = nil
         requiresHotspotExitBeforeReveal = false
+        isRevealWaitingOnMenu = false
         isHidePending = false
     }
 }
