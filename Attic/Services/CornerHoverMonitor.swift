@@ -490,11 +490,16 @@ final class CornerHoverMonitor {
         refreshSamplingCadence(at: location)
     }
 
-    /// The hotspot by geometry alone, with the same 1 pt edge allowance as a
-    /// sample. No key or display rule: a pointer resting in the corner
-    /// latches whatever the rule; a sample the rule rejects clears it.
+    /// The hotspot of a watched display (one whose corner answers hover, so
+    /// it is in `cachedScreenFrames` and samples near the corner), with the
+    /// same 1 pt edge allowance as a sample. The key is left out: a pointer
+    /// resting in the corner latches whether or not it is held, and a
+    /// sample without it clears the latch as before. An unwatched corner
+    /// never reveals, so it needs no latch, and one set there would sit
+    /// under an idle cadence and block the next watched corner.
     private func isInCornerHotspot(_ location: CGPoint) -> Bool {
-        guard let screen = screen(containing: location) else { return false }
+        guard let screen = screen(containing: location),
+              revealPolicy.answers(displayID: displayID(of: screen)) else { return false }
         return PanelGeometry.hotspot(in: screen.frame, corner: settings.corner)
             .insetBy(dx: -1, dy: -1)
             .contains(location)
