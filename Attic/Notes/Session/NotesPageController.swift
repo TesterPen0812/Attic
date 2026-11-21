@@ -296,9 +296,11 @@ final class NotesPageController: ObservableObject {
     /// Each change of the undo route's history (a step recorded, undone or
     /// dropped, in any page), sent without invalidating the controller:
     /// the menus read the library's undo names when they open, and only the
-    /// delete toast's check runs on every change.
-    var undoRevisionChanges: AnyPublisher<UInt64, Never> { undoRevisionSubject.eraseToAnyPublisher() }
-    private let undoRevisionSubject = PassthroughSubject<UInt64, Never>()
+    /// delete toast's check runs on every change. Sent synchronously from
+    /// inside the route's own change: receivers must not change the route.
+    /// Erased once, so `onReceive` sees the same publisher on every body run.
+    let undoRevisionChanges: AnyPublisher<UInt64, Never>
+    private let undoRevisionSubject: PassthroughSubject<UInt64, Never>
 
     let store: NoteStore
     let librarySummaries = NotesLibrarySummaryCache()
@@ -885,6 +887,9 @@ final class NotesPageController: ObservableObject {
          decodeRecoveryDocument: @escaping @Sendable (Data) async -> NoteDocument? = { bytes in
              await Task.detached(priority: .userInitiated) { NoteContentCodec.decode(bytes).document }.value
          }) {
+        let undoRevisionSubject = PassthroughSubject<UInt64, Never>()
+        self.undoRevisionSubject = undoRevisionSubject
+        undoRevisionChanges = undoRevisionSubject.eraseToAnyPublisher()
         self.store = store
         self.journal = journal
         self.defaults = defaults

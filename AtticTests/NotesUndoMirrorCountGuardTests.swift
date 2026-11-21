@@ -259,8 +259,13 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
             // Printed, not asserted: a toast alone, no Tasks step (the
             // priority change posts one, the tick does not). It stays up
             // while the priority change is counted.
-            _ = measure(rig, "toast only", { rig.toasts.show("Counted toast") {} },
-                        saved: { rig.toasts.current?.message == "Counted toast" })
+            // It is also the Calendar columns' positive control: the same
+            // settle sees the hidden Calendar host, page and route host run.
+            let toastOnly = measure(rig, "toast only", { rig.toasts.show("Counted toast") {} },
+                                    saved: { rig.toasts.current?.message == "Counted toast" })
+            for key in ["CalendarPageHost", "CalendarPage", "route.calendar"] {
+                XCTAssertGreaterThan(toastOnly[key, default: 0], 0, "harness: the settle sees the hidden \(key) run")
+            }
 
             let prioritised = rig.plain[1]
             let priority = measure(rig, "priority", {
@@ -277,14 +282,16 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
                 }
             }
 
-            // The same settle sees a hidden Notes host run when something it
-            // reads changes (a note pinned in the store).
+            // The Notes columns' positive control: the same settle sees the
+            // hidden Notes views and route host run when something they read
+            // changes (a note pinned in the store).
             let pinned = rig.freeNotes[0]
             let control = measure(rig, "note pinned in the store", {
                 _ = rig.notes.setPinned(true, noteID: pinned)
             }, saved: { rig.notes.note(withID: pinned)?.isPinned == true })
-            XCTAssertGreaterThan(control["NotesPageHost", default: 0], 0,
-                                 "harness: the settle sees the hidden Notes host run")
+            for key in ["NotesPageHost", "NotesEditorPage", "NotesLibraryView", "route.notes"] {
+                XCTAssertGreaterThan(control[key, default: 0], 0, "harness: the settle sees the hidden \(key) run")
+            }
         }
     }
 
