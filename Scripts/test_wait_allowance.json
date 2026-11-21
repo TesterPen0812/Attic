@@ -536,6 +536,10 @@
     "AtticUITests/TasksDragOutUITests.swift": {
       "runloop": 1
     },
+    "AtticUITests/TasksFindCloseRedrawUITests.swift": {
+      "runloop": 1,
+      "sleep": 2
+    },
     "AtticUITests/TasksPageUITests.swift": {
       "runloop": 11
     },
