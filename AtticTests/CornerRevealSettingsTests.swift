@@ -665,6 +665,7 @@ extension CornerRevealSettingsTests {
     }
 
     private func narrow(reduceMotion: Bool, mode: PanelDismissMode = .clickAway,
+                        screens: [(frame: CGRect, id: String?)]? = nil,
                         _ body: (NarrowRig) throws -> Void) throws {
         NarrowEvents.install()
         let previous = AtticMotionPreference.systemReduceMotionOverride
@@ -678,6 +679,7 @@ extension CornerRevealSettingsTests {
         rig.settings.corner = .topRight
         rig.settings.panelDismissMode = mode
         NarrowEvents.flags = []
+        rig.monitor.screensForTesting = screens
         rig.monitor.start()
         defer {
             rig.uiState.setInteractionLock(.menuTracking, isActive: false)
@@ -737,9 +739,39 @@ extension CornerRevealSettingsTests {
         }
     }
 
-    // Astra 2 (two watched corners are not one) needs two displays, so it
-    // is covered by the resting hotspot's unit test on two frames
-    // (CornerHoverStateMachineTests) and an on-screen two-display row.
+    /// Astra 2, through the monitor: two watched displays (the real one as
+    /// A and a stand-in B beside it, through `screensForTesting`). A hide
+    /// begins with the pointer resting in A's hotspot; the pointer is next
+    /// seen in B's corner; the hide completes. B's corner is not A's, so it
+    /// is an approach: its reveal delay starts with no further event. The
+    /// show itself needs a real screen, so the test asserts the reveal
+    /// deadline (the on-screen two-display row covers the show).
+    func testNarrow2TwoWatchedCornersAreNotOne() throws {
+        let real = try XCTUnwrap(NSScreen.screens.first)
+        let a = real.frame
+        let b = CGRect(x: a.maxX, y: a.maxY - 900, width: 1440, height: 900)
+        let screens: [(frame: CGRect, id: String?)] = [(a, AtticDisplay.identifier(for: real)), (b, "pr43-stand-in-b")]
+        try narrow(reduceMotion: false, screens: screens) { n in
+            XCTAssertEqual(n.rig.monitor.hoverScreenFramesForTesting, [a, b], "both corners are watched")
+            let bCorner = CGPoint(x: b.maxX - 1, y: b.maxY - 1)
+            XCTAssertTrue(n.rig.monitor.isInHotspotForTesting(n.corner, flags: []), "A's corner is a hotspot")
+            XCTAssertTrue(n.rig.monitor.isInHotspotForTesting(bCorner, flags: []), "B's corner is a hotspot")
+            NarrowEvents.location = n.corner
+            narrowShow(n)
+            let announced = Corner.Box()
+            n.rig.monitor.onVisibilityChangeExpected = { expected in
+                if let expected, !expected.hiding { announced.revealPending = true }
+            }
+            defer { n.rig.monitor.onVisibilityChangeExpected = nil }
+            _ = n.rig.controller.requestHide { _ in }
+            XCTAssertTrue(n.rig.controller.isPanelVisible, "the hide is animated, so it is still running")
+            NarrowEvents.location = bCorner
+            narrowWaitHidden(n)
+            let deadline = Date().addingTimeInterval(1)
+            while !announced.revealPending, Date() < deadline { spin(0.01) }
+            XCTAssertTrue(announced.revealPending, "another display's corner is an approach: its reveal delay starts")
+        }
+    }
 
     /// Astra 3: hidden with the pointer far, it enters the corner, then a
     /// second hide request while already hidden. Trunk latched on it; the
