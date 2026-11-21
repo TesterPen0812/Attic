@@ -292,6 +292,47 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertEqual(titles(), ["A", "C", "B"])
     }
 
+    func testHeldSubtaskOrderPreservesReturningChildrenAndPhysicalReplicas() {
+        let parent = UUID()
+        let a = TaskItem(title: "A"), b = TaskItem(title: "B"), c = TaskItem(title: "C")
+        let otherA = TaskItem(id: a.id, title: "Second A")
+        let otherC = TaskItem(id: c.id, title: "Second C")
+        let d = TaskItem(title: "D")
+        func titles(_ children: [TaskItem]) -> [String] {
+            model.quickLookSubtasks(of: parent, children).map(\.title)
+        }
+        XCTAssertEqual(titles([a, b, otherA]), ["A", "B", "Second A"])
+        XCTAssertEqual(titles([c, b, d, otherC]), ["B", "C", "D", "Second C"])
+        XCTAssertEqual(titles([otherC, b, otherA, d, c, a]), ["Second A", "A", "B", "Second C", "C", "D"])
+        XCTAssertEqual(titles([]), [])
+        XCTAssertEqual(titles([d, a, c]), ["A", "C", "D"])
+        model.releaseQuickLookOrder(of: parent)
+        XCTAssertEqual(titles([d, a, c]), ["D", "A", "C"])
+    }
+
+    /// The Pro night job's 713e9012 (the held order indexed, not searched
+    /// per child): projecting an open family again in another order shows
+    /// the held order at 25 and 100 subtasks. Physical replicas that share
+    /// an ID keep their input order beside each other (duplicate-safe IDs,
+    /// AGENTS.md): one before its twin, one after.
+    func testReprojectingAnOpenFamilyKeepsItsHeldOrderAndReplicas() {
+        for size in [25, 100] {
+            let parent = UUID()
+            let children = (0..<size).map { TaskItem(title: "Subtask \($0)") }
+            let before = TaskItem(id: children[0].id, title: "Replica before")
+            let after = TaskItem(id: children[size / 2].id, title: "Replica after")
+            _ = model.quickLookSubtasks(of: parent, children)  // the quick look opens and holds this order
+            // The store's order after some ticks: a fixed scramble (37 is
+            // coprime to both sizes), with the replicas at either end.
+            let scrambled = (0..<size).map { children[($0 * 37) % size] }
+            let shown = model.quickLookSubtasks(of: parent, [before] + scrambled + [after])
+            var expected = children.map(\.title)
+            expected.insert("Replica after", at: size / 2 + 1)
+            expected.insert("Replica before", at: 0)
+            XCTAssertEqual(shown.map(\.title), expected, "the held order at \(size), each replica in its input place beside its twin")
+        }
+    }
+
     /// Round 10b, finding 3's other half: ticking a box keeps the quick
     /// look's held order (review 21), and a move released only its own.
     func testTickingASubtaskKeepsTheQuickLooksOrder() throws {
