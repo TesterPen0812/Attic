@@ -178,18 +178,22 @@ Scripts/run_local_ui_tests.zsh
   The main unit runner skips those complete suites; optimized cost tests keep
   their existing jobs. Both unit runners are required in `fast` and `full`.
 - **CI** is [`.github/workflows/macos-ci.yml`](.github/workflows/macos-ci.yml)
-  ("Attic CI"). It runs on pushes to `main`, using the `full` lane. It does not
-  start on pull-request pushes: a pull request's CI is started by hand at gate
-  time (`gh workflow run "Attic CI" --ref <branch> -f lane=full`). A manual run
+  ("Attic CI"). It runs on pushes to `main`, using the `full` lane plus the
+  `performance` and `costs` jobs. It does not start on pull-request pushes: a
+  pull request's CI is started by hand at gate time
+  (`gh workflow run "Attic CI" --ref <branch> -f lane=full`). A manual run
   picks a lane:
   - `fast`: builds, runs the split unit suites, full-history Notes editor seeds
     and generated round trips in parallel, the static analyzer, and the
     project-generation checks. Timing gates report but don't block.
   - `full` (the default): everything in `fast`, plus UI tests, Full Keyboard
-    Access tests, the optimized cost gates with the heavy retention soaks,
-    seeded performance runs and the design-system appearance matrix.
-  - `costs` and `fka` run just those jobs. The iPhone build runs only when
-    asked for (`run_iphone`).
+    Access tests and the design-system appearance matrix.
+  - `performance` (seeded performance runs on a fresh runner) and `costs` (the
+    optimized cost gates with the heavy retention soaks) are lanes of their
+    own, run once on the trunk after a batch merges. They are not part of
+    `full` and don't gate a merge.
+  - `fka` runs just the Full Keyboard Access job. The iPhone build runs only
+    when asked for (`run_iphone`).
 
 The heavy retention soaks are skipped locally unless
 `TEST_RUNNER_ATTIC_SOAK_TESTS=1` is set. The full appearance matrix and its

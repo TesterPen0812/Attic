@@ -1,4 +1,4 @@
-# Dispatch fka for the focused native keyboard gate; costs for optimized costs; fast for build/analyzer/unit; full for milestones.
+# Dispatch fka for the focused native keyboard gate; costs for optimized costs; performance for seeded performance on a fresh runner; fast for build/analyzer/unit; full for milestones.
 name: Attic CI
 
 on:
@@ -21,11 +21,11 @@ on:
   workflow_dispatch:
     inputs:
       lane:
-        description: Verification scope (full, fast, costs, or focused FKA)
+        description: Verification scope (full, fast, costs, performance, or focused FKA)
         required: false
         default: full
         type: choice
-        options: [full, fast, costs, fka]
+        options: [full, fast, costs, performance, fka]
       headless_costs:
         description: Run integration costs without key-window or UI fixtures (lane=costs)
         required: false
@@ -53,7 +53,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: attic-ci-${{ github.workflow }}-${{ github.ref }}
+  # The lane is part of the group, so lanes dispatched on one ref (for example
+  # performance and costs on the trunk) don't cancel each other.
+  group: attic-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.lane }}
   cancel-in-progress: true
 
 env:
@@ -87,9 +89,14 @@ jobs:
         env:
           LANE: ${{ inputs.lane }}
           HEADLESS_COSTS: ${{ inputs.headless_costs }}
+          UI_TESTS: ${{ inputs.ui_tests }}
         run: |
           if [ "$HEADLESS_COSTS" = true ] && [ "$LANE" != costs ]; then
             echo '::error::headless_costs=true requires lane=costs'
+            exit 1
+          fi
+          if [ -n "$UI_TESTS" ] && [ "$LANE" = performance ]; then
+            echo '::error::ui_tests requires lane=full; lane=performance would run nothing'
             exit 1
           fi
 
@@ -179,7 +186,7 @@ jobs:
 
   round-trips:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Generated models, matrices, stress, and Notes round trips
     runs-on: macos-26
     # The complete successful generated suite plus compilation exceeded the
@@ -227,19 +234,26 @@ jobs:
 
   notes-seeds:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
-    name: Notes editor generated seed ${{ matrix.seed }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
+    name: Notes editor generated seeds
     runs-on: macos-26
     # Each seed replays the complete history after every generated command.
     # That quadratic, deliberately checked behavior is independent of the
-    # functional unit suite, so give each full seed its own required runner.
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        seed: [11012, 11013, 11014, 11015]
+    # functional unit suite, so the seeds get their own required runner: one
+    # build, then one test process per seed. Every seed runs even when an
+    # earlier one fails, and the job fails unless every named seed passed.
+    # Each seed's test has its own 20-minute limit (the slowest seed took
+    # 6 min in run 43976364570) and its result reader 2 minutes, so a hung seed
+    # fails without starving the seeds after it. The seeds share one runner
+    # and its test infrastructure, so after a timeout the later seeds'
+    # results are logged as suspect.
+    timeout-minutes: 120
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      NOTES_SEEDS: 11012 11013 11014 11015
+      NOTES_SEED_TIMEOUT_SECONDS: 1200
+      NOTES_RESULT_TIMEOUT_SECONDS: 120
+      NOTES_SEED_HOST: AtticUnitTestHost
     steps:
       - uses: actions/checkout@v5
       - name: Build local-only Notes editor test host
@@ -249,32 +263,198 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
           Scripts/sign_crash_harness.zsh "$RUNNER_TEMP/AtticNotesSeed/Build/Products/Local/AtticUnitTestHost.app"
-      - name: Verify complete generated Notes editor seed
-        timeout-minutes: 75
+      - name: Verify every complete generated Notes editor seed
+        timeout-minutes: 100
         run: |
-          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
-            -configuration Local -destination 'platform=macOS' \
-            -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
-            -resultBundlePath "$RUNNER_TEMP/AtticNotesSeed.xcresult" \
-            CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
-            -only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed${{ matrix.seed }}
-          xcrun xcresulttool get test-results summary \
-            --path "$RUNNER_TEMP/AtticNotesSeed.xcresult" --format json > "$RUNNER_TEMP/notes-seed-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==1 and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/notes-seed-summary.json"
-      - name: Upload Notes editor generated-seed evidence
+          # Job control gives each bounded command and its watchdog their own
+          # process group, so a timeout stops the whole tree by exact group id.
+          set -m
+          # This job's own build of the test host, by full path (and its
+          # symlink-free form, in case the host is launched by that).
+          host_rel="AtticNotesSeed/Build/Products/Local/$NOTES_SEED_HOST.app/Contents/MacOS/$NOTES_SEED_HOST"
+          host_path="$RUNNER_TEMP/$host_rel"
+          host_path_physical="$(cd "$RUNNER_TEMP" && pwd -P)/$host_rel"
+
+          # run_bounded LABEL SECONDS COMMAND...: returns the command's status,
+          # or 124 after interrupting (then killing) its process group on timeout.
+          run_bounded() {
+            local label=$1 limit=$2 pid watchdog waited rc=0
+            shift 2
+            rm -f "$out/timed-out-now"
+            "$@" < /dev/null &
+            pid=$!
+            (
+              sleep "$limit"
+              : > "$out/timed-out-now"
+              echo "::error::$label timed out after $limit s"
+              kill -INT -- "-$pid" 2>/dev/null
+              waited=0
+              while [ "$waited" -lt 60 ] && kill -0 -- "-$pid" 2>/dev/null; do sleep 1; waited=$((waited + 1)); done
+              kill -KILL -- "-$pid" 2>/dev/null
+              exit 0
+            ) &
+            watchdog=$!
+            wait "$pid" || rc=$?
+            if [ ! -e "$out/timed-out-now" ]; then
+              kill -- "-$watchdog" 2>/dev/null || true
+            fi
+            wait "$watchdog" 2>/dev/null || true
+            if [ -e "$out/timed-out-now" ]; then
+              : > "$out/timed-out"
+              return 124
+            fi
+            return "$rc"
+          }
+
+          # Test hosts are launched outside the seed's process group. Stop any
+          # that this seed started: running this job's host build, and not
+          # running when the seed began. NOTES_PROCESS_TABLE and NOTES_SIGNAL
+          # replace ps and kill only in the script tests, which simulate both.
+          process_table() {
+            if [ -n "${NOTES_PROCESS_TABLE:-}" ]; then "$NOTES_PROCESS_TABLE"
+            else ps -x -U "$(id -u)" -o pid= -o comm=; fi
+          }
+          send_signal() {
+            if [ -n "${NOTES_SIGNAL:-}" ]; then "$NOTES_SIGNAL" "$@"
+            else kill "$@"; fi
+          }
+          host_pids() {
+            local pid path
+            process_table | while read -r pid path; do
+              if [ "$path" = "$host_path" ] || [ "$path" = "$host_path_physical" ]; then echo "$pid"; fi
+            done
+          }
+          seed_hosts() {
+            local pid
+            for pid in $(host_pids); do
+              printf '%s\n' "$hosts_before" | grep -qx "$pid" || echo "$pid"
+            done
+          }
+          # Up to 3 passes: rescan, TERM every host the seed left, one shared
+          # 10 s grace, KILL any left. A host still running after that fails
+          # the seed, so no host carries silently into the next seed.
+          stop_seed_hosts() {
+            local host hosts waited=0 pass=0
+            # A host that is already exiting gets 5 s to finish on its own.
+            while [ "$waited" -lt 5 ] && [ -n "$(seed_hosts)" ]; do sleep 1; waited=$((waited + 1)); done
+            while [ "$pass" -lt 3 ]; do
+              hosts=$(seed_hosts)
+              [ -n "$hosts" ] || return 0
+              pass=$((pass + 1))
+              for host in $hosts; do
+                echo "::warning::Seed $seed left $NOTES_SEED_HOST pid $host running: sending TERM (pass $pass)"
+                send_signal -TERM "$host" 2>/dev/null || true
+              done
+              waited=0
+              while [ "$waited" -lt 10 ] && [ -n "$(seed_hosts)" ]; do sleep 1; waited=$((waited + 1)); done
+              hosts=$(seed_hosts)
+              [ -n "$hosts" ] || continue
+              for host in $hosts; do
+                echo "::warning::Seed $seed: $NOTES_SEED_HOST pid $host outlived TERM: sending KILL (pass $pass)"
+                send_signal -KILL "$host" 2>/dev/null || true
+              done
+              sleep 1
+            done
+            hosts=$(seed_hosts)
+            [ -n "$hosts" ] || return 0
+            echo "::error::Seed $seed: $NOTES_SEED_HOST still running after 3 cleanup passes: pid" $hosts
+            return 1
+          }
+
+          read_result() {
+            xcrun xcresulttool get test-results summary \
+              --path "$1/AtticNotesSeed.xcresult" --format json > "$1/notes-seed-summary.json" \
+            && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==1 and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$1/notes-seed-summary.json"
+          }
+
+          failed='' named=0 passed=0 timed_out_seed=''
+          for seed in $NOTES_SEEDS; do
+            named=$((named + 1))
+            echo "::group::Notes editor generated seed $seed"
+            out="$RUNNER_TEMP/notes-seed-$seed"
+            mkdir -p "$out"
+            if [ -n "$timed_out_seed" ]; then
+              echo "::warning::Seed $seed runs after seed $timed_out_seed timed out; its result may be affected by test infrastructure that timeout left behind"
+            fi
+            hosts_before=$(host_pids)
+            status=0
+            case "$seed" in
+              *[!0-9]*) echo "::error::Notes editor generated seed '$seed' is not a number"; status=2 ;;
+              *)
+                run_bounded "Notes editor generated seed $seed test" "$NOTES_SEED_TIMEOUT_SECONDS" \
+                  Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+                  -configuration Local -destination 'platform=macOS' \
+                  -derivedDataPath "$RUNNER_TEMP/AtticNotesSeed" \
+                  -resultBundlePath "$out/AtticNotesSeed.xcresult" \
+                  CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
+                  -only-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed$seed || status=$?
+                ;;
+            esac
+            host_left=0
+            stop_seed_hosts || host_left=1
+            if [ "$status" -eq 0 ] && [ "$host_left" -eq 0 ] && [ ! -e "$out/timed-out" ] \
+              && run_bounded "Notes editor generated seed $seed result reader" "$NOTES_RESULT_TIMEOUT_SECONDS" read_result "$out"; then
+              passed=$((passed + 1))
+              echo "Notes editor generated seed $seed passed"
+            else
+              failed="$failed $seed"
+              echo "::error::Notes editor generated seed $seed failed"
+            fi
+            if [ -e "$out/timed-out" ] && [ -z "$timed_out_seed" ]; then timed_out_seed=$seed; fi
+            echo "::endgroup::"
+          done
+          if [ -n "$timed_out_seed" ]; then
+            echo "::warning::Seed $timed_out_seed timed out; results of the seeds after it are suspect"
+          fi
+          if [ -n "$failed" ] || [ "$named" -eq 0 ] || [ "$passed" -ne "$named" ]; then
+            echo "::error::Notes editor generated seeds: $passed of $named passed; failed:${failed:- none}"
+            exit 1
+          fi
+          echo "Notes editor generated seeds: $passed of $named passed"
+      - name: Upload Notes editor generated seed 11012 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: notes-editor-seed-${{ matrix.seed }}-${{ github.sha }}
+          name: notes-editor-seed-11012-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/AtticNotesSeed.xcresult
-            ${{ runner.temp }}/notes-seed-summary.json
+            ${{ runner.temp }}/notes-seed-11012/AtticNotesSeed.xcresult
+            ${{ runner.temp }}/notes-seed-11012/notes-seed-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload Notes editor generated seed 11013 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-editor-seed-11013-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/notes-seed-11013/AtticNotesSeed.xcresult
+            ${{ runner.temp }}/notes-seed-11013/notes-seed-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload Notes editor generated seed 11014 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-editor-seed-11014-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/notes-seed-11014/AtticNotesSeed.xcresult
+            ${{ runner.temp }}/notes-seed-11014/notes-seed-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload Notes editor generated seed 11015 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-editor-seed-11015-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/notes-seed-11015/AtticNotesSeed.xcresult
+            ${{ runner.temp }}/notes-seed-11015/notes-seed-summary.json
           if-no-files-found: ignore
           retention-days: 7
 
   macos:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Build, test, and analyze Attic for macOS
     runs-on: macos-26
     timeout-minutes: 180
@@ -672,7 +852,7 @@ jobs:
 
   unit-continuation:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Required macOS unit continuation (P-Z and exhaustive first mouse)
     runs-on: macos-26
     timeout-minutes: 75
@@ -730,7 +910,7 @@ jobs:
 
   required:
     needs: [validate-inputs, macos, round-trips, notes-seeds, unit-continuation]
-    if: ${{ always() && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ always() && inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Require macOS and generated coverage
     runs-on: ubuntu-latest
     steps:
@@ -747,7 +927,7 @@ jobs:
 
   ui:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' }}
     name: macOS UI tests (${{ matrix.shard }} of 3)
     runs-on: macos-26
     timeout-minutes: 50
@@ -853,7 +1033,7 @@ jobs:
 
   costs:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.lane == 'costs') && !inputs.ui_tests }}
     name: Optimized costs and opt-in soak retention gates
     runs-on: macos-26
     timeout-minutes: 90
@@ -1090,7 +1270,7 @@ jobs:
 
   performance:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.lane == 'performance') && !inputs.ui_tests }}
     name: Observe seeded performance on a fresh macOS runner
     runs-on: macos-26
     timeout-minutes: 180
@@ -1178,7 +1358,7 @@ jobs:
 
   appearance:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Design system appearance matrix (${{ matrix.shard }} of 4)
     runs-on: macos-26
     timeout-minutes: 45
@@ -1239,7 +1419,7 @@ jobs:
   iphone:
     needs: validate-inputs
     name: Build Attic for iPhone Simulator
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -1356,7 +1536,7 @@ jobs:
 
   canvas-lab:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && inputs.lane != 'performance' && !inputs.ui_tests }}
     name: Canvas lab headless renderer and analysis
     runs-on: macos-26
     timeout-minutes: 15
