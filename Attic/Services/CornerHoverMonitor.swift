@@ -485,7 +485,7 @@ final class CornerHoverMonitor {
     /// entry: CORNER-REVEAL-MISS.) A latched pointer is near the corner, so
     /// the sampling cadence is responsive and its exit is always sampled.
     private func hideCompleted() {
-        let location = pointerLocationAtHideForTesting ?? NSEvent.mouseLocation
+        let location = pointerLocationForTesting ?? NSEvent.mouseLocation
         stateMachine.forceHidden(untilHotspotExit: isInCornerHotspot(location))
         refreshSamplingCadence(at: location)
     }
@@ -620,7 +620,7 @@ final class CornerHoverMonitor {
             guard let self, self.isRunning else { return }
             self.followUpWork = nil
             IdleLatencyTrace.followUpFired(scheduled: due)
-            self.samplePointer()
+            self.samplePointer(at: self.pointerLocationForTesting ?? NSEvent.mouseLocation)
         }
         followUpWork = work
         followUpCountForTesting += 1
@@ -718,9 +718,9 @@ final class CornerHoverMonitor {
         samplePointer(at: location, uptime: uptime)
     }
     func pointerActivityForTesting(at location: CGPoint) { pointerActivityObserved(at: location) }
-    /// Test seam: where the pointer is when a hide completes; nil reads the
-    /// real pointer.
-    var pointerLocationAtHideForTesting: CGPoint?
+    /// Test seam: where a hide's end and the timed follow-up read the
+    /// pointer; nil reads the real pointer.
+    var pointerLocationForTesting: CGPoint?
     /// Test seam: whether a pointer at `location` counts as in the hotspot
     /// with `flags` held, as a sample decides it.
     func isInHotspotForTesting(_ location: CGPoint, flags: NSEvent.ModifierFlags) -> Bool {

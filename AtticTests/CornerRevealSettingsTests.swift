@@ -507,20 +507,40 @@ final class CornerRevealSettingsTests: XCTestCase {
                        "the menu bar icon, quick capture and agents still open it")
     }
 
-    // MARK: - CORNER-REVEAL-MISS: the exit latch follows the pointer at the hide
+    // MARK: - CORNER-REVEAL-MISS: the exit latch means "resting since the hide began"
 
     /// Every hide that is not a cursor exit: click away, a controller hide
     /// (Esc, menu; the `hideCount` path), the interactive swipe and the probe.
     private enum LatchingHide: CaseIterable { case clickAway, controller, swipe, probe }
 
-    /// Reveals, then hides by `path` with the pointer at `pointer` when the
-    /// hide completes. Returns the monitored screen frame.
-    private func reveal(_ rig: Panel, thenHideBy path: LatchingHide, pointerAt pointer: (CGRect) -> CGPoint,
-                        file: StaticString = #filePath, line: UInt = #line) throws -> CGRect {
+    private struct Corner {
+        let rig: Panel
+        let frame: CGRect
+        var corner: CGPoint { CGPoint(x: frame.maxX - 1, y: frame.maxY - 1) }
+        var far: CGPoint { CGPoint(x: frame.midX, y: frame.midY) }
+        var band: CGPoint { CGPoint(x: frame.maxX - 50, y: frame.maxY - 50) }
+        /// Whether the monitor has announced a reveal deadline since the last reset.
+        let announced: Box
+        final class Box { var revealPending = false }
+    }
+
+    /// Reveals, then hides by `path`. The pointer is at `begin(…)` as the
+    /// hide begins and at `end(…)` as it ends, where it then rests (the
+    /// monitor's timed follow-up reads it there too).
+    private func reveal(_ rig: Panel, thenHideBy path: LatchingHide,
+                        pointerAtBegin begin: (Corner) -> CGPoint, atEnd end: (Corner) -> CGPoint,
+                        file: StaticString = #filePath, line: UInt = #line) throws -> Corner {
         let frame = try XCTUnwrap(rig.monitor.hoverScreenFramesForTesting.first, file: file, line: line)
-        rig.monitor.pointerLocationAtHideForTesting = pointer(frame)
+        let box = Corner.Box()
+        let corner = Corner(rig: rig, frame: frame, announced: box)
+        let beginLocation = begin(corner)
+        rig.controller.pointerLocation = { beginLocation }
+        rig.monitor.pointerLocationForTesting = end(corner)
         XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown,
                        file: file, line: line)
+        rig.monitor.onVisibilityChangeExpected = { expected in
+            if let expected, !expected.hiding { box.revealPending = true }
+        }
         switch path {
         case .clickAway:
             let panel = rig.controller.visibleContentFrameForTesting
@@ -535,22 +555,22 @@ final class CornerRevealSettingsTests: XCTestCase {
         if path == .swipe { rig.controller.onInteractiveHideCompleted?() }
         XCTAssertFalse(rig.controller.isPanelVisible, "\(path) hid the panel", file: file, line: line)
         XCTAssertTrue(rig.monitor.isHiddenForPerformanceProbe, file: file, line: line)
-        return frame
+        return corner
     }
 
-    /// Samples the corner as the first sample after the hide, then again at
-    /// the reveal deadline. Returns whether the first sample left a reveal
-    /// pending and whether the second revealed.
-    private func approachCorner(_ rig: Panel, in frame: CGRect) -> (pending: Bool, revealed: Bool) {
-        var announced: [(hiding: Bool, delay: TimeInterval)?] = []
-        rig.monitor.onVisibilityChangeExpected = { announced.append($0) }
-        defer { rig.monitor.onVisibilityChangeExpected = nil }
-        let corner = CGPoint(x: frame.maxX - 1, y: frame.maxY - 1)
-        let time = ProcessInfo.processInfo.systemUptime + 10
-        rig.monitor.sampleForTesting(at: corner, uptime: time)
-        let pending = (announced.last ?? nil).map { !$0.hiding } ?? false
-        rig.monitor.sampleForTesting(at: corner, uptime: time + rig.settings.revealDelay + 0.05)
-        return (pending, rig.controller.isPanelVisible)
+    /// Runs the run loop until the panel is visible or `timeout` passes.
+    private func revealsWithin(_ rig: Panel, _ timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !rig.controller.isPanelVisible, Date() < deadline { spin(0.01) }
+        return rig.controller.isPanelVisible
+    }
+
+    /// The pointer arrives in the corner: the first sample after the hide
+    /// is already in the hotspot, then the pointer rests there.
+    private func arrive(at corner: Corner) {
+        corner.announced.revealPending = false
+        corner.rig.monitor.pointerLocationForTesting = corner.corner
+        corner.rig.monitor.sampleForTesting(at: corner.corner)
     }
 
     private func withLatchRig(_ body: (Panel) throws -> Void) throws {
@@ -560,54 +580,69 @@ final class CornerRevealSettingsTests: XCTestCase {
         let rig = try makePanel()
         rig.settings.corner = .topRight
         rig.monitor.start()
-        defer { rig.monitor.stop(); spin(0.3) }
+        defer { rig.monitor.onVisibilityChangeExpected = nil; rig.monitor.stop(); spin(0.3) }
         try body(rig)
     }
 
-    /// The owner's miss (20 Nov): a hide sets the latch, the pointer then
-    /// travels far from the corner (no samples there), and the first sample
+    /// The owner's miss (20 Nov): the pointer is far from the corner when
+    /// the hide begins and ends, no samples run there, and the first sample
     /// near the corner is already in the hotspot. That is a new approach,
-    /// not a resting pointer, so the reveal must be pending at once.
+    /// not a resting pointer, so the reveal is pending at once.
     func testCornerRevealMissFastApproachAfterAHideRevealsOnTheFirstHotspotSample() throws {
         for path in LatchingHide.allCases {
             try withLatchRig { rig in
-                let frame = try reveal(rig, thenHideBy: path, pointerAt: { CGPoint(x: $0.midX, y: $0.midY) })
-                let outcome = approachCorner(rig, in: frame)
-                XCTAssertTrue(outcome.pending, "\(path): the first hotspot sample after a far pointer sets the reveal deadline")
-                XCTAssertTrue(outcome.revealed, "\(path): the panel reveals at the deadline without a second entry")
+                let corner = try reveal(rig, thenHideBy: path, pointerAtBegin: \.far, atEnd: \.far)
+                arrive(at: corner)
+                XCTAssertTrue(corner.announced.revealPending, "\(path): the first hotspot sample sets the reveal deadline")
+                XCTAssertTrue(revealsWithin(rig, 1), "\(path): the panel reveals without a second entry")
             }
         }
     }
 
-    /// The guarantee the latch exists for: a hide with the pointer still
-    /// resting in the corner must not re-reveal under it. Leaving and
-    /// coming back then reveals.
+    /// The guarantee the latch exists for: the pointer rests in the corner
+    /// from the hide's start to its end, so the hide must not re-reveal
+    /// under it. Leaving and coming back then reveals.
     func testCornerRevealMissPointerStillInTheCornerAtAHideMustLeaveFirst() throws {
         for path in LatchingHide.allCases {
             try withLatchRig { rig in
-                let frame = try reveal(rig, thenHideBy: path, pointerAt: { CGPoint(x: $0.maxX - 1, y: $0.maxY - 1) })
-                let resting = approachCorner(rig, in: frame)
-                XCTAssertFalse(resting.pending, "\(path): a pointer resting in the corner gets no reveal deadline")
-                XCTAssertFalse(resting.revealed, "\(path): a hide never re-reveals under a resting pointer")
-                rig.monitor.sampleForTesting(at: CGPoint(x: frame.midX, y: frame.midY))
-                let again = approachCorner(rig, in: frame)
-                XCTAssertTrue(again.pending, "\(path): after leaving, the next entry is a fresh approach")
-                XCTAssertTrue(again.revealed, "\(path)")
+                let corner = try reveal(rig, thenHideBy: path, pointerAtBegin: \.corner, atEnd: \.corner)
+                XCTAssertFalse(revealsWithin(rig, 0.5), "\(path): a hide never re-reveals under a resting pointer")
+                XCTAssertFalse(corner.announced.revealPending, "\(path): a resting pointer gets no reveal deadline")
+                rig.monitor.pointerLocationForTesting = corner.far
+                rig.monitor.sampleForTesting(at: corner.far)
+                arrive(at: corner)
+                XCTAssertTrue(corner.announced.revealPending, "\(path): after leaving, the next entry is a fresh approach")
+                XCTAssertTrue(revealsWithin(rig, 1), "\(path)")
             }
         }
     }
 
-    /// The sibling: a pointer resting near the corner but outside the
-    /// hotspot when the hide ends (inside the 96 pt band, so the next event
-    /// samples) is not resting in the corner either; a flick into the
-    /// hotspot is a new approach.
+    /// The sibling: a pointer still near the corner but outside the hotspot
+    /// at the hide (inside the 96 pt band) is not resting in the corner; a
+    /// flick into the hotspot is a new approach.
     func testCornerRevealMissPointerNearButOutsideTheHotspotAtAHideDoesNotLatch() throws {
         for path in LatchingHide.allCases {
             try withLatchRig { rig in
-                let frame = try reveal(rig, thenHideBy: path, pointerAt: { CGPoint(x: $0.maxX - 50, y: $0.maxY - 50) })
-                let outcome = approachCorner(rig, in: frame)
-                XCTAssertTrue(outcome.pending, "\(path)")
-                XCTAssertTrue(outcome.revealed, "\(path)")
+                let corner = try reveal(rig, thenHideBy: path, pointerAtBegin: \.band, atEnd: \.band)
+                arrive(at: corner)
+                XCTAssertTrue(corner.announced.revealPending, "\(path)")
+                XCTAssertTrue(revealsWithin(rig, 1), "\(path)")
+            }
+        }
+    }
+
+    /// Round 2 (lead, 21 Nov): the pointer is away when the hide begins
+    /// and reaches the corner before it ends (0.22 s on Slide, 0.80 s on
+    /// Genie). That is an approach, not a resting pointer: it is not
+    /// latched, and since a resting pointer sends no more events, a sample
+    /// at the hide's end starts its dwell and the panel reveals with no
+    /// further pointer event.
+    func testCornerRevealMissPointerArrivingDuringTheHideRevealsWithoutAnotherEvent() throws {
+        for path in LatchingHide.allCases {
+            try withLatchRig { rig in
+                let corner = try reveal(rig, thenHideBy: path, pointerAtBegin: \.far, atEnd: \.corner)
+                XCTAssertTrue(revealsWithin(rig, 1), "\(path): the arrival reveals by itself")
+                XCTAssertTrue(corner.announced.revealPending, "\(path): a reveal deadline was set at the hide's end")
             }
         }
     }
