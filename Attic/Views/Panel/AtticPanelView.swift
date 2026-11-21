@@ -951,6 +951,8 @@ struct PanelCanvasNoticeAwareHost: View {
     #if DEBUG
     /// Test seam (HiddenPagesCountersTests): how many times the body has run.
     static var bodyEvaluations = 0
+    /// Test seam: the clearance the last body run gave the Canvas page.
+    static var lastErrorBannerHeight: CGFloat = 0
     #endif
     @ObservedObject var canvasSession: CanvasSession
     @ObservedObject var toasts: PanelToastCenter
@@ -966,8 +968,12 @@ struct PanelCanvasNoticeAwareHost: View {
         let _ = Self.bodyEvaluations += 1
         #endif
         let hasNotice = AtticDraw.isEnabled ? drawPage.saveNotice != nil : canvasSession.lastErrorMessage != nil
+        let errorBannerHeight = hasNotice || toasts.current != nil ? noticeHeight : 0
+        #if DEBUG
+        let _ = Self.lastErrorBannerHeight = errorBannerHeight
+        #endif
         CanvasPageHost(canvasSession: canvasSession, uiState: uiState, layout: layout,
-                       errorBannerHeight: hasNotice || toasts.current != nil ? noticeHeight : 0,
+                       errorBannerHeight: errorBannerHeight,
                        headerControlRects: headerControlRects, headerBottom: headerBottom)
     }
 }
