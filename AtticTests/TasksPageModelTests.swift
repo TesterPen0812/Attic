@@ -226,6 +226,7 @@ final class TasksPageModelTests: XCTestCase {
     func testE02ListSnapshotReusesRowIDsStatusGroupsAndSelectionRuns() throws {
         let a = try XCTUnwrap(add("A")), b = try XCTUnwrap(add("B")), c = try XCTUnwrap(add("C"))
         let initial = model.listSnapshot(for: .now)
+        XCTAssertEqual(initial.ids, initial.rows.map(\.id), "Keyboard completion uses the displayed order")
         XCTAssertEqual(Set(initial.ids), Set([a, b, c]))
         XCTAssertEqual(initial.idsByStatus[.todo], initial.ids)
         XCTAssertEqual(initial.selectionRuns.count, 0)
@@ -255,6 +256,7 @@ final class TasksPageModelTests: XCTestCase {
 
         let added = try XCTUnwrap(add("D"))
         let changed = model.listSnapshot(for: .now)
+        XCTAssertEqual(changed.ids, changed.rows.map(\.id), "The order stays in sync after insertion")
         XCTAssertTrue(changed.ids.contains(added))
         XCTAssertEqual(changed.idsByStatus[.todo], changed.ids)
         XCTAssertEqual(model.eligibleRowIDs(for: .now), Set(changed.ids))

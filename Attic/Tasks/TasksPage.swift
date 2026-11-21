@@ -165,6 +165,10 @@ struct TasksPage: View {
     #if DEBUG
     /// Hosted scroll-frame regression, alongside PanelHeader and AtticAddBar.
     static var tabsEvaluations = 0
+    /// Plain-waste count guard: list-page passes, and the times one
+    /// projected its rows' IDs again for the completion focus watch.
+    static var listPageEvaluations = 0
+    static var rowIDProjections = 0
     #endif
 
     /// The row that has the keyboard on the page shown, if any. The focus
@@ -1665,7 +1669,17 @@ struct TasksPage: View {
     }
 
 
+    private static func watchedRowIDs(_ rows: [TasksListRow]) -> [UUID] {
+        #if DEBUG
+        rowIDProjections += 1
+        #endif
+        return rows.map(\.id)
+    }
+
     private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
+        #if DEBUG
+        Self.listPageEvaluations += 1
+        #endif
         let (rows, sections, entries, ids, groups, selectionRuns) = model.listSnapshot(for: tab)
         let travel = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false)
         let view = model.viewOptions(for: tab)
@@ -1865,7 +1879,7 @@ struct TasksPage: View {
             // moves on to the row that took it (review 8). A row the pointer
             // completed takes nothing with it: no row is lit that the person
             // did not reach (round 5).
-            .onChange(of: rows.map(\.id)) { old, new in
+            .onChange(of: Self.watchedRowIDs(rows)) { old, new in
                 if tab == model.tab { PerformanceSignposts.watchFrames("RowsMotion", seconds: 0.35) }
                 guard tab == model.tab, let focused = focusedID, !new.contains(focused),
                       let index = old.firstIndex(of: focused), !new.isEmpty else { return }

@@ -601,6 +601,51 @@ final class TasksCountGuardTests: XCTestCase {
         XCTAssertEqual(model.rows(for: .now).map(\.id), [held, changed, try task("M")])
     }
 
+    // MARK: - Plain waste
+
+    /// The night job's a2f6599d: the list page watches the snapshot's
+    /// ordered IDs for the keyboard's completion focus transfer instead of
+    /// projecting its rows' IDs again on every pass. One tick on a
+    /// tracker-shaped Now (80 open, tagged), through press, save and
+    /// release: the hosted list page passes, and none of its passes
+    /// projects the IDs again. The snapshot's IDs are the rows' order on
+    /// Now and Later before and after, so the watch sees the same values.
+    func testGuardCompletionReusesTheSnapshotsOrderedIDs() throws {
+        let store = try makeStore(open: 80, later: 12, tagged: true)
+        var services = TasksPageServices()
+        services.acknowledgementDelay = .seconds(25)
+        services.doneHold = .seconds(25)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        let hosting = page(model, store)
+        func assertSnapshotOrder(_ when: String) {
+            for tab in [TasksTab.now, .backlog] {
+                let snapshot = model.listSnapshot(for: tab)
+                XCTAssertFalse(snapshot.ids.isEmpty, "\(tab) has rows \(when)")
+                XCTAssertEqual(snapshot.ids, snapshot.rows.map(\.id), "\(tab)'s snapshot IDs are its rows' order \(when)")
+            }
+        }
+        assertSnapshotOrder("before the tick")
+        let id = try XCTUnwrap(model.rows(for: .now).first?.id)
+        let passes = TasksPage.listPageEvaluations, projections = TasksPage.rowIDProjections
+
+        model.completeAcknowledged(id) { _ in }  // press: the row is held, ticked
+        settle(hosting)
+        model.settlePendingCompletionAcknowledgements(through: id)  // the save
+        settle(hosting)
+        model.releaseHold(id)  // the release: the row leaves Now
+        settle(hosting)
+        settle(hosting)
+        XCTAssertNil(model.held[id])
+        XCTAssertFalse(model.listSnapshot(for: .now).ids.contains(id), "the ticked row left Now")
+        assertSnapshotOrder("after the tick")
+
+        let pagePasses = TasksPage.listPageEvaluations - passes
+        let projected = TasksPage.rowIDProjections - projections
+        print("GUARD_COMPLETION_IDS open=80 list_page_passes=\(pagePasses) row_id_projections=\(projected)")
+        XCTAssertGreaterThan(pagePasses, 0, "the hosted list page did not update, so its count proves nothing")
+        XCTAssertEqual(projected, 0, "one tick projected the rows' IDs again \(projected) times")
+    }
+
     // MARK: - Rig
 
     private static let size = CGSize(width: 344, height: 520)
