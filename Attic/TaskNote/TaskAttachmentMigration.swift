@@ -571,7 +571,7 @@ enum TaskAttachmentMigration {
                 if created {
                     guard let generation = NoteStore.taskOwnerGeneration(rootID, in: commit) else { throw WorkspaceFoundationError.conflict }
                     let note = NoteItem(id: noteID, createdAt: now, updatedAt: now)
-                    NoteStore.stageDocumentContent(prepared, format: document.format, on: [note], timestamp: now, revision: 0, revisionID: revision)
+                    NoteStore.stageDocumentContent(prepared, format: document.format, on: [note], timestamp: now, revision: 0, revisionID: revision, in: commit)
                     note.taskID = rootID
                     commit.insert(note)
                     let association = TaskNoteAssociation(id: associationID, taskID: rootID, noteID: noteID)

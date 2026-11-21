@@ -751,18 +751,19 @@ final class NoteStore: ObservableObject {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
             }
             retainedEdits.capture(replicas, includingDocument: true)
+            // Read once, before anything is staged or saved: a save may replace the context these rows belong to.
+            owner = replicas.first?.taskID
             let groups = Set(replicas.compactMap(\.deletionGroupID))
             if !groups.isEmpty {
                 guard groups.count == 1, let group = groups.first else { throw WorkspaceFoundationError.conflict }
                 try WorkspaceItemLifecycle.stageRestore(group: group, timestamp: now(), in: context)
                 try staging?(context)
                 guard save(retaining: retainedEdits) else { return false }
-                lastRestore = RestoredNote(separate: false, group: group, owner: replicas.first?.taskID)
+                lastRestore = RestoredNote(separate: false, group: group, owner: owner)
                 refresh()
                 WorkspaceItemLifecycle.didCommit(in: container)
                 return true
             }
-            owner = replicas.first?.taskID
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             // § 2.7.2: a task's note restored while the task has a newer own
             // note returns as an ordinary note, materialized, in this save.
