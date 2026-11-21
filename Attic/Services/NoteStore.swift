@@ -741,9 +741,10 @@ final class NoteStore: ObservableObject {
     @discardableResult
     func restoreDeleted(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> Bool {
         guard prepareNoteEdit() else { return false }
-        lastRestoreWasSeparate = false
+        lastRestore = nil
         let retainedEdits = RetainedNoteEdits()
         var separated = false
+        var owner: UUID?
         do {
             let replicas = try storedNotesIncludingDeleted(matching: noteID)
             guard replicas.contains(where: { $0.deletedAt != nil }) else {
@@ -756,10 +757,12 @@ final class NoteStore: ObservableObject {
                 try WorkspaceItemLifecycle.stageRestore(group: group, timestamp: now(), in: context)
                 try staging?(context)
                 guard save(retaining: retainedEdits) else { return false }
+                lastRestore = RestoredNote(separate: false, group: group, owner: replicas.first?.taskID)
                 refresh()
                 WorkspaceItemLifecycle.didCommit(in: container)
                 return true
             }
+            owner = replicas.first?.taskID
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             // § 2.7.2: a task's note restored while the task has a newer own
             // note returns as an ordinary note, materialized, in this save.
@@ -777,7 +780,7 @@ final class NoteStore: ObservableObject {
                 if let materialized { replica.tags = materialized.tags }
                 if normalized != document {
                     Self.stageDocumentContent(try PreparedNoteDocument(normalized), format: normalized.format,
-                        on: [replica], timestamp: currentDate, revision: replica.revision, revisionID: UUID())
+                        on: [replica], timestamp: currentDate, revision: replica.revision, revisionID: UUID(), in: context)
                 }
             }
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
@@ -792,7 +795,7 @@ final class NoteStore: ObservableObject {
             return false
         }
         guard save(retaining: retainedEdits) else { return false }
-        lastRestoreWasSeparate = separated
+        lastRestore = RestoredNote(separate: separated, group: nil, owner: owner)
 #if os(macOS)
         // Reconcile the returning attachments' files in full on the reload.
         reconciledAttachmentSignature = nil
@@ -805,9 +808,20 @@ final class NoteStore: ObservableObject {
         return true
     }
 
-    /// The last `restoreDeleted` returned a task's note as a separate,
-    /// ordinary note (§ 2.7.2: the task had a newer own note).
-    private(set) var lastRestoreWasSeparate = false
+    /// What the last successful `restoreDeleted` brought back, read from the
+    /// rows it restored (after its staging entry, so after any context swap).
+    /// `group` is the deletion group it restored, nil for a pre-group
+    /// independent deletion; `owner` is the task the note belonged to;
+    /// `separate` says it returned as an ordinary note (§ 2.7.2: the task had
+    /// a newer own note). An Undo for the restore is built from this, never
+    /// from a read taken before the restore's entry.
+    struct RestoredNote: Equatable {
+        let separate: Bool
+        let group: UUID?
+        let owner: UUID?
+    }
+    private(set) var lastRestore: RestoredNote?
+    var lastRestoreWasSeparate: Bool { lastRestore?.separate ?? false }
 
     /// Stages the "task has a newer note" restore (§ 2.7.2, § 2.12): every
     /// replica becomes ordinary (block 0 the task's title, `taskNote`
@@ -831,7 +845,7 @@ final class NoteStore: ObservableObject {
             let materialized = try WorkspaceTaskNoteMaterializer.materialize(document, taskID: taskID, preservation: preservation)
             let ordinary = materialized.document
             Self.stageDocumentContent(try PreparedNoteDocument(ordinary), format: ordinary.format,
-                on: [replica], timestamp: now, revision: replica.revision, revisionID: UUID())
+                on: [replica], timestamp: now, revision: replica.revision, revisionID: UUID(), in: context)
             if replica.tags.isEmpty { replica.tags = materialized.tags }
             replica.taskID = nil
             replica.associationGeneration += 1
@@ -1790,7 +1804,8 @@ final class NoteStore: ObservableObject {
                 if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
                     if !changedAttachments { changedNoteIDs = changedNotes }
                 } else {
-                    try reloadModels(preservingAttachmentProofs: true)
+                    // A plain commit whose guard update failed left a spent context: its proofs do not cross.
+                    try reloadModels(preservingAttachmentProofs: !WorkspaceLegacyBridge.plainGuardFailed(in: context))
                 }
                 lastErrorMessage = nil
             } catch {

@@ -4226,13 +4226,18 @@ extension NotesPageController {
     /// separate, ordinary note (the task had a newer own note) and the
     /// step's id (the toast's Undo targets exactly that step).
     func restoreTaskNote(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> (separate: Bool, stepID: UUID?)? {
-        let before = (try? store.replicasIncludingDeleted(of: noteID)) ?? []
-        let owner = before.first?.taskID
-        let independent = before.allSatisfy { $0.deletionGroupID == nil }
-        let historyID: UndoHistoryID = owner.map { .taskWorkspace($0) } ?? .note(noteID)
+        // Read before the restore clears the record of what came back. With a
+        // command library this reads fresh contexts; the store-context
+        // fallback's groups are replaced below from what the restore did.
         let owned = noteHistoryOwnership(noteID, deleted: true)
-        guard store.restoreDeleted(noteID: noteID, staging: staging) else { return nil }
-        let separate = store.lastRestoreWasSeparate
+        guard store.restoreDeleted(noteID: noteID, staging: staging), let restored = store.lastRestore else { return nil }
+        // The owner and the kind of deletion come from the rows the restore
+        // brought back (after its staging entry), not from the presentation
+        // read before it, which a context swap can leave behind.
+        let owner = restored.owner, separate = restored.separate
+        let independent = restored.group == nil
+        if lifecycleHistoryLibrary == nil { owned.groups = restored.group.map { [$0] } ?? [] }
+        let historyID: UndoHistoryID = owner.map { .taskWorkspace($0) } ?? .note(noteID)
         undoRoute.record(UndoStep(
             name: String(localized: "Restore Note"),
             lifecycle: .restore,
@@ -4452,7 +4457,10 @@ extension NotesPageController {
             if store.restoreDeleted(noteID: noteID) { outcome = .applied }
             else { outcome = store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete }
         } else {
-            guard let copies = try? store.replicasIncludingDeleted(of: noteID) else { return .failed }
+            // Decided from disk: the store's context may be spent and still hold
+            // this note's earlier values, while the restore reads after its entry.
+            guard let copies = try? ModelContext(store.container).fetch(
+                FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) else { return .failed }
             let current = Set(copies.compactMap(\.deletionGroupID))
             guard owned.groups.isEmpty || !current.isEmpty && current.isSubset(of: owned.groups) else { return .obsolete }
             if store.restoreDeleted(noteID: noteID) { outcome = .applied }

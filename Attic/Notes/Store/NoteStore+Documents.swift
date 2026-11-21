@@ -788,7 +788,7 @@ extension NoteStore {
                                 projection: PreparedNoteDocument, tags: String? = nil) -> UUID {
         let revisionID = UUID()
         Self.stageDocumentContent(projection, format: document.format, on: replicas,
-                                  timestamp: timestamp, revision: revision, revisionID: revisionID, tags: tags)
+                                  timestamp: timestamp, revision: revision, revisionID: revisionID, tags: tags, in: modelContext)
         for replica in replicas {
             documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true, projection.attachmentBlocks, projection.hasTaskNote)
             if let tags { replica.tagsRaw = tags }
@@ -799,7 +799,10 @@ extension NoteStore {
     static func stageDocumentContent(_ projection: PreparedNoteDocument, format: Int,
                                      on replicas: [NoteItem], timestamp: Date, revision: Int64,
                                      revisionID: UUID, tags: String? = nil, in context: ModelContext? = nil) {
-        if let context = replicas.first?.modelContext { WorkspaceLegacyBridge.prepareMutations(replicas, in: context) }
+        // Rows not yet in any context (a new note's) are not prepared. Otherwise the staging writes through the
+        // caller's installed context when given, so the family guard counts rows carried from an older context
+        // even when the whole family came from it; else through the rows' own.
+        if let owner = replicas.first?.modelContext { WorkspaceLegacyBridge.prepareMutations(replicas, in: context ?? owner) }
         let preferred = canonicalReplicas(from: replicas)
         for replica in replicas {
             replica.installPreparedContent(projection)
@@ -1745,7 +1748,7 @@ extension NoteStore {
         }
         stageDocumentContent(prepared, format: document.format, on: replicas, timestamp: timestamp,
                              revision: replicas.map(\.revision).max() ?? 0, revisionID: revisionID,
-                             tags: tags.map(AtticTag.encode))
+                             tags: tags.map(AtticTag.encode), in: context)
         stageAttachments(plan, noteID: noteID, context: context, timestamp: timestamp)
         let shown = Set(document.attachmentIDs)
         for row in attachments {

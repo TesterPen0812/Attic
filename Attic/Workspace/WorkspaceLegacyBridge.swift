@@ -79,6 +79,8 @@ enum WorkspaceLegacyBridge {
         /// from it returns (the context itself is never saved and still holds what was committed), or when a plain
         /// commit's after-commit step failed (its guards are stale). Stores replace a spent context before staging.
         var spent = false
+        /// A plain commit was durable but its guards could not be updated (the context is spent).
+        var plainGuardFailed = false
         var itemLifecycle = false
         var itemLifecycleScopes: Set<WorkspaceScope> = []
         var scopeBaseline: ScopeBaseline?
@@ -424,6 +426,12 @@ enum WorkspaceLegacyBridge {
     }
     #endif
 
+    /// The last commit was plain and durable, but updating its guards failed, so the context is spent and its
+    /// immediate reload must not carry attachment proofs across (r6 HOLD 2).
+    static func plainGuardFailed(in source: ModelContext) -> Bool {
+        (objc_getAssociatedObject(source, &contextKey) as? ContextState)?.plainGuardFailed == true
+    }
+
     static func wasPlainCommit(in source: ModelContext) throws -> Bool {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         return state.plainCommit
@@ -580,6 +588,7 @@ enum WorkspaceLegacyBridge {
             } catch {
                 state.spent = true
                 state.plainCommit = false
+                state.plainGuardFailed = true
             }
             return
         }

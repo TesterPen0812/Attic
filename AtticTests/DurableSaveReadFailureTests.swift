@@ -1830,18 +1830,16 @@ final class DurableSaveR6Tests: XCTestCase {
             note.taskID = taskID
             context.insert(note)
         }
-        // A pre-group independent deletion of the note, as the store's context shows it.
-        let legacy = ModelContext(rig.container)
-        for row in try legacy.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) {
-            row.deletedAt = date.addingTimeInterval(10)
-        }
-        try legacy.save()
-        rig.notes.refresh()
-        let shown = try rig.notes.replicasIncludingDeleted(of: noteID)
-        XCTAssertTrue(!shown.isEmpty && shown.allSatisfy { $0.deletedAt != nil && $0.deletionGroupID == nil },
-                      "the store shows the pre-group deletion")
+        // r6 attempt 2 (the lead's recipe): the spending commit itself carries a pre-group independent deletion of
+        // the note, staged on the store's own rows; its journaled commit leaves the spent context holding those
+        // values for these rows. (No store command makes a group-less deletion today; old data has them.)
+        let staged = try rig.notes.replicasIncludingDeleted(of: noteID)
+        WorkspaceLegacyBridge.prepareMutations(staged, in: rig.notes.modelContext)
+        for row in staged { row.deletedAt = date.addingTimeInterval(10) }
         let spent = R5Seams.leaveNotesBehind(rig.notes, deleting: rig.victim, spend: true)
         XCTAssertEqual(spent, true, "the store's context is spent")
+        XCTAssertTrue(try noteRows(rig.container, noteID).allSatisfy { $0.deletedAt != nil && $0.deletionGroupID == nil },
+                      "the spending commit wrote the pre-group deletion")
         // Elsewhere: the note comes back and the task is deleted with it, as one group.
         let outside = ModelContext(rig.container)
         for row in try outside.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) {
@@ -1853,6 +1851,7 @@ final class DurableSaveR6Tests: XCTestCase {
             timestamp: date.addingTimeInterval(20), in: outside)
         try outside.save()
         let stale = try rig.notes.replicasIncludingDeleted(of: noteID).map { $0.deletionGroupID == nil }
+        let disk = try noteRows(rig.container, noteID).map { $0.deletionGroupID == nil }
         XCTAssertTrue(try noteRows(rig.container, noteID).allSatisfy { $0.deletionGroupID == group }, "disk holds the group")
 
         let restored = rig.controller.restoreTaskNote(noteID: noteID)
@@ -1860,7 +1859,7 @@ final class DurableSaveR6Tests: XCTestCase {
         let undone = rig.controller.undoRoute.undo(in: .taskWorkspace(taskID))
         let taskAfter = try taskRows(rig.container, taskID).map { $0.deletedAt != nil }
         let noteAfter = try noteRows(rig.container, noteID).map { $0.deletedAt != nil }
-        print("R6_H1 stale_independent=\(stale) restored=\(restored.map { "\($0.separate)" } ?? "nil") "
+        print("R6_H1 before_independent=\(stale) disk_independent=\(disk) restored=\(restored.map { "\($0.separate)" } ?? "nil") "
             + "task_live_after_restore=\(restoredTask) undone=\(undone) task_deleted=\(taskAfter) note_deleted=\(noteAfter)")
         XCTAssertNotNil(restored, "Restore Note succeeds")
         XCTAssertEqual(restoredTask, [true], "the restore brought back the task with its note")
@@ -1877,12 +1876,14 @@ final class DurableSaveR6Tests: XCTestCase {
         let rig = try await makeRig(library: false)
         let note = try XCTUnwrap(rig.notes.notes.first { $0.title == "Note 1" })
         let noteID = note.id
+        // The same recipe: the Delete Note commit is the spending commit (its reloads fail), so the spent context
+        // holds the deletion's values for these rows.
+        rig.notes.reloadFailures = 3
         XCTAssertTrue(rig.controller.deleteNote(noteID: noteID))
+        rig.notes.reloadFailures = 0
+        XCTAssertEqual(WorkspaceLegacyBridge.isSpent(rig.notes.modelContext), true, "the store's context is spent")
         let owned = Set(try noteRows(rig.container, noteID).compactMap(\.deletionGroupID))
         XCTAssertEqual(owned.count, 1, "the delete recorded one group")
-        _ = try rig.notes.replicasIncludingDeleted(of: noteID)
-        let spent = R5Seams.leaveNotesBehind(rig.notes, deleting: rig.victim, spend: true)
-        XCTAssertEqual(spent, true, "the store's context is spent")
         // Elsewhere: restored and deleted again, under a newer group.
         let newer = UUID()
         let outside = ModelContext(rig.container)
@@ -1894,7 +1895,8 @@ final class DurableSaveR6Tests: XCTestCase {
         let shown = Set(try rig.notes.replicasIncludingDeleted(of: noteID).compactMap(\.deletionGroupID))
         let undone = rig.controller.undoRoute.undo(in: .notesLibrary)
         let after = try noteRows(rig.container, noteID)
-        print("R6_SWEEP shown_is_owned=\(shown == owned) undone=\(undone) "
+        let disk = Set(try noteRows(rig.container, noteID).compactMap(\.deletionGroupID))
+        print("R6_SWEEP before_is_owned=\(shown == owned) disk_is_owned=\(disk == owned) undone=\(undone) "
             + "deleted_after=\(after.map { $0.deletedAt != nil }) group_after=\(after.map { $0.deletionGroupID == newer })")
         XCTAssertTrue(!after.isEmpty && after.allSatisfy { $0.deletedAt != nil && $0.deletionGroupID == newer },
                       "Undo does not restore the newer deletion the step does not own")
