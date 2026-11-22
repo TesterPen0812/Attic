@@ -514,7 +514,9 @@ if $release_like; then
         [[ "$measure_source" == /* ]] || measure_source="${project_path:h}/$measure_source"
         [[ -f "$measure_source" ]] || fail "measure build cannot read the entitlements file: $measure_source"
         /bin/cp "$measure_source" "$measure_entitlements_file"
-        /usr/bin/plutil -replace com.apple.security.get-task-allow -bool YES "$measure_entitlements_file" \
+        # PlistBuddy, not plutil: plutil key paths split the dotted key.
+        /usr/libexec/PlistBuddy -c 'Delete :com.apple.security.get-task-allow' "$measure_entitlements_file" >/dev/null 2>&1 || true
+        /usr/libexec/PlistBuddy -c 'Add :com.apple.security.get-task-allow bool true' "$measure_entitlements_file" \
             || fail "could not add get-task-allow to the measure entitlements"
         print -- "measure_entitlements=$measure_entitlements_file"
     fi
@@ -549,7 +551,7 @@ fi
 
 # get-task-allow lets a profiler attach: the measure build must carry it and
 # the plain release-like build must not. (Local builds get it from Xcode.)
-get_task_allow=$(/usr/bin/plutil -extract com.apple.security.get-task-allow raw -o - "$entitlements_file" 2>/dev/null || true)
+get_task_allow=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.get-task-allow' "$entitlements_file" 2>/dev/null || true)
 if $measure; then
     [[ "$get_task_allow" == true ]] || fail "measure build lacks get-task-allow; a profiler could not attach"
 elif $release_like; then
