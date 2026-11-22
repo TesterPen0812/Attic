@@ -86,6 +86,30 @@ extension GlossLabPanelSurfaceLayer {
     }
 }
 
+/// 11. Neutral glass: a neutral grey in the surface's shape with the
+/// saturation blend, drawn directly over the glass, so what comes through
+/// keeps its lightness and loses its colour. `amount` (0 to 1) is the
+/// fill's opacity. The rim fade (idea 1) goes inside the blend.
+struct GlossNeutralGlass<S: Shape>: View {
+    let shape: S
+    let amount: Double
+    var rimFade: GlossRimFadeMask?
+
+    var body: some View {
+        shape.fill(Color(.sRGB, white: 0.5, opacity: amount))
+            .glossLabRimFade(rimFade)
+            .blendMode(.saturation)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    /// The lab's amount for a surface, or nil when 11 is off. Reads the
+    /// amount only when 11 is on.
+    @MainActor static func amount(_ lab: GlossLab) -> Double? {
+        lab.neutralGlass ? lab.neutralGlassAmount / 100 : nil
+    }
+}
+
 /// 5. An additive white strongest at the top and gone by two thirds of the
 /// height, and a soft shade over the bottom third. With `keepsOut`, both
 /// leave the top and bottom control bands, as the lift does (Accepted
@@ -592,6 +616,18 @@ struct GlossLabPanelShadow: View {
             }
             .compositingGroup()
         }
+    }
+}
+
+/// 11, "Controls too": the glass controls' amount, or nil. It reads 11's
+/// switch and amount only when "Controls too" is on, so flipping 11 alone
+/// never re-runs a control. Glass surface only, as for the panel.
+@MainActor
+enum GlossLabControlNeutral {
+    static func amount(design: AtticDesignContext) -> Double? {
+        let lab = GlossLab.shared
+        guard lab.neutralControls, design.tokens.panel.kind == .glass else { return nil }
+        return GlossNeutralGlass<Rectangle>.amount(lab)
     }
 }
 #endif

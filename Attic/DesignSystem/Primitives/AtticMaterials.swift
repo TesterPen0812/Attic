@@ -245,6 +245,13 @@ struct AtticRaisedMaterialModifier: ViewModifier {
         let glass: Glass = away ? .identity : (interactive ? .regular.interactive() : .regular)
         return content
             .background {
+                #if ATTIC_GLOSS_LAB
+                // Gloss lab idea 11, "Controls too": under the state fill,
+                // so only the glass is drained.
+                if let amount = GlossLabControlNeutral.amount(design: design) {
+                    GlossNeutralGlass(shape: shape, amount: amount)
+                }
+                #endif
                 if let fill = AtticGlassStateFill.fill(for: state, tokens: tokens) {
                     shape.fill(fill.color)
                 }
@@ -833,6 +840,9 @@ struct AtticSurfaceBackground<S: Shape>: View {
     /// Gloss lab idea 2: a band of Clear glass with regular glass inside it,
     /// in place of the one regular glass (live panel, native glass only).
     var glossClearBand: GlossClearBandGlass?
+    /// Gloss lab idea 11: drain the colour of what shows through the
+    /// native glass (amount 0 to 1); nil draws nothing.
+    var glossNeutral: Double?
     #endif
 
     @Environment(\.atticCapture) private var capture
@@ -842,6 +852,16 @@ struct AtticSurfaceBackground<S: Shape>: View {
         ZStack {
             if model.kind != .solid {
                 underlay
+                #if ATTIC_GLOSS_LAB
+                // Gloss lab idea 11: directly over the glass, under the lift,
+                // the foundation and the Tint.
+                // The island (the one surface that passes `nativeGlassSize`)
+                // wears the panel's surface, so it takes 11 too.
+                if let amount = glossNeutral ?? (nativeGlassSize != nil ? GlossNeutralGlass<S>.amount(.shared) : nil),
+                   model.kind == .glass, capture == nil, !isChrome {
+                    GlossNeutralGlass(shape: shape, amount: amount, rimFade: glossRimFade)
+                }
+                #endif
                 // "Brighten glass over dark backgrounds" (owner, 2026-11-11):
                 // Light Glass and Frosted only; never Settings' chrome.
                 if !isChrome {
@@ -1143,12 +1163,13 @@ struct AtticPanelStageSurface: View {
         let rimFade = glossLabPanel && lab.rimFade
             ? GlossRimFadeMask(cornerSize: cornerSize, exponent: AtticStyle.panelSquircleExponent, width: lab.rimFadeWidth)
             : nil
+        let neutral = glossLabPanel ? GlossNeutralGlass<Squircle>.amount(lab) : nil
         let clearBand = glossLabPanel && lab.clearBand
             ? GlossClearBandGlass(cornerSize: cornerSize, width: CGFloat(lab.clearBandWidth), method: lab.clearBandMethod,
                                   sharesContainer: lab.clearBandContainer)
             : nil
         AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
-                               liftLeavesControlBands: true, glossRimFade: rimFade, glossClearBand: clearBand)
+                               liftLeavesControlBands: true, glossRimFade: rimFade, glossClearBand: clearBand, glossNeutral: neutral)
         #else
         AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
                                liftLeavesControlBands: true)

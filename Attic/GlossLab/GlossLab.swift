@@ -48,6 +48,12 @@ final class GlossLab {
     /// 9. Highlights that move: 3's Edge light, drawn by Core Animation and
     /// tilted a little towards the pointer once per display refresh.
     var movingLight = false { didSet { save(movingLight, "movingLight") } }
+    /// 11. Neutral glass: what shows through the glass keeps its light and
+    /// shade and loses its colour (a saturation blend over the glass, under
+    /// our own fills). The panel and the island, native Glass only.
+    var neutralGlass = false { didSet { save(neutralGlass, "neutralGlass") } }
+    /// 11, its own switch: the glass controls drained the same way.
+    var neutralControls = false { didSet { save(neutralControls, "neutralControls") } }
 
     // MARK: Sliders
 
@@ -90,6 +96,8 @@ final class GlossLab {
     /// pointer, as a share of the height (0 to 0.2).
     var movingLightTilt: Double = 10 { didSet { save(movingLightTilt, "movingLightTilt") } }
     var movingLightReach: Double = 0.06 { didSet { save(movingLightReach, "movingLightReach") } }
+    /// 11: how much colour is drained, % (0 to 100): the grey fill's opacity.
+    var neutralGlassAmount: Double = 60 { didSet { save(neutralGlassAmount, "neutralGlassAmount") } }
 
     // MARK: The lab window's own state
 
@@ -150,6 +158,8 @@ final class GlossLab {
         double("spillStrength", &spillStrength)
         bool("movingLight", &movingLight)
         double("movingLightTilt", &movingLightTilt); double("movingLightReach", &movingLightReach)
+        bool("neutralGlass", &neutralGlass); bool("neutralControls", &neutralControls)
+        double("neutralGlassAmount", &neutralGlassAmount)
         if let raw = defaults.string(forKey: Self.prefix + "clearBandMethod"), let value = ClearBandMethod(rawValue: raw) {
             clearBandMethod = value
         }
@@ -169,6 +179,7 @@ final class GlossLab {
     func allOff() {
         rimFade = false; edgeLight = false; innerEdge = false; topLight = false; grain = false; oneRim = false
         clearBand = false; glassShadow = false; glassSpill = false; movingLight = false
+        neutralGlass = false; neutralControls = false
     }
 
     /// The sliders back to the lead's starting values.
@@ -189,6 +200,7 @@ final class GlossLab {
         shadowSoftRadius = fresh.shadowSoftRadius; shadowSoftDrop = fresh.shadowSoftDrop
         spillStrength = fresh.spillStrength
         movingLightTilt = fresh.movingLightTilt; movingLightReach = fresh.movingLightReach
+        neutralGlassAmount = fresh.neutralGlassAmount
     }
 
     /// 0. 3D: dark glass lit from the top is Dark mode plus ideas 5 and 3.
@@ -234,6 +246,7 @@ final class GlossLab {
         7 A shadow that fits glass: \(on(glassShadow)), contact Light \(f(shadowContactLight)) Dark \(f(shadowContactDark)), soft Light \(f(shadowSoftLight)) Dark \(f(shadowSoftDark)), radius \(f(shadowSoftRadius)) pt, drop \(f(shadowSoftDrop)) pt
         7 Spill of light under the bottom edge: \(on(glassSpill)), \(f(spillStrength))
         9 Highlights that move: \(on(movingLight)), tilt \(f(movingLightTilt)) deg, reach \(f(movingLightReach)) (draws 3's light with 3's values)
+        11 Neutral glass: \(on(neutralGlass)), amount \(f(neutralGlassAmount)) %, controls too: \(on(neutralControls))
         10 One rim recipe for every control: \(on(oneRim))
         """
     }

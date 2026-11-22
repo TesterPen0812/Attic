@@ -88,6 +88,9 @@ final class GlossLabCountTests: XCTestCase {
             ("6 grain", { $0.grain = true }),
             ("10 one rim", { $0.oneRim = true }),
             ("0 3D (5 and 3)", { $0.apply3D() }),
+            ("11 neutral glass", { $0.neutralGlass = true }),
+            ("11 neutral glass, controls too", { $0.neutralGlass = true; $0.neutralControls = true }),
+            ("11 neutral glass with 1", { $0.neutralGlass = true; $0.rimFade = true }),
         ]
         for (name, configure) in switches {
             let count = oneResize(configure)
@@ -144,6 +147,8 @@ final class GlossLabCountTests: XCTestCase {
             ("7 shadow", \.glassShadow, { GlossLabCounters.shadowLayer }),
             ("7 spill", \.glassSpill, { GlossLabCounters.shadowLayer }),
             ("9 moving light", \.movingLight, { GlossLabCounters.rimLayer }),
+            ("11 neutral glass", \.neutralGlass, { GlossLabCounters.stageSurface }),
+            ("11 controls too", \.neutralControls, { GlossLabCounters.controlEdgeLight }),
         ]
         var lines: [String] = []
         for (name, key, read) in cases {
@@ -441,6 +446,30 @@ final class GlossLabValuesTests: XCTestCase {
         for line in ["Mode: Dark", "Surface: Frosted", "Palette: Sea Glass", "Tint: Vivid, length 45 %", "Brighten glass: on"] {
             XCTAssertTrue(text.contains(line), "missing \(line):\n\(text)")
         }
+    }
+
+    /// Idea 11's switches and amount load, are written down by Copy
+    /// values, and All off and Reset sliders reach them.
+    func testNeutralGlassValuesLoadCopyAndReset() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "GlossLab.neutralGlass")
+        defaults.set(true, forKey: "GlossLab.neutralControls")
+        defaults.set(85.0, forKey: "GlossLab.neutralGlassAmount")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.neutralGlass); XCTAssertTrue(lab.neutralControls); XCTAssertEqual(lab.neutralGlassAmount, 85)
+        XCTAssertEqual(GlossNeutralGlass<Rectangle>.amount(lab), 0.85)
+        let text = lab.valuesText(app: Self.app(mode: "Light"))
+        XCTAssertTrue(text.contains("11 Neutral glass: on, amount 85.00 %, controls too: on"), text)
+        lab.allOff()
+        XCTAssertFalse(lab.neutralGlass); XCTAssertFalse(lab.neutralControls)
+        XCTAssertNil(GlossNeutralGlass<Rectangle>.amount(lab), "off draws nothing")
+        lab.resetSliders()
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertEqual(lab.neutralGlassAmount, fresh.neutralGlassAmount)
+        XCTAssertEqual(fresh.neutralGlassAmount, 60)
+        XCTAssertFalse(fresh.neutralGlass || fresh.neutralControls, "11 starts off")
     }
 
     /// Pass 3's switch and values load, are written down by Copy values,
