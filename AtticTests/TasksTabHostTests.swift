@@ -139,13 +139,18 @@ final class TasksTabHostTests: XCTestCase {
         tabHosts.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] }
     }
 
-    /// Air, PR 41 844907fb (-O, queried): the hidden Later and Done hosts
-    /// each laid out once on every row click, moving focus or not, and about
-    /// as often as the shown host on every resize frame, and a hidden host's
-    /// held environment ran on every click (job1-ax-focus-per-click.md, "Why
-    /// the whole host lays out"). A hidden host does neither; the shown host
-    /// still lays out.
-    func testHiddenTabHostsRunNoLayoutAndNoEnvironmentOnRowClicksAndAResize() throws {
+    /// What one action reached: each host's layouts in tab order, runs of
+    /// a hidden host's held environment, and hidden tabs' row bodies.
+    private struct HiddenHostReach {
+        let label: String
+        let layouts: [Int]
+        let heldEnvironments: Int
+        let hiddenLeaves: Int
+    }
+
+    /// Row clicks on Now (moving focus and staying) and a resize, with
+    /// Later and Done hidden; what each reached, recorded and printed.
+    private func reachOfClicksAndAResize() throws -> [HiddenHostReach] {
         let hosted = try warmed(followsWindow: true)
         defer { hosted.close() }
         hosted.spin(0.5)
@@ -153,6 +158,7 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertEqual(tabHosts.map(\.isInteractive), [true, false, false], "Now is shown; Later and Done are hidden")
         let rows = hosted.model.rows(for: .now).filter { $0.status != .done }
         XCTAssertGreaterThanOrEqual(rows.count, 2, "two rows to click in turn")
+        guard rows.count >= 2 else { return [] }
         // The first click also brings the keyboard to the list.
         try hosted.clickRow(rows[0].id, tab: .now)
         hosted.spin(0.4)
@@ -162,34 +168,55 @@ final class TasksTabHostTests: XCTestCase {
             TasksCellBodyCounts.records = false
             KeptContentHostCounts.recordsStacks = false
         }
-        func measure(_ label: String, _ action: () throws -> Void) rethrows -> Int {
+        func measure(_ label: String, _ action: () throws -> Void) rethrows -> HiddenHostReach {
             KeptContentHostCounts.reset()
             TasksCellBodyCounts.leaves = [:]
             try action()
-            let counts = layoutCounts(tabHosts)
-            let held = KeptContentHostCounts.heldEnvironments
-            let hiddenLeaves = TasksCellBodyCounts.leaves.filter { $0.key.tab != .now }.values.reduce(0, +)
-            print("HIDDEN_HOST \(label) now=\(counts[0]) later=\(counts[1]) done=\(counts[2]) held_env=\(held) hidden_leaves=\(hiddenLeaves)")
+            let reach = HiddenHostReach(label: label, layouts: layoutCounts(tabHosts),
+                                        heldEnvironments: KeptContentHostCounts.heldEnvironments,
+                                        hiddenLeaves: TasksCellBodyCounts.leaves.filter { $0.key.tab != .now }.values.reduce(0, +))
+            print("HIDDEN_HOST \(label) now=\(reach.layouts[0]) later=\(reach.layouts[1]) done=\(reach.layouts[2]) held_env=\(reach.heldEnvironments) hidden_leaves=\(reach.hiddenLeaves)")
             for (kind, stack) in KeptContentHostCounts.stacks.sorted(by: { $0.key < $1.key }) {
                 print("HIDDEN_HOST_STACK \(label) \(kind)\n" + stack.joined(separator: "\n"))
             }
-            XCTAssertEqual(counts[1], 0, "\(label): the hidden Later host laid out")
-            XCTAssertEqual(counts[2], 0, "\(label): the hidden Done host laid out")
-            XCTAssertEqual(held, 0, "\(label): a hidden host's environment ran")
-            XCTAssertEqual(hiddenLeaves, 0, "\(label): a hidden tab's row ran")
-            return counts[0]
+            return reach
         }
-        var shown = 0
+        var reaches: [HiddenHostReach] = []
         for (label, row) in [("click-move-1", rows[1]), ("click-stay-1", rows[1]),
                              ("click-move-2", rows[0]), ("click-stay-2", rows[0])] {
-            shown += try measure(label) {
+            reaches.append(try measure(label) {
                 try hosted.clickRow(row.id, tab: .now)
                 hosted.spin(0.4)
-            }
+            })
         }
-        XCTAssertGreaterThan(shown, 0, "the shown host still lays out on row clicks")
-        let resized = measure("resize") { resize(hosted) }
-        XCTAssertGreaterThan(resized, 0, "the shown host still lays out on a resize")
+        reaches.append(measure("resize") { resize(hosted) })
+        return reaches
+    }
+
+    /// Air, PR 41 844907fb (-O, queried): the hidden Later and Done hosts
+    /// each laid out once on every row click, moving focus or not, and about
+    /// as often as the shown host on every resize frame
+    /// (job1-ax-focus-per-click.md, "Why the whole host lays out"). A hidden
+    /// host lays out on neither and runs no row; the shown host still lays out.
+    func testHiddenTabHostsRunNoLayoutOnRowClicksAndAResize() throws {
+        let reaches = try reachOfClicksAndAResize()
+        for reach in reaches {
+            XCTAssertEqual(reach.layouts[1], 0, "\(reach.label): the hidden Later host laid out")
+            XCTAssertEqual(reach.layouts[2], 0, "\(reach.label): the hidden Done host laid out")
+            XCTAssertEqual(reach.hiddenLeaves, 0, "\(reach.label): a hidden tab's row ran")
+        }
+        let clicks = reaches.filter { $0.label.hasPrefix("click") }.map { $0.layouts[0] }.reduce(0, +)
+        XCTAssertGreaterThan(clicks, 0, "the shown host still lays out on row clicks")
+        XCTAssertGreaterThan(reaches.last?.layouts[0] ?? 0, 0, "the shown host still lays out on a resize")
+    }
+
+    /// The same air run: a hidden host's held environment ran on every
+    /// click (A4: the focus, window and accessibility values changed). It
+    /// does not run while the host is hidden.
+    func testHiddenTabHostsRunNoEnvironmentOnRowClicksAndAResize() throws {
+        for reach in try reachOfClicksAndAResize() {
+            XCTAssertEqual(reach.heldEnvironments, 0, "\(reach.label): a hidden host's environment ran")
+        }
     }
 
     /// Records each host's layouts on a tab switch, plain, after row clicks
@@ -247,11 +274,14 @@ final class TasksTabHostTests: XCTestCase {
 
     // MARK: A hidden tab is right in its first frame
 
-    /// Widens the window in steps, as a resize drag does.
+    /// Widens and lengthens the window in steps, as a corner drag does
+    /// (the top stays put, so the page's clicks keep their places).
     private func resize(_ hosted: Hosted, steps: Int = 8, by step: CGFloat = 6) {
         for _ in 0..<steps {
             var frame = hosted.window.frame
             frame.size.width += step
+            frame.size.height += step
+            frame.origin.y -= step
             hosted.window.setFrame(frame, display: true)
             hosted.spin(0.03)
         }
@@ -262,9 +292,10 @@ final class TasksTabHostTests: XCTestCase {
     /// in its slot, by title.
     private struct LaterDrawing: Equatable {
         var listWidth: CGFloat
+        var listHeight: CGFloat
         var rows: [String: CGRect]
         var summary: String {
-            "width=\(listWidth) rows=\(rows.count) " + rows.sorted { $0.value.minY < $1.value.minY }
+            "list=\(listWidth)x\(listHeight) rows=\(rows.count) " + rows.sorted { $0.value.minY < $1.value.minY }
                 .prefix(3).map { "\($0.key)@\(Int($0.value.minX)),\(Int($0.value.minY)),\(Int($0.value.width))x\(Int($0.value.height))" }
                 .joined(separator: " ")
         }
@@ -277,7 +308,7 @@ final class TasksTabHostTests: XCTestCase {
             guard let frame = hosted.pointer.frame(for: TasksRowID(tab: .backlog, id: row.id)) else { continue }
             rows[row.model.title] = frame.offsetBy(dx: -hosted.pointer.pageOffset(.backlog), dy: 0)
         }
-        return LaterDrawing(listWidth: list?.frame.width ?? -1, rows: rows)
+        return LaterDrawing(listWidth: list?.frame.width ?? -1, listHeight: list?.frame.height ?? -1, rows: rows)
     }
 
     /// Makes `change` while Later is hidden, switches to Later, and reads the
@@ -292,9 +323,12 @@ final class TasksTabHostTests: XCTestCase {
         let reference = try warmed(laterRows: 4, followsWindow: true)
         defer { reference.close() }
         reference.go(to: .backlog)
+        let referenceHost = hosts(reference)[1]
+        let before = laterDrawing(reference, host: referenceHost)
         try change(reference)
         reference.spin(0.6)
-        let expected = laterDrawing(reference, host: hosts(reference)[1])
+        let expected = laterDrawing(reference, host: referenceHost)
+        XCTAssertNotEqual(expected.listHeight, before.listHeight, "\(label): the change resizes the list, so the first frame can be stale")
 
         let hosted = try warmed(laterRows: 4, followsWindow: true)
         defer { hosted.close() }
@@ -304,7 +338,8 @@ final class TasksTabHostTests: XCTestCase {
         try change(hosted)
         hosted.spin(0.6)
         withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: .backlog) }
-        hosted.window.contentView?.layoutSubtreeIfNeeded()
+        // The window's own next display, as the app's first frame comes;
+        // no layout is forced first.
         hosted.window.displayIfNeeded()
         let first = laterDrawing(hosted, host: laterHost)
         hosted.spin(1.2)
@@ -312,8 +347,10 @@ final class TasksTabHostTests: XCTestCase {
         print("FIRST_FRAME \(label) first=\(first.summary) | settled=\(settled.summary) | reference=\(expected.summary)")
         XCTAssertGreaterThan(settled.rows.count, 0, "\(label): Later has rows to compare")
         XCTAssertEqual(first.listWidth, settled.listWidth, "\(label): the list's width in the first frame")
+        XCTAssertEqual(first.listHeight, settled.listHeight, "\(label): the list's height in the first frame")
         XCTAssertEqual(first.rows, settled.rows, "\(label): the rows' frames in the first frame")
         XCTAssertEqual(settled.listWidth, expected.listWidth, "\(label): the list's width matches a Later shown throughout")
+        XCTAssertEqual(settled.listHeight, expected.listHeight, "\(label): the list's height matches a Later shown throughout")
         if matchesRows {
             XCTAssertEqual(settled.rows, expected.rows, "\(label): the rows match a Later shown throughout")
         }
