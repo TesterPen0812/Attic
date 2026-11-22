@@ -1865,7 +1865,7 @@ struct TasksPage: View {
             // moves on to the row that took it (review 8). A row the pointer
             // completed takes nothing with it: no row is lit that the person
             // did not reach (round 5).
-            .onChange(of: rows.map(\.id)) { old, new in
+            .onChange(of: ids) { old, new in
                 if tab == model.tab { PerformanceSignposts.watchFrames("RowsMotion", seconds: 0.35) }
                 guard tab == model.tab, let focused = focusedID, !new.contains(focused),
                       let index = old.firstIndex(of: focused), !new.isEmpty else { return }
