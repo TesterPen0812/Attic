@@ -1,6 +1,6 @@
 #if ATTIC_GLOSS_LAB
-// Ported for the Gloss lab preview from attic-redesign-assets/phaseX/panel-design/improvements-build/hunt-13nov/tools/tracker-seed/TrackerSeed.swift (sample data only).
-// TrackerSeed.swift: the one shared, deterministic seed for the everyday-size
+// Ported for the Gloss lab preview from attic-redesign-assets/phaseX/panel-design/improvements-build/hunt-13nov/tools/tracker-seed/GlossLabTrackerSeed.swift (sample data only).
+// GlossLabTrackerSeed.swift: the one shared, deterministic seed for the everyday-size
 // speed measurements (write-path and speed sessions, 17 Nov 2026). It is a
 // test-side file: copy it into AtticTests (or a probe target) as it is. It is
 // never committed to the product.
@@ -10,13 +10,13 @@
 // Two shapes from one generator, so the only differences between the two runs
 // are the ones the shapes name (RULES "Measure first", 17 Nov):
 //
-//   TrackerSeed.tracker: the shape of the owner's Attic Progress copy, from the
+//   GlossLabTrackerSeed.tracker: the shape of the owner's Attic Progress copy, from the
 //   counts the lead wrote in ops/design/write-path.md ("The measurement that
 //   now decides builds 4 and 6"). The copy's own store was never read or
 //   copied. Everything below that the lead did not give is a choice made here
 //   and marked CHOICE.
 //
-//   TrackerSeed.ordinary: the ordinary everyday seed (RULES: 40 Now, 30 Later,
+//   GlossLabTrackerSeed.ordinary: the ordinary everyday seed (RULES: 40 Now, 30 Later,
 //   300 Done, 8 notes). If the speed session already has its own ordinary
 //   seed, align on one before comparing numbers.
 //
@@ -88,11 +88,11 @@
 //
 // USE
 //
-//   let plan = TrackerSeed.plan(.tracker)                 // pure data
-//   try TrackerSeed.insertTasks(plan, in: container)       // before the stores
+//   let plan = GlossLabTrackerSeed.plan(.tracker)                 // pure data
+//   try GlossLabTrackerSeed.insertTasks(plan, in: container)       // before the stores
 //   ... build TaskStore / NoteStore / finishLaunch as the probe's rig does ...
-//   try TrackerSeed.createNotes(plan, notes: noteStore, container: container)
-//   XCTAssertEqual(try TrackerSeed.census(in: container), plan.census)
+//   try GlossLabTrackerSeed.createNotes(plan, notes: noteStore, container: container)
+//   XCTAssertEqual(try GlossLabTrackerSeed.census(in: container), plan.census)
 //
 // The API used (TaskItem's init and fields, NoteStore.createDocumentNote,
 // NoteAgentTextParser.document, ItemLink, AtticTag) is identical in a7a11552
@@ -102,7 +102,7 @@ import Foundation
 import SwiftData
 
 
-enum TrackerSeed {
+enum GlossLabTrackerSeed {
 
     // MARK: Shapes
 
