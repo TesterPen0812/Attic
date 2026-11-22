@@ -4399,7 +4399,7 @@ final class TaskStore: ObservableObject {
 
     /// This store, when its last save already presented from a fresh read;
     /// passed to `WorkspaceItemLifecycle.didCommit` so it is not read twice.
-    private var freshAfterSave: TaskStore? { savePresentedFromFreshRead ? self : nil }
+    var freshAfterSave: TaskStore? { savePresentedFromFreshRead ? self : nil }
 
     func refresh() {
         defer { tagInventoryRefreshed() }
