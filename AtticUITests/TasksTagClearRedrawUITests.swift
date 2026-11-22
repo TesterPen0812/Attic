@@ -13,7 +13,7 @@ import XCTest
 final class TasksTagClearRedrawUITests: XCTestCase {
     private var app: XCUIApplication!
     private var launchedAt = Date()
-    private var panel: XCUIElement?
+    private var panel: PanelCapture?
 
     override func setUpWithError() throws {
         continueAfterFailure = true
@@ -30,11 +30,11 @@ final class TasksTagClearRedrawUITests: XCTestCase {
     private func tab(_ page: String) -> XCUIElement { app.buttons["tasks-page-\(page)"] }
     private func bar(_ part: String) -> XCUIElement { app.descendants(matching: .any)["tasks-tag-bar-\(part)"].firstMatch }
 
-    private func waitFor(_ condition: @autoclosure () -> Bool, timeout: TimeInterval = 5, _ message: String,
+    private func waitFor(_ condition: @autoclosure () -> Bool, timeout: TimeInterval = 5, _ message: @autoclosure () -> String,
                          file: StaticString = #filePath, line: UInt = #line) {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline, !condition() { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
-        XCTAssertTrue(condition(), message, file: file, line: line)
+        XCTAssertTrue(condition(), message(), file: file, line: line)
     }
 
     private func appsUnderTest() -> [NSRunningApplication] {
@@ -57,41 +57,6 @@ final class TasksTagClearRedrawUITests: XCTestCase {
         usleep(500_000)
     }
 
-    private func findPanel() -> XCUIElement? {
-        let frame = tab("now").frame
-        let tops = app.windows.allElementsBoundByIndex + app.children(matching: .any).allElementsBoundByIndex
-        return tops.first { $0.frame.contains(frame) && $0.frame.width < 900 && $0.frame.height > 300 }
-    }
-
-    /// The Find guard's bands, unchanged.
-    private func bands(_ image: NSImage) -> [ClosedRange<Int>] {
-        guard let tiff = image.tiffRepresentation, let raw = NSBitmapImageRep(data: tiff),
-              let rep = raw.converting(to: .sRGB, renderingIntent: .default) else { return [] }
-        let scale = CGFloat(rep.pixelsWide) / max(image.size.width, 1)
-        let x1 = min(Int(320 * scale), rep.pixelsWide)
-        let y0 = Int(55 * scale), y1 = min(Int(400 * scale), rep.pixelsHigh)
-        func lum(_ x: Int, _ y: Int) -> CGFloat {
-            guard let c = rep.colorAt(x: x, y: y) else { return 0 }
-            return 0.299 * c.redComponent + 0.587 * c.greenComponent + 0.114 * c.blueComponent
-        }
-        var ink: [Bool] = []
-        for y in y0..<y1 {
-            var values: [CGFloat] = []
-            for x in stride(from: 0, to: x1, by: 2) { values.append(lum(x, y)) }
-            let median = values.sorted()[values.count / 2]
-            ink.append(values.filter { abs($0 - median) > 0.25 }.count >= 3)
-        }
-        var found: [(Int, Int)] = []
-        var start: Int?, gap = 0
-        for (i, on) in ink.enumerated() {
-            if on { if start == nil { start = i }; gap = 0 }
-            else if let s = start { gap += 1; if gap > 3 { found.append((s, i - gap)); start = nil; gap = 0 } }
-        }
-        if let s = start { found.append((s, ink.count - 1)) }
-        return found.filter { $0.1 - $0.0 >= Int(6 * scale) }
-            .map { Int(CGFloat(y0 + $0.0) / scale)...Int(CGFloat(y0 + $0.1) / scale) }
-    }
-
     /// The Find guard's "whole", unchanged.
     private func whole(_ now: [ClosedRange<Int>], before: [ClosedRange<Int>]) -> (Bool, Int) {
         func covered(_ s: Int) -> Int {
@@ -102,16 +67,12 @@ final class TasksTagClearRedrawUITests: XCTestCase {
         return (!before.isEmpty && n == before.count && now.count >= before.count, n)
     }
 
-    private func shot(_ name: String, keep: Bool = true) -> [ClosedRange<Int>] {
-        guard let panel else { XCTFail("\(name): no panel element"); return [] }
-        let screenshot = panel.screenshot()
-        if keep {
-            let attachment = XCTAttachment(screenshot: screenshot)
-            attachment.name = "tag-clear-\(name)"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-        }
-        return bands(screenshot.image)
+    /// One shot of the panel, or nil after a failure that names the capture.
+    private func shot(_ name: String, keep: Bool = true) -> [ClosedRange<Int>]? {
+        guard let panel else { XCTFail("\(name): no panel"); return nil }
+        let got = panel.take("tag-clear-\(name)", keep: keep, in: self)
+        if let problem = got.problem { XCTFail(problem) }
+        return got.bands
     }
 
     private func text(_ b: [ClosedRange<Int>]) -> String { b.map { "\($0.lowerBound)-\($0.upperBound)" }.joined(separator: " ") }
@@ -121,7 +82,8 @@ final class TasksTagClearRedrawUITests: XCTestCase {
         print("TAGCLEARREDRAW app under test: \(describe(apps))")
         XCTAssertEqual(apps.count, 1, "exactly one app under test: \(describe(apps))")
         waitFor(tab("now").isSelected, "the panel opens on Now")
-        panel = findPanel()
+        panel = PanelCapture.find(in: app, holding: tab("now"))
+        XCTAssertNotNil(panel, "the panel: a top-level dialog holding Now's tab (\(PanelCapture.describeTops(of: app)))")
         for page in ["backlog", "done", "now", "backlog"] {
             activate(); tab(page).clickInsideOwnWindow(of: app)
             waitFor(tab(page).isSelected, "\(page) reads as selected")
@@ -129,8 +91,12 @@ final class TasksTagClearRedrawUITests: XCTestCase {
         activate(); tab("now").clickInsideOwnWindow(of: app)
         waitFor(tab("now").isSelected, "Now reads as selected")
         activate()
-        waitFor(shot("before-poll", keep: false).count == 12, "the Now list is drawn before the filter")
-        let before = shot("before")
+        guard let panel else { return }
+        var poll = PanelCapture.Shot(bands: nil, problem: "not captured", sizes: "none")
+        waitFor({ poll = panel.take("tag-clear-before-poll", keep: false, in: self); return poll.bands?.count == 12 }(),
+                "the Now list is drawn before the filter (\(poll.problem ?? text(poll.bands ?? [])))")
+        print("TAGCLEARREDRAW panel \(panel.frame), capture \(poll.sizes)")
+        guard let before = shot("before") else { return }
         for round in 1...3 {
             activate(); bar("key").clickInsideOwnWindow(of: app)
             waitFor(bar("launch").exists && bar("launch").isHittable, "round \(round): the tag bar shows #launch")
@@ -139,7 +105,7 @@ final class TasksTagClearRedrawUITests: XCTestCase {
             waitFor(bar("clear").exists && bar("clear").isHittable, "round \(round): the collapsed bar shows ✕ for #launch")
             usleep(1_000_000) // Settle: the filtered list is read a second after the bar closes.
             let filtered = shot("filtered\(round)")
-            print("TAGCLEARREDRAW filtered \(round): \(filtered.count)/\(before.count) bands shown under #launch (\(text(filtered)))")
+            print("TAGCLEARREDRAW filtered \(round): \(filtered.map { "\($0.count)" } ?? "NO CAPTURE")/\(before.count) bands shown under #launch (\(text(filtered ?? [])))")
             activate(); let clearAt = Date()
             bar("clear").clickInsideOwnWindow(of: app)
             let clickReturned = Date()
@@ -159,9 +125,14 @@ final class TasksTagClearRedrawUITests: XCTestCase {
                 let wait = clickReturned.addingTimeInterval(offset).timeIntervalSinceNow
                 if wait > 0 { usleep(UInt32(wait * 1_000_000)) }
                 let took = Date().timeIntervalSince(clickReturned)
-                let got = shot("clear\(round)-\(offset)")
+                let shotAt = Date()
+                guard let got = shot("clear\(round)-\(offset)") else {
+                    line.append(String(format: "+%.2f s NO CAPTURE", took))
+                    continue
+                }
                 let (ok, n) = whole(got, before: before)
-                line.append(String(format: "+%.2f s %@ %d/%d", took, ok ? "whole" : "THIN", got.count, before.count))
+                line.append(String(format: "+%.2f s %@ %d/%d (shot %.2f s)", took, ok ? "whole" : "THIN", got.count, before.count,
+                                   Date().timeIntervalSince(shotAt)))
                 if offset == 2.0 {
                     XCTAssertTrue(ok, String(format: "clear %d, %.2f s after the ✕ click returned: every Now row drawn before the filter is drawn (%d of %d bands, %d covered: %@)",
                                              round, took, got.count, before.count, n, text(got)))
