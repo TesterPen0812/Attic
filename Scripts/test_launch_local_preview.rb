@@ -2,6 +2,7 @@
 
 require "minitest/autorun"
 require "open3"
+require "tmpdir"
 
 class LaunchLocalPreviewTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
@@ -124,6 +125,120 @@ class LaunchLocalPreviewTest < Minitest::Test
       refute status.success?, "--release-like #{extra.join(' ')} must be rejected"
       assert_includes stderr, "--release-like cannot be combined"
     end
+  end
+
+  # A stubbed xcodebuild (settings read and a fake build product) and a stubbed
+  # codesign (entitlements read), so the release-like guards run end to end
+  # without a real build.
+  STUB_XCODEBUILD = <<~'ZSH'
+    #!/bin/zsh
+    if (( ${@[(I)-showBuildSettings]} )); then
+      print -- "Build settings for action build and target AtticAgentHelper:"
+      print -- "    OTHER_SWIFT_FLAGS = $(inherited) -DATTIC_LOCAL_ONLY"
+      print -- "Build settings for action build and target Attic:"
+      print -- "    CODE_SIGN_ENTITLEMENTS = Attic/AtticNotesLocal.entitlements"
+      print -- "    OTHER_SWIFT_FLAGS = $STUB_SWIFT_FLAGS"
+      print -- "    SWIFT_ACTIVE_COMPILATION_CONDITIONS = $STUB_CONDITIONS"
+      exit 0
+    fi
+    for a in "$@"; do
+      case $a in
+        CONFIGURATION_BUILD_DIR=*) dir=${a#*=} ;;
+        ATTIC_MACOS_EXECUTABLE_NAME=*) exe=${a#*=} ;;
+        PRODUCT_BUNDLE_IDENTIFIER=*) id=${a#*=} ;;
+        INFOPLIST_FILE=*) plist=${a#*=} ;;
+      esac
+    done
+    print -- built >>"$STUB_LOG"
+    /bin/mkdir -p "$dir/$exe.app/Contents/MacOS"
+    /bin/cp "$plist" "$dir/$exe.app/Contents/Info.plist"
+    /usr/bin/plutil -replace CFBundleIdentifier -string "$id" "$dir/$exe.app/Contents/Info.plist"
+    /usr/bin/plutil -replace CFBundleExecutable -string "$exe" "$dir/$exe.app/Contents/Info.plist"
+    print -- stub >"$dir/$exe.app/Contents/MacOS/$exe"
+    /bin/chmod +x "$dir/$exe.app/Contents/MacOS/$exe"
+  ZSH
+  STUB_CODESIGN = <<~'ZSH'
+    #!/bin/zsh
+    if (( ${@[(I)--entitlements]} )); then /bin/cat "$STUB_ENTITLEMENTS"; fi
+    exit 0
+  ZSH
+  LOCAL_ENTITLEMENTS = <<~XML
+    <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
+    <key>com.apple.security.app-sandbox</key><true/>
+    <key>com.apple.security.network.client</key><true/>
+    </dict></plist>
+  XML
+
+  def stubbed_release_like_build(swift_flags:, conditions: "", entitlements: LOCAL_ENTITLEMENTS)
+    Dir.mktmpdir("attic-release-like-guard") do |dir|
+      dir = File.realpath(dir)
+      { "xcodebuild" => STUB_XCODEBUILD, "codesign" => STUB_CODESIGN }.each do |name, body|
+        File.write(File.join(dir, name), body)
+        File.chmod(0o755, File.join(dir, name))
+      end
+      File.write(File.join(dir, "entitlements.plist"), entitlements)
+      env = {
+        "ATTIC_XCODEBUILD_COMMAND" => File.join(dir, "xcodebuild"),
+        "ATTIC_CODESIGN_COMMAND" => File.join(dir, "codesign"),
+        "STUB_SWIFT_FLAGS" => swift_flags,
+        "STUB_CONDITIONS" => conditions,
+        "STUB_ENTITLEMENTS" => File.join(dir, "entitlements.plist"),
+        "STUB_LOG" => File.join(dir, "stub.log")
+      }
+      stdout, stderr, status = Open3.capture3(
+        env, SCRIPT, "--release-like", "--build-only",
+        "--derived-data", File.join(dir, "dd"), chdir: ROOT
+      )
+      built = File.exist?(env["STUB_LOG"])
+      return [stdout, stderr, status, built]
+    end
+  end
+
+  def test_release_like_refuses_settings_without_attic_local_only
+    _stdout, stderr, status, built = stubbed_release_like_build(swift_flags: "$(inherited)")
+
+    refute status.success?
+    assert_includes stderr, "lack ATTIC_LOCAL_ONLY"
+    refute built, "nothing may be built once the settings fail"
+  end
+
+  def test_release_like_refuses_debug_in_resolved_settings
+    _stdout, stderr, status, built = stubbed_release_like_build(
+      swift_flags: "$(inherited) -DATTIC_LOCAL_ONLY", conditions: "$(inherited) DEBUG"
+    )
+
+    refute status.success?
+    assert_includes stderr, "carry DEBUG or a Local diagnostic flag"
+    refute built
+  end
+
+  def test_release_like_refuses_any_icloud_or_push_entitlement
+    %w[
+      com.apple.developer.icloud-services
+      com.apple.developer.icloud-container-identifiers
+      com.apple.developer.icloud-container-environment
+      com.apple.developer.ubiquity-container-identifiers
+      com.apple.developer.ubiquity-kvstore-identifier
+      aps-environment
+      com.apple.developer.aps-environment
+    ].each do |key|
+      entitlements = LOCAL_ENTITLEMENTS.sub("</dict>", "<key>#{key}</key><string>Production</string>\n</dict>")
+      _stdout, stderr, status, built = stubbed_release_like_build(
+        swift_flags: "$(inherited) -DATTIC_LOCAL_ONLY", entitlements: entitlements
+      )
+
+      refute status.success?, "#{key} must stop the build"
+      assert_includes stderr, "carries iCloud or push entitlements (#{key})"
+      assert built
+    end
+  end
+
+  def test_release_like_prints_the_resolved_entitlements_file
+    stdout, stderr, status, built = stubbed_release_like_build(swift_flags: "$(inherited) -DATTIC_LOCAL_ONLY")
+
+    assert status.success?, stderr
+    assert built
+    assert_includes stdout, "code_sign_entitlements=Attic/AtticNotesLocal.entitlements"
   end
 
   def test_desktop_run_passes_release_like_through_and_finds_its_product

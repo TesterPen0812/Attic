@@ -6,6 +6,8 @@ readonly script_dir=${0:A:h}
 readonly repository_root=${script_dir:h}
 readonly ui_lock_path=/tmp/attic-exclusive-ui.lock
 readonly xcodebuild_command=${ATTIC_XCODEBUILD_COMMAND:-/usr/bin/xcodebuild}
+# Test seam, like the one above: the launcher tests stub the signature reads.
+readonly codesign_command=${ATTIC_CODESIGN_COMMAND:-/usr/bin/codesign}
 
 usage() {
     /bin/cat <<'USAGE'
@@ -238,6 +240,7 @@ readonly manifest_file="$state_dir/manifest.txt"
 readonly entitlements_file="$state_dir/entitlements.plist"
 readonly signature_file="$state_dir/signature.txt"
 readonly preview_info_plist="$state_dir/Info.plist"
+readonly build_settings_file="$state_dir/build-settings.txt"
 readonly launch_provenance_file="$state_dir/launch-provenance.txt"
 # Bounded waits: a new instance must appear, map its images and then stay up.
 readonly launch_appear_timeout_seconds=20
@@ -431,6 +434,25 @@ if [[ "$store_environment" == Development ]]; then
     /usr/bin/plutil -replace AtticCloudKitEnvironment -string Development "$preview_info_plist"
 fi
 
+code_sign_entitlements="not resolved (read only for --release-like)"
+if $release_like; then
+    # Resolve the app target's settings with the exact build arguments
+    # (without -quiet) and refuse to build anything that is not local-only.
+    "$xcodebuild_command" "${build_arguments[@]:#-quiet}" -showBuildSettings >"$build_settings_file" 2>/dev/null \
+        || fail "could not resolve the release-like build settings"
+    app_settings=$(/usr/bin/awk '/^Build settings for action build and target /{inside = ($0 ~ / target Attic:$/); next} inside' "$build_settings_file")
+    [[ -n "$app_settings" ]] || fail "release-like build settings have no Attic target"
+    resolved_setting() { print -r -- "$app_settings" | /usr/bin/sed -n "s/^ *$1 = //p" | /usr/bin/head -1; }
+    resolved_flags=" $(resolved_setting OTHER_SWIFT_FLAGS) $(resolved_setting SWIFT_ACTIVE_COMPILATION_CONDITIONS) "
+    [[ "$resolved_flags" == *" -DATTIC_LOCAL_ONLY "* || "$resolved_flags" == *" ATTIC_LOCAL_ONLY "* ]] \
+        || fail "release-like build settings lack ATTIC_LOCAL_ONLY; refusing to build a non-local-only app"
+    [[ "$resolved_flags" != *(" DEBUG "|" -DDEBUG "|ATTIC_IDLE_SAMPLER|ATTIC_FIRST_TOUCH_LOG)* ]] \
+        || fail "release-like build settings carry DEBUG or a Local diagnostic flag; refusing to build"
+    code_sign_entitlements=$(resolved_setting CODE_SIGN_ENTITLEMENTS)
+    [[ -n "$code_sign_entitlements" ]] || fail "release-like build settings name no CODE_SIGN_ENTITLEMENTS"
+    print -- "code_sign_entitlements=$code_sign_entitlements"
+fi
+
 "$xcodebuild_command" "${build_arguments[@]}" build
 [[ -d "$built_app" && -x "$built_executable" ]] || fail "expected build product is missing: $built_app"
 actual_display_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$built_app/Contents/Info.plist")
@@ -444,12 +466,18 @@ if [[ "$store_environment" == Development ]]; then
         || fail "release-like build does not pin the preview's development store"
 fi
 
-/usr/bin/codesign --verify --deep --strict "$built_app"
-/usr/bin/codesign -d --entitlements - --xml "$built_app" >"$entitlements_file" 2>/dev/null
-/usr/bin/codesign -dv --verbose=4 "$built_app" >"$signature_file" 2>&1
+"$codesign_command" --verify --deep --strict "$built_app"
+"$codesign_command" -d --entitlements - --xml "$built_app" >"$entitlements_file" 2>/dev/null
+"$codesign_command" -dv --verbose=4 "$built_app" >"$signature_file" 2>&1
 
-if /usr/bin/grep -Eq 'com\.apple\.developer\.icloud|com\.apple\.developer\.ubiquity|aps-environment' "$entitlements_file"; then
-    fail "Local preview unexpectedly contains CloudKit, ubiquity, or APNs entitlements"
+# Any iCloud, CloudKit container-environment, ubiquity or push key is a hard
+# stop (com.apple.developer.icloud-*, com.apple.developer.ubiquity-*,
+# aps-environment and com.apple.developer.aps-environment).
+cloud_keys=$(/usr/bin/grep -oE '<key>[^<]*</key>' "$entitlements_file" \
+    | /usr/bin/sed -E 's#</?key>##g' \
+    | /usr/bin/grep -E '^com\.apple\.developer\.(icloud|ubiquity)|aps-environment$' || true)
+if [[ -n "$cloud_keys" ]]; then
+    fail "built app carries iCloud or push entitlements (${(j:, :)${(f)cloud_keys}}); refusing a non-local-only preview"
 fi
 
 executable_hash=$(/usr/bin/shasum -a 256 "$built_executable" | /usr/bin/awk '{print $1}')
@@ -464,6 +492,7 @@ executable_hash=$(/usr/bin/shasum -a 256 "$built_executable" | /usr/bin/awk '{pr
         print -- "debug_dylib=${built_executable}.debug.dylib"
         print -- "debug_dylib_inode_size_sha256=$(file_identity "${built_executable}.debug.dylib")"
     fi
+    print -- "code_sign_entitlements=$code_sign_entitlements"
     print -- "entitlements=$entitlements_file"
     print -- "signature=$signature_file"
 } >"$manifest_file"
