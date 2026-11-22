@@ -679,9 +679,11 @@ struct TasksPagerPages<Page: View>: View {
                         // The list animates between its rows by itself, so
                         // a root that changes them is laid out as it is set
                         // (PR 41, Find close); a hidden tab's are not read.
+                        // Done draws its own list (`TasksDonePage`), so it
+                        // is handed none (PR 41 review B1).
                         KeptContentHost(drawn: drawn, interactive: index == shown && model.isPageShown,
                                         space: TasksPagerSlot.localSpace(index),
-                                        rows: drawn && TasksTab.allCases.indices.contains(index)
+                                        rows: drawn && TasksTab.allCases.indices.contains(index) && TasksTab.allCases[index] != .done
                                             ? AnyHashable(model.listIDs(for: TasksTab.allCases[index])) : nil) {
                             TasksKeptPage(frozen: !drawn) { page(index, drawn) }
                                 .equatable()
