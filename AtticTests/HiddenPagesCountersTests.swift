@@ -75,6 +75,7 @@ final class HiddenPagesCountersTests: XCTestCase {
         let seed: Seed
         let tally: Tally
         let calendarState: CalendarPageState
+        let tasksState: TasksPageState
         /// The scroll views Notes' library holds (the card's end keeper's),
         /// taken before any other page was built.
         let notesScrolls: Set<ObjectIdentifier>
@@ -300,7 +301,7 @@ final class HiddenPagesCountersTests: XCTestCase {
         try body(Rig(container: container, tasks: tasks, notes: notes, library: library, draft: draft,
                      state: state, composerState: composerState, content: content, panel: panel, page: page,
                      composer: composer, notesLibrary: notesLibrary, libraryBox: libraryBox, seed: seed, tally: tally,
-                     calendarState: calendarState, notesScrolls: notesScrolls))
+                     calendarState: calendarState, tasksState: tasksState, notesScrolls: notesScrolls))
         XCTAssertTrue(libraryBox.model === notesLibrary,
                       "harness: the Notes page kept the library model the counts subscribed to")
     }
@@ -922,6 +923,47 @@ final class HiddenPagesCountersTests: XCTestCase {
                 }
                 XCTAssertEqual(model.isVisibleForTesting, onScreen, "C6 calendar: the shown page missed the \(step)")
             }
+        }
+    }
+
+    // MARK: - C7: Calendar's closure-free hand-off (M2) keeps its routes
+
+    /// The Calendar's "+" now goes through `CalendarPageSlot.startNewTask`
+    /// (the shell's one card, as `composerRoute` opens it): shown, it opens
+    /// the card on that day.
+    func testC7ACalendarPlusOpensTheCardOnItsDay() throws {
+        try withRig { rig in
+            show(.calendar, rig)
+            closeCard(rig)
+            let day = rig.calendarModel.newTaskDay
+            CalendarPageSlot.startNewTask(day, composerState: rig.composerState)
+            XCTAssertTrue(rig.composer.isOpen, "C7: Calendar's \"+\" did not open the card")
+            XCTAssertEqual(rig.composer.page, .calendar(selected: day), "C7: the card is not on Calendar's day")
+            closeCard(rig)
+        }
+    }
+
+    /// Calendar's task-note services, now made by the slot from the moved
+    /// `AtticPanelView.calendarTaskNoteEntryServices`: Open Task Note opens
+    /// the task's page over Calendar with Calendar's way back.
+    func testC7BCalendarOpenTaskNoteComesBackToCalendar() throws {
+        try withRig { rig in
+            show(.calendar, rig)
+            let id = rig.seed.plain[0]
+            let services = AtticPanelView.calendarTaskNoteEntryServices(
+                uiState: rig.state, calendarPageState: rig.calendarState, tasksPageState: rig.tasksState,
+                store: rig.tasks, toasts: PanelToastCenter(), noteDraft: rig.draft)
+            services.open(id, "Back to Calendar")
+            XCTAssertEqual(rig.state.openTaskNoteID, id, "C7: Open Task Note did not open the task's page")
+            XCTAssertEqual(rig.state.taskNoteOrigin, .calendar, "C7: the task's page is not over Calendar")
+            XCTAssertEqual(rig.state.taskNoteBackTitle, "Back to Calendar", "C7: the way back is not Calendar's")
+            pump(rig.content, rig.panel)
+            TaskNoteRouteHost<EmptyView>.closeRoute(id, uiState: rig.state, controller: rig.draft.pages)
+            waitForTestOperation("the task's page closed") {
+                frame(rig)
+                return rig.state.openTaskNoteID == nil
+            }
+            pump(rig.content, rig.panel)
         }
     }
 }

@@ -367,13 +367,12 @@ struct AtticPanelView: View {
             )
             .transition(pageTransition(.notes))
         case .calendar:
-            // A task's page opens over the Calendar, which stays built
-            // (covered) so Back returns to it as it was.
-            TaskNoteRouteHost(page: .calendar, noteStore: noteStore, taskStore: store, noteDraft: noteDraft,
-                              uiState: uiState, layout: layout, isReady: hasRestoredNoteSession) { _ in
-                CalendarPageHost(store: store, state: calendarPageState, uiState: uiState, layout: layout,
-                                 onNewTask: startNewTask, taskNotes: calendarTaskNoteEntryServices)
-            }
+            // Handed over with no closure, so the shell's re-runs (a size
+            // write on each step of a resize) skip it while it is hidden.
+            CalendarPageSlot(store: store, noteStore: noteStore, noteDraft: noteDraft, uiState: uiState,
+                             calendarPageState: calendarPageState, tasksPageState: tasksPageState,
+                             composerState: composerState, toasts: toasts, layout: layout,
+                             isReady: hasRestoredNoteSession)
             .transition(pageTransition(.calendar))
         }
     }
@@ -390,11 +389,6 @@ struct AtticPanelView: View {
                                motion: PanelPageMotion.current(reduceMotion: AtticMotionPreference.reducesMotion
                                                                || settings.animations == .reduced))
         }
-    }
-
-    /// The Calendar's "+": the card, on that day.
-    private func startNewTask(_ day: DueDay) {
-        composer.open(on: .calendar(selected: day))
     }
 
     // MARK: The "+" card
@@ -471,6 +465,12 @@ struct AtticPanelView: View {
 
     /// Open Task Note and a row's file drop (Phase 3).
     private var taskNoteEntryServices: TaskNoteEntryServices {
+        Self.taskNoteEntryServices(uiState: uiState, tasksPageState: tasksPageState, store: store, toasts: toasts,
+                                   noteDraft: noteDraft)
+    }
+
+    static func taskNoteEntryServices(uiState: PanelUIState, tasksPageState: TasksPageState, store: TaskStore,
+                                      toasts: PanelToastCenter, noteDraft: NoteDraftController) -> TaskNoteEntryServices {
         TaskNoteEntryServices(
             open: { [weak uiState, weak tasksPageState, store, toasts, weak pages = noteDraft.pages] id, backTitle in
                 guard let uiState, let tasksPageState else { return }
@@ -500,8 +500,12 @@ struct AtticPanelView: View {
                 .eraseToAnyPublisher())
     }
 
-    private var calendarTaskNoteEntryServices: TaskNoteEntryServices {
-        let services = taskNoteEntryServices
+    /// Calendar's: Open Task Note and a file drop come back to Calendar.
+    static func calendarTaskNoteEntryServices(uiState: PanelUIState, calendarPageState: CalendarPageState,
+                                              tasksPageState: TasksPageState, store: TaskStore,
+                                              toasts: PanelToastCenter, noteDraft: NoteDraftController) -> TaskNoteEntryServices {
+        let services = taskNoteEntryServices(uiState: uiState, tasksPageState: tasksPageState, store: store,
+                                             toasts: toasts, noteDraft: noteDraft)
         return TaskNoteEntryServices(
             open: { [uiState, calendarPageState, store, weak pages = noteDraft.pages] id, backTitle in
                 let query = calendarPageState.model(store: store, resumeDefaults: uiState.resumeDefaults,
