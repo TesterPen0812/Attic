@@ -135,3 +135,34 @@ final class GlossLabCountTests: XCTestCase {
     }
 }
 #endif
+
+#if ATTIC_GLOSS_LAB
+@MainActor
+final class GlossLabValuesTests: XCTestCase {
+    private final class CountingDefaults: UserDefaults {
+        var writes: [String] = []
+        override func set(_ value: Any?, forKey defaultName: String) {
+            writes.append(defaultName)
+            super.set(value, forKey: defaultName)
+        }
+    }
+
+    /// Reading the stored values never writes them back (on 22 Nov a launch
+    /// argument read this way was saved for good), and a change is kept.
+    func testLoadingNeverWritesAndChangesPersist() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(CountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "GlossLab.grain")
+        defaults.set(3.0, forKey: "GlossLab.grainPercent")
+        defaults.writes = []
+        let loaded = GlossLab(defaults: defaults)
+        XCTAssertTrue(loaded.grain)
+        XCTAssertEqual(loaded.grainPercent, 3)
+        XCTAssertEqual(defaults.writes, [], "loading wrote values back")
+        loaded.edgeLight = true
+        XCTAssertEqual(defaults.writes, ["GlossLab.edgeLight"])
+        XCTAssertTrue(GlossLab(defaults: defaults).edgeLight, "a change is kept")
+    }
+}
+#endif

@@ -19,6 +19,9 @@ final class GlossLab {
     }
 
     @ObservationIgnored private let defaults: UserDefaults?
+    /// True while `init` reads the stored values: reading must never write
+    /// them back (a launch argument would otherwise be saved for good).
+    @ObservationIgnored private var loading = true
 
     // MARK: Switches (ideas, numbered as in the brief)
 
@@ -77,6 +80,7 @@ final class GlossLab {
 
     init(defaults: UserDefaults?) {
         self.defaults = defaults
+        defer { loading = false }
         guard let defaults else { return }
         func bool(_ key: String, _ value: inout Bool) {
             if defaults.object(forKey: Self.prefix + key) != nil { value = defaults.bool(forKey: Self.prefix + key) }
@@ -100,6 +104,7 @@ final class GlossLab {
     static let prefix = "GlossLab."
 
     private func save(_ value: Any, _ key: String) {
+        guard !loading else { return }
         defaults?.set(value, forKey: Self.prefix + key)
     }
 
