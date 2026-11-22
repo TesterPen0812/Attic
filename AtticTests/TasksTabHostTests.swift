@@ -469,6 +469,69 @@ final class TasksTabHostTests: XCTestCase {
         }
     }
 
+    // The family: a row that leaves any tab's list while that tab is not
+    // drawn. Later draws the same list as Now; Done draws its own
+    // (`TasksDonePage`), whose rows have no exit today, and is guarded so
+    // one added later cannot bring the fault back unseen.
+
+    /// How many reads of the return to `tab`, from the first in which its
+    /// list is drawn, still draw the row `id`, which left the tab while it
+    /// was not drawn.
+    private func staleReadsOnReturn(_ hosted: Hosted, to tab: TasksTab, of id: UUID, label: String) throws -> Int {
+        let slot = try XCTUnwrap(TasksTab.allCases.firstIndex(of: tab))
+        let host = hosts(hosted)[slot]
+        let row = TasksRowID(tab: tab, id: id)
+        var drawings: [LaterDrawing] = []
+        var still: [Bool] = []
+        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: tab) }
+        let sampler = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 2_100_000) { _, _ in
+            MainActor.assumeIsolated {
+                drawings.append(self.laterDrawing(hosted, host: host, tab: tab))
+                still.append(hosted.pointer.frame(for: row) != nil)
+            }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), sampler, .commonModes)
+        waitForTestOperation("\(label): the slide to the tab ends, its list settles and the row has gone") {
+            hosted.model.pagerSwipe.motion.position == CGFloat(slot) && drawings.count >= 2
+                && drawings[drawings.count - 1] == drawings[drawings.count - 2] && drawings[drawings.count - 1].listWidth > 0
+                && still.last == false
+        }
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), sampler, .commonModes)
+        CFRunLoopObserverInvalidate(sampler)
+        let shown = try XCTUnwrap(drawings.firstIndex { $0.listWidth > 0 }, "\(label): the list is drawn during the switch")
+        let stale = still[shown...].filter { $0 }.count
+        print("RETURN_STALE \(label) reads=\(drawings.count) first_drawn_read=\(shown) stale_reads=\(stale)")
+        return stale
+    }
+
+    func testLaterIsRightInItsFirstFrameBackAfterARowIsDeletedFromNow() throws {
+        let hosted = try warmed(laterRows: 4, followsWindow: true)
+        defer { hosted.close() }
+        hosted.go(to: .backlog)
+        let id = try XCTUnwrap(hosted.model.rows(for: .backlog).dropFirst().first).id
+        XCTAssertNotNil(hosted.pointer.frame(for: TasksRowID(tab: .backlog, id: id)), "the row is drawn on Later")
+        hosted.go(to: .now)
+        XCTAssertTrue(hosted.model.delete([id]).isApplied, "the delete is saved")
+        hosted.spin(0.6)
+        XCTAssertEqual(try staleReadsOnReturn(hosted, to: .backlog, of: id, label: "later-delete"), 0,
+                       "a row deleted while Later was not drawn is not drawn in Later's first frame back")
+    }
+
+    func testDoneIsRightInItsFirstFrameBackAfterARowIsDeletedFromNow() throws {
+        let hosted = try warmed(laterRows: 4, followsWindow: true)
+        defer { hosted.close() }
+        let id = try nowsSecondRow(hosted)
+        hosted.model.completeAcknowledged(id) { _ in }
+        XCTAssertTrue(hosted.model.settlePendingCompletionAcknowledgements(through: id), "the tick is saved")
+        hosted.go(to: .done)
+        XCTAssertNotNil(hosted.pointer.frame(for: TasksRowID(tab: .done, id: id)), "the row is drawn on Done")
+        hosted.go(to: .now)
+        XCTAssertTrue(hosted.model.delete([id]).isApplied, "the delete is saved")
+        hosted.spin(0.6)
+        XCTAssertEqual(try staleReadsOnReturn(hosted, to: .done, of: id, label: "done-delete"), 0,
+                       "a row deleted while Done was not drawn is not drawn in Done's first frame back")
+    }
+
     /// Only the return is laid out without motion: a row deleted on Now once
     /// it is drawn again still leaves with its exit (it keeps a frame while
     /// it goes, then has none).
