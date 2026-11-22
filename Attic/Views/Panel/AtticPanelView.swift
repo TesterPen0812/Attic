@@ -12,6 +12,17 @@ import SwiftData
 }
 #endif
 
+#if DEBUG
+/// Test seam (NotesUndoMirrorCountGuardTests): the view that pads the
+/// shell's notices above the page's bottom controls.
+@MainActor enum PanelNoticeClearanceProbe {
+    /// How many times the notices' bottom padding was applied (body runs).
+    static var applications = 0
+    /// The bottom padding last given to the notices.
+    static var lastBottomPadding: CGFloat = 0
+}
+#endif
+
 /// Settings for the panel's geometry, motion and appearance. Other settings
 /// (such as the global quick-capture shortcut) must not rebuild retained pages.
 @MainActor
@@ -113,7 +124,11 @@ struct AtticPanelView: View {
     /// Canvas host reads it, so a toast coming or going never runs this
     /// body and every page host in it (SPEED-TOAST-HIDDEN-CALENDAR).
     @State private var noticeHeight = PanelNoticeHeight()
-    @State private var noticeClearance = PanelPageNoticeClearancePreferenceKey.defaultValue
+    /// The clearance the page's bottom controls ask of the notices, held
+    /// and not observed here: only the notices' padding reads it, so the
+    /// composer's date and tags row coming or going never runs this body
+    /// and every page host in it (SPEED-NOTICE-CLEARANCE-SHELL).
+    @State private var noticeClearance = PanelNoticeClearance()
     @State var hasRestoredNoteSession = false
 
     @MainActor
@@ -284,13 +299,13 @@ struct AtticPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { clearance in
-            guard noticeClearance != clearance else { return }
+            guard noticeClearance.value != clearance else { return }
             // A page's bottom controls grow or shrink with a spring (the
             // composer's date and tags row): the notices ride it, never
             // jump (O17-02). Reduce Motion moves them at once.
             let reduced = reduceMotion || settings.animations == .reduced
-            withAnimation(AtticMotionPreset.popover.animation(reduceMotion: reduced, showing: clearance > noticeClearance)) {
-                noticeClearance = clearance
+            withAnimation(AtticMotionPreset.popover.animation(reduceMotion: reduced, showing: clearance > noticeClearance.value)) {
+                noticeClearance.value = clearance
             }
         }
     }
@@ -310,17 +325,11 @@ struct AtticPanelView: View {
     }
 
     private var notices: some View {
-        PanelCurrentNoticeOverlay(
+        PanelClearedNotices(
             store: store, noteStore: noteStore, canvasSession: canvasSession,
-            toasts: toasts, page: currentPage
+            toasts: toasts, page: currentPage, clearance: noticeClearance,
+            horizontalInset: chromeInsets.leading, contentBottom: pageLayout.contentInsets.bottom
         )
-        .padding(.horizontal, chromeInsets.leading)
-        .padding(.bottom, pageLayout.contentInsets.bottom + noticeClearance)
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(key: PanelNoticeHeightPreferenceKey.self, value: proxy.size.height)
-            }
-        }
     }
 
     @ViewBuilder
@@ -908,6 +917,46 @@ private struct PanelNoteDraftLockObserver: View {
     }
 }
 
+/// The shell's notices, padded above the page's bottom controls. The one
+/// reader of the clearance: a change runs this view, not the shell.
+private struct PanelClearedNotices: View {
+    // Passed through, not observed: the overlay observes what it reads.
+    let store: TaskStore
+    let noteStore: NoteStore
+    let canvasSession: CanvasSession
+    let toasts: PanelToastCenter
+    let page: PanelPage
+    @ObservedObject var clearance: PanelNoticeClearance
+    let horizontalInset: CGFloat
+    let contentBottom: CGFloat
+
+    var body: some View {
+        let bottomPadding = contentBottom + clearance.value
+        #if DEBUG
+        let _ = PanelNoticeClearanceProbe.applications += 1
+        let _ = PanelNoticeClearanceProbe.lastBottomPadding = bottomPadding
+        #endif
+        PanelCurrentNoticeOverlay(
+            store: store, noteStore: noteStore, canvasSession: canvasSession,
+            toasts: toasts, page: page
+        )
+        // The stack's own height, measured before the padding: with nothing
+        // up it is 0 and so is the room the Canvas host is sent, whatever
+        // the clearance, so a page's bottom row growing runs no Canvas host
+        // (PR52 B1). With a notice or toast up the value is the same as
+        // before: the stack plus the padding below it.
+        .background {
+            GeometryReader { proxy in
+                let stack = proxy.size.height
+                Color.clear.preference(key: PanelNoticeHeightPreferenceKey.self,
+                                       value: stack > 0.5 ? stack + bottomPadding : 0)
+            }
+        }
+        .padding(.horizontal, horizontalInset)
+        .padding(.bottom, bottomPadding)
+    }
+}
+
 /// Heavy page error state changes only the notice and its measured clearance.
 private struct PanelCurrentNoticeOverlay: View {
     @ObservedObject var store: TaskStore
@@ -1072,8 +1121,17 @@ enum PanelKeyTreatment {
     }
 }
 
-/// The notices' measured height. The shell writes it and does not observe
-/// it; the Canvas host, its one reader, does.
+/// The clearance the current page's bottom controls ask of the notices.
+/// The shell writes it and does not observe it; the notices, its one
+/// reader, do.
+@MainActor
+final class PanelNoticeClearance: ObservableObject {
+    @Published var value: CGFloat = PanelPageNoticeClearancePreferenceKey.defaultValue
+}
+
+/// The notices' measured height with the padding below them, or 0 when
+/// no notice or toast is up. The shell writes it and does not observe it;
+/// the Canvas host, its one reader, does.
 @MainActor
 final class PanelNoticeHeight: ObservableObject {
     @Published var value: CGFloat = 0
