@@ -139,12 +139,15 @@ final class TasksTabHostTests: XCTestCase {
         tabHosts.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] }
     }
 
-    /// What one action reached: each host's layouts in tab order, and
-    /// hidden tabs' row bodies.
+    /// What one action reached: each host's layouts in tab order, hidden
+    /// tabs' row bodies, the environments the hosts' content took as new,
+    /// and the hosts' updates (both split drawn or hidden).
     private struct HiddenHostReach {
         let label: String
         let layouts: [Int]
         let hiddenLeaves: Int
+        let environments: KeptContentHostCounts.Split
+        let updates: KeptContentHostCounts.Split
     }
 
     /// Row clicks on Now (moving focus and staying) and a resize, with
@@ -168,8 +171,10 @@ final class TasksTabHostTests: XCTestCase {
             TasksCellBodyCounts.leaves = [:]
             try action()
             let reach = HiddenHostReach(label: label, layouts: layoutCounts(tabHosts),
-                                        hiddenLeaves: TasksCellBodyCounts.leaves.filter { $0.key.tab != .now }.values.reduce(0, +))
-            print("HIDDEN_HOST \(label) now=\(reach.layouts[0]) later=\(reach.layouts[1]) done=\(reach.layouts[2]) hidden_leaves=\(reach.hiddenLeaves)")
+                                        hiddenLeaves: TasksCellBodyCounts.leaves.filter { $0.key.tab != .now }.values.reduce(0, +),
+                                        environments: KeptContentHostCounts.environments,
+                                        updates: KeptContentHostCounts.updates)
+            print("HIDDEN_HOST \(label) now=\(reach.layouts[0]) later=\(reach.layouts[1]) done=\(reach.layouts[2]) hidden_leaves=\(reach.hiddenLeaves) env_drawn=\(reach.environments.on) env_hidden=\(reach.environments.off) updates_drawn=\(reach.updates.on) updates_hidden=\(reach.updates.off)")
             return reach
         }
         var reaches: [HiddenHostReach] = []
@@ -181,7 +186,36 @@ final class TasksTabHostTests: XCTestCase {
             })
         }
         reaches.append(measure("resize") { resize(hosted) })
+        // One size write at a time, as a corner drag's frames come.
+        for step in 1...3 {
+            reaches.append(measure("size-write-\(step)") { resize(hosted, steps: 1) })
+        }
         return reaches
+    }
+
+    /// rows-rerun-fable.md, probe 3 (Air preview, unqueried): on every size
+    /// write and every click's action pass the two hidden hosts' content was
+    /// handed a rebuilt environment, the same values with a new identity, so
+    /// every environment reader in a hidden tab re-checked (2 a size write,
+    /// one a hidden host). A hidden host's content is handed back the value
+    /// it had; the shown host's still takes each new one.
+    func testHiddenTabHostsTakeNoNewEnvironmentOnRowClicksAndSizeWrites() throws {
+        let reaches = try reachOfClicksAndAResize()
+        for reach in reaches {
+            XCTAssertEqual(reach.environments.off, 0, "\(reach.label): a hidden host's content took a new environment")
+        }
+        let clicks = reaches.filter { $0.label.hasPrefix("click") }
+        XCTAssertGreaterThan(clicks.map(\.environments.on).reduce(0, +), 0,
+                             "the shown host's content still takes a new environment on clicks (the counter counts)")
+        XCTAssertGreaterThan(clicks.map(\.updates.off).reduce(0, +), 0,
+                             "the hidden hosts were updated on clicks, so their zero means something")
+        // Size writes: this host's size writes replaced no hidden
+        // environment on the trunk either (a3829c89), so this half guards
+        // nothing yet; the preview's 2 a size write is not reproduced here.
+        for write in reaches.filter({ $0.label.hasPrefix("size-write") }) {
+            XCTAssertGreaterThan(write.environments.on, 0, "\(write.label): the shown host's content took no new environment")
+            XCTAssertGreaterThan(write.updates.off, 0, "\(write.label): the hidden hosts were not updated")
+        }
     }
 
     /// Air, PR 41 844907fb (-O, queried): the hidden Later and Done hosts
@@ -198,7 +232,7 @@ final class TasksTabHostTests: XCTestCase {
         }
         let clicks = reaches.filter { $0.label.hasPrefix("click") }.map { $0.layouts[0] }.reduce(0, +)
         XCTAssertGreaterThan(clicks, 0, "the shown host still lays out on row clicks")
-        XCTAssertGreaterThan(reaches.last?.layouts[0] ?? 0, 0, "the shown host still lays out on a resize")
+        XCTAssertGreaterThan(reaches.first { $0.label == "resize" }?.layouts[0] ?? 0, 0, "the shown host still lays out on a resize")
     }
 
     /// Records each host's layouts on a tab switch, plain, after row clicks
