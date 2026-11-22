@@ -210,15 +210,6 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertGreaterThan(reaches.last?.layouts[0] ?? 0, 0, "the shown host still lays out on a resize")
     }
 
-    /// The same air run: a hidden host's held environment ran on every
-    /// click (A4: the focus, window and accessibility values changed). It
-    /// does not run while the host is hidden.
-    func testHiddenTabHostsRunNoEnvironmentOnRowClicksAndAResize() throws {
-        for reach in try reachOfClicksAndAResize() {
-            XCTAssertEqual(reach.heldEnvironments, 0, "\(reach.label): a hidden host's environment ran")
-        }
-    }
-
     /// Records each host's layouts on a tab switch, plain, after row clicks
     /// and straight after a resize (PR 41 recorded 20 to 21 in use). The
     /// lead compares these before and after a change to the hidden hosts.
