@@ -961,3 +961,147 @@ final class TasksBreadthGuardTests: XCTestCase {
         TasksPageModel.checkLiveRowStates()
     }
 }
+
+/// A click, counted (PR 48 round 2): only the cells whose own inputs changed
+/// run their body. STAY: the selection moves from A to B and the keyboard is
+/// on no row (one model update). MOVE: a click on D with the keyboard and the
+/// selection on C, the way `TasksPage.rowClicked` does it: the click's
+/// selection, then the page's focus route as `rowFocusChanged` runs it
+/// (two updates). Each update runs the old and the new row's cells once and
+/// no other cell on any tab; Done, kept built beside Now, runs none. The
+/// class is self-contained so it runs unchanged on the trunk, where each
+/// cell observes the model's every change.
+@MainActor
+final class TasksClickCountTests: XCTestCase {
+    private static let size = CGSize(width: 344, height: 520)
+    private var window: NSWindow?
+
+    override func setUp() async throws {
+        try await super.setUp()
+        TasksCellBodyCounts.reset(); TasksCellBodyCounts.records = true
+    }
+
+    override func tearDown() async throws {
+        window?.orderOut(nil); window = nil
+        TasksCellBodyCounts.records = false; TasksCellBodyCounts.reset()
+        try await super.tearDown()
+    }
+
+    func testAClickRunsOnlyTheCellsWhoseInputsChangedStayAndMove() throws {
+        let store = try makeStore()
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let hosting = page(model, store)
+        go(.done, model, hosting)
+        go(.now, model, hosting)
+        let built = TasksCellBodyCounts.evaluations.keys
+        let builtNow = built.filter { $0.tab == .now }.count, builtDone = built.filter { $0.tab == .done }.count
+        print("CLICK_COUNT built now=\(builtNow) done=\(builtDone)")
+        XCTAssertGreaterThan(builtNow, 5, "too few cells built on Now for the count to mean anything")
+        XCTAssertGreaterThan(builtDone, 0, "Done's cells were never built, so its case is void")
+        let ids = model.rows(for: .now).map(\.id)
+        func row(_ id: UUID) -> TasksRowID { TasksRowID(tab: .now, id: id) }
+        func focus(_ id: UUID) { // TasksPage.rowFocusChanged's two calls, for a click
+            model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: id), keyboardDriving: false)
+            model.cellUpdates.objectWillChange.send()
+        }
+        func turn(_ name: String, _ action: () -> Void) -> (cells: [TasksRowID: Int], rows: [UUID: Int]) {
+            let cells = TasksCellBodyCounts.evaluations, rows = AtticTaskRow.evaluations
+            print("CLICK_COUNT begin \(name)")
+            action()
+            settle(hosting)
+            settle(hosting)
+            print("CLICK_COUNT end \(name)")
+            let ranCells = TasksCellBodyCounts.evaluations.reduce(into: [TasksRowID: Int]()) {
+                let added = $1.value - cells[$1.key, default: 0]
+                if added > 0 { $0[$1.key] = added }
+            }
+            let ranRows = AtticTaskRow.evaluations.reduce(into: [UUID: Int]()) {
+                let added = $1.value - rows[$1.key, default: 0]
+                if added > 0 { $0[$1.key] = added }
+            }
+            print("CLICK_COUNT \(name) cells=\(ranCells.values.reduce(0, +)) cell_rows=\(ranCells.count) "
+                  + "other_cells=\(ranCells.filter { $0.key.tab != .now }.values.reduce(0, +)) "
+                  + "row_bodies=\(ranRows.values.reduce(0, +))")
+            return (ranCells, ranRows)
+        }
+
+        // STAY: A selected, the keyboard on no row; a click on B.
+        let a = ids[1], b = ids[3]
+        model.selectOnly(a)
+        settle(hosting); settle(hosting)
+        XCTAssertNil(model.keyboardFocus)
+        let stay = turn("stay") { model.click(b, modifiers: [], visible: ids) }
+        XCTAssertEqual(model.selection, [b], "stay: the click selected B")
+        XCTAssertEqual(stay.rows[b], 1, "stay: B's row drew the change")
+        XCTAssertEqual(stay.cells, [row(a): 1, row(b): 1], "stay: A's and B's cells once each, no other")
+
+        // MOVE: C selected and holding the keyboard; a click on D.
+        let c = ids[2], d = ids[4]
+        model.selectOnly(c)
+        focus(c)
+        settle(hosting); settle(hosting)
+        XCTAssertEqual(model.keyboardFocus?.id, c)
+        let select = turn("move_select") { model.click(d, modifiers: [], visible: ids) }
+        XCTAssertEqual(model.selection, [d], "move: the click selected D")
+        XCTAssertEqual(select.rows[d], 1, "move: D's row drew the selection")
+        XCTAssertEqual(select.cells, [row(c): 1, row(d): 1], "move, selection: C's and D's cells once each, no other")
+        let keyboard = turn("move_focus") { focus(d) }
+        XCTAssertEqual(model.keyboardFocus?.id, d, "move: the keyboard reached D")
+        XCTAssertEqual(keyboard.cells, [row(c): 1, row(d): 1], "move, focus: C's and D's cells once each, no other")
+    }
+
+    private func go(_ tab: TasksTab, _ model: TasksPageModel, _ hosting: NSView) {
+        model.select(tab: tab)
+        let deadline = Date().addingTimeInterval(3)
+        while model.pagerSwipe.span.pages != tab.rawValue...tab.rawValue, Date() < deadline { settle(hosting) }
+        XCTAssertEqual(model.pagerSwipe.span.pages, tab.rawValue...tab.rawValue, "the span narrowed to \(tab)")
+        settle(hosting)
+        settle(hosting)
+    }
+
+    private func makeStore() throws -> TaskStore {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let context = ModelContext(container)
+        let now = Date()
+        var order: Int64 = 10_000_000
+        for index in 0..<83 {
+            order -= 1_024
+            let item = TaskItem(title: "Open task \(index) with a longer title like the tracker's", status: .todo,
+                                createdAt: now, manualOrder: order)
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            item.tags = ["tag\(index % 7)", "area\(index % 3)"]
+            context.insert(item)
+        }
+        for index in 0..<8 {
+            order -= 1_024
+            let item = TaskItem(title: "Done task \(index)", status: .done, createdAt: now, manualOrder: order)
+            item.completedAt = now.addingTimeInterval(-Double(index) * 60)
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(item)
+        }
+        try context.save()
+        return TaskStore(container: container)
+    }
+
+    private func page(_ model: TasksPageModel, _ store: TaskStore) -> NSView {
+        let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: Self.size),
+                             addBarFocused: .constant(false), pointer: TasksPointer())
+        let hosting = NSHostingView(rootView: page.frame(width: Self.size.width, height: Self.size.height).atticDesign(.default))
+        hosting.frame = CGRect(origin: .zero, size: Self.size)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        self.window = window
+        settle(hosting)
+        settle(hosting)
+        return hosting
+    }
+
+    private func settle(_ hosting: NSView) {
+        let drained = expectation(description: "main queue drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 5)
+        hosting.layoutSubtreeIfNeeded()
+        hosting.window?.displayIfNeeded()
+    }
+}
