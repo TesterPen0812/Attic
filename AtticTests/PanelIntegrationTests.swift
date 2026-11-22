@@ -72,7 +72,7 @@ final class PanelIntegrationTests: XCTestCase {
         var pageVisible = false
         let pager = TasksPagerPages(
             span: model.pagerSwipe.span, model: model, store: panel.store,
-            motion: model.pagerSwipe.motion, count: 3, shown: 0,
+            motion: model.pagerSwipe.motion, count: 3,
             size: CGSize(width: 300, height: 200),
             page: { index, drawn in
                 Text(drawn ? "Drawing" : "Quiet")
@@ -1472,5 +1472,148 @@ final class PanelIntegrationTests: XCTestCase {
             ?? window.firstResponder as? NSView
         XCTAssertFalse(focusTarget?.isHiddenOrHasHiddenAncestor == true,
                        "keyboard focus must leave a hidden native control")
+    }
+}
+
+// MARK: The panel's accessibility hit test over a tab's kept host
+
+extension PanelIntegrationTests {
+    /// The panel's accessibility hit test (`AtticPanelHostingView.accessibilityHitTest`,
+    /// XCUITest's hit point) with Tasks shown, on each surface the scroll-edge
+    /// UI tests cover: the shell's controls answer at their own points although
+    /// the tab's kept host sits after them in the tree (PR 41, ScrollEdge);
+    /// a row answers at its own centre, and a row scrolled under the glass
+    /// answers beside the controls but not under one.
+    @MainActor
+    func testTheShellsControlsAndTheRowsAnswerThePanelsHitTestOverAKeptHost() throws {
+        for (surface, mode) in [(PanelSurfaceStyle.solid, AppearancePreference.light), (.glass, .light), (.glass, .dark)] {
+            try checkTheHitTest(surface: surface, mode: mode)
+        }
+    }
+
+    @MainActor
+    private func checkTheHitTest(surface: PanelSurfaceStyle, mode: AppearancePreference) throws {
+        let name = "\(surface.rawValue) \(mode.rawValue)"
+        let panel = try makePanel()
+        panel.settings.panelSurfaceStyle = surface
+        panel.settings.appearance = mode
+        _ = panel.store.commit((0..<40).map { TaskDraft(title: "Hit row \($0)") })
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        defer { hide(panel) }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let window = panel.controller.panelForTesting
+        let root = try XCTUnwrap(window.contentView)
+        func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
+        let host = try XCTUnwrap(views(root).compactMap { $0 as? AtticPanelHostingView }.first, "the panel's hosting view")
+        func children(_ node: AnyObject) -> [AnyObject] {
+            let raw: [Any]?? = node.accessibilityChildren?()
+            return ((raw ?? nil) ?? []).map { $0 as AnyObject }
+        }
+        func descendants(_ node: AnyObject) -> [AnyObject] { [node] + children(node).flatMap(descendants) }
+        func identifier(_ node: AnyObject) -> String { let id: String?? = node.accessibilityIdentifier?(); return (id ?? nil) ?? "" }
+        func text(_ node: AnyObject) -> String {
+            let label: String?? = node.accessibilityLabel?()
+            let title: String?? = node.accessibilityTitle?()
+            return ((label ?? nil) ?? "") + "|" + ((title ?? nil) ?? "")
+        }
+        func frame(_ node: AnyObject) -> CGRect { let rect: CGRect? = node.accessibilityFrame?(); return rect ?? .zero }
+        func element(_ id: String) -> AnyObject? { descendants(host).first { identifier($0) == id } }
+        func hit(_ point: NSPoint) -> AnyObject? { host.accessibilityHitTest(point) as AnyObject? }
+        /// The hit, or an ancestor of it, is `target`.
+        func lands(_ point: NSPoint, on target: AnyObject) -> Bool {
+            var node = hit(point)
+            for _ in 0..<16 {
+                guard let current = node else { return false }
+                if current === target { return true }
+                let parent: Any?? = current.accessibilityParent?()
+                node = (parent ?? nil) as AnyObject?
+            }
+            return false
+        }
+        /// The row titled `title` itself: its button, labelled "title, state".
+        func rowButton(_ title: String) -> AnyObject? {
+            descendants(host).first { node in
+                let role: NSAccessibility.Role?? = node.accessibilityRole?()
+                let label: String?? = node.accessibilityLabel?()
+                return (role ?? nil) == .button && ((label ?? nil) ?? "").hasPrefix(title + ",")
+            }
+        }
+        /// The hit, or an ancestor of it, is inside a kept host.
+        func insideAKeptHost(_ node: AnyObject?) -> Bool {
+            var node = node
+            for _ in 0..<64 {
+                guard let current = node else { return false }
+                if current is KeptContentHostingView { return true }
+                let parent: Any?? = current.accessibilityParent?()
+                node = (parent ?? nil) as AnyObject?
+            }
+            return false
+        }
+        func centre(_ box: CGRect) -> NSPoint { NSPoint(x: box.midX, y: box.midY) }
+        func describe(_ node: AnyObject?) -> String {
+            guard let node else { return "nil" }
+            let role: NSAccessibility.Role?? = node.accessibilityRole?()
+            return "\(type(of: node))[\((role ?? nil)?.rawValue ?? "-") id=\(identifier(node)) \(text(node).prefix(28))]"
+        }
+        let kept = { views(root).compactMap { $0 as? KeptContentHostingView }.first(where: \.isInteractive) }
+        spin(until: { element("panel-pin-button") != nil && element("tasks-page-now") != nil && kept()?.isAccessible == true }, timeout: 5)
+
+        // The controls, at rest.
+        for id in ["panel-pin-button", "tasks-page-now", "tasks-page-backlog", "tasks-page-done", "tasks-find-button", "tasks-new-task"] {
+            guard let control = element(id) else { XCTFail("\(name): \(id) is shown"); continue }
+            let point = centre(frame(control))
+            print("HBTABLE \(name) \(id) -> \(describe(hit(point)))")
+            XCTAssertTrue(lands(point, on: control), "\(name): \(id) answers at its own centre, not \(describe(hit(point)))")
+        }
+        // A row in the open list, at its own centre.
+        let open = try XCTUnwrap(rowButton("Hit row 3"), "\(name): a row in the list")
+        print("HBTABLE \(name) row-centre -> \(describe(hit(centre(frame(open)))))")
+        XCTAssertTrue(lands(centre(frame(open)), on: open), "\(name): a row answers at its own centre, not \(describe(hit(centre(frame(open)))))")
+
+        // A row scrolled under the glass, beside the controls and under one.
+        let pin = try XCTUnwrap(element("panel-pin-button"))
+        let now = try XCTUnwrap(element("tasks-page-now"))
+        let pinBox = frame(pin), nowBox = frame(now)
+        let scroll = try XCTUnwrap(kept().flatMap { views($0).compactMap { $0 as? NSScrollView }.max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) } },
+                                   "\(name): the list's scroll view")
+        var under: (title: String, box: CGRect)?
+        func rowUnderTheTopRow() -> (title: String, box: CGRect)? {
+            for index in 0..<40 {
+                let title = "Hit row \(index)"
+                if let button = rowButton(title), frame(button).minY < pinBox.minY, frame(button).maxY > pinBox.maxY { return (title, frame(button)) }
+            }
+            return nil
+        }
+        for offset in stride(from: CGFloat(120), through: 600, by: 40) where under == nil {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            spin(until: { rowUnderTheTopRow() != nil }, timeout: 0.5)
+            under = rowUnderTheTopRow()
+        }
+        let row = try XCTUnwrap(under, "\(name): a row scrolled under the top row")
+        let beside = NSPoint(x: (pinBox.maxX + nowBox.minX) / 2, y: pinBox.midY)
+        // Beside the controls the top row's band covers the row, as before
+        // kept hosts: neither a control nor anything of the page answers.
+        let besideHit = hit(beside)
+        print("HBTABLE \(name) row-under-glass-beside(\(row.title)) -> \(describe(besideHit))")
+        let controls = ["panel-pin-button", "tasks-page-now", "tasks-page-backlog", "tasks-page-done", "tasks-find-button", "tasks-new-task"].compactMap(element)
+        XCTAssertFalse(controls.contains { lands(beside, on: $0) }, "\(name): no control answers beside the controls")
+        XCTAssertFalse(insideAKeptHost(besideHit), "\(name): the top row's band, not the page, answers beside the controls, not \(describe(besideHit))")
+        if let button = rowButton(row.title) { XCTAssertFalse(lands(beside, on: button), "\(name): the row under the glass does not answer beside the controls") }
+        let besideRole: NSAccessibility.Role?? = besideHit?.accessibilityRole?()
+        XCTAssertTrue([nil, .unknown].contains(besideRole ?? nil), "\(name): the band beside the controls has no role, not \(describe(besideHit))")
+        print("HBTABLE \(name) row-under-glass-at-pin(\(row.title)) -> \(describe(hit(centre(pinBox))))")
+        XCTAssertTrue(lands(centre(pinBox), on: pin), "\(name): the pin answers over a row under the glass")
+
+        // Find's field, over the scrolled rows.
+        let findButton = try XCTUnwrap(element("tasks-find-button"))
+        XCTAssertTrue(findButton.accessibilityPerformPress?() ?? false, "\(name): Find opens")
+        spin(until: { element("tasks-find") != nil })
+        let find = try XCTUnwrap(element("tasks-find"), "\(name): Find's field")
+        print("HBTABLE \(name) tasks-find -> \(describe(hit(centre(frame(find)))))")
+        XCTAssertTrue(lands(centre(frame(find)), on: find), "\(name): Find's field answers at its own centre, not \(describe(hit(centre(frame(find)))))")
     }
 }
