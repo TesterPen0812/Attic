@@ -80,6 +80,29 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertGreaterThan(KeptContentHostCounts.laidOutInSet, 0, "a root that adds a row is laid out in the pass that sets it")
     }
 
+    /// PR 41 review B1: Done draws its own list (`TasksDonePage`), not the
+    /// row list the other tabs share, so its host is handed no ids. While
+    /// Done is shown, a store change (here a task restored from Done)
+    /// builds no shared row list for it and lays its host out in no set pass.
+    func testAStoreChangeWhileDoneIsShownBuildsNoSharedRowListAndNoSetPassLayout() throws {
+        let hosted = try warmed()
+        defer { hosted.close() }
+        let id = try XCTUnwrap(hosted.store.create(title: "Restored from Done")).id
+        hosted.spin(0.2)
+        hosted.model.setStatus(.done, for: [id])
+        hosted.spin(2.0)
+        hosted.go(to: .done)
+        hosted.spin(0.6)
+        let missesBefore = hosted.model.rowsCacheMissCount[.done, default: 0]
+        KeptContentHostCounts.reset()
+        hosted.model.setStatus(.todo, for: [id])
+        hosted.spin(0.6)
+        XCTAssertGreaterThan(KeptContentHostCounts.roots.on, 0, "the change set the root of the Done host, so the counts mean something")
+        XCTAssertEqual(hosted.model.rowsCacheMissCount[.done, default: 0], missesBefore,
+                       "no shared row list is built for Done, which never draws one")
+        XCTAssertEqual(KeptContentHostCounts.laidOutInSet, 0, "the Done host is left to AppKit's pass")
+    }
+
     /// The guard (§8.1, HB-07): updates on the tab shown set no root in a
     /// hidden host and run no hidden row; a resize step is reported.
     func testHiddenTabsGetNoRootAndRunNoRowOnTheShownTabsUpdates() throws {
