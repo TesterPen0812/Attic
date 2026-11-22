@@ -432,7 +432,8 @@ struct KeptEnvironment: ViewModifier {
     }
 
     /// Set above the host by the panel or the page, and read inside it.
-    @MainActor static let entries: [Entry] = [
+    @MainActor static let entries: [Entry] = {
+        var entries: [Entry] = [
         // SwiftUI's, set by the panel (AtticPanelView: colour scheme, key
         // state) or by an ancestor (enabled, locale, direction, font, focus
         // effect).
@@ -476,7 +477,6 @@ struct KeptEnvironment: ViewModifier {
         entry("atticUnfold", \.atticUnfold),
         entry("atticUnfoldCornerRadius", \.atticUnfoldCornerRadius),
         entry("atticUnfoldTreated", \.atticUnfoldTreated),
-        entry("atticUnfoldDiagnosticsOwner", \.atticUnfoldDiagnosticsOwner),
         // Capture and probes.
         entry("atticCapture", \.atticCapture),
         entry("atticSpecimen", \.atticSpecimen),
@@ -493,7 +493,14 @@ struct KeptEnvironment: ViewModifier {
         entry("panelPageMotion", \.panelPageMotion),
         entry("panelTopRowPage", \.panelTopRowPage),
         entry("panelTopRowState", \.panelTopRowState),
-    ]
+        ]
+        #if DEBUG
+        // The key itself is DEBUG-only (AtticDropdown.swift); a container
+        // literal cannot hold an #if, so it is added here.
+        entries.append(entry("atticUnfoldDiagnosticsOwner", \.atticUnfoldDiagnosticsOwner))
+        #endif
+        return entries
+    }()
 
     func body(content: Content) -> some View {
         let source = source
