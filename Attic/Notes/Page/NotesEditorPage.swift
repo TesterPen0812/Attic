@@ -30,7 +30,10 @@ struct NotesEditorPage: View {
     @ObservedObject var controller: NotesPageController
     @ObservedObject var noteStore: NoteStore
     @ObservedObject var noteDraft: NoteDraftController
-    @ObservedObject var uiState: PanelUIState
+    /// Not observed: the body reads none of its published values (it is
+    /// used inside actions only), and observing it re-ran the hidden page
+    /// on every panel-size write of a resize on another page.
+    let uiState: PanelUIState
     let layout: PanelPageLayout
     private let taskStore: TaskStore?
 

@@ -93,11 +93,18 @@ struct CalendarPageHost: View {
     #endif
     let store: TaskStore
     @ObservedObject var state: CalendarPageState
-    @ObservedObject var uiState: PanelUIState
+    /// Not observed: the body follows only whether the panel is on screen
+    /// (`panelOnScreen`, from the hide and reveal counts). `resumeDefaults`
+    /// is a constant and `isFloating` is not published (it matters only
+    /// when the page's model is first made); the rest is read in actions.
+    let uiState: PanelUIState
     let layout: PanelPageLayout
     /// The footer's "+": the add-a-task flow, for that day.
     let onNewTask: (DueDay) -> Void
     var taskNotes: TaskNoteEntryServices?
+    /// `uiState.isPanelOnScreen` as of its last hide or reveal; nil until
+    /// the first one (then the value is read as it is).
+    @State private var panelOnScreen: Bool?
 
     var body: some View {
         #if DEBUG
@@ -106,7 +113,15 @@ struct CalendarPageHost: View {
         CalendarPage(model: state.model(store: store, resumeDefaults: uiState.resumeDefaults,
                                         owner: uiState.isFloating ? .floating : .docked),
                      layout: layout, taskActions: taskActions, onNewTask: onNewTask,
-                     panelIsVisible: uiState.isPanelOnScreen)
+                     panelIsVisible: panelOnScreen ?? uiState.isPanelOnScreen)
+            // A publisher sends before its property changes: each count
+            // is taken from the value sent, the other from the state.
+            .onReceive(uiState.$revealCount.dropFirst()) { [uiState] reveals in
+                panelOnScreen = reveals > uiState.hideCount
+            }
+            .onReceive(uiState.$hideCount.dropFirst()) { [uiState] hides in
+                panelOnScreen = uiState.revealCount > hides
+            }
     }
 
     private var taskActions: CalendarTaskRowActions {
