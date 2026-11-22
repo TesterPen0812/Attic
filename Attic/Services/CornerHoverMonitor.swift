@@ -405,7 +405,7 @@ final class CornerHoverMonitor {
             dismissMode: settings.panelDismissMode
         )
         let hasRevealDeadline = stateMachine.nextRevealDeadline(revealDelay: settings.revealDelay) != nil
-        #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+        #if (ATTIC_FIRST_TOUCH_LOG || ATTIC_MEASURE) && ATTIC_LOCAL_ONLY && arch(arm64)
         if !hadRevealDeadline, hasRevealDeadline {
             IdleLatencyTrace.cornerHotspotEntered(revealDelay: settings.revealDelay)
         }
@@ -568,7 +568,7 @@ final class CornerHoverMonitor {
         // Before the cadence guard and the coalescing: an exit delivered
         // inside one coalescing interval still counts as leaving.
         restingHotspot.pointerObserved(at: location)
-        #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+        #if (ATTIC_FIRST_TOUCH_LOG || ATTIC_MEASURE) && ATTIC_LOCAL_ONLY && arch(arm64)
         let callbackNS = DispatchTime.now().uptimeNanoseconds
         #endif
         let decision = samplingState.update(
@@ -582,7 +582,7 @@ final class CornerHoverMonitor {
         let activityAtEntry = responsivenessActivity != nil
         applySamplingCadence(decision.cadence)
         if cadenceChanged, decision.cadence == .responsive, !stateMachine.isVisible {
-            #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+            #if (ATTIC_FIRST_TOUCH_LOG || ATTIC_MEASURE) && ATTIC_LOCAL_ONLY && arch(arm64)
             IdleLatencyTrace.begin("corner_approach", original: eventTimestamp,
                                    context: panelController.idleLatencyContext(activity: activityAtEntry),
                                    receivedNS: callbackNS)

@@ -284,7 +284,11 @@ app.build_configurations.each do |config|
   settings['ATTIC_DISPLAY_NAME'] = 'Attic'
   settings['GENERATE_INFOPLIST_FILE'] = 'NO'
   settings['INFOPLIST_FILE'] = 'Attic/Info.plist'
-  settings['CODE_SIGN_ENTITLEMENTS'] = 'Attic/AtticNotesLocal.entitlements'
+  # An app-only override point, like the identity above: a global
+  # CODE_SIGN_ENTITLEMENTS override would also sign the embedded agent
+  # helper (which has none) with the app's sandbox entitlements.
+  settings['ATTIC_MACOS_ENTITLEMENTS'] = 'Attic/AtticNotesLocal.entitlements'
+  settings['CODE_SIGN_ENTITLEMENTS'] = '$(ATTIC_MACOS_ENTITLEMENTS)'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['ENABLE_APP_SANDBOX'] = 'YES'

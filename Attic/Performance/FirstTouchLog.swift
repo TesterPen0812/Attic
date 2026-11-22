@@ -3,14 +3,14 @@ import Foundation
 /// The diagnostic is intentionally a preview-only compile-time feature. The
 /// official release has no writer, filesystem access or event collection.
 enum FirstTouchLogAvailability {
-    #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+    #if (ATTIC_FIRST_TOUCH_LOG || ATTIC_MEASURE) && ATTIC_LOCAL_ONLY && arch(arm64)
     static let enabled = true
     #else
     static let enabled = false
     #endif
 }
 
-#if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+#if (ATTIC_FIRST_TOUCH_LOG || ATTIC_MEASURE) && ATTIC_LOCAL_ONLY && arch(arm64)
 /// A fixed schema: only clocks, preselected stage names and system counters.
 /// Records are encoded and written off main, after the input has been returned.
 struct FirstTouchLogRecord: Codable, Sendable {
@@ -118,8 +118,13 @@ final class FirstTouchRollingFile {
     }
 }
 
+#if ATTIC_FIRST_TOUCH_LOG
+// The Mach reader is C (IdleLatencyMach.c) and compiles only with the Local
+// preprocessor flags; an ATTIC_MEASURE build writes the marks without
+// memory records.
 @_silgen_name("AtticFirstTouchReadMemory")
 private func atticFirstTouchReadMemory(_ output: UnsafeMutablePointer<UInt64>)
+#endif
 
 /// Only enqueue is called by input handlers. Encoding, Mach task_info and all
 /// disk IO occur on this utility queue. No background timer is installed.
@@ -143,6 +148,7 @@ final class FirstTouchLogWriter: @unchecked Sendable {
                 file = FirstTouchRollingFile(url: support.appendingPathComponent("Attic/Diagnostics/first-touch.jsonl"))
             }
             write(record)
+            #if ATTIC_FIRST_TOUCH_LOG
             // Attribute page-ins/faults to the approach, the render preflight
             // and the eventual reveal or click (not just input -> frame).
             let samplesStage = record.event == "stage" && [
@@ -162,6 +168,7 @@ final class FirstTouchLogWriter: @unchecked Sendable {
                 sample.sampledAfterMS = Double(sampled >= record.atNS ? sampled - record.atNS : 0) / 1_000_000
                 write(sample)
             }
+            #endif
         }
     }
 

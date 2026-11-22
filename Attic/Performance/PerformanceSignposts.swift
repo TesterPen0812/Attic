@@ -320,7 +320,7 @@ enum IdleLatencyTrace {
         let activity: Bool
     }
 
-    #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+    #if (ATTIC_FIRST_TOUCH_LOG || ATTIC_MEASURE) && ATTIC_LOCAL_ONLY && arch(arm64)
     private static var serial = 0
     private static var current: (id: Int, begunNS: UInt64, kind: String, downOriginNS: UInt64)?
     /// Island hover precedes a mouse-down trace, so give it its own memory
@@ -653,7 +653,7 @@ enum IdleLatencyTrace {
     #endif
 }
 
-#if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+#if (ATTIC_FIRST_TOUCH_LOG || ATTIC_MEASURE) && ATTIC_LOCAL_ONLY && arch(arm64)
 /// Installs a display link for only the next opportunity after a touch.
 @MainActor
 private final class IdleLatencyFirstFrameWatch: NSObject {

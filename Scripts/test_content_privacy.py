@@ -26,7 +26,10 @@ class ContentPrivacyTests(unittest.TestCase):
                 with path.open('rb') as stream:
                     self.assertIs(plistlib.load(stream).get('com.apple.security.print'), True)
         generator = (ROOT / 'Scripts/generate_project.rb').read_text()
-        self.assertIn("settings['CODE_SIGN_ENTITLEMENTS'] = 'Attic/AtticNotesLocal.entitlements'", generator)
+        # The app signs through its own override point; the unit-test host's
+        # line must not stand in for it.
+        self.assertIn("settings['ATTIC_MACOS_ENTITLEMENTS'] = 'Attic/AtticNotesLocal.entitlements'", generator)
+        self.assertIn("settings['CODE_SIGN_ENTITLEMENTS'] = '$(ATTIC_MACOS_ENTITLEMENTS)'", generator)
 
 
 if __name__ == '__main__':

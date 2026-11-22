@@ -1,22 +1,24 @@
 import AppKit
 import QuartzCore
 
-#if DEBUG
-/// Preview builds only (round 11): with `ATTIC_FRAME_MONITOR=1` a display
+#if DEBUG || ATTIC_MEASURE
+/// Preview and measure builds only (round 11): with `ATTIC_FRAME_MONITOR=1` a display
 /// link on the main screen logs every frame the main thread saw to
 /// standard output (`ATTIC_FRAME <uptime> <gap ms>`), so an on-screen run
 /// driven by synthetic input can be judged frame by frame, before and
 /// after a change, without Instruments' hitch template. A frame whose gap
 /// is more than one refresh is a frame the main thread missed. Nothing
-/// runs without the variable.
+/// runs without the variable, which is read only in `startIfRequested`.
 @MainActor
 final class AtticFrameMonitor: NSObject {
     private static var shared: AtticFrameMonitor?
     private var link: CADisplayLink?
     private var last: CFTimeInterval?
 
-    static func startIfRequested() {
-        guard ProcessInfo.processInfo.environment["ATTIC_FRAME_MONITOR"] == "1", shared == nil,
+    static var isRunning: Bool { shared != nil }
+
+    static func startIfRequested(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        guard environment["ATTIC_FRAME_MONITOR"] == "1", shared == nil,
               let screen = NSScreen.main else { return }
         setvbuf(stdout, nil, _IOLBF, 0)
         let monitor = AtticFrameMonitor()

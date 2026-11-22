@@ -83,6 +83,44 @@ final class CalendarPageState: ObservableObject {
     }
 }
 
+/// The Calendar page as the shell hands it over: references and values
+/// only, no closure, so the shell's re-runs (each size write of a resize
+/// on another page) compare it equal and skip it while it is hidden. It
+/// makes the page's closures itself: the route host's page, the footer's
+/// "+" and the task-note services (moved from `AtticPanelView`).
+struct CalendarPageSlot: View {
+    let store: TaskStore
+    let noteStore: NoteStore
+    let noteDraft: NoteDraftController
+    let uiState: PanelUIState
+    let calendarPageState: CalendarPageState
+    let tasksPageState: TasksPageState
+    let composerState: PanelComposerState
+    let toasts: PanelToastCenter
+    let layout: PanelPageLayout
+    /// Notes has restored its session (a task's page opens only after).
+    let isReady: Bool
+
+    var body: some View {
+        // A task's page opens over the Calendar, which stays built
+        // (covered) so Back returns to it as it was.
+        TaskNoteRouteHost(page: .calendar, noteStore: noteStore, taskStore: store, noteDraft: noteDraft,
+                          uiState: uiState, layout: layout, isReady: isReady) { _ in
+            CalendarPageHost(store: store, state: calendarPageState, uiState: uiState, layout: layout,
+                             onNewTask: { [composerState] day in Self.startNewTask(day, composerState: composerState) },
+                             taskNotes: AtticPanelView.calendarTaskNoteEntryServices(
+                                 uiState: uiState, calendarPageState: calendarPageState,
+                                 tasksPageState: tasksPageState, store: store, toasts: toasts, noteDraft: noteDraft))
+        }
+    }
+
+    /// The Calendar's "+": the card, on that day, through the shell's one
+    /// card (as `AtticPanelView.composerRoute` opens it for every page).
+    static func startNewTask(_ day: DueDay, composerState: PanelComposerState) {
+        composerState.model?.open(on: .calendar(selected: day))
+    }
+}
+
 /// The Calendar page in the shell. Its task rows act as the Tasks page's
 /// do: the circle completes (or reopens) through the same command. Open
 /// Page in the row menu or ⌘Return opens over Calendar until Back.
