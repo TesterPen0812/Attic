@@ -133,10 +133,10 @@ final class TasksFindCloseRedrawUITests: XCTestCase {
         waitFor(tab("now").isSelected, "the panel opens on Now")
         panel = findPanel()
         for page in ["backlog", "done", "now", "backlog"] {
-            activate(); tab(page).click()
+            activate(); tab(page).clickInsideOwnWindow(of: app)
             waitFor(tab(page).isSelected, "\(page) reads as selected")
         }
-        activate(); tab("now").click()
+        activate(); tab("now").clickInsideOwnWindow(of: app)
         waitFor(tab("now").isSelected, "Now reads as selected")
         activate()
         // Before Find, the Now list as drawn: every one of the seed's twelve text bands.

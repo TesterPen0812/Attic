@@ -123,25 +123,25 @@ final class TasksTagClearRedrawUITests: XCTestCase {
         waitFor(tab("now").isSelected, "the panel opens on Now")
         panel = findPanel()
         for page in ["backlog", "done", "now", "backlog"] {
-            activate(); tab(page).click()
+            activate(); tab(page).clickInsideOwnWindow(of: app)
             waitFor(tab(page).isSelected, "\(page) reads as selected")
         }
-        activate(); tab("now").click()
+        activate(); tab("now").clickInsideOwnWindow(of: app)
         waitFor(tab("now").isSelected, "Now reads as selected")
         activate()
         waitFor(shot("before-poll", keep: false).count == 12, "the Now list is drawn before the filter")
         let before = shot("before")
         for round in 1...3 {
-            activate(); bar("key").click()
+            activate(); bar("key").clickInsideOwnWindow(of: app)
             waitFor(bar("launch").exists && bar("launch").isHittable, "round \(round): the tag bar shows #launch")
-            activate(); bar("launch").click()
-            activate(); bar("key").click()
+            activate(); bar("launch").clickInsideOwnWindow(of: app)
+            activate(); bar("key").clickInsideOwnWindow(of: app)
             waitFor(bar("clear").exists && bar("clear").isHittable, "round \(round): the collapsed bar shows ✕ for #launch")
             usleep(1_000_000) // Settle: the filtered list is read a second after the bar closes.
             let filtered = shot("filtered\(round)")
             print("TAGCLEARREDRAW filtered \(round): \(filtered.count)/\(before.count) bands shown under #launch (\(text(filtered)))")
             activate(); let clearAt = Date()
-            bar("clear").click()
+            bar("clear").clickInsideOwnWindow(of: app)
             let clickReturned = Date()
             var line: [String] = []
             // The ✕ click returns about 2 s after it is asked for and lands
