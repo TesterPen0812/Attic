@@ -7,7 +7,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKTREE_TOKEN="$(printf '%s' "$ROOT_DIR" | /usr/bin/shasum -a 256 | /usr/bin/cut -c1-12)"
 PROCESS_NAME="AtticLocal${WORKTREE_TOKEN}"
 DERIVED_DATA="$ROOT_DIR/.build/LocalPreview"
-APP_BINARY="$DERIVED_DATA/Build/Products/Local/$PROCESS_NAME.app/Contents/MacOS/$PROCESS_NAME"
 MODE=run
 case "${1:-run}" in
   run|debug|--debug|logs|--logs|telemetry|--telemetry|verify|--verify)
@@ -16,6 +15,13 @@ case "${1:-run}" in
     if (( $# > 0 )); then shift; fi
     ;;
 esac
+# --release-like (passed through to the launcher) builds Release.
+CONFIGURATION=Local
+for argument in "$@"; do
+  if [[ "$argument" == --release-like ]]; then CONFIGURATION=Release; fi
+done
+APP_PRODUCT="$DERIVED_DATA/Build/Products/$CONFIGURATION/$PROCESS_NAME.app"
+APP_BINARY="$APP_PRODUCT/Contents/MacOS/$PROCESS_NAME"
 
 PREVIEW_ARGS=(
   --display-name "Attic Local ${WORKTREE_TOKEN}"
@@ -39,7 +45,7 @@ case "$MODE" in
     exec /usr/bin/log stream --info --style compact --predicate "process == \"$PROCESS_NAME\""
     ;;
   verify)
-    /usr/bin/codesign --verify --deep --strict "$DERIVED_DATA/Build/Products/Local/$PROCESS_NAME.app"
+    /usr/bin/codesign --verify --deep --strict "$APP_PRODUCT"
     PREVIEW_PID="$(<"$DERIVED_DATA/PreviewState/process.pid")"
     [[ "$(/bin/ps -p "$PREVIEW_PID" -o command=)" == "$APP_BINARY"* ]]
     ;;
