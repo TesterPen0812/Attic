@@ -75,6 +75,9 @@ final class HiddenPagesCountersTests: XCTestCase {
         let seed: Seed
         let tally: Tally
         let calendarState: CalendarPageState
+        /// The scroll views Notes' library holds (the card's end keeper's),
+        /// taken before any other page was built.
+        let notesScrolls: Set<ObjectIdentifier>
         /// The Calendar page's model (the panel built it behind Tasks).
         @MainActor var calendarModel: CalendarPageModel {
             calendarState.model(store: tasks, resumeDefaults: state.resumeDefaults, owner: .docked)
@@ -95,8 +98,12 @@ final class HiddenPagesCountersTests: XCTestCase {
                                           "store.$cloudSyncStatus", "store.$attachmentsByNoteID",
                                           "store.$attachmentFailures", "store.$attachmentRetryVersions"]
 
+    /// The shell's body runs (`PanelInvalidationProbe.shell`), counted while a rig is up.
+    private static var shellRuns = 0
+
     /// Column order of every printed line.
     private static let columns = [
+        "shell", "panelLayouts", "keptLayouts", "route.tasks", "route.notes", "route.calendar",
         "NotesPageHost", "NotesEditorPage", "NotesLibraryView",
         "CalendarPageHost", "CalendarPage", "CalendarDayView", "dayTimeline",
         "DrawPageHost", "CanvasPageHost", "PanelCanvasNoticeAwareHost",
@@ -244,6 +251,11 @@ final class HiddenPagesCountersTests: XCTestCase {
         pump(content, panel, seconds: 1.0)
         XCTAssertTrue(draft.pages.showLibrary(), "harness: Notes goes to its library")
         pump(content, panel, seconds: 0.5)
+        let notesScrolls = Set(Self.roomScrolls(in: content).map(ObjectIdentifier.init))
+        XCTAssertFalse(notesScrolls.isEmpty, "harness: Notes' library holds a scroll view")
+        let previousShellProbe = PanelInvalidationProbe.shell
+        PanelInvalidationProbe.shell = { Self.shellRuns += 1 }
+        defer { PanelInvalidationProbe.shell = previousShellProbe }
         state.selectSection(.tasks)
         for built in [PanelPage.calendar, .notes, .canvas] { state.prepareBuiltPage(built) }
         pump(content, panel, seconds: 2.0)
@@ -288,7 +300,7 @@ final class HiddenPagesCountersTests: XCTestCase {
         try body(Rig(container: container, tasks: tasks, notes: notes, library: library, draft: draft,
                      state: state, composerState: composerState, content: content, panel: panel, page: page,
                      composer: composer, notesLibrary: notesLibrary, libraryBox: libraryBox, seed: seed, tally: tally,
-                     calendarState: calendarState))
+                     calendarState: calendarState, notesScrolls: notesScrolls))
         XCTAssertTrue(libraryBox.model === notesLibrary,
                       "harness: the Notes page kept the library model the counts subscribed to")
     }
@@ -296,7 +308,14 @@ final class HiddenPagesCountersTests: XCTestCase {
     // MARK: - Snapshots
 
     private static func views() -> [String: Int] {
+        let kept = KeptContentHostCounts.layouts
         var v: [String: Int] = [
+            "shell": shellRuns,
+            "panelLayouts": AtticPanelHostingView.layoutPasses,
+            "keptLayouts": kept.on + kept.off,
+            "route.tasks": TaskNoteRouteHostCounts.bodyEvaluations[.tasks, default: 0],
+            "route.notes": TaskNoteRouteHostCounts.bodyEvaluations[.notes, default: 0],
+            "route.calendar": TaskNoteRouteHostCounts.bodyEvaluations[.calendar, default: 0],
             "NotesPageHost": NotesPageHost.bodyEvaluations,
             "NotesEditorPage": NotesEditorPage.bodyEvaluations,
             "NotesLibraryView": NotesLibraryView.bodyEvaluations,
@@ -649,6 +668,157 @@ final class HiddenPagesCountersTests: XCTestCase {
                 XCTAssertGreaterThan(counts["room.$height", default: 0], 0,
                                      "harness: C4 \(name): the card's room changed in the measured interval")
                 assertRoomChangeReachesNoHiddenPage(counts, "C4 \(name)", libraryList: name == "plus")
+            }
+        }
+    }
+
+    // MARK: - C5: the panel's size during a live resize
+
+    /// The counted views of each page that is not shown while Tasks is.
+    /// The shell holds four pages (`PanelPage.allCases`); Settings is a
+    /// window of its own, not a page.
+    private static let hiddenPageViews: [PanelPage: [String]] = [
+        .notes: ["NotesPageHost", "route.notes", "NotesEditorPage", "NotesLibraryView"],
+        .calendar: ["route.calendar", "CalendarPageHost", "CalendarPage", "CalendarDayView", "dayTimeline"],
+        .canvas: ["PanelCanvasNoticeAwareHost", "CanvasPageHost", "DrawPageHost"],
+    ]
+    private static let dragSteps = 6
+
+    /// One step of a drag on the panel's edge, in `AtticPanelController`'s
+    /// order: AppKit sets the window's frame, then `windowDidResize` writes
+    /// the visible size.
+    private func resize(_ rig: Rig, to size: CGSize) {
+        rig.panel.setContentSize(size)
+        rig.state.updatePanelSize(size)
+    }
+
+    private func dragSize(_ start: CGSize, step: Int) -> CGSize {
+        CGSize(width: start.width + CGFloat(step * 8), height: start.height + CGFloat(step * 4))
+    }
+
+    /// `AtticPanelController.endLiveResize`: the final size, then the lock's release.
+    private func release(_ rig: Rig) {
+        rig.state.updatePanelSize(rig.panel.contentRect(forFrameRect: rig.panel.frame).size)
+        rig.state.setInteractionLock(.windowResize, isActive: false)
+    }
+
+    /// The trace (22 Nov, PR 41's build): on each size write of a drag on
+    /// Tasks, the hidden Notes page re-ran its editor, library list and
+    /// route host. With Tasks shown, a size write under the live-resize
+    /// lock runs no body of any page that is not shown. The lock's start
+    /// and its release are recorded only: at release the hidden pages take
+    /// the new size, so they run then.
+    func testC5APanelSizeWriteDuringALiveResizeRunsNoHiddenPage() throws {
+        try withRig { rig in
+            let hidden = PanelPage.allCases.filter { $0 != .tasks }
+            for page in hidden {
+                XCTAssertFalse(Self.hiddenPageViews[page, default: []].isEmpty, "harness: \(page) has counted views")
+            }
+            let start = rig.state.panelSize
+            measure(rig, "C5 lock-on") { rig.state.setInteractionLock(.windowResize, isActive: true) }
+            var drag: [String: Int] = [:]
+            for step in 1...Self.dragSteps {
+                let counts = measure(rig, "C5 write step=\(step)") { resize(rig, to: dragSize(start, step: step)) }
+                drag.merge(counts) { $0 + $1 }
+            }
+            measure(rig, "C5 release") { release(rig) }
+            print("HIDDEN_COUNTS C5 drag-total " + Self.line(drag))
+            XCTAssertEqual(rig.state.panelSize, dragSize(start, step: Self.dragSteps), "harness: the drag reached its size")
+            XCTAssertGreaterThan(drag["shell", default: 0], 0, "harness: the size writes reached the shell")
+            for page in hidden {
+                for view in Self.hiddenPageViews[page, default: []] {
+                    XCTAssertEqual(drag[view, default: 0], 0,
+                                   "C5 \(page): \(view) ran on the \(Self.dragSteps) size writes of a live resize on Tasks")
+                }
+            }
+        }
+    }
+
+    /// The page-wide native views of a page, found again on each read:
+    /// Notes' library scroll view, Calendar's (the other end keepers) and
+    /// the Draw board.
+    private func nativeViews(of page: PanelPage, _ rig: Rig) -> [ObjectIdentifier: NSView] {
+        var found: [ObjectIdentifier: NSView] = [:]
+        switch page {
+        case .notes, .calendar:
+            for scroll in Self.roomScrolls(in: rig.content)
+            where rig.notesScrolls.contains(ObjectIdentifier(scroll)) == (page == .notes) {
+                found[ObjectIdentifier(scroll)] = scroll
+            }
+        case .canvas:
+            func walk(_ view: NSView) {
+                if view is DrawBoardView { found[ObjectIdentifier(view)] = view }
+                view.subviews.forEach(walk)
+            }
+            walk(rig.content)
+        case .tasks:
+            break
+        }
+        return found
+    }
+
+    private func widths(of page: PanelPage, _ rig: Rig) -> [ObjectIdentifier: CGFloat] {
+        nativeViews(of: page, rig).mapValues(\.bounds.width)
+    }
+
+    /// Condition (a) of the brief: a page hidden through a whole drag on
+    /// Tasks is right in its first frame after a switch to it. Read in the
+    /// first layout pass with it shown (once per run-loop turn, with a
+    /// deadline): each of its native views already has the width it keeps
+    /// once the switch has settled, and the drag changed that width.
+    func testC5BAPageHiddenThroughAResizeIsRightInItsFirstFrame() throws {
+        for page in [PanelPage.notes, .calendar, .canvas] {
+            try withRig { rig in
+                let before = widths(of: page, rig)
+                XCTAssertFalse(before.isEmpty, "harness: \(page) has a page-wide native view")
+                let start = rig.state.panelSize
+                // A frame for the lock and for each step, as the drag draws.
+                func frame() { rig.content.layoutSubtreeIfNeeded(); rig.panel.displayIfNeeded() }
+                rig.state.setInteractionLock(.windowResize, isActive: true)
+                frame()
+                for step in 1...Self.dragSteps { resize(rig, to: dragSize(start, step: step)); frame() }
+                release(rig)
+                waitForTestOperation("the release's pass") {
+                    rig.content.layoutSubtreeIfNeeded()
+                    rig.panel.displayIfNeeded()
+                    return rig.state.retainedPageSizeDuringLiveResize == nil
+                }
+                let shellBefore = Self.shellRuns
+                rig.state.switchPage(to: page.section, motion: .instant)
+                var first: [ObjectIdentifier: CGFloat]?
+                waitForTestOperation("the first frame with \(page) shown") {
+                    rig.content.layoutSubtreeIfNeeded()
+                    rig.panel.displayIfNeeded()
+                    guard Self.shellRuns > shellBefore else { return false }
+                    first = widths(of: page, rig)
+                    return true
+                }
+                XCTAssertEqual(rig.state.selectedSection, page.section, "harness: \(page) is shown")
+                pump(rig.content, rig.panel)
+                let settled = widths(of: page, rig)
+                XCTAssertEqual(Set(settled.keys), Set(before.keys), "harness: \(page) kept its native views")
+                for (id, width) in settled {
+                    XCTAssertNotEqual(width, before[id] ?? width, "harness: the drag changed \(page)'s width")
+                    XCTAssertEqual(first?[id] ?? -1, width, accuracy: 0.5,
+                                   "C5 \(page): its first frame after the switch is not at its settled width")
+                }
+                print("HIDDEN_FIRST page=\(page) before=\(before.values.sorted()) first=\((first ?? [:]).values.sorted()) "
+                      + "settled=\(settled.values.sorted())")
+            }
+        }
+    }
+
+    /// Condition (b) of the brief: a page switch is no slower by count.
+    /// Recorded only (base against fix): the panel's and the kept hosts'
+    /// layout passes and the counted bodies per switch.
+    func testC5CPageSwitchCountsAreRecorded() throws {
+        try withRig { rig in
+            for page in [PanelPage.notes, .tasks, .calendar, .tasks, .canvas, .tasks] {
+                let counts = measure(rig, "C5 switch to=\(page)") {
+                    rig.state.switchPage(to: page.section, motion: .instant)
+                }
+                XCTAssertEqual(rig.state.selectedSection, page.section, "harness: the switch to \(page) happened")
+                XCTAssertGreaterThan(counts["panelLayouts", default: 0], 0, "harness: the panel layout counter is live")
             }
         }
     }

@@ -2020,6 +2020,10 @@ final class AtticPanelContentContainer: NSView {
 }
 
 final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
+    #if DEBUG
+    /// Test seam (HiddenPagesCountersTests): the panel root's layout passes.
+    static var layoutPasses = 0
+    #endif
     private struct ResizeSession {
         let edges: PanelResizeEdges
         let initialFrame: CGRect
@@ -2125,6 +2129,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     /// made and dismantled here): overlay hierarchy changes from it wait
     /// for the next turn (`AtticOverlayHierarchy`, P1-01 hypothesis).
     override func layout() {
+        #if DEBUG
+        Self.layoutPasses += 1
+        #endif
         IdleLatencyTrace.span("panel_host_layout") {
             AtticOverlayHierarchy.layoutPass { super.layout() }
         }
