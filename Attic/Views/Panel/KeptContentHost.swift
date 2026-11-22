@@ -403,6 +403,9 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     func updateNSView(_ container: KeptContentContainer, context: Context) {
         guard let host = container.host else { return }
         let coordinator = context.coordinator
+        #if DEBUG
+        KeptContentHostCounts.update(drawn: drawn)
+        #endif
         // Drawn first, so a host that held its layouts while hidden is
         // marked for the pass that takes this root.
         host.isDrawn = drawn
@@ -555,7 +558,7 @@ struct KeptEnvironment: ViewModifier {
         let hold = hold
         let holding = holding
         let palette = source.atticPanelThemePalette
-        return content
+        return Self.counted(content, holding: holding)
             .transformEnvironment(\.self) { values in
                 if let hold {
                     if holding, let held = hold.held {
@@ -574,6 +577,20 @@ struct KeptEnvironment: ViewModifier {
             .foregroundStyle(palette.primaryForegroundColor, palette.secondaryForegroundColor)
     }
 }
+
+#if DEBUG
+extension KeptEnvironment {
+    /// Counts each environment the content is handed that SwiftUI takes as
+    /// new (`KeptContentHostCounts.environments`).
+    fileprivate static func counted(_ content: Content, holding: Bool) -> some View {
+        content.transformEnvironment(\.self) { _ in KeptContentHostCounts.environment(drawn: !holding) }
+    }
+}
+#else
+extension KeptEnvironment {
+    fileprivate static func counted(_ content: Content, holding: Bool) -> Content { content }
+}
+#endif
 
 /// The environment a kept host derives itself, as last drawn (or as first
 /// seen, for a host that has never been drawn).
@@ -613,6 +630,11 @@ enum KeptContentHostCounts {
     /// Root sets that laid the host out in their own pass.
     static var laidOutInSet = 0
     static var roots = Split()
+    /// `updateNSView` calls, by drawn or not.
+    static var updates = Split()
+    /// Environments handed to the content that SwiftUI took as new, by the
+    /// root's drawn or not (`KeptEnvironment.counted`).
+    static var environments = Split()
     static var accessibilityChildrenCalls = Split()
     static var accessibilityHits = Split()
     /// Layouts by host (a host's own count, whatever its state).
@@ -623,6 +645,8 @@ enum KeptContentHostCounts {
         layouts = Split()
         laidOutInSet = 0
         roots = Split()
+        updates = Split()
+        environments = Split()
         accessibilityChildrenCalls = Split()
         accessibilityHits = Split()
     }
@@ -632,6 +656,8 @@ enum KeptContentHostCounts {
         layoutsByHost[ObjectIdentifier(host), default: 0] += 1
     }
     fileprivate static func root(drawn: Bool) { count(&roots, drawn) }
+    fileprivate static func update(drawn: Bool) { count(&updates, drawn) }
+    fileprivate static func environment(drawn: Bool) { count(&environments, drawn) }
     fileprivate static func accessibilityChildren(interactive: Bool) { count(&accessibilityChildrenCalls, interactive) }
     fileprivate static func accessibilityHit(interactive: Bool) { count(&accessibilityHits, interactive) }
 

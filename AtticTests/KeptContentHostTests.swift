@@ -467,6 +467,138 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertEqual(seen.design, AtticDesignContext(mode: .dark), "and the current design")
     }
 
+    /// The return from hidden with the hidden value handed back
+    /// (rows-rerun-fable.md, "Code shape of the lever"): hidden, the content
+    /// keeps the values it was hidden with, whatever changes above it and
+    /// however many passes run; the update that draws it brings the current
+    /// theme, palette, font and row hover gate before its first frame; and
+    /// hidden a second time, it keeps that return's values, never the first
+    /// hiding's. What the host derives itself (here the contrast of a high
+    /// contrast window appearance) is checked only where the window gives it
+    /// to a view outside the host.
+    func testAHostHiddenTwiceKeepsEachHidingsValuesAndShowsTheCurrentOnesOnEachReturn() {
+        struct Read: Equatable {
+            var scheme: ColorScheme?, palette: AtticPanelThemePalette?, font: Font?, gate: ObjectIdentifier?
+        }
+        final class Seen {
+            var read = Read(), rootPass = 0
+            var contrast: ColorSchemeContrast?, outsideContrast: ColorSchemeContrast?
+        }
+        final class Outer: ObservableObject {
+            @Published var drawn = true
+            @Published var dark = false
+            @Published var pass = 0
+        }
+        struct Probe: View {
+            let seen: Seen
+            @Environment(\.colorScheme) private var scheme
+            @Environment(\.atticPanelThemePalette) private var palette
+            @Environment(\.font) private var font
+            @Environment(\.atticRowHoverGate) private var gate
+            @Environment(\.colorSchemeContrast) private var contrast
+            var body: some View {
+                let _ = {
+                    seen.read = Read(scheme: scheme, palette: palette, font: font, gate: gate.map { ObjectIdentifier($0) })
+                    seen.contrast = contrast
+                }()
+                Color.clear
+            }
+        }
+        struct OutsideProbe: View {
+            let seen: Seen
+            @Environment(\.colorSchemeContrast) private var contrast
+            var body: some View {
+                let _ = { seen.outsideContrast = contrast }()
+                Color.clear
+            }
+        }
+        let gates = (light: AtticRowHoverGate(), dark: AtticRowHoverGate())
+        func expected(dark: Bool) -> Read {
+            Read(scheme: dark ? .dark : .light,
+                 palette: (dark ? AtticPanelTheme.midnightCobalt : .original).palette(for: dark ? AtticPanelThemeAppearance.dark : .light),
+                 font: dark ? .title : .body,
+                 gate: ObjectIdentifier(dark ? gates.dark : gates.light))
+        }
+        struct Root: View {
+            @ObservedObject var outer: Outer
+            let seen: Seen
+            let gates: (light: AtticRowHoverGate, dark: AtticRowHoverGate)
+            var body: some View {
+                let dark = outer.dark
+                let _ = { seen.rootPass = outer.pass }()
+                ZStack {
+                    OutsideProbe(seen: seen)
+                    KeptContentHost(drawn: outer.drawn, interactive: outer.drawn) { Probe(seen: seen) }
+                        .environment(\.colorScheme, dark ? .dark : .light)
+                        .environment(\.atticPanelThemePalette,
+                                     (dark ? AtticPanelTheme.midnightCobalt : .original).palette(for: dark ? AtticPanelThemeAppearance.dark : .light))
+                        .environment(\.font, dark ? .title : .body)
+                        .environment(\.atticRowHoverGate, dark ? gates.dark : gates.light)
+                }
+                .frame(width: 100, height: 100 + CGFloat(outer.pass % 2))
+            }
+        }
+        let seen = Seen(), outer = Outer()
+        let window = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 100, height: 101),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = NSHostingView(rootView: Root(outer: outer, seen: seen, gates: gates))
+        window.contentView = root
+        window.orderFront(nil)
+        /// A pass of the root (and a size write of the host), waited for, bounded.
+        func pass() {
+            outer.pass += 1
+            waitForTestOperation("the root's pass") {
+                root.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                return seen.rootPass == outer.pass
+            }
+            root.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        /// Draws the host: the update that draws it, and its first frame,
+        /// with no turn of the run loop.
+        func draw() {
+            outer.drawn = true
+            root.needsLayout = true
+            root.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        pass()
+        XCTAssertEqual(seen.read, expected(dark: false), "drawn, with the values set above")
+
+        outer.drawn = false
+        pass()
+        let contrastBefore = seen.contrast
+        outer.dark = true
+        window.appearance = NSAppearance(named: .accessibilityHighContrastAqua)
+        #if DEBUG
+        KeptContentHostCounts.reset()
+        #endif
+        for _ in 0..<4 { pass() }
+        #if DEBUG
+        print("KEPT_RETURN hidden passes=4 env_hidden=\(KeptContentHostCounts.environments.off) updates_hidden=\(KeptContentHostCounts.updates.off)")
+        #endif
+        XCTAssertEqual(seen.read, expected(dark: false), "hidden: it keeps the values it was hidden with")
+        let flipped = seen.outsideContrast != contrastBefore
+        print("KEPT_RETURN contrast before=\(String(describing: contrastBefore)) outside=\(String(describing: seen.outsideContrast)) inside=\(String(describing: seen.contrast)) flipped=\(flipped)")
+        if flipped { XCTAssertEqual(seen.contrast, contrastBefore, "hidden: its own contrast is held") }
+        draw()
+        XCTAssertEqual(seen.read, expected(dark: true), "its first frame back has the current values")
+        if flipped { XCTAssertEqual(seen.contrast, seen.outsideContrast, "its first frame back has the window's contrast") }
+
+        outer.drawn = false
+        pass()
+        outer.dark = false
+        window.appearance = nil
+        for _ in 0..<4 { pass() }
+        XCTAssertEqual(seen.read, expected(dark: true), "hidden again: it keeps this hiding's values, not the first's")
+        draw()
+        XCTAssertEqual(seen.read, expected(dark: false), "its second return has the current values")
+        if flipped { XCTAssertEqual(seen.contrast, contrastBefore, "and the window's contrast as it is now") }
+    }
+
     /// HB-03: a nested host's own update runs inside the overlay layout
     /// guard, as the panel's root does, so an overlay anchor made or
     /// dismantled there changes the hierarchy only after the pass.
