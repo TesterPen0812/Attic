@@ -209,8 +209,9 @@ final class TasksTabHostTests: XCTestCase {
                              "the shown host's content still takes a new environment on clicks (the counter counts)")
         XCTAssertGreaterThan(clicks.map(\.updates.off).reduce(0, +), 0,
                              "the hidden hosts were updated on clicks, so their zero means something")
-        // Size writes: 0 hidden on the trunk too in this host (a3829c89,
-        // where hidden hosts already hold their layouts); kept as a guard.
+        // Size writes: this host's size writes replaced no hidden
+        // environment on the trunk either (a3829c89), so this half guards
+        // nothing yet; the preview's 2 a size write is not reproduced here.
         for write in reaches.filter({ $0.label.hasPrefix("size-write") }) {
             XCTAssertGreaterThan(write.environments.on, 0, "\(write.label): the shown host's content took no new environment")
             XCTAssertGreaterThan(write.updates.off, 0, "\(write.label): the hidden hosts were not updated")
