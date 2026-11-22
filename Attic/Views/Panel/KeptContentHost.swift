@@ -191,7 +191,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// this host lays out alone.
     override func layout() {
         #if DEBUG
-        KeptContentHostCounts.layout(interactive: isInteractive)
+        KeptContentHostCounts.layout(interactive: isInteractive, host: self)
         #endif
         AtticOverlayHierarchy.layoutPass { super.layout() }
     }
@@ -505,6 +505,7 @@ struct KeptEnvironment: ViewModifier {
                 if let hold {
                     if holding, let held = hold.held {
                         #if DEBUG
+                        KeptContentHostCounts.heldEnvironment()
                         hold.logChanges(from: held, to: values)
                         #endif
                         values = held
@@ -560,8 +561,19 @@ enum KeptContentHostCounts {
     static var roots = Split()
     static var accessibilityChildrenCalls = Split()
     static var accessibilityHits = Split()
+    /// Layouts by host (a host's own count, whatever its state).
+    static var layoutsByHost: [ObjectIdentifier: Int] = [:]
+    /// Runs of a hidden host's environment transform (the held branch).
+    static var heldEnvironments = 0
+    /// With `recordsStacks`, the first call stack of each kind since the
+    /// last reset ("layout.off", "environment.held"): what reached it.
+    static var recordsStacks = false
+    static var stacks: [String: [String]] = [:]
 
     static func reset() {
+        layoutsByHost = [:]
+        heldEnvironments = 0
+        stacks = [:]
         layouts = Split()
         laidOutInSet = 0
         roots = Split()
@@ -569,7 +581,19 @@ enum KeptContentHostCounts {
         accessibilityHits = Split()
     }
 
-    fileprivate static func layout(interactive: Bool) { count(&layouts, interactive) }
+    fileprivate static func layout(interactive: Bool, host: KeptContentHostingView) {
+        count(&layouts, interactive)
+        layoutsByHost[ObjectIdentifier(host), default: 0] += 1
+        if !interactive { recordStack("layout.off") }
+    }
+    fileprivate static func heldEnvironment() {
+        heldEnvironments += 1
+        recordStack("environment.held")
+    }
+    private static func recordStack(_ kind: String) {
+        guard recordsStacks, stacks[kind] == nil else { return }
+        stacks[kind] = Array(Thread.callStackSymbols.dropFirst(2).prefix(40))
+    }
     fileprivate static func root(drawn: Bool) { count(&roots, drawn) }
     fileprivate static func accessibilityChildren(interactive: Bool) { count(&accessibilityChildrenCalls, interactive) }
     fileprivate static func accessibilityHit(interactive: Bool) { count(&accessibilityHits, interactive) }

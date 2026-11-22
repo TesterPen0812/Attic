@@ -476,7 +476,7 @@ final class Hosted {
          chrome: TasksPageChrome = TasksPageChrome(), services: TasksPageServices = TasksPageServices(),
          design: AtticDesignContext = AtticDesignContext(mode: .light),
          composerIsOpen: (() -> Bool)? = nil, memory: TasksPageMemory? = nil, warms: Bool = true,
-         atticPanel: Bool = false) throws {
+         atticPanel: Bool = false, followsWindow: Bool = false) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -499,10 +499,18 @@ final class Hosted {
         let route = composerIsOpen.map { isOpen in
             PanelComposerRoute(open: { _, _ in }, isOpen: isOpen)
         }
-        window.contentView = NSHostingView(rootView: page
+        let root = page
             .environment(\.panelComposer, route)
             .atticDesign(design)
-            .frame(width: size.width, height: size.height))
+        if followsWindow {
+            // The page takes the window's size, as the panel's does, so a
+            // window resize reaches the pager and every tab's host.
+            let host = NSHostingView(rootView: root.frame(maxWidth: .infinity, maxHeight: .infinity))
+            host.sizingOptions = []
+            window.contentView = host
+        } else {
+            window.contentView = NSHostingView(rootView: root.frame(width: size.width, height: size.height))
+        }
         window.orderFront(nil)
         if keyWindow { window.makeKey() }
         spin(1)
