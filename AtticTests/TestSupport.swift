@@ -394,6 +394,17 @@ func verifyCIAccessibilityMode(_ expected: Any?, phase: String) {
     print("CI_INPUT_MODES AX \(phase) expected=\(String(describing: expected)) actual=\(String(describing: value))")
 }
 
+/// PR 48 round 3: the hosted Tasks classes hold both row-state guards
+/// (`TasksRowStateCounts`) at zero: no row state is written while a list
+/// read runs, and no drawn row catches up a frame late. Then resets them.
+@MainActor
+func assertNoRowStateWriteDuringAReadAndNoLateCatchUp(file: StaticString = #filePath, line: UInt = #line) {
+    XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0, "a row state was written during a list read",
+                   file: file, line: line)
+    XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0, "a drawn row's state caught up a frame late", file: file, line: line)
+    TasksRowStateCounts.reset()
+}
+
 /// Native key-window tests remain enabled on CI, and require an explicit
 /// opt-in on a person's desktop.
 func requireKeyWindowTests() throws {

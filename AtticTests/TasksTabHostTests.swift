@@ -10,6 +10,16 @@ import XCTest
 /// key or the panel's accessibility hit walk.
 @MainActor
 final class TasksTabHostTests: XCTestCase {
+    override func setUp() async throws {
+        try await super.setUp()
+        await MainActor.run { TasksRowStateCounts.reset() }
+    }
+
+    override func tearDown() async throws {
+        await MainActor.run { assertNoRowStateWriteDuringAReadAndNoLateCatchUp() }
+        try await super.tearDown()
+    }
+
     private func hosts(_ hosted: Hosted) -> [KeptContentHostingView] {
         func walk(_ view: NSView) -> [KeptContentHostingView] {
             if let host = view as? KeptContentHostingView { return [host] }

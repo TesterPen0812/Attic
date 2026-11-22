@@ -4861,6 +4861,7 @@ struct TasksReorderCell<Row: View, Below: View>: View, Equatable {
         let value = state.read(drawn: key.drawn)
         #if DEBUG
         let _ = model.noteRowStateMount(reports, row: TasksRowID(tab: tab, id: id), state: state, drawn: key.drawn)
+        let _ = model.noteRowStateRead(tab: tab, drawn: key.drawn)
         let _ = TasksCellBodyCounts.noteCellState(TasksRowID(tab: tab, id: id), value, drawn: key.drawn)
         #endif
         let live = TasksCellLive(

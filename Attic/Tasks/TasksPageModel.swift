@@ -326,6 +326,10 @@ final class TasksPageModel: ObservableObject {
                 keyboardFocus = nil
                 keyboardFocusSelectionRevision = nil
             }
+            // The arriving tab's rows are brought up to its list before the
+            // send, so its first frame thaws them as the model holds them
+            // (a send can flush the graph: TAB-STALL above).
+            if newValue != tab { syncRowStates(arriving: newValue) }
         }
         didSet {
             // Remembered across relaunch (L7), where the page has a memory.
@@ -454,6 +458,22 @@ final class TasksPageModel: ObservableObject {
     /// list. One entry per (tab, id): a task's physical replicas (one UUID)
     /// are one row in the list, so one state.
     private var rowStates: [TasksTab: [UUID: TasksRowState]] = [:]
+    /// Each tab's list builds (`keep`, Done's days), counted, and the build
+    /// its row states were last brought up to. A list read only builds and
+    /// counts; it never writes a row state (PR 48 round 3: a read can run in
+    /// a body, and a write there aborts the view update). The states catch
+    /// up in `syncRowStates`, outside any view update.
+    private var rowListBuilds: [TasksTab: UInt64] = [:]
+    private var rowStatesBuild: [TasksTab: UInt64] = [:]
+    /// A row-state sync is queued (`queueRowStateSync`).
+    private var rowStateSyncQueued = false
+    /// `syncRowStates` is running: the lists it builds queue nothing.
+    private var rowStateSyncing = false
+    #if DEBUG
+    /// Tabs a drawn cell read while their states were behind their list:
+    /// the catch-up that follows came a frame late.
+    private var rowStatesDrawnBehind: Set<TasksTab> = []
+    #endif
     #if DEBUG
     /// The state each mounted cell holds (the oracle's second check).
     private var rowStateMounts: [ObjectIdentifier: RowStateMount] = [:]
@@ -756,7 +776,22 @@ final class TasksPageModel: ObservableObject {
                 self.noteDoneLogChanged(self.store.revisionChangedTaskIDs)
                 self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
                 self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
+                self.queueRowStateSync()
             }
+            .store(in: &cancellables)
+        // Row states follow their lists (PR 48 round 3): whatever a list is
+        // built from reaches the rows through one sync per change, made
+        // outside any view update (`queueRowStateSync`). The model's sends
+        // (every published value, the date sink's, a dropped list's), the
+        // store's revision above, Done's results and the pager's drawn pages.
+        objectWillChange
+            .sink { [weak self] _ in self?.queueRowStateSync() }
+            .store(in: &cancellables)
+        doneResults.objectWillChange
+            .sink { [weak self] _ in self?.queueRowStateSync() }
+            .store(in: &cancellables)
+        pagerSwipe.span.objectWillChange
+            .sink { [weak self] _ in self?.queueRowStateSync() }
             .store(in: &cancellables)
         library.tags.inventoryChanges
             .sink { [weak self] in
@@ -1100,6 +1135,12 @@ final class TasksPageModel: ObservableObject {
     func eligibleRowIDs(for tab: TasksTab) -> Set<UUID> { cached(tab).eligibleIDs }
 
     private func cached(_ tab: TasksTab) -> RowsSnapshot {
+        #if DEBUG
+        // Any row-state write made while this read runs is counted
+        // (`TasksRowStateCounts.writesDuringListRead`): none is allowed.
+        TasksRowStateCounts.listReadDepth += 1
+        defer { TasksRowStateCounts.listReadDepth -= 1 }
+        #endif
         let key = RowsKey(tab: tab, revision: trimmedQuery(for: tab).isEmpty ? store.taskDataRevision : store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagPicks(on: tab),
@@ -1138,7 +1179,7 @@ final class TasksPageModel: ObservableObject {
         rowsCache[tab] = snapshot
         rowsChangedSinceBuild[tab] = nil
         rowsChangeUnknown.remove(tab)
-        rowStatesListed(tab)
+        rowListBuilt(tab)
         return snapshot
     }
 
@@ -1467,6 +1508,10 @@ final class TasksPageModel: ObservableObject {
     /// cleanup) and the Done log, grouped by the day they were finished,
     /// newest first; filtered by the search.
     func doneDays() -> [TasksDoneDay] {
+        #if DEBUG
+        TasksRowStateCounts.listReadDepth += 1
+        defer { TasksRowStateCounts.listReadDepth -= 1 }
+        #endif
         let key = DoneKey(revision: store.revision, loaded: doneLogTasks.map(\.id), search: doneSearch, tag: tagPicks,
                           today: DueDay(date: services.now(), calendar: services.calendar()), dateEnvironment: dateEnvironment,
                           folded: folded(on: .done))
@@ -1476,7 +1521,7 @@ final class TasksPageModel: ObservableObject {
             return TasksDoneDay(id: day.id, title: day.title, rows: folded ? [] : day.rows, total: day.rows.count, folded: folded)
         }
         doneCache = (key, days)
-        rowStatesListed(.done)
+        rowListBuilt(.done)
         return days
     }
 
@@ -1521,6 +1566,7 @@ final class TasksPageModel: ObservableObject {
         stay.ids.insert(id)
         filterStay[tab] = stay
         rowsCache[tab] = nil
+        queueRowStateSync()
     }
 
     /// The view changed for the person (the panel hid, another tab): what
@@ -2106,6 +2152,9 @@ final class TasksPageModel: ObservableObject {
     weak var rowPointer: TasksPointer?
 
     @StoredThenSent var isPageShown = true {
+        // Back on Tasks: the shown tab's rows catch up before the send, as a
+        // tab switch's do.
+        willSet { if newValue, !isPageShown { syncRowStates(arriving: tab) } }
         didSet {
             guard isPageShown != oldValue else { return }
             // Left for Notes or Canvas: the pager lets go (round 10); back
@@ -3193,6 +3242,7 @@ final class TasksPageModel: ObservableObject {
     func releaseQuickLookOrder(of id: UUID) {
         quickLookOrder[id] = nil
         rowsCache = [:]
+        queueRowStateSync()
     }
 
     func setExpanded(_ id: UUID, _ open: Bool) {
@@ -3751,9 +3801,96 @@ extension TasksPageModel {
     func rowState(for row: TasksListRow, tab: TasksTab, run: AtticSelectionRun) -> TasksRowState {
         if let state = rowStates[tab]?[row.id] { return state }
         let state = TasksRowState(id: row.id, tab: tab, value: derivedRowState(row.id, tab: tab, row: row, run: run))
+        // A tab's first state is made from the list as built now.
+        if rowStates[tab]?.isEmpty ?? true { rowStatesBuild[tab] = rowListBuilds[tab, default: 0] }
         rowStates[tab, default: [:]][row.id] = state
         return state
     }
+
+    // MARK: Row states follow their lists (PR 48 round 3)
+
+    /// A tab's list was built (`keep`, Done's days). Nothing is written
+    /// here: the read that built it may be running in a body. The tab's
+    /// states are behind until `syncRowStates` brings them up.
+    private func rowListBuilt(_ tab: TasksTab) {
+        rowListBuilds[tab, default: 0] &+= 1
+        guard !rowStateSyncing, rowStates[tab]?.isEmpty == false else { return }
+        queueRowStateSync()
+    }
+
+    /// Something a list is built from may have changed (every send of this
+    /// model, a store revision, Done's results, the pager's drawn pages, a
+    /// dropped list): one sync runs once the change is done, before the
+    /// next frame is drawn. However many inputs one action changes, the
+    /// sync builds each drawn list once. A run loop block runs as soon as
+    /// the event, the main queue turn or the timer that made the change
+    /// returns to the run loop, in that same pass and in any mode, so
+    /// before the frame's commit (and before a test's drain returns); never
+    /// inside a view update.
+    func queueRowStateSync() {
+        guard !rowStateSyncQueued, !rowStates.isEmpty else { return }
+        rowStateSyncQueued = true
+        let main = CFRunLoopGetMain()
+        CFRunLoopPerformBlock(main, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            MainActor.assumeIsolated { self?.syncQueuedRowStates() }
+        }
+        CFRunLoopWakeUp(main)
+    }
+
+    private func syncQueuedRowStates() {
+        guard rowStateSyncQueued else { return }
+        syncRowStates()
+    }
+
+    /// The tabs the pager draws on its next pass (`TasksPagerPages`): the
+    /// one shown and those a move passes, while Tasks is shown; and a tab
+    /// about to be shown (`tab`'s and `isPageShown`'s `willSet`).
+    private func rowStateDrawnTabs(arriving: TasksTab?) -> Set<TasksTab> {
+        var tabs: Set<TasksTab> = arriving.map { [$0] } ?? []
+        guard isPageShown || arriving != nil else { return tabs }
+        tabs.insert(tab)
+        let span = pagerSwipe.span
+        for index in span.pages where index != span.skipped && TasksTab.allCases.indices.contains(index) {
+            tabs.insert(TasksTab.allCases[index])
+        }
+        return tabs
+    }
+
+    /// Outside any view update: each drawn tab's list is brought up to date
+    /// (built only if what it is built from changed, as the next frame's
+    /// read would build it), then every tab whose list was built since its
+    /// states last caught up has them brought up to it (`rowStatesListed`;
+    /// a frozen state takes the value in its mirror only). A tab not drawn
+    /// is not built here: it is built when it is about to be drawn.
+    func syncRowStates(arriving: TasksTab? = nil) {
+        rowStateSyncQueued = false
+        guard !rowStates.isEmpty else { return }
+        rowStateSyncing = true
+        defer { rowStateSyncing = false }
+        let drawn = rowStateDrawnTabs(arriving: arriving)
+        for tab in TasksTab.allCases where rowStates[tab]?.isEmpty == false {
+            if drawn.contains(tab) {
+                if tab == .done { _ = doneDays() } else { _ = cached(tab) }
+            }
+            let built = rowListBuilds[tab, default: 0]
+            guard rowStatesBuild[tab] != built else { continue }
+            rowStatesBuild[tab] = built
+            #if DEBUG
+            if rowStatesDrawnBehind.remove(tab) != nil { TasksRowStateCounts.lateCatchUps += 1}
+            #endif
+            rowStatesListed(tab)
+        }
+    }
+
+    #if DEBUG
+    /// A drawn cell of `tab` read its state: if the tab's states are behind
+    /// its list, this frame drew them late (`TasksRowStateCounts.lateCatchUps`
+    /// counts the catch-up that follows).
+    func noteRowStateRead(tab: TasksTab, drawn: Bool) {
+        guard drawn, let applied = rowStatesBuild[tab], applied != rowListBuilds[tab, default: 0] else { return }
+        rowStatesDrawnBehind.insert(tab)
+    }
+    #endif
 
     /// The model changed what `ids` show (nil: any listed row), on every
     /// tab: their live states are worked out again. `runs`: the selection
@@ -3789,8 +3926,9 @@ extension TasksPageModel {
         queueRowStateCheck()
     }
 
-    /// The tab's list was built again (`keep`, or Done's days): states of
-    /// rows that left it go, so an "all rows" route never grows with the
+    /// The tab's list was built again (`keep`, or Done's days), and
+    /// `syncRowStates` brings its states up to it, outside any view update
+    /// (never the read that built it): states of rows that left it go, so an "all rows" route never grows with the
     /// rows ever built; every other state is brought up to the new
     /// list (its row, its run). A row that comes back gets a fresh state.
     private func rowStatesListed(_ tab: TasksTab) {
@@ -3885,6 +4023,8 @@ extension TasksPageModel {
     /// Runs the oracle now and reports each difference.
     func checkRowStates() {
         guard let report = TasksRowStateOracle.report else { return }
+        // A sync still queued runs first: the oracle checks settled states.
+        syncQueuedRowStates()
         rowStateMismatches().forEach(report)
     }
 

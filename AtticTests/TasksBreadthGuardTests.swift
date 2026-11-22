@@ -20,11 +20,13 @@ final class TasksBreadthGuardTests: XCTestCase {
         TasksCellBodyCounts.records = true
         AtticContextMenuBodyCounts.reset()
         AtticContextMenuBodyCounts.records = true
+        TasksRowStateCounts.reset()
     }
 
     override func tearDown() async throws {
         window?.close()
         window = nil
+        assertNoRowStateWriteDuringAReadAndNoLateCatchUp()
         TasksCellBodyCounts.recordsDragGroups = false
         TasksCellBodyCounts.records = false
         TasksCellBodyCounts.reset()
@@ -463,6 +465,152 @@ final class TasksBreadthGuardTests: XCTestCase {
     }
 
     // MARK: - Fix round 1: what the wrapper's key compares
+
+    // MARK: PR 48 round 3: a list read writes no row state
+
+    /// The lead's ruling (round 3): a list read builds the list and writes
+    /// no row state, wherever it runs, since a read can run in a body. The
+    /// states catch up in one sync outside any view update. At a55a1ab2 the
+    /// read wrote them itself (`keep` → `rowStatesListed`), and a read in
+    /// the pager's body aborted the update ("setting value during update").
+    func testAListReadBuildsTheListAndWritesNoRowState() throws {
+        let store = try makeStore(open: 6)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let row = try XCTUnwrap(model.rows(for: .now).dropFirst().first)
+        let state = model.rowState(for: row, tab: .now, run: .single)
+        XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: row.id)), to: "Renamed by the store"))
+        let listed = try XCTUnwrap(model.rows(for: .now).first { $0.id == row.id })
+        XCTAssertEqual(listed.model.title, "Renamed by the store", "the read built the new list")
+        XCTAssertEqual(state.value.row.model.title, row.model.title, "the read wrote no row state")
+        XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0)
+        drain()
+        XCTAssertEqual(state.value.row.model.title, "Renamed by the store", "the queued sync brought the state up")
+        XCTAssertEqual(model.rowStateMismatches(), [])
+    }
+
+    /// The write guard's seam: a row-state write made while a list read
+    /// runs is counted (the hosted classes hold the count at zero).
+    func testTheWriteGuardCountsAWriteMadeDuringAListRead() throws {
+        let store = try makeStore(open: 3)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let state = model.rowState(for: try XCTUnwrap(model.rows(for: .now).first), tab: .now, run: .single)
+        let original = state.value
+        var changed = original
+        changed.isSelected.toggle()
+        TasksRowStateCounts.listReadDepth += 1
+        state.apply(changed)
+        TasksRowStateCounts.listReadDepth -= 1
+        XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 1, "the write inside the read is counted")
+        state.apply(original)
+        XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 1, "a write outside a read is not")
+        TasksRowStateCounts.reset()
+    }
+
+    /// The catch-up guard's seam, and the crash's shape: a drawn row's list
+    /// changes and a frame is laid out before the queued sync runs (a change
+    /// no funnel announced in time). The pager's body builds the list and
+    /// writes nothing, so no update aborts; the row draws its old state for
+    /// that one frame, and the catch-up that follows is counted late.
+    func testAFrameLaidOutBeforeTheSyncCostsOneLateFrameAndNoCrash() throws {
+        let store = try makeStore(open: 6)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        let id = model.rows(for: .now)[1].id
+        let row = TasksRowID(tab: .now, id: id)
+        XCTAssertNotNil(pointer.frame(for: row), "the row is drawn")
+        TasksRowStateCounts.reset()
+        XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: id)), to: "Renamed before the sync"))
+        hosting.layoutSubtreeIfNeeded()
+        hosting.window?.displayIfNeeded()
+        XCTAssertNotEqual(TasksCellBodyCounts.cellStates[row]?.row.model.title, "Renamed before the sync",
+                          "the frame before the sync drew the old state")
+        XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0, "the read in the body wrote no state")
+        settle(hosting)
+        XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 1, "the catch-up after that frame is counted late")
+        XCTAssertEqual(TasksCellBodyCounts.cellStates[row]?.row.model.title, "Renamed before the sync", "the next frame is right")
+        TasksRowStateCounts.reset()
+    }
+
+    /// The family (RULES §3 lesson 4): every input a list is built from
+    /// (`TasksPageModel.RowsKey`, Done's `DoneKey`) reaches the drawn rows
+    /// through the sync before the frame. Each change is laid out the way
+    /// the page settles (the main queue turns, then the frame): no state is
+    /// written during a read, none catches up late, the oracle agrees and
+    /// each drawn row draws its row as listed.
+    func testEveryListInputReachesTheDrawnRowsBeforeTheFrame() throws {
+        let start = Date()
+        let calendar = TasksPageServices().calendar()
+        let clock = Clock(now: start)
+        var services = TasksPageServices()
+        services.now = { clock.now }
+        services.doneHold = .seconds(25)
+        services.acknowledgementDelay = .seconds(25)
+        let store = try makeStore(open: 8, due: DueDay(date: start, calendar: calendar), tracker: true)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        let ids = model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(drawnRows(pointer, ids).count, 4, "Now drew its rows")
+        func check(_ name: String, on tab: TasksTab = .now, _ change: () throws -> Void) rethrows {
+            TasksRowStateCounts.reset()
+            try change()
+            settle(hosting)
+            settle(hosting)
+            print("FAMILY_\(name) writes=\(TasksRowStateCounts.writesDuringListRead) late=\(TasksRowStateCounts.lateCatchUps)")
+            XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0, "\(name): a row state was written during a list read")
+            XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0, "\(name): the drawn rows caught up a frame late")
+            XCTAssertEqual(model.rowStateMismatches(), [], "\(name): the states agree with the model")
+            let listed = tab == .done ? model.doneDays().flatMap(\.rows) : model.listSnapshot(for: tab).rows
+            var drawn = 0
+            for row in listed where pointer.frame(for: TasksRowID(tab: tab, id: row.id)) != nil {
+                drawn += 1
+                let drew = TasksCellBodyCounts.cellStates[TasksRowID(tab: tab, id: row.id)]
+                XCTAssertTrue(drew.map { TasksRowStateValue.sameRow($0.row, row) } == true,
+                              "\(name): \(row.model.title) draws its row as listed")
+            }
+            XCTAssertTrue(drawn > 0 || listed.isEmpty, "\(name): rows are drawn, so the check means something")
+        }
+        let task = { (id: UUID) throws -> TaskItem in try XCTUnwrap(store.task(withID: id)) }
+        try check("store_revision") { XCTAssertTrue(store.rename(try task(ids[1]), to: "Renamed in the store")) }
+        check("held") { model.completeAcknowledged(ids[2]) { _ in } }
+        check("acknowledgement") { XCTAssertTrue(model.settlePendingCompletionAcknowledgements(through: ids[2])) }
+        check("held_release") { model.releaseHold(ids[2]) }
+        check("note_owners") { model.setNoteOwners([ids[3]]) }
+        check("expanded") { model.setExpanded(ids[3], true) }
+        check("expanded_closed") { model.setExpanded(ids[3], false) }
+        check("completed_today") { model.completedTodayExpanded = true }
+        check("view_options") { model.setViewOptions(TasksViewOptions(sort: .dueDate), for: .now) }
+        check("view_options_cleared") { model.setViewOptions(TasksViewOptions(), for: .now) }
+        check("search") { model.listSearch[.now] = "task" }
+        check("search_cleared") { model.listSearch[.now] = nil }
+        check("tag_pick") { model.tagPicks = TagPicks(["tag1"]) }
+        check("tag_pick_cleared") { model.tagPicks = .none }
+        let group = try XCTUnwrap(model.groupKey(of: ids[0], on: .now), "the dated row has a group")
+        check("folded") { model.foldAllGroups([group], folded: true, on: .now) }
+        check("unfolded") { model.foldAllGroups([group], folded: false, on: .now) }
+        check("next_event") {
+            let event = CalendarEvent(id: "next", title: "Stand-up", start: clock.now.addingTimeInterval(3_600),
+                                      end: clock.now.addingTimeInterval(5_400), isAllDay: false, location: nil,
+                                      calendarTitle: "Work", colour: CalendarEventColour(red: 0.2, green: 0.4, blue: 0.8))
+            model.nextEvent = TasksNextEvent(event, calendar: calendar, locale: services.locale)
+        }
+        check("next_event_cleared") { model.nextEvent = nil }
+        check("day_drag") { model.dayDragLive = true }
+        check("day_drag_ended") { model.dayDragLive = false }
+        check("today_and_date_environment") {
+            clock.now = start.addingTimeInterval(2 * 86_400)
+            NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
+        }
+        // Done, drawn: the store, its search, a delete.
+        check("tab_to_done", on: .done) { model.select(tab: .done) }
+        let done = try XCTUnwrap(model.doneDays().flatMap(\.rows).first?.id, "Done lists the ticked row")
+        try check("done_store_revision", on: .done) { XCTAssertTrue(store.rename(try task(done), to: "Done, renamed")) }
+        check("done_search", on: .done) { model.doneSearch = "Done" }
+        check("done_search_cleared", on: .done) { model.doneSearch = "" }
+        check("done_delete", on: .done) { XCTAssertTrue(model.delete([done]).isApplied) }
+        check("tab_to_now") { model.select(tab: .now) }
+    }
 
     /// Astra R-1, Opus R-1: a row due 12 days ahead, then the clock jumps 15
     /// days. The date's text and day stay the same, its tone and whether it
@@ -986,10 +1134,12 @@ final class TasksClickCountTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
         TasksCellBodyCounts.reset(); TasksCellBodyCounts.records = true
+        TasksRowStateCounts.reset()
     }
 
     override func tearDown() async throws {
         window?.orderOut(nil); window = nil
+        assertNoRowStateWriteDuringAReadAndNoLateCatchUp()
         TasksCellBodyCounts.records = false; TasksCellBodyCounts.reset()
         try await super.tearDown()
     }

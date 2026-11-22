@@ -11,7 +11,8 @@ import Observation
 /// (`TasksPageModel.derivedRowState`); every writer and the DEBUG oracle
 /// call it, and no writer sets a field by hand.
 struct TasksRowStateValue: Equatable {
-    /// The row as its tab's list was last built (`TasksPageModel.keep`).
+    /// The row as its tab's list was last built (`TasksPageModel.keep`),
+    /// brought up by `TasksPageModel.syncRowStates`.
     var row: TasksListRow
     var isSelected: Bool
     var run: AtticSelectionRun
@@ -137,6 +138,9 @@ final class TasksRowState {
     /// value.
     func apply(_ new: TasksRowStateValue) {
         guard new != value else { return }
+        #if DEBUG
+        TasksRowStateCounts.noteWrite()
+        #endif
         value = new
         if !isFrozen { writeFields(new) }
     }
@@ -146,6 +150,9 @@ final class TasksRowState {
     func setDrawn(_ drawn: Bool) {
         if drawn {
             guard isFrozen else { return }
+            #if DEBUG
+            TasksRowStateCounts.noteWrite()
+            #endif
             isFrozen = false
             writeFields(value)
         } else {
@@ -167,6 +174,29 @@ final class TasksRowState {
 }
 
 #if DEBUG
+/// PR 48 round 3's two guards, both held at zero by the hosted tests.
+@MainActor enum TasksRowStateCounts {
+    /// Row-state writes made while a list read (`TasksPageModel.cached`,
+    /// `doneDays`) was running. A read can run inside a view update, and a
+    /// write to an observed field there aborts it ("setting value during
+    /// update"): the read path writes none.
+    static var writesDuringListRead = 0
+    /// Catch-ups that came after a drawn cell had read its tab's states
+    /// behind their list: a change no funnel announced before the frame.
+    static var lateCatchUps = 0
+    /// The list reads running now (`cached`, `doneDays`).
+    static var listReadDepth = 0
+
+    static func noteWrite() {
+        if listReadDepth > 0 { writesDuringListRead += 1 }
+    }
+
+    static func reset() {
+        writesDuringListRead = 0
+        lateCatchUps = 0
+    }
+}
+
 /// The DEBUG oracle's report (slice 1b): after a settle, every live row
 /// state equals a fresh derivation from the model, and every drawn cell
 /// holds its row's current state. A difference names the row and the field.
