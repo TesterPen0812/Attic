@@ -139,12 +139,11 @@ final class TasksTabHostTests: XCTestCase {
         tabHosts.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] }
     }
 
-    /// What one action reached: each host's layouts in tab order, runs of
-    /// a hidden host's held environment, and hidden tabs' row bodies.
+    /// What one action reached: each host's layouts in tab order, and
+    /// hidden tabs' row bodies.
     private struct HiddenHostReach {
         let label: String
         let layouts: [Int]
-        let heldEnvironments: Int
         let hiddenLeaves: Int
     }
 
@@ -163,22 +162,14 @@ final class TasksTabHostTests: XCTestCase {
         try hosted.clickRow(rows[0].id, tab: .now)
         hosted.spin(0.4)
         TasksCellBodyCounts.records = true
-        KeptContentHostCounts.recordsStacks = true
-        defer {
-            TasksCellBodyCounts.records = false
-            KeptContentHostCounts.recordsStacks = false
-        }
+        defer { TasksCellBodyCounts.records = false }
         func measure(_ label: String, _ action: () throws -> Void) rethrows -> HiddenHostReach {
             KeptContentHostCounts.reset()
             TasksCellBodyCounts.leaves = [:]
             try action()
             let reach = HiddenHostReach(label: label, layouts: layoutCounts(tabHosts),
-                                        heldEnvironments: KeptContentHostCounts.heldEnvironments,
                                         hiddenLeaves: TasksCellBodyCounts.leaves.filter { $0.key.tab != .now }.values.reduce(0, +))
-            print("HIDDEN_HOST \(label) now=\(reach.layouts[0]) later=\(reach.layouts[1]) done=\(reach.layouts[2]) held_env=\(reach.heldEnvironments) hidden_leaves=\(reach.hiddenLeaves)")
-            for (kind, stack) in KeptContentHostCounts.stacks.sorted(by: { $0.key < $1.key }) {
-                print("HIDDEN_HOST_STACK \(label) \(kind)\n" + stack.joined(separator: "\n"))
-            }
+            print("HIDDEN_HOST \(label) now=\(reach.layouts[0]) later=\(reach.layouts[1]) done=\(reach.layouts[2]) hidden_leaves=\(reach.hiddenLeaves)")
             return reach
         }
         var reaches: [HiddenHostReach] = []
@@ -223,6 +214,9 @@ final class TasksTabHostTests: XCTestCase {
             hosted.go(to: tab)
             let counts = layoutCounts(tabHosts)
             print("TAB_SWITCH \(label) now=\(counts[0]) later=\(counts[1]) done=\(counts[2]) on=\(KeptContentHostCounts.layouts.on) off=\(KeptContentHostCounts.layouts.off) laid_out_in_set=\(KeptContentHostCounts.laidOutInSet) roots_on=\(KeptContentHostCounts.roots.on)")
+            // Every switch here is between Now and Later: Done is hidden
+            // throughout and lays out on none (19 a switch before the fix).
+            XCTAssertEqual(counts[2], 0, "\(label): the hidden Done host laid out during the switch")
         }
         switchTo(.backlog, "plain-to-later")
         XCTAssertEqual(tabHosts.map(\.isInteractive), [false, true, false], "the hosts are in tab order")
@@ -254,7 +248,9 @@ final class TasksTabHostTests: XCTestCase {
         func leaves(_ tab: TasksTab) -> Int { TasksCellBodyCounts.leaves.filter { $0.key.tab == tab }.values.reduce(0, +) }
         func rowsBuilt(_ tab: TasksTab) -> Int { TasksCellBodyCounts.leaves.keys.filter { $0.tab == tab }.count }
         var counts = layoutCounts(tabHosts)
-        print("WARM built now=\(counts[0]) later=\(counts[1]) done=\(counts[2]) later_rows=\(rowsBuilt(.backlog)) later_leaves=\(leaves(.backlog)) held_env=\(KeptContentHostCounts.heldEnvironments)")
+        print("WARM built now=\(counts[0]) later=\(counts[1]) done=\(counts[2]) later_rows=\(rowsBuilt(.backlog)) later_leaves=\(leaves(.backlog))")
+        XCTAssertGreaterThan(counts[1], 0, "warming lays the hidden Later host out")
+        XCTAssertGreaterThan(rowsBuilt(.backlog), 0, "warming builds Later's rows")
         KeptContentHostCounts.reset()
         TasksCellBodyCounts.leaves = [:]
         hosted.go(to: .backlog)
@@ -337,17 +333,22 @@ final class TasksTabHostTests: XCTestCase {
         try change(hosted)
         hosted.spin(0.6)
         withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: tab) }
-        // The app's own frames: the run loop turns, and each commit runs the
-        // window's layout and display; nothing is laid out by hand. Read
-        // after every turn of about 5 ms until the slide has settled.
+        // The app's own frames: each turn of the run loop commits, and the
+        // commit runs the window's layout and display; nothing is laid out
+        // by hand. Read once a turn, after the commit (before the loop
+        // waits), until the slide has ended and two turns read the same.
         var drawings: [LaterDrawing] = []
-        let end = Date().addingTimeInterval(1.2)
-        while Date() < end {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.005))
-            drawings.append(laterDrawing(hosted, host: laterHost, tab: tab))
+        let sampler = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 2_100_000) { _, _ in
+            MainActor.assumeIsolated { drawings.append(self.laterDrawing(hosted, host: laterHost, tab: tab)) }
         }
-        hosted.spin(0.3)
-        let settled = laterDrawing(hosted, host: laterHost, tab: tab)
+        CFRunLoopAddObserver(CFRunLoopGetMain(), sampler, .commonModes)
+        waitForTestOperation("\(label): the slide to the tab ends and its list settles") {
+            hosted.model.pagerSwipe.motion.position == CGFloat(slot) && drawings.count >= 2
+                && drawings[drawings.count - 1] == drawings[drawings.count - 2] && drawings[drawings.count - 1].listWidth > 0
+        }
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), sampler, .commonModes)
+        CFRunLoopObserverInvalidate(sampler)
+        let settled = drawings.last ?? laterDrawing(hosted, host: laterHost, tab: tab)
         let shown = drawings.firstIndex { $0.listWidth > 0 }
         let first = shown.map { drawings[$0] } ?? settled
         let differing = shown.map { drawings[$0...].filter { $0 != settled }.count } ?? -1
