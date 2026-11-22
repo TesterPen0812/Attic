@@ -571,7 +571,16 @@ final class AppCoordinator: ObservableObject {
             try? TaskNotePreviewSeed.seedOwnerPreview(in: container)
         }
         #endif
+        #if ATTIC_GLOSS_LAB
+        // Gloss lab preview only: its own fresh store gets the tracker-shaped
+        // sample once (never the official identity or another preview's).
+        let glossLabSeedPlan = (!inMemoryStore && !isUITesting && !isRunningTests)
+            ? GlossLabTrackerSeed.seedTasksIfNeeded(in: container) : nil
+        #endif
         let (store, noteStore) = try runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
+        #if ATTIC_GLOSS_LAB
+        if let glossLabSeedPlan { GlossLabTrackerSeed.seedNotes(glossLabSeedPlan, notes: noteStore, container: container) }
+        #endif
         #if DEBUG
         // Screen9 window-only capture: a fresh in-memory launch with an
         // existing note, without touching any persisted preview or owner data.
@@ -901,6 +910,9 @@ final class AppCoordinator: ObservableObject {
 
         observeMenuTracking()
         cleanupService.start()
+        #if ATTIC_GLOSS_LAB
+        GlossLabWindows.shared.configure(settings: settings)
+        #endif
 
         if isUITesting {
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PINNED"] == "1" { uiState.isPanelPinned = true }

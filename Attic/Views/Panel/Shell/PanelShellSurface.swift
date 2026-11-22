@@ -13,7 +13,14 @@ struct PanelShellSurface: ViewModifier {
     func body(content: Content) -> some View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         content
+            #if ATTIC_GLOSS_LAB
+            // Gloss lab (experimental preview only): ideas 5 and 6 over the
+            // surface and under the content.
+            .background { GlossLabPanelSurfaceLayer(cornerSize: cornerSize) }
+            .background { AtticPanelStageSurface(cornerSize: cornerSize, glossLabPanel: true) }
+            #else
             .background { AtticPanelStageSurface(cornerSize: cornerSize) }
+            #endif
             // The window server routes a click on this transparent panel
             // only where SwiftUI draws something hit-testable, and the design
             // system draws the surface with hit testing off. Without this
@@ -22,6 +29,10 @@ struct PanelShellSurface: ViewModifier {
             // under the surface is invisible on every material.
             .background { shape.fill(Color.black.opacity(1.0 / 255)) }
             .overlay { AtticPanelRim(cornerSize: cornerSize) }
+            #if ATTIC_GLOSS_LAB
+            // Gloss lab: ideas 3 and 4 at the rim.
+            .overlay { GlossLabPanelRimLayer(cornerSize: cornerSize) }
+            #endif
             .clipShape(shape)
             // Keep the full surface in the native event region: blank
             // surface must not click through at WindowServer.

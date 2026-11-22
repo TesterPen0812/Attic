@@ -8,6 +8,26 @@ struct MenuBarView: View {
     @ObservedObject var coordinator: AppCoordinator
 
     var body: some View {
+        #if ATTIC_GLOSS_LAB
+        AtticMenuItems(commands: MenuBarCommands.commands(
+            advertisedNewTaskShortcut: advertisedGlobalShortcut,
+            showPanel: coordinator.showPanel,
+            newTask: coordinator.showNewTask,
+            newNote: coordinator.showNewNote,
+            search: coordinator.showSearch,
+            openSettings: coordinator.openSettings,
+            quit: { NSApp.terminate(nil) },
+            openPage: coordinator.showPage,
+            // Pins or unpins as the menu shows it (never a blind toggle), so
+            // a second route to the same key can never undo it.
+            togglePin: { [pinned = coordinator.isPanelPinned] in coordinator.setPinned(!pinned) },
+            isPinned: coordinator.isPanelPinned
+        ) + [
+            // Gloss lab preview only: the lab window from the app's menu.
+            AtticMenuCommand(verbatim: "Gloss lab…", systemImage: "slider.horizontal.3", startsSection: true,
+                             action: { GlossLabWindows.shared.show() })
+        ])
+        #else
         AtticMenuItems(commands: MenuBarCommands.commands(
             advertisedNewTaskShortcut: advertisedGlobalShortcut,
             showPanel: coordinator.showPanel,
@@ -22,6 +42,7 @@ struct MenuBarView: View {
             togglePin: { [pinned = coordinator.isPanelPinned] in coordinator.setPinned(!pinned) },
             isPinned: coordinator.isPanelPinned
         ))
+        #endif
     }
 
     /// Only Carbon's registration makes this combination work from anywhere,

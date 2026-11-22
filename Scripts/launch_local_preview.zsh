@@ -49,6 +49,8 @@ Options:
                                Not combinable with --optimized,
                                --first-touch-log or --configuration.
   --first-touch-log            Include the preview-only first-touch diagnostics.
+  --gloss-lab                  Compile the Gloss lab (ATTIC_GLOSS_LAB), for the
+                               experimental Attic Gloss preview only.
   --build-only                 Build and emit provenance without launching.
   --verify                     Build and launch nothing: check that exactly one
                                launchd-owned process runs this preview and
@@ -91,6 +93,7 @@ optimized=false
 release_like=false
 configuration_given=false
 first_touch_log=false
+gloss_lab=false
 verify_only=false
 dry_run=false
 allow_applications_install=false
@@ -171,6 +174,10 @@ while (( $# > 0 )); do
             ;;
         --first-touch-log)
             first_touch_log=true
+            shift
+            ;;
+        --gloss-lab)
+            gloss_lab=true
             shift
             ;;
         --verify)
@@ -340,6 +347,9 @@ other_swift_flags='$(inherited) -DATTIC_LOCAL_ONLY'
 if $first_touch_log; then
     other_swift_flags+=' -DATTIC_FIRST_TOUCH_LOG'
 fi
+if $gloss_lab; then
+    other_swift_flags+=' -DATTIC_GLOSS_LAB'
+fi
 build_arguments=(
     -quiet
     -project "$project_path"
@@ -405,6 +415,7 @@ print_resolved_configuration() {
     print -- "release_like=$release_like"
     print -- "store_environment=$store_environment"
     print -- "first_touch_log=$first_touch_log"
+    print -- "gloss_lab=$gloss_lab"
 }
 
 if $verify_only; then

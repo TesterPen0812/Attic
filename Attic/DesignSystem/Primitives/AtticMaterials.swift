@@ -256,6 +256,16 @@ struct AtticRaisedMaterialModifier: ViewModifier {
             .overlay {
                 if edgeLight, !design.increaseContrast,
                    let light = AtticGlassModel.edgeLight(dark: design.mode == .dark, surface: design.effectiveSurface) {
+                    #if ATTIC_GLOSS_LAB
+                    // Gloss lab idea 10: one rim recipe for every control.
+                    if GlossLab.shared.oneRim {
+                        GlossLabControlEdgeLight(shape: shape, light: light)
+                            .opacity(away ? 0 : 1)
+                            .allowsHitTesting(false)
+                    } else {
+                        trunkEdgeLight(light, in: shape)
+                    }
+                    #else
                     ZStack {
                         shape.strokeBorder(LinearGradient(stops: light.stops.map { .init(color: .white.opacity($0.opacity), location: $0.location) },
                                                           startPoint: .topLeading, endPoint: .bottomTrailing),
@@ -264,6 +274,7 @@ struct AtticRaisedMaterialModifier: ViewModifier {
                     }
                     .opacity(away ? 0 : 1)
                     .allowsHitTesting(false)
+                    #endif
                 }
             }
             .overlay {
@@ -276,6 +287,25 @@ struct AtticRaisedMaterialModifier: ViewModifier {
             }
     }
 }
+
+#if ATTIC_GLOSS_LAB
+extension AtticRaisedMaterialModifier {
+    /// The trunk's Edge light, unchanged (Gloss lab idea 10 off).
+    func trunkEdgeLight<S: InsettableShape>(_ light: AtticEdgeLight, in shape: S) -> some View {
+        #if DEBUG
+        let _ = GlossLabCounters.controlEdgeLight += 1
+        #endif
+        return ZStack {
+            shape.strokeBorder(LinearGradient(stops: light.stops.map { .init(color: .white.opacity($0.opacity), location: $0.location) },
+                                              startPoint: .topLeading, endPoint: .bottomTrailing),
+                               lineWidth: light.lineWidth)
+            shape.stroke(light.hairline.color, lineWidth: light.hairlineWidth)
+        }
+        .opacity(away ? 0 : 1)
+        .allowsHitTesting(false)
+    }
+}
+#endif
 
 /// The part of a raised control that is drawn while it slides under an
 /// edge (A32, Aa's neighbours leaving into the row's sides): the control's
@@ -797,11 +827,56 @@ struct AtticSurfaceBackground<S: Shape>: View {
     /// The panel's lift leaves its top and bottom control bands
     /// (`AtticSurfaceModel.LiftControlBands`, Accepted 2026-11-13).
     var liftLeavesControlBands = false
+    #if ATTIC_GLOSS_LAB
+    /// Gloss lab idea 1: the foundation and the Tint fade out at the rim.
+    var glossRimFade: GlossRimFadeMask?
+    #endif
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticDesign) private var design
 
+    #if ATTIC_GLOSS_LAB
     var body: some View {
+        if let glossRimFade, model.kind != .solid {
+            ZStack {
+                underlay
+                if !isChrome {
+                    AtticGlassLift(shape: shape, strength: model.glassLift(enabled: design.brightenGlass),
+                                   leavesControlBands: liftLeavesControlBands)
+                }
+                ZStack {
+                    shape.fill(model.backing.color)
+                    tint
+                }
+                .mask { glossRimFade }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        } else {
+            trunkBody
+        }
+    }
+
+    @ViewBuilder
+    private var tint: some View {
+        if !model.tintStops.isEmpty {
+            if let tintHeight {
+                ZStack(alignment: .top) {
+                    model.washColor.withAlpha(model.tintOpacity(at: 1)).color
+                    LinearGradient(stops: model.tintGradientStops, startPoint: .top, endPoint: .bottom)
+                        .frame(height: tintHeight)
+                }
+                .clipShape(shape)
+            } else {
+                shape.fill(LinearGradient(stops: model.tintGradientStops, startPoint: .top, endPoint: .bottom))
+            }
+        }
+    }
+
+    private var trunkBody: some View {
+    #else
+    var body: some View {
+    #endif
         ZStack {
             if model.kind != .solid {
                 underlay
@@ -1014,11 +1089,27 @@ extension EnvironmentValues {
 /// the gallery draw the same surface).
 struct AtticPanelStageSurface: View {
     var cornerSize: CGFloat
+    #if ATTIC_GLOSS_LAB
+    /// Gloss lab: only the live panel (`PanelShellSurface`) takes idea 1.
+    var glossLabPanel = false
+    #endif
     @Environment(\.atticDesign) private var design
 
     var body: some View {
+        #if ATTIC_GLOSS_LAB
+        #if DEBUG
+        let _ = GlossLabCounters.stageSurface += 1
+        #endif
+        let lab = GlossLab.shared
+        let rimFade = glossLabPanel && lab.rimFade
+            ? GlossRimFadeMask(cornerSize: cornerSize, exponent: AtticStyle.panelSquircleExponent, width: lab.rimFadeWidth)
+            : nil
+        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
+                               liftLeavesControlBands: true, glossRimFade: rimFade)
+        #else
         AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
                                liftLeavesControlBands: true)
+        #endif
     }
 }
 
