@@ -911,7 +911,7 @@ final class AppCoordinator: ObservableObject {
         observeMenuTracking()
         cleanupService.start()
         #if ATTIC_GLOSS_LAB
-        GlossLabWindows.shared.configure(settings: settings)
+        GlossLabWindows.shared.configure(settings: settings, dockedPanel: panelController.panelForTesting)
         #endif
 
         if isUITesting {

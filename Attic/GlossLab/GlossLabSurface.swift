@@ -61,15 +61,28 @@ struct GlossLabPanelSurfaceLayer: View {
             if lab.topLight {
                 GlossTopLight(shape: shape, dark: design.mode == .dark, keepsOut: lab.topLightKeepsOut,
                               light: design.mode == .dark ? lab.topLightDark : lab.topLightLight,
-                              shade: design.mode == .dark ? lab.bottomShadeDark : lab.bottomShadeLight)
+                              shade: design.mode == .dark ? lab.bottomShadeDark : lab.bottomShadeLight,
+                              rimFade: rimFade(lab))
             }
             if lab.grain {
                 GlossGrain(percent: lab.grainPercent)
                     .clipShape(shape)
+                    .glossLabRimFade(rimFade(lab))
             }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+extension GlossLabPanelSurfaceLayer {
+    /// With 1 on, 5 and 6 leave the rim bare too, as the foundation, the
+    /// Tint and the lift do (glass surfaces only, as for those). Read only
+    /// inside 5's and 6's branches, so flipping 1 with both off re-runs
+    /// nothing here.
+    private func rimFade(_ lab: GlossLab) -> GlossRimFadeMask? {
+        guard lab.rimFade, design.tokens.panel.kind != .solid else { return nil }
+        return GlossRimFadeMask(cornerSize: cornerSize, exponent: AtticStyle.panelSquircleExponent, width: lab.rimFadeWidth)
     }
 }
 
@@ -83,6 +96,9 @@ struct GlossTopLight: View {
     let keepsOut: Bool
     let light: Double
     let shade: Double
+    /// Idea 1's rim fade, or nil. It goes inside the blend, so the faded
+    /// white still adds to the glass.
+    var rimFade: GlossRimFadeMask?
 
     var body: some View {
         ZStack {
@@ -91,11 +107,13 @@ struct GlossTopLight: View {
                                               .init(color: .white.opacity(0), location: 1)],
                                       startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 2.0 / 3)))
                 .mask { bands }
+                .glossLabRimFade(rimFade)
                 .blendMode(.plusLighter)
             shape.fill(LinearGradient(stops: [.init(color: .black.opacity(0), location: 0),
                                               .init(color: .black.opacity(shade), location: 1)],
                                       startPoint: UnitPoint(x: 0.5, y: 2.0 / 3), endPoint: .bottom))
                 .mask { bands }
+                .glossLabRimFade(rimFade)
         }
     }
 

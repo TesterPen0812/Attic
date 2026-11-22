@@ -845,8 +845,14 @@ struct AtticSurfaceBackground<S: Shape>: View {
                 // "Brighten glass over dark backgrounds" (owner, 2026-11-11):
                 // Light Glass and Frosted only; never Settings' chrome.
                 if !isChrome {
+                    #if ATTIC_GLOSS_LAB
+                    // Gloss lab idea 1: the lift leaves the rim bare too.
+                    AtticGlassLift(shape: shape, strength: model.glassLift(enabled: design.brightenGlass),
+                                   leavesControlBands: liftLeavesControlBands, glossRimFade: glossRimFade)
+                    #else
                     AtticGlassLift(shape: shape, strength: model.glassLift(enabled: design.brightenGlass),
                                    leavesControlBands: liftLeavesControlBands)
+                    #endif
                 }
                 // The foundation, with Dark's dark tint over it (A37).
                 #if ATTIC_GLOSS_LAB
@@ -997,6 +1003,11 @@ struct AtticGlassLift<S: Shape>: View {
     /// The panel's frame the bands are measured in, in this view's
     /// coordinates. Nil is the whole view.
     var bandsFrame: CGRect?
+    #if ATTIC_GLOSS_LAB
+    /// Gloss lab idea 1: the lift fades out at the rim, as the foundation
+    /// and the Tint do. Nil draws the trunk's lift.
+    var glossRimFade: GlossRimFadeMask?
+    #endif
 
     var body: some View {
         if strength > 0 {
@@ -1011,10 +1022,20 @@ struct AtticGlassLift<S: Shape>: View {
     }
 
     private func lift(_ white: some View) -> some View {
+        #if ATTIC_GLOSS_LAB
+        // Inside the blend, like the bands' mask, so the faded white still
+        // adds to the glass.
+        white
+            .glossLabRimFade(glossRimFade)
+            .blendMode(.plusLighter)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        #else
         white
             .blendMode(.plusLighter)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+        #endif
     }
 
     private var bandMask: some View {

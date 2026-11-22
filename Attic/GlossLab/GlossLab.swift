@@ -192,19 +192,38 @@ final class GlossLab {
     }
 
     /// 0. 3D: dark glass lit from the top is Dark mode plus ideas 5 and 3.
-    /// The mode is the app's own setting; the caller sets it.
+    /// The mode is the app's own setting; the caller sets it. 5's light
+    /// must not keep out of the control bands here: kept out, it leaves the
+    /// top band, so it cannot be brightest at the top (recheck, 22 Nov).
     func apply3D() {
         topLight = true
+        topLightKeepsOut = false
         edgeLight = true
     }
 
+    /// The app's own glass settings, as the lab writes them down: with
+    /// them, a pick can be rebuilt from the copied text alone.
+    struct AppValues {
+        var mode: String
+        var surface: String
+        var palette: String
+        var tint: String
+        /// The Tint's reach down the panel, 0 to 1.
+        var tintLength: Double
+        var brightenGlass: Bool
+    }
+
     /// The current switches and values as text, for "Copy values".
-    func valuesText(mode: String) -> String {
+    func valuesText(app: AppValues) -> String {
         func f(_ value: Double) -> String { String(format: "%.2f", value) }
         func on(_ value: Bool) -> String { value ? "on" : "off" }
         return """
         Attic Gloss lab values
-        Mode: \(mode)
+        Mode: \(app.mode)
+        Surface: \(app.surface)
+        Palette: \(app.palette)
+        Tint: \(app.tint), length \(Int((app.tintLength * 100).rounded())) %
+        Brighten glass: \(on(app.brightenGlass))
         Backdrop: \(backdrop.title)
         1 Bare glass at the rim: \(on(rimFade)), width \(f(rimFadeWidth)) pt
         2 A band of Clear glass: \(on(clearBand)), width \(f(clearBandWidth)) pt, \(clearBandMethod.title), one container: \(on(clearBandContainer))

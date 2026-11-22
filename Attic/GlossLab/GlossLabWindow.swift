@@ -18,9 +18,15 @@ final class GlossLabWindows: NSObject, NSWindowDelegate {
     private var backdropHost: NSHostingView<GlossBackdropView>?
     private var followTimer: Timer?
     private var lastPanelFrame: CGRect?
+    private var lastPanelVisible: Bool?
+    /// The docked panel the backdrop sits behind (a pulled-out panel is an
+    /// `AtticPanel` too, so the first one in the app's list may not be it).
+    private weak var dockedPanel: NSWindow?
+    private var occlusionObserver: NSObjectProtocol?
 
-    func configure(settings: AppSettings) {
+    func configure(settings: AppSettings, dockedPanel: NSWindow?) {
         self.settings = settings
+        self.dockedPanel = dockedPanel
         observeBackdrop()
         if UserDefaults.standard.object(forKey: GlossLab.prefix + "openAtLaunch") == nil
             || UserDefaults.standard.bool(forKey: GlossLab.prefix + "openAtLaunch") {
@@ -69,6 +75,8 @@ final class GlossLabWindows: NSObject, NSWindowDelegate {
         let backdrop = GlossLab.shared.backdrop
         guard backdrop != .none else {
             followTimer?.invalidate(); followTimer = nil
+            if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
+            occlusionObserver = nil
             backdropWindow?.orderOut(nil)
             return
         }
@@ -94,28 +102,54 @@ final class GlossLabWindows: NSObject, NSWindowDelegate {
                 MainActor.assumeIsolated { self?.followPanel(force: false) }
             }
         }
+        if occlusionObserver == nil {
+            // The panel hides with orderOut and keeps its frame, so the
+            // frame alone never tells. Its occlusion change on orderOut and
+            // orderFront makes the backdrop follow at once; the timer above
+            // still catches anything this misses.
+            occlusionObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main
+            ) { [weak self] note in
+                guard note.object is AtticPanel else { return }
+                MainActor.assumeIsolated { self?.followPanel(force: false) }
+            }
+        }
     }
 
     private func followPanel(force: Bool) {
         guard let window = backdropWindow else { return }
-        let panel = NSApp.windows.first { $0 is AtticPanel }
+        let panel = dockedPanel ?? NSApp.windows.first { $0 is AtticPanel }
         let frame = panel?.frame
-        if !force, frame == lastPanelFrame { return }
+        let visible = panel?.isVisible == true
+        if !force, frame == lastPanelFrame, visible == lastPanelVisible { return }
         lastPanelFrame = frame
+        lastPanelVisible = visible
         let screen = panel?.screen ?? NSScreen.main
-        guard let screenFrame = screen?.frame else { return }
+        guard let target = Self.backdropFrame(panelFrame: frame, panelVisible: visible, screenFrame: screen?.frame) else {
+            // The panel is hidden: so is the backdrop, on every Space.
+            window.orderOut(nil)
+            return
+        }
+        window.setFrame(target, display: true)
+        window.orderFrontRegardless()
+        if labPanel?.isVisible == true { labPanel?.orderFrontRegardless() }
+    }
+
+    /// Where the backdrop goes for the panel's frame, or nil when it must
+    /// not be on screen: the panel is hidden (or absent), so the backdrop
+    /// hides with it and comes back with it.
+    nonisolated static func backdropFrame(panelFrame: CGRect?, panelVisible: Bool, screenFrame: CGRect?) -> CGRect? {
+        guard panelVisible, let screenFrame else { return nil }
         var target: CGRect
-        if let frame, frame.width > 1 {
+        if let panelFrame, panelFrame.width > 1 {
             // Generous room around the panel: glass bends what lies well
             // outside its own edge.
-            target = frame.insetBy(dx: -220, dy: -220).intersection(screenFrame)
+            target = panelFrame.insetBy(dx: -220, dy: -220).intersection(screenFrame)
         } else {
             target = CGRect(x: screenFrame.midX, y: screenFrame.minY, width: screenFrame.width / 2, height: screenFrame.height)
         }
         if target.isEmpty { target = screenFrame }
-        window.setFrame(target, display: true)
-        window.orderFrontRegardless()
-        if labPanel?.isVisible == true { labPanel?.orderFrontRegardless() }
+        return target
     }
 }
 
@@ -125,6 +159,13 @@ struct GlossLabView: View {
     @Bindable var lab: GlossLab
     @ObservedObject var settings: AppSettings
     @State private var copied = false
+
+    /// The app's own glass settings, for Copy values.
+    private var appValues: GlossLab.AppValues {
+        GlossLab.AppValues(mode: settings.appearance.title, surface: settings.panelSurfaceStyle.title,
+                           palette: settings.panelTheme.title, tint: settings.panelTint.title,
+                           tintLength: settings.panelTintLength, brightenGlass: settings.brightenGlass)
+    }
 
     var body: some View {
         ScrollView {
@@ -147,7 +188,7 @@ struct GlossLabView: View {
                 HStack {
                     Button("Copy values") {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(lab.valuesText(mode: settings.appearance.title), forType: .string)
+                        NSPasteboard.general.setString(lab.valuesText(app: appValues), forType: .string)
                         copied = true
                     }
                     Button("All off") { lab.allOff() }
@@ -163,7 +204,7 @@ struct GlossLabView: View {
                             settings.appearance = .dark
                             lab.apply3D()
                         }
-                        Text("Dark, plus 5 and 3").font(.caption).foregroundStyle(.secondary)
+                        Text("Dark, plus 5 (Keeps out off) and 3").font(.caption).foregroundStyle(.secondary)
                     }
                 }
 
@@ -197,6 +238,9 @@ struct GlossLabView: View {
 
                 toggle("5 · Light from the top", $lab.topLight) {
                     Toggle("Keeps out from under the controls", isOn: $lab.topLightKeepsOut)
+                    Text("With Keeps out on, the light leaves the top and bottom control bands, so it can't be brightest at the top.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     slider("Light: top", $lab.topLightLight, 0...0.6)
                     slider("Light: shade", $lab.bottomShadeLight, 0...0.4)
                     slider("Dark: top", $lab.topLightDark, 0...0.6)

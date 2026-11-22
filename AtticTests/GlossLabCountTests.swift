@@ -389,7 +389,7 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertTrue(lab.clearBand); XCTAssertTrue(lab.glassShadow); XCTAssertTrue(lab.glassSpill)
         XCTAssertEqual(lab.clearBandMethod, .stacked); XCTAssertTrue(lab.clearBandContainer)
         XCTAssertEqual(lab.clearBandWidth, 10); XCTAssertEqual(lab.shadowSoftRadius, 9); XCTAssertEqual(lab.spillStrength, 0.3)
-        let text = lab.valuesText(mode: "Dark")
+        let text = lab.valuesText(app: Self.app(mode: "Dark"))
         XCTAssertTrue(text.contains("2 A band of Clear glass: on, width 10.00 pt, Stacked, one container: on"), text)
         XCTAssertTrue(text.contains("7 A shadow that fits glass: on"), text)
         XCTAssertTrue(text.contains("radius 9.00 pt"), text)
@@ -404,6 +404,45 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertFalse(fresh.clearBand || fresh.glassShadow || fresh.glassSpill, "pass 2 starts off")
     }
 
+    private static func app(mode: String) -> GlossLab.AppValues {
+        GlossLab.AppValues(mode: mode, surface: "Glass", palette: "Original", tint: "Subtle", tintLength: 0.6, brightenGlass: false)
+    }
+
+    /// Fix round 1: Apply 3D turns 5's "Keeps out" off, so the light is
+    /// brightest at the top.
+    func testApply3DTurnsKeepsOutOff() {
+        let lab = GlossLab(defaults: nil)
+        XCTAssertTrue(lab.topLightKeepsOut, "starts on")
+        lab.apply3D()
+        XCTAssertTrue(lab.topLight); XCTAssertTrue(lab.edgeLight)
+        XCTAssertFalse(lab.topLightKeepsOut, "Apply 3D left Keeps out on: the light is cut from the top band")
+    }
+
+    /// Fix round 2: the backdrop follows the panel's visibility, not only
+    /// its frame. The panel hides with orderOut and keeps its frame.
+    func testBackdropHidesAndReturnsWithThePanel() {
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let panel = CGRect(x: 1100, y: 300, width: 380, height: 640)
+        let shown = GlossLabWindows.backdropFrame(panelFrame: panel, panelVisible: true, screenFrame: screen)
+        XCTAssertEqual(shown, panel.insetBy(dx: -220, dy: -220).intersection(screen))
+        XCTAssertNil(GlossLabWindows.backdropFrame(panelFrame: panel, panelVisible: false, screenFrame: screen),
+                     "same frame, panel hidden: the backdrop must leave the screen")
+        XCTAssertEqual(GlossLabWindows.backdropFrame(panelFrame: panel, panelVisible: true, screenFrame: screen), shown,
+                       "the panel back: the backdrop returns to the same place")
+        XCTAssertNil(GlossLabWindows.backdropFrame(panelFrame: nil, panelVisible: false, screenFrame: screen), "no panel, no backdrop")
+    }
+
+    /// Fix round 4: Copy values writes down the app's own glass settings,
+    /// so a pick can be rebuilt from the text alone.
+    func testCopyValuesIncludesTheAppGlassSettings() {
+        let lab = GlossLab(defaults: nil)
+        let text = lab.valuesText(app: GlossLab.AppValues(mode: "Dark", surface: "Frosted", palette: "Sea Glass",
+                                                          tint: "Vivid", tintLength: 0.45, brightenGlass: true))
+        for line in ["Mode: Dark", "Surface: Frosted", "Palette: Sea Glass", "Tint: Vivid, length 45 %", "Brighten glass: on"] {
+            XCTAssertTrue(text.contains(line), "missing \(line):\n\(text)")
+        }
+    }
+
     /// Pass 3's switch and values load, are written down by Copy values,
     /// and All off and Reset sliders reach them.
     func testPassThreeValuesLoadCopyAndReset() throws {
@@ -415,7 +454,7 @@ final class GlossLabValuesTests: XCTestCase {
         defaults.set(0.15, forKey: "GlossLab.movingLightReach")
         let lab = GlossLab(defaults: defaults)
         XCTAssertTrue(lab.movingLight); XCTAssertEqual(lab.movingLightTilt, 20); XCTAssertEqual(lab.movingLightReach, 0.15)
-        let text = lab.valuesText(mode: "Light")
+        let text = lab.valuesText(app: Self.app(mode: "Light"))
         XCTAssertTrue(text.contains("9 Highlights that move: on, tilt 20.00 deg, reach 0.15"), text)
         lab.allOff()
         XCTAssertFalse(lab.movingLight)
