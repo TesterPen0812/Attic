@@ -1,3 +1,16 @@
+## 2026-11-22 · A deleted row's exit plays only in an update that animates
+
+A row ticked or deleted while its tab was not drawn (from Done, say) was
+still drawn in the tab's first frame back and left during the slide. The
+delete exit (`AtticMotionScale.deleteExit`) carried its own animation, and
+SwiftUI plays that even in an update with none; a kept tab host drawn again
+takes what changed meanwhile in such an update. The exit is now
+`AtticDeleteExit`: the same fade and 0.96 shrink on `exit`, in place of the
+animation its list moves on, and nothing in an update with no animation.
+A delete or a tick on the tab shown is unchanged, on Tasks, Completed
+today and Notes. Not covered: a day heading whose rows left while its tab
+was not drawn still fades out on the return (its own transition).
+
 ## 2026-11-21 · Find close and filter clear: the list returns whole, with its motion
 
 When Find closes or a tag filter is cleared, the Tasks list comes back whole
