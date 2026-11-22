@@ -591,7 +591,11 @@ final class AtticLibrary {
     func delete(_ ref: AtticItemRef, in history: UndoHistoryID? = nil) -> Bool {
         undo.perform(in: history ?? Self.defaultHistory(for: ref)) {
             guard performDelete(ref) else { return nil }
-            if !lifecycleRefreshed(after: ref) { refreshItemStores() }
+            // A task store whose delete saved from a fresh read of every row has already read itself. Only a task
+            // delete passes it: the flag outlives that save, and a note or canvas delete does not save through it.
+            if !lifecycleRefreshed(after: ref) {
+                refreshItemStores(freshTasks: ref.kind == .task ? tasks.freshAfterSave : nil)
+            }
             return committedDeletionStep(ref)
         }
     }
