@@ -353,6 +353,14 @@ final class TasksTabHostTests: XCTestCase {
         let first = shown.map { drawings[$0] } ?? settled
         let differing = shown.map { drawings[$0...].filter { $0 != settled }.count } ?? -1
         print("FIRST_FRAME \(label) first_drawn_read=\(shown ?? -1) of \(drawings.count) differing_after=\(differing) first=\(first.summary) | settled=\(settled.summary) | reference=\(expected.summary)")
+        if let shown {
+            for (index, drawing) in drawings.enumerated().dropFirst(shown) where drawing != settled {
+                let rows = drawing.rows.filter { settled.rows[$0.key] != $0.value }
+                    .map { "\($0.key)@\($0.value) settled \(settled.rows[$0.key].map { "\($0)" } ?? "absent")" }
+                let gone = settled.rows.keys.filter { drawing.rows[$0] == nil }
+                print("FIRST_FRAME_DIFF \(label) read=\(index) list=\(drawing.listWidth)x\(drawing.listHeight) rows=\(rows.prefix(4)) missing=\(gone.prefix(4))")
+            }
+        }
         XCTAssertNotNil(shown, "\(label): Later's list is drawn during the switch")
         XCTAssertEqual(differing, 0, "\(label): from its first drawn frame on, Later's list never differs from its settled state (no stale frame, no jump)")
         XCTAssertGreaterThan(settled.rows.count, 0, "\(label): Later has rows to compare")
