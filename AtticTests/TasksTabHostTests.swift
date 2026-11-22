@@ -306,7 +306,12 @@ final class TasksTabHostTests: XCTestCase {
         var rows: [String: CGRect] = [:]
         for row in hosted.model.rows(for: .backlog) {
             guard let frame = hosted.pointer.frame(for: TasksRowID(tab: .backlog, id: row.id)) else { continue }
-            rows[row.model.title] = frame.offsetBy(dx: -hosted.pointer.pageOffset(.backlog), dy: 0)
+            // The pointer adds the slide's offset and this takes it off
+            // again: rounded to a thousandth of a point, so the arithmetic's
+            // 1e-14 is not read as a move.
+            let local = frame.offsetBy(dx: -hosted.pointer.pageOffset(.backlog), dy: 0)
+            func round(_ value: CGFloat) -> CGFloat { (value * 1000).rounded() / 1000 }
+            rows[row.model.title] = CGRect(x: round(local.minX), y: round(local.minY), width: round(local.width), height: round(local.height))
         }
         return LaterDrawing(listWidth: list?.frame.width ?? -1, listHeight: list?.frame.height ?? -1, rows: rows)
     }
