@@ -266,7 +266,8 @@ class LaunchLocalPreviewTest < Minitest::Test
       .sub("-DATTIC_LOCAL_ONLY", "-DATTIC_LOCAL_ONLY\\ -DATTIC_MEASURE")
       .sub(/ build $/, " ATTIC_MACOS_ENTITLEMENTS=")
     assert measure_command.start_with?(expected), "#{measure_command}\nis not\n#{expected}..."
-    assert_match(%r{ ATTIC_MACOS_ENTITLEMENTS=\S*/PreviewState/measure\.entitlements build $}, measure_command)
+    assert_match(%r{ ATTIC_MACOS_ENTITLEMENTS=\S*/PreviewState/measure\.entitlements ENTITLEMENTS_DONT_REMOVE_GET_TASK_ALLOW=YES build $}, measure_command)
+    refute_includes plain_command, "GET_TASK_ALLOW"
     refute_includes measure_command, "CODE_SIGN_ENTITLEMENTS"
     refute_includes measure_command, "ATTIC_FIRST_TOUCH_LOG"
     refute_includes measure_command, "ATTIC_IDLE_SAMPLER"

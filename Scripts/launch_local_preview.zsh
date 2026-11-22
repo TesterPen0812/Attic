@@ -428,7 +428,12 @@ settings_arguments=("${build_arguments[@]:#-quiet}")
 $frame_monitor && frame_monitor_state=on || frame_monitor_state=off
 if $measure; then
     # App-only override point (the embedded agent helper keeps its own).
-    build_arguments+=("ATTIC_MACOS_ENTITLEMENTS=$measure_entitlements_file")
+    # Xcode's packaging drops get-task-allow from a Release build's file
+    # unless told to keep it; only a file that names the key is affected.
+    build_arguments+=(
+        "ATTIC_MACOS_ENTITLEMENTS=$measure_entitlements_file"
+        ENTITLEMENTS_DONT_REMOVE_GET_TASK_ALLOW=YES
+    )
     build_label="debug=0 measure=1 opt=1 frame_monitor=$frame_monitor_state"
 elif $release_like; then
     build_label="debug=0 measure=0 opt=1 frame_monitor=off"
