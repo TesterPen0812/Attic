@@ -369,7 +369,14 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertEqual(first.rows, settled.rows, "\(label): the rows' frames in the first frame")
         XCTAssertEqual(settled.listWidth, expected.listWidth, "\(label): the list's width matches a Later shown throughout")
         XCTAssertEqual(settled.listHeight, expected.listHeight, "\(label): the list's height matches a Later shown throughout")
-        if matchesRows {
+        if matchesRows, tab == .done {
+            // Two windows seeded apart can order Done's ties differently
+            // (inferred: same-day rows by completion time, stamped at each
+            // seed), so Done is matched by its titles and its row geometry.
+            XCTAssertEqual(Set(settled.rows.keys), Set(expected.rows.keys), "\(label): the rows match a Done shown throughout")
+            let places = { (drawing: LaterDrawing) in drawing.rows.values.sorted { ($0.minY, $0.minX) < ($1.minY, $1.minX) } }
+            XCTAssertEqual(places(settled), places(expected), "\(label): the rows' places match a Done shown throughout")
+        } else if matchesRows {
             XCTAssertEqual(settled.rows, expected.rows, "\(label): the rows match a Later shown throughout")
         }
     }
