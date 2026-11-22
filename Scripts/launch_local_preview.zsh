@@ -48,6 +48,11 @@ Options:
                                the store stays the preview's development.store.
                                Not combinable with --optimized,
                                --first-touch-log or --configuration.
+  --measure                    With --release-like only: add ATTIC_MEASURE,
+                               which compiles the first-touch marks the
+                               measuring drivers read, and nothing else, plus
+                               get-task-allow so a profiler can attach. Its
+                               numbers are labelled debug=0 measure=1 opt=1.
   --first-touch-log            Include the preview-only first-touch diagnostics.
   --build-only                 Build and emit provenance without launching.
   --verify                     Build and launch nothing: check that exactly one
@@ -89,6 +94,7 @@ appearance=""
 build_only=false
 optimized=false
 release_like=false
+measure=false
 configuration_given=false
 first_touch_log=false
 verify_only=false
@@ -169,6 +175,10 @@ while (( $# > 0 )); do
             release_like=true
             shift
             ;;
+        --measure)
+            measure=true
+            shift
+            ;;
         --first-touch-log)
             first_touch_log=true
             shift
@@ -200,6 +210,8 @@ if $release_like; then
         || fail "--release-like cannot be combined with a signing identity or team; it is ad hoc only"
     configuration="Release"
 fi
+# The measure build is the release-like build plus ATTIC_MEASURE only.
+! $measure || $release_like || fail "--measure requires --release-like"
 
 [[ -n "$display_name" ]] || fail "display name cannot be empty"
 [[ "$display_name" =~ '^[^/[:cntrl:]]+$' && "$display_name" != . && "$display_name" != .. ]] || fail "display name must be a single path-safe component"
@@ -241,6 +253,7 @@ readonly entitlements_file="$state_dir/entitlements.plist"
 readonly signature_file="$state_dir/signature.txt"
 readonly preview_info_plist="$state_dir/Info.plist"
 readonly build_settings_file="$state_dir/build-settings.txt"
+readonly measure_entitlements_file="$state_dir/measure.entitlements"
 readonly launch_provenance_file="$state_dir/launch-provenance.txt"
 # Bounded waits: a new instance must appear, map its images and then stay up.
 readonly launch_appear_timeout_seconds=20
@@ -340,6 +353,9 @@ other_swift_flags='$(inherited) -DATTIC_LOCAL_ONLY'
 if $first_touch_log; then
     other_swift_flags+=' -DATTIC_FIRST_TOUCH_LOG'
 fi
+if $measure; then
+    other_swift_flags+=' -DATTIC_MEASURE'
+fi
 build_arguments=(
     -quiet
     -project "$project_path"
@@ -388,6 +404,18 @@ if $release_like; then
 else
     store_environment=unchanged
 fi
+# The settings read sees the project's own entitlements file; the measure
+# build then signs with a copy that adds only get-task-allow.
+typeset -a settings_arguments
+settings_arguments=("${build_arguments[@]:#-quiet}")
+if $measure; then
+    build_arguments+=("CODE_SIGN_ENTITLEMENTS=$measure_entitlements_file")
+    build_label="debug=0 measure=1 opt=1"
+elif $release_like; then
+    build_label="debug=0 measure=0 opt=1"
+else
+    build_label="not resolved (release-like only)"
+fi
 
 print_resolved_configuration() {
     print -- "branch=$branch_name"
@@ -403,6 +431,8 @@ print_resolved_configuration() {
     print -- "configuration=$configuration"
     print -- "optimized=$optimized"
     print -- "release_like=$release_like"
+    print -- "measure=$measure"
+    print -- "build_label=$build_label"
     print -- "store_environment=$store_environment"
     print -- "first_touch_log=$first_touch_log"
 }
@@ -438,7 +468,7 @@ code_sign_entitlements="not resolved (read only for --release-like)"
 if $release_like; then
     # Resolve the app target's settings with the exact build arguments
     # (without -quiet) and refuse to build anything that is not local-only.
-    "$xcodebuild_command" "${build_arguments[@]:#-quiet}" -showBuildSettings >"$build_settings_file" 2>/dev/null \
+    "$xcodebuild_command" "${settings_arguments[@]}" -showBuildSettings >"$build_settings_file" 2>/dev/null \
         || fail "could not resolve the release-like build settings"
     app_settings=$(/usr/bin/awk '/^Build settings for action build and target /{inside = ($0 ~ / target Attic:$/); next} inside' "$build_settings_file")
     [[ -n "$app_settings" ]] || fail "release-like build settings have no Attic target"
@@ -448,9 +478,26 @@ if $release_like; then
         || fail "release-like build settings lack ATTIC_LOCAL_ONLY; refusing to build a non-local-only app"
     [[ "$resolved_flags" != *(" DEBUG "|" -DDEBUG "|ATTIC_IDLE_SAMPLER|ATTIC_FIRST_TOUCH_LOG)* ]] \
         || fail "release-like build settings carry DEBUG or a Local diagnostic flag; refusing to build"
+    if $measure; then
+        [[ "$resolved_flags" == *(" -DATTIC_MEASURE "|" ATTIC_MEASURE ")* ]] \
+            || fail "measure build settings lack ATTIC_MEASURE; refusing to build"
+    else
+        [[ "$resolved_flags" != *ATTIC_MEASURE* ]] \
+            || fail "release-like build settings carry ATTIC_MEASURE without --measure; refusing to build"
+    fi
     code_sign_entitlements=$(resolved_setting CODE_SIGN_ENTITLEMENTS)
     [[ -n "$code_sign_entitlements" ]] || fail "release-like build settings name no CODE_SIGN_ENTITLEMENTS"
     print -- "code_sign_entitlements=$code_sign_entitlements"
+    if $measure; then
+        # The project's own file plus get-task-allow, nothing else.
+        measure_source=$code_sign_entitlements
+        [[ "$measure_source" == /* ]] || measure_source="${project_path:h}/$measure_source"
+        [[ -f "$measure_source" ]] || fail "measure build cannot read the entitlements file: $measure_source"
+        /bin/cp "$measure_source" "$measure_entitlements_file"
+        /usr/bin/plutil -replace com.apple.security.get-task-allow -bool YES "$measure_entitlements_file" \
+            || fail "could not add get-task-allow to the measure entitlements"
+        print -- "measure_entitlements=$measure_entitlements_file"
+    fi
 fi
 
 "$xcodebuild_command" "${build_arguments[@]}" build
@@ -480,6 +527,15 @@ if [[ -n "$cloud_keys" ]]; then
     fail "built app carries iCloud or push entitlements (${(j:, :)${(f)cloud_keys}}); refusing a non-local-only preview"
 fi
 
+# get-task-allow lets a profiler attach: the measure build must carry it and
+# the plain release-like build must not. (Local builds get it from Xcode.)
+get_task_allow=$(/usr/bin/plutil -extract com.apple.security.get-task-allow raw -o - "$entitlements_file" 2>/dev/null || true)
+if $measure; then
+    [[ "$get_task_allow" == true ]] || fail "measure build lacks get-task-allow; a profiler could not attach"
+elif $release_like; then
+    [[ -z "$get_task_allow" ]] || fail "release-like build carries get-task-allow; only --measure may"
+fi
+
 executable_hash=$(/usr/bin/shasum -a 256 "$built_executable" | /usr/bin/awk '{print $1}')
 {
     print_resolved_configuration
@@ -493,6 +549,7 @@ executable_hash=$(/usr/bin/shasum -a 256 "$built_executable" | /usr/bin/awk '{pr
         print -- "debug_dylib_inode_size_sha256=$(file_identity "${built_executable}.debug.dylib")"
     fi
     print -- "code_sign_entitlements=$code_sign_entitlements"
+    print -- "build_label=$build_label"
     print -- "entitlements=$entitlements_file"
     print -- "signature=$signature_file"
 } >"$manifest_file"
@@ -501,6 +558,10 @@ executable_hash=$(/usr/bin/shasum -a 256 "$built_executable" | /usr/bin/awk '{pr
 print -- "entitlements_begin"
 /bin/cat "$entitlements_file"
 print -- "entitlements_end"
+if $release_like; then
+    signature_kind=$(/usr/bin/sed -n 's/^Signature=//p' "$signature_file" | /usr/bin/head -1)
+    print -- "summary build_label=$build_label configuration=$configuration get_task_allow=${get_task_allow:-absent} cloud_push_keys=0 signature=${signature_kind:-unknown} bundle_id=$bundle_id executable_sha256=$executable_hash"
+fi
 
 $build_only && exit 0
 

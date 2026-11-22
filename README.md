@@ -145,6 +145,14 @@ switched off (see [What is not active](#what-is-not-active)).
      timing builds that read those seams use it; its numbers include the
      debug-only work.
 
+   `--release-like --measure` is the release-like build plus one Swift
+   condition, `ATTIC_MEASURE`, which compiles the first-touch marks the
+   measuring drivers read (without the Local memory records), and
+   `get-task-allow` so a profiler can attach. The guards check that
+   `ATTIC_MEASURE` and `get-task-allow` appear only in this mode, and the
+   summary line labels its numbers `debug=0 measure=1 opt=1`. Seed and
+   launch seams stay `DEBUG`-only.
+
    `./script/build_and_run.sh --release-like` passes the mode through.
    `--verify` checks that the running preview is the build on disk.
 
