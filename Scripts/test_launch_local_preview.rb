@@ -88,6 +88,54 @@ class LaunchLocalPreviewTest < Minitest::Test
     assert_includes source, "attic-exclusive-ui.lock"
   end
 
+  def test_release_like_builds_release_without_debug_or_diagnostic_flags
+    stdout, stderr, status = dry_run("--release-like")
+
+    assert status.success?, stderr
+    assert_includes stdout, "release_like=true"
+    assert_includes stdout, "configuration=Release"
+    assert_includes stdout, "-configuration Release"
+    assert_match(%r{CONFIGURATION_BUILD_DIR=/tmp/attic-preview-derived-[0-9a-f]{12}/Build/Products/Release}, stdout)
+    assert_includes stdout, "-DATTIC_LOCAL_ONLY"
+    refute_includes stdout, "ATTIC_FIRST_TOUCH_LOG"
+    refute_includes stdout, "ATTIC_IDLE_SAMPLER"
+    %w[
+      SWIFT_OPTIMIZATION_LEVEL=-O
+      SWIFT_COMPILATION_MODE=wholemodule
+      ENABLE_DEBUG_DYLIB=NO
+      ENABLE_TESTABILITY=NO
+      STRIP_INSTALLED_PRODUCT=NO
+      CODE_SIGN_IDENTITY=-
+    ].each { |setting| assert_includes stdout, setting }
+    # Without DEBUG the app would otherwise pick the Production store name;
+    # the preview keeps the same development.store a Local preview opens.
+    assert_includes stdout, "store_environment=Development"
+    assert_match(/^bundle_id=com\.taha\.Attic\.preview\.[0-9a-f]{12}$/, stdout)
+  end
+
+  def test_release_like_rejects_debug_build_options
+    [
+      ["--optimized"],
+      ["--first-touch-log"],
+      ["--configuration", "Local"]
+    ].each do |extra|
+      _stdout, stderr, status = dry_run("--release-like", *extra)
+
+      refute status.success?, "--release-like #{extra.join(' ')} must be rejected"
+      assert_includes stderr, "--release-like cannot be combined"
+    end
+  end
+
+  def test_desktop_run_passes_release_like_through_and_finds_its_product
+    wrapper = File.join(ROOT, "script", "build_and_run.sh")
+    stdout, stderr, status = Open3.capture3(wrapper, "--dry-run", "--release-like", chdir: ROOT)
+    assert status.success?, stderr
+    assert_includes stdout, "release_like=true"
+    assert_includes stdout, "-configuration Release"
+    assert_match(/^bundle_id=com\.taha\.Attic\.local\.[0-9a-f]{12}$/, stdout)
+    assert_includes File.read(wrapper), "Build/Products/$CONFIGURATION/"
+  end
+
   def test_desktop_run_delegates_to_same_isolated_launcher
     wrapper = File.join(ROOT, "script", "build_and_run.sh")
     stdout, stderr, status = Open3.capture3(wrapper, "--dry-run", chdir: ROOT)
