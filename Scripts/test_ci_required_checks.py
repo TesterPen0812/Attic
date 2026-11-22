@@ -181,13 +181,27 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn('round_trip_scheme.add_test_target(round_trip_tests)', generator)
         self.assertIn('%w[RoundFX3Tests.swift TestSupport.swift InvisibleHostObserver.swift]', generator)
         required = workflow.split('  required:', 1)[1].split('\n  ui:', 1)[0]
-        self.assertIn('needs: [validate-inputs, macos, round-trips, notes-seeds, unit-continuation]', required)
+        self.assertIn('needs: [validate-inputs, macos, round-trips, notes-seeds, unit-continuation, release-build]', required)
         self.assertIn("always() && inputs.lane != 'costs' && inputs.lane != 'fka'", required)
         self.assertIn('MACOS_JOB: ${{ needs.macos.result }}', required)
         self.assertIn('ROUND_TRIPS: ${{ needs.round-trips.result }}', required)
         self.assertIn('NOTES_SEEDS: ${{ needs.notes-seeds.result }}', required)
         self.assertIn('UNIT_CONTINUATION: ${{ needs.unit-continuation.result }}', required)
+        self.assertIn('RELEASE_BUILD: ${{ needs.release-build.result }}', required)
         self.assertIn('python3 Scripts/ci_required_checks.py --parallel', required)
+
+    def test_release_configuration_is_built_by_its_own_required_job(self):
+        root = Path(__file__).resolve().parent.parent
+        workflow = (root / '.github/workflows/macos-ci.yml').read_text()
+        job = workflow.split('\n  release-build:', 1)[1].split('\n  required:', 1)[0]
+        # The same build --release-like makes: Release, ATTIC_LOCAL_ONLY,
+        # ad hoc, with the launcher's own guards; build only, no tests.
+        self.assertIn('Scripts/launch_local_preview.zsh --release-like --build-only', job)
+        self.assertIn("inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests", job)
+        self.assertNotIn('continue-on-error', job)
+        self.assertNotIn('--signing-identity', job)
+        self.assertNotIn('test-without-building', job)
+        self.assertEqual(PARALLEL_CHECKS['RELEASE_BUILD'], 'release-build')
 
     def test_exhaustive_unit_suites_are_partitioned_across_required_runners(self):
         import re
