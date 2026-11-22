@@ -676,8 +676,13 @@ struct TasksPagerPages<Page: View>: View {
                         // Drawn and in use are two states (HB-01): a
                         // neighbour a swipe shows, or Tasks leaving in a
                         // shell switch, is drawn and takes no input or read.
+                        // The list animates between its rows by itself, so
+                        // a root that changes them is laid out as it is set
+                        // (PR 41, Find close); a hidden tab's are not read.
                         KeptContentHost(drawn: drawn, interactive: index == shown && model.isPageShown,
-                                        space: TasksPagerSlot.localSpace(index)) {
+                                        space: TasksPagerSlot.localSpace(index),
+                                        rows: drawn && TasksTab.allCases.indices.contains(index)
+                                            ? AnyHashable(model.listIDs(for: TasksTab.allCases[index])) : nil) {
                             TasksKeptPage(frozen: !drawn) { page(index, drawn) }
                                 .equatable()
                         }

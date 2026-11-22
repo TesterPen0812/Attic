@@ -166,10 +166,22 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// the update's transaction, the content takes one pass, as it does
     /// without a host. A hidden root is not laid out: its graph does not
     /// run until it is drawn (host-boundary.md §4.2).
+    ///
+    /// Only a root that moves the content's rows is laid out here
+    /// (`KeptContentHost.rows`). A layout inside the panel's update runs
+    /// before the content's own actions, which wait for that update to
+    /// end (a row's focus change redraws its cells that way), so the host
+    /// was then laid out a second time for them: twice a row click, where
+    /// AppKit's one pass takes the root and the actions together.
     func setRoot(_ root: AnyView, laidOut: Bool, under transaction: Transaction) {
         withTransaction(transaction) {
             rootView = root
-            if laidOut, window != nil { layoutSubtreeIfNeeded() }
+            if laidOut, window != nil {
+                #if DEBUG
+                KeptContentHostCounts.laidOutInSet += 1
+                #endif
+                layoutSubtreeIfNeeded()
+            }
         }
     }
 
@@ -296,8 +308,8 @@ final class KeptContentContainer: NSView {
 /// updates do not invalidate the hidden graph); `interactive` decides input,
 /// keyboard and accessibility. The root is set, and a drawn one laid out,
 /// under the update's transaction, so an animation or its suppression
-/// crosses the boundary (HB-08) and the content takes the change in one
-/// pass (`KeptContentHostingView.setRoot`).
+/// crosses the boundary (HB-08) and the content takes a change of its rows
+/// in one pass (`KeptContentHostingView.setRoot`).
 struct KeptContentHost<Content: View>: NSViewRepresentable {
     let drawn: Bool
     let interactive: Bool
@@ -305,12 +317,18 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     /// (the host fills the slot that declares it outside, so the origins
     /// are the same).
     var space: NamedCoordinateSpace?
+    /// The rows the content animates between by itself (a list's ids), if
+    /// it has any. A drawn root that changes them is laid out in the pass
+    /// that sets it; any other root is left to AppKit's pass (`setRoot`).
+    var rows: AnyHashable?
     @ViewBuilder let content: () -> Content
 
     @MainActor
     final class Coordinator {
         /// The root last set was a hidden one.
         var hiddenRootSet = false
+        /// The rows of the drawn root last set; nil after a hidden one.
+        var drawnRows: AnyHashable?
         /// The host's own environment, held while it is not drawn.
         let hold = KeptEnvironmentHold()
         /// The host, as its content knows it (one box for the host's life,
@@ -330,6 +348,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         container.host = host
         container.addSubview(host)
         context.coordinator.hiddenRootSet = !drawn
+        context.coordinator.drawnRows = drawn ? rows : nil
         #if DEBUG
         KeptContentHostCounts.root(drawn: drawn)
         #endif
@@ -343,13 +362,22 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         // equality, which this boundary carries across the host).
         if drawn || !coordinator.hiddenRootSet {
             let root = root(context)
-            host.setRoot(root, laidOut: drawn, under: context.transaction)
+            host.setRoot(root, laidOut: Self.movesRows(from: coordinator.drawnRows, to: drawn ? rows : nil),
+                         under: context.transaction)
             #if DEBUG
             KeptContentHostCounts.root(drawn: drawn)
             #endif
         }
         coordinator.hiddenRootSet = !drawn
+        coordinator.drawnRows = drawn ? rows : nil
         host.isInteractive = interactive
+    }
+
+    /// Whether a root moves the rows of the drawn root before it. A root
+    /// revealed (nothing drawn before it) and a hidden one move none.
+    static func movesRows(from drawnRows: AnyHashable?, to rows: AnyHashable?) -> Bool {
+        guard let drawnRows, let rows else { return false }
+        return drawnRows != rows
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: KeptContentContainer, context: Context) -> CGSize? {
@@ -527,12 +555,15 @@ enum KeptContentHostCounts {
     }
 
     static var layouts = Split()
+    /// Root sets that laid the host out in their own pass.
+    static var laidOutInSet = 0
     static var roots = Split()
     static var accessibilityChildrenCalls = Split()
     static var accessibilityHits = Split()
 
     static func reset() {
         layouts = Split()
+        laidOutInSet = 0
         roots = Split()
         accessibilityChildrenCalls = Split()
         accessibilityHits = Split()

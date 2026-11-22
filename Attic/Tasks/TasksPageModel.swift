@@ -1053,6 +1053,9 @@ final class TasksPageModel: ObservableObject {
         return (snapshot.rows, snapshot.sections, snapshot.entries, snapshot.ids, snapshot.idsByStatus, snapshot.selectionRuns)
     }
 
+    /// The list's row ids alone (the pager tells a tab's host when they move).
+    func listIDs(for tab: TasksTab) -> [UUID] { cached(tab).ids }
+
     /// File-drag hover uses the current snapshot's membership; it never
     /// walks the task list just because the pointer moved.
     func eligibleRowIDs(for tab: TasksTab) -> Set<UUID> { cached(tab).eligibleIDs }

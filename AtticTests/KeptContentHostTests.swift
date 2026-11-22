@@ -516,6 +516,16 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertEqual(count.placements, drawn, "a hidden root is not laid out by the pass that sets it")
     }
 
+    /// Which roots the boundary lays out as it sets them: one that changes
+    /// the rows of the drawn root before it, and no other.
+    func testOnlyAChangeOfDrawnRowsIsLaidOutInThePassThatSetsIt() {
+        typealias Host = KeptContentHost<EmptyView>
+        XCTAssertTrue(Host.movesRows(from: AnyHashable([1, 2]), to: AnyHashable([1, 2, 3])), "rows came")
+        XCTAssertFalse(Host.movesRows(from: AnyHashable([1, 2]), to: AnyHashable([1, 2])), "the same rows (a click, a hover)")
+        XCTAssertFalse(Host.movesRows(from: nil, to: AnyHashable([1, 2])), "a root revealed: nothing was drawn before it")
+        XCTAssertFalse(Host.movesRows(from: AnyHashable([1, 2]), to: nil), "a hidden root, or content with no rows")
+    }
+
     func testANestedHostsOwnUpdateRunsInsideTheOverlayLayoutGuard() {
         let fixture = makeFixture()
         defer { fixture.window.close() }

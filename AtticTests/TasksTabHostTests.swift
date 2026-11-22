@@ -50,6 +50,36 @@ final class TasksTabHostTests: XCTestCase {
     }
 
     #if DEBUG
+    /// PR 41: only a root that moves the list's rows is laid out in the pass
+    /// that sets it. A row click's root moves none, so AppKit lays the host
+    /// in use out once, with the click's focus change; laid out as it was
+    /// set, the host was laid out a second time for that change.
+    func testOnlyARootThatMovesRowsIsLaidOutInThePassThatSetsIt() throws {
+        let hosted = try warmed()
+        defer { hosted.close() }
+        hosted.spin(0.5)
+        let rows = hosted.model.rows(for: .now).filter { $0.status != .done }
+        XCTAssertGreaterThanOrEqual(rows.count, 2, "two rows to click in turn")
+        for round in 0..<5 {
+            KeptContentHostCounts.reset()
+            try hosted.clickRow(rows[round % 2].id, tab: .now)
+            hosted.spin(0.4)
+            // The first click also brings the keyboard to the list.
+            guard round > 0 else { continue }
+            let roots = KeptContentHostCounts.roots.on
+            XCTAssertGreaterThan(roots, 0, "click \(round) set the root of the host in use, so the counts mean something")
+            XCTAssertEqual(KeptContentHostCounts.laidOutInSet, 0, "click \(round) moved no row: its root is left to AppKit's pass")
+            // One root a click alone; a late update in the same wait sets
+            // another, with a pass of its own.
+            XCTAssertLessThanOrEqual(KeptContentHostCounts.layouts.on, roots, "click \(round): the host in use is laid out once a root")
+            print("ROWCLICK click=\(round) roots_on=\(roots) layouts_on=\(KeptContentHostCounts.layouts.on) laid_out_in_set=\(KeptContentHostCounts.laidOutInSet)")
+        }
+        KeptContentHostCounts.reset()
+        XCTAssertNotNil(hosted.store.create(title: "One more row"))
+        hosted.spin(0.4)
+        XCTAssertGreaterThan(KeptContentHostCounts.laidOutInSet, 0, "a root that adds a row is laid out in the pass that sets it")
+    }
+
     /// The guard (§8.1, HB-07): updates on the tab shown set no root in a
     /// hidden host and run no hidden row; a resize step is reported.
     func testHiddenTabsGetNoRootAndRunNoRowOnTheShownTabsUpdates() throws {
