@@ -412,9 +412,21 @@ final class LibraryDeleteRefreshTests: XCTestCase {
         XCTAssertNil(tasks.task(withID: owner), "the task left Tasks with its writing")
         XCTAssertNil(notes.note(withID: writing))
         XCTAssertTrue(try rowDeleted(owner))
-        // Not checked here: Undo of this delete through this library. Its restore (`restoreOutcome`) adds no
-        // refresh of this library's Tasks, so the task stays out of them; that is older than this test and is
-        // on the board (DELETE-UNDO-NONLIFECYCLE-TASKS).
+        await other.notes.waitForAttachmentReconciliation()
+    }
+
+    func testUndoOfANoteDeleteThroughThatLibraryBringsItsTaskBackToTasks() async throws {
+        // Older than PR 54 and reported there (board id pending): the Undo's restore (`restoreOutcome`) adds no
+        // refresh of this library's Tasks where the commit step misses them, so the task stays out of them.
+        let other = try await handLifecycleToAnotherLibrary()
+        XCTAssertTrue(library.delete(AtticItemRef(.note, writing)))
+        XCTAssertNil(tasks.task(withID: owner))
+        XCTAssertTrue(library.undo.undo(in: .note(writing)))
+        XCTAssertNotNil(notes.note(withID: writing), "Undo brought the writing back to Notes")
+        XCTExpectFailure("Undo through a library that isn't the lifecycle's does not reload its Tasks (PR 54, board id pending)",
+                         strict: true) {
+            XCTAssertNotNil(tasks.task(withID: owner), "Undo brought the task back to Tasks")
+        }
         await other.notes.waitForAttachmentReconciliation()
     }
 
