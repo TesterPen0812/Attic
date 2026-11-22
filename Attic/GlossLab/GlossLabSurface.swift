@@ -164,14 +164,24 @@ struct GlossLabPanelRimLayer: View {
         let dark = design.mode == .dark
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         ZStack {
+            if lab.movingLight {
+                // 9: the same light, drawn by Core Animation and tilted
+                // towards the pointer without a SwiftUI body run.
+                GlossMovingEdgeLight(cornerSize: cornerSize, width: lab.edgeLightWidth,
+                                     strength: dark ? lab.edgeLightDark : lab.edgeLightLight,
+                                     tilt: lab.movingLightTilt, reach: lab.movingLightReach)
+            }
             if lab.edgeLight {
                 let strength = dark ? lab.edgeLightDark : lab.edgeLightLight
                 // Bright along the top and the upper sides, fading down.
-                shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(strength), location: 0),
-                                                          .init(color: .white.opacity(strength * 0.4), location: 0.22),
-                                                          .init(color: .white.opacity(0), location: 0.55)],
-                                                  startPoint: .top, endPoint: .bottom),
-                                   lineWidth: lab.edgeLightWidth)
+                // With 9 on, 9 draws this light instead.
+                if !lab.movingLight {
+                    shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(strength), location: 0),
+                                                              .init(color: .white.opacity(strength * 0.4), location: 0.22),
+                                                              .init(color: .white.opacity(0), location: 0.55)],
+                                                      startPoint: .top, endPoint: .bottom),
+                                       lineWidth: lab.edgeLightWidth)
+                }
                 // A thin darker line along the bottom.
                 shape.inset(by: 0.25)
                     .stroke(LinearGradient(stops: [.init(color: .black.opacity(0), location: 0.7),
@@ -186,6 +196,231 @@ struct GlossLabPanelRimLayer: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// 9. Highlights that move: idea 3's Edge light (the same stroke, stops and
+/// strengths) drawn by Core Animation, its gradient axis tilted a little
+/// towards the pointer. Nothing here runs a SwiftUI body per pointer move:
+/// a display link reads the pointer once per refresh and writes the
+/// gradient's two points directly, with implicit actions off. Under Reduce
+/// Motion (macOS or Settings) the link is stopped and the light rests where
+/// idea 3 draws it.
+struct GlossMovingEdgeLight: NSViewRepresentable {
+    let cornerSize: CGFloat
+    let width: CGFloat
+    let strength: Double
+    let tilt: Double
+    let reach: Double
+
+    func makeNSView(context: Context) -> GlossMovingEdgeLightView { GlossMovingEdgeLightView() }
+
+    func updateNSView(_ view: GlossMovingEdgeLightView, context: Context) {
+        #if DEBUG
+        GlossLabCounters.movingUpdates += 1
+        #endif
+        view.configure(cornerSize: cornerSize, width: width, strength: strength, tilt: tilt, reach: reach)
+    }
+
+    static func dismantleNSView(_ view: GlossMovingEdgeLightView, coordinator: ()) { view.stop() }
+}
+
+final class GlossMovingEdgeLightView: NSView {
+    #if DEBUG
+    /// Tests only: the pointer in screen points, in place of the real one.
+    @MainActor static var pointerForTesting: CGPoint?
+    #endif
+
+    private let gradient = CAGradientLayer()
+    private let stroke = CAShapeLayer()
+    private var link: CADisplayLink?
+    private var lastTimestamp: CFTimeInterval?
+    private var cornerSize: CGFloat = 0
+    private var width: CGFloat = 2.5
+    private var tilt: Double = 10
+    private var reach: Double = 0.06
+    private var builtFor: (size: CGSize, corner: CGFloat, width: CGFloat)?
+    /// Where the light points now and where the pointer asks it to go,
+    /// each as (x, y) in -1...1 of the panel's half-size.
+    private(set) var current = CGPoint.zero
+    private var lastWritten: (start: CGPoint, end: CGPoint)?
+    private var observers: [NSObjectProtocol] = []
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
+        gradient.mask = stroke
+        stroke.fillColor = nil
+        stroke.strokeColor = NSColor.black.cgColor
+        gradient.actions = ["startPoint": NSNull(), "endPoint": NSNull(), "colors": NSNull(), "locations": NSNull(),
+                            "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
+        stroke.actions = ["path": NSNull(), "lineWidth": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
+        gradient.locations = [0, 0.22, 0.55]
+        layer?.addSublayer(gradient)
+        setAccessibilityElement(false)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override var acceptsFirstResponder: Bool { false }
+    override func accessibilityChildren() -> [Any]? { [] }
+
+    var gradientPoints: (start: CGPoint, end: CGPoint) { (gradient.startPoint, gradient.endPoint) }
+
+    func configure(cornerSize: CGFloat, width: CGFloat, strength: Double, tilt: Double, reach: Double) {
+        self.cornerSize = cornerSize
+        self.width = width
+        self.tilt = tilt
+        self.reach = reach
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        gradient.colors = [NSColor.white.withAlphaComponent(strength).cgColor,
+                           NSColor.white.withAlphaComponent(strength * 0.4).cgColor,
+                           NSColor.white.withAlphaComponent(0).cgColor]
+        CATransaction.commit()
+        rebuildIfNeeded()
+        writePoints()
+        updateRunning()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        rebuildIfNeeded()
+    }
+
+    override func layout() {
+        super.layout()
+        rebuildIfNeeded()
+    }
+
+    /// The stroke follows the panel's squircle, as idea 3's `strokeBorder`
+    /// does (inset by half the width). Rebuilt only when the size, corner
+    /// or width changes, never per pointer move.
+    private func rebuildIfNeeded() {
+        let size = bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        if gradient.superlayer == nil { layer?.addSublayer(gradient) }
+        if let built = builtFor, built.size == size, built.corner == cornerSize, built.width == width { return }
+        builtFor = (size, cornerSize, width)
+        #if DEBUG
+        GlossLabCounters.movingPathBuilds += 1
+        #endif
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        gradient.frame = bounds
+        stroke.frame = gradient.bounds
+        let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
+        stroke.path = shape.inset(by: width / 2).path(in: CGRect(origin: .zero, size: size)).cgPath
+        stroke.lineWidth = width
+        CATransaction.commit()
+        // The unit points do not change with the size; this writes only
+        // on the first build (or if the layer's flip changed).
+        writePoints()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observers.forEach { NotificationCenter.default.removeObserver($0); NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        observers = []
+        guard let window else { return stop() }
+        writePoints()
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
+                                                                object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateRunning() }
+        })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateRunning() }
+        })
+        updateRunning()
+    }
+
+    /// The link runs only while the view is in a visible window and motion
+    /// is allowed. Under Reduce Motion the light goes back to rest.
+    func updateRunning() {
+        let visible = window.map { $0.isVisible && $0.occlusionState.contains(.visible) } ?? false
+        if AtticMotionPreference.reducesMotion {
+            stopLink()
+            if current != .zero { current = .zero; writePoints() }
+            return
+        }
+        guard visible else { return stopLink() }
+        guard link == nil else { return }
+        let link = displayLink(target: self, selector: #selector(frame(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+        lastTimestamp = nil
+    }
+
+    var isRunning: Bool { link != nil }
+
+    private func stopLink() {
+        link?.invalidate()
+        link = nil
+    }
+
+    func stop() {
+        stopLink()
+        observers.forEach { NotificationCenter.default.removeObserver($0); NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        observers = []
+    }
+
+    @objc private func frame(_ link: CADisplayLink) {
+        let dt = lastTimestamp.map { link.targetTimestamp - $0 } ?? link.duration
+        lastTimestamp = link.targetTimestamp
+        step(dt: dt)
+    }
+
+    /// One display refresh; tests drive it directly. Reads the pointer,
+    /// eases towards it (time constant 80 ms) and writes the gradient's
+    /// points only when they changed.
+    func step(dt: CFTimeInterval) {
+        #if DEBUG
+        GlossLabCounters.movingTicks += 1
+        #endif
+        guard let window, bounds.width > 0, bounds.height > 0 else { return }
+        if AtticMotionPreference.reducesMotion { return updateRunning() }
+        var screen = NSEvent.mouseLocation
+        #if DEBUG
+        if let point = Self.pointerForTesting { screen = point }
+        #endif
+        let local = convert(window.convertPoint(fromScreen: screen), from: nil)
+        func unit(_ value: CGFloat, _ mid: CGFloat, _ half: CGFloat) -> CGFloat { min(1, max(-1, (value - mid) / half)) }
+        let target = CGPoint(x: unit(local.x, bounds.midX, bounds.width / 2), y: unit(local.y, bounds.midY, bounds.height / 2))
+        let k = CGFloat(1 - exp(-max(0, dt) / 0.08))
+        var next = CGPoint(x: current.x + (target.x - current.x) * k, y: current.y + (target.y - current.y) * k)
+        if abs(next.x - target.x) < 0.002 { next.x = target.x }
+        if abs(next.y - target.y) < 0.002 { next.y = target.y }
+        guard next != current else { return }
+        current = next
+        writePoints()
+    }
+
+    /// The axis starts at the top and ends at the bottom (idea 3), turned
+    /// by up to `tilt` degrees so the lit end leans towards the pointer's
+    /// side, and slid by up to `reach` of the height with the pointer.
+    static func points(pointer: CGPoint, tilt: Double, reach: Double) -> (start: CGPoint, end: CGPoint) {
+        let angle = -Double(pointer.x) * tilt * .pi / 180
+        let sx = CGFloat(sin(angle)) / 2, sy = CGFloat(cos(angle)) / 2
+        let slide = pointer.y * CGFloat(reach)
+        return (CGPoint(x: 0.5 - sx, y: 0.5 - sy + slide), CGPoint(x: 0.5 + sx, y: 0.5 + sy + slide))
+    }
+
+    private func writePoints() {
+        var (start, end) = Self.points(pointer: current, tilt: tilt, reach: reach)
+        // Unit space has y = 0 at the top only when the layer's contents
+        // are flipped (AppKit flips a flipped view's layer).
+        if !gradient.contentsAreFlipped() { start.y = 1 - start.y; end.y = 1 - end.y }
+        if let last = lastWritten, last.start == start, last.end == end { return }
+        lastWritten = (start, end)
+        #if DEBUG
+        GlossLabCounters.movingWrites += 1
+        #endif
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        gradient.startPoint = start
+        gradient.endPoint = end
+        CATransaction.commit()
     }
 }
 

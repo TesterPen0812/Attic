@@ -143,6 +143,7 @@ final class GlossLabCountTests: XCTestCase {
             ("2 clear band", \.clearBand, { GlossLabCounters.stageSurface }),
             ("7 shadow", \.glassShadow, { GlossLabCounters.shadowLayer }),
             ("7 spill", \.glassSpill, { GlossLabCounters.shadowLayer }),
+            ("9 moving light", \.movingLight, { GlossLabCounters.rimLayer }),
         ]
         var lines: [String] = []
         for (name, key, read) in cases {
@@ -160,6 +161,148 @@ final class GlossLabCountTests: XCTestCase {
             }
         }
         print("GLOSS_LAB_FLIPS\n\(lines.joined(separator: "\n"))\nGLOSS_LAB_FLIPS_END")
+    }
+
+    private func movingLightView(in root: NSView) -> GlossMovingEdgeLightView? {
+        if let view = root as? GlossMovingEdgeLightView { return view }
+        for sub in root.subviews { if let found = movingLightView(in: sub) { return found } }
+        return nil
+    }
+
+    private struct Moving: CustomStringConvertible {
+        var ticks = 0, writes = 0, paths = 0, updates = 0
+        static func read() -> Moving {
+            Moving(ticks: GlossLabCounters.movingTicks, writes: GlossLabCounters.movingWrites,
+                   paths: GlossLabCounters.movingPathBuilds, updates: GlossLabCounters.movingUpdates)
+        }
+        var description: String { "refreshes \(ticks), gradient writes \(writes), path builds \(paths), representable updates \(updates)" }
+    }
+
+    private func bodies() -> Count {
+        Count(stage: GlossLabCounters.stageSurface, surface: GlossLabCounters.surfaceLayer, rim: GlossLabCounters.rimLayer,
+              controlLight: GlossLabCounters.controlEdgeLight, shadow: GlossLabCounters.shadowLayer)
+    }
+
+    /// 9, one resize write: no body run beyond all off, the representable is
+    /// not updated, and the mask path is built once (the stroke follows the
+    /// new size). Nothing else is written.
+    func testMovingLightOneResizeWrite() {
+        let off = oneResize { _ in }
+        var lines = ["all off: \(off), \(Moving.read())"]
+        for (name, configure) in [("9 moving light", { (lab: GlossLab) in lab.movingLight = true }),
+                                  ("9 with 3", { (lab: GlossLab) in lab.movingLight = true; lab.edgeLight = true })] {
+            let count = oneResize(configure)
+            let moving = Moving.read()
+            lines.append("\(name): \(count), \(moving)")
+            XCTAssertEqual(count, off, "\(name) adds body runs on one resize write")
+            XCTAssertEqual(moving.updates, 0, "a resize updated the representable")
+            XCTAssertEqual(moving.paths, 1, "the stroke's path is built once per resize")
+            XCTAssertEqual(moving.writes, 0, "a resize rewrote the gradient's points")
+        }
+        GlossLab.shared.allOff(); GlossLab.shared.resetSliders()
+        print("GLOSS_LAB_MOVING_RESIZE\n\(lines.joined(separator: "\n"))\nGLOSS_LAB_MOVING_RESIZE_END")
+    }
+
+    /// 9, pointer moves: each display refresh after a move writes the
+    /// gradient's two points once and runs no SwiftUI body; a refresh with
+    /// the pointer still writes nothing. With 9 off there is no view at all.
+    func testMovingLightPointerMovesRunNoBody() throws {
+        let lab = GlossLab.shared
+        lab.allOff(); lab.resetSliders()
+        // The machine's own Reduce Motion must not decide this test.
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer {
+            lab.allOff(); GlossMovingEdgeLightView.pointerForTesting = nil
+            AtticMotionPreference.systemReduceMotionOverride = nil
+        }
+        do {
+            let (panel, view) = host()
+            defer { panel.orderOut(nil); panel.close() }
+            XCTAssertNil(movingLightView(in: view), "with 9 off there is no moving light view")
+        }
+        lab.movingLight = true
+        lab.edgeLight = true
+        let (panel, view) = host()
+        defer { panel.orderOut(nil); panel.close() }
+        spin()
+        let light = try XCTUnwrap(movingLightView(in: view))
+        let frame = panel.frame
+        // The pointer at rest in the middle: idea 3's axis, top to bottom.
+        GlossMovingEdgeLightView.pointerForTesting = CGPoint(x: frame.midX, y: frame.midY)
+        light.step(dt: 1)
+        let rest = light.gradientPoints
+        XCTAssertEqual(rest.start.x, 0.5, accuracy: 1e-6); XCTAssertEqual(rest.end.x, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(abs(rest.end.y - rest.start.y), 1, accuracy: 1e-6)
+        GlossLabCounters.reset()
+        let moves = 24
+        var last = rest
+        for i in 0..<moves {
+            let angle = Double(i) / Double(moves) * 2 * .pi
+            GlossMovingEdgeLightView.pointerForTesting = CGPoint(x: frame.midX + cos(angle) * frame.width * 0.45,
+                                                                 y: frame.midY + sin(angle) * frame.height * 0.45)
+            light.step(dt: 1.0 / 60)
+            view.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            let now = light.gradientPoints
+            XCTAssertTrue(now.start != last.start || now.end != last.end, "move \(i) did not move the light")
+            last = now
+        }
+        let moved = Moving.read(), movedBodies = bodies()
+        // Refreshes with the pointer still: it eases in, then stops writing.
+        GlossLabCounters.reset()
+        for _ in 0..<120 { light.step(dt: 1.0 / 60) }
+        let settling = Moving.read()
+        GlossLabCounters.reset()
+        for _ in 0..<30 { light.step(dt: 1.0 / 60) }
+        let still = Moving.read(), stillBodies = bodies()
+        let report = """
+        \(moves) pointer moves, one refresh each: \(moved); bodies \(movedBodies)
+        120 refreshes after the last move: \(settling)
+        30 more refreshes, pointer still: \(still); bodies \(stillBodies)
+        """
+        print("GLOSS_LAB_MOVING_POINTER\n\(report)\nGLOSS_LAB_MOVING_POINTER_END")
+        XCTAssertEqual(movedBodies, Count(), "a pointer move ran a SwiftUI body")
+        XCTAssertEqual(moved.writes, moves, "one gradient write per refresh after a move")
+        XCTAssertEqual(moved.updates, 0); XCTAssertEqual(moved.paths, 0)
+        XCTAssertLessThanOrEqual(settling.writes, 120)
+        XCTAssertEqual(still.writes, 0, "a still pointer still writes")
+        XCTAssertEqual(stillBodies, Count())
+        // Tilt: a pointer on the left leans the lit end to the left.
+        let left = GlossMovingEdgeLightView.points(pointer: CGPoint(x: -1, y: 0), tilt: 10, reach: 0)
+        XCTAssertLessThan(left.start.x, 0.5); XCTAssertGreaterThan(left.end.x, 0.5)
+        XCTAssertEqual(left.start.y, 0.5 - cos(10 * .pi / 180) / 2, accuracy: 1e-9)
+    }
+
+    /// 9 under Reduce Motion: the link does not run, a refresh writes
+    /// nothing, and the light goes back to rest (idea 3's axis).
+    func testMovingLightRestsUnderReduceMotion() throws {
+        let lab = GlossLab.shared
+        lab.allOff(); lab.resetSliders()
+        lab.movingLight = true
+        let (panel, view) = host()
+        defer {
+            panel.orderOut(nil); panel.close(); lab.allOff()
+            GlossMovingEdgeLightView.pointerForTesting = nil
+            AtticMotionPreference.systemReduceMotionOverride = nil
+        }
+        AtticMotionPreference.systemReduceMotionOverride = false
+        spin()
+        let light = try XCTUnwrap(movingLightView(in: view))
+        GlossMovingEdgeLightView.pointerForTesting = CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        light.step(dt: 1)
+        XCTAssertNotEqual(light.current, .zero, "the light did not follow the pointer")
+        AtticMotionPreference.systemReduceMotionOverride = true
+        light.updateRunning()
+        XCTAssertFalse(light.isRunning)
+        XCTAssertEqual(light.current, .zero, "the light did not go back to rest")
+        let rest = light.gradientPoints
+        XCTAssertEqual(rest.start.x, 0.5, accuracy: 1e-6)
+        GlossLabCounters.reset()
+        for _ in 0..<10 { light.step(dt: 1.0 / 60) }
+        XCTAssertEqual(GlossLabCounters.movingWrites, 0, "a refresh under Reduce Motion wrote")
+        XCTAssertEqual(light.current, .zero)
+        XCTAssertFalse(light.isRunning)
     }
 
     /// Idea 1's mask is a linear alpha ramp: step k leaves alpha (k + 1) / n.
@@ -259,6 +402,27 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(lab.clearBandWidth, fresh.clearBandWidth); XCTAssertEqual(lab.shadowSoftRadius, fresh.shadowSoftRadius)
         XCTAssertEqual(lab.spillStrength, fresh.spillStrength)
         XCTAssertFalse(fresh.clearBand || fresh.glassShadow || fresh.glassSpill, "pass 2 starts off")
+    }
+
+    /// Pass 3's switch and values load, are written down by Copy values,
+    /// and All off and Reset sliders reach them.
+    func testPassThreeValuesLoadCopyAndReset() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "GlossLab.movingLight")
+        defaults.set(20.0, forKey: "GlossLab.movingLightTilt")
+        defaults.set(0.15, forKey: "GlossLab.movingLightReach")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.movingLight); XCTAssertEqual(lab.movingLightTilt, 20); XCTAssertEqual(lab.movingLightReach, 0.15)
+        let text = lab.valuesText(mode: "Light")
+        XCTAssertTrue(text.contains("9 Highlights that move: on, tilt 20.00 deg, reach 0.15"), text)
+        lab.allOff()
+        XCTAssertFalse(lab.movingLight)
+        lab.resetSliders()
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertEqual(lab.movingLightTilt, fresh.movingLightTilt); XCTAssertEqual(lab.movingLightReach, fresh.movingLightReach)
+        XCTAssertFalse(fresh.movingLight, "pass 3 starts off")
     }
 }
 #endif

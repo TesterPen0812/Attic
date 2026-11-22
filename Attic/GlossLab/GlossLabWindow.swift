@@ -129,7 +129,7 @@ struct GlossLabView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Every switch changes the live panel at once. Values are kept in this preview.")
+                Text("Pin the panel first if it hides when the pointer leaves it. Every switch changes the live panel at once. Values are kept in this preview.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -223,8 +223,19 @@ struct GlossLabView: View {
                     slider("Strength", $lab.spillStrength, 0...0.5)
                     Text("Shows over a dark desktop.").font(.caption).foregroundStyle(.secondary)
                 }
-                pending("8 · The island as a droplet", "Pass 3 (a note)")
-                pending("9 · Highlights that move", "Pass 3")
+                idea("8 · The island as a droplet") {
+                    Text("Not built: the island is its own window, and glass merges only inside one window's view. See ops/design/gloss-lab-idea8-note.md.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                toggle("9 · Highlights that move", $lab.movingLight) {
+                    slider("Tilt", $lab.movingLightTilt, 0...30, unit: "°")
+                    slider("Reach", $lab.movingLightReach, 0...0.2)
+                    Text("Draws 3's Edge light with 3's width and strengths, tilted towards the pointer. It rests under Reduce Motion.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 toggle("10 · One rim recipe for every control", $lab.oneRim) {
                     Text("Every glass control's Edge light is lit over the same length from its corners, whatever its width.")
@@ -251,14 +262,6 @@ struct GlossLabView: View {
                 .padding(.leading, 20)
                 .disabled(!isOn.wrappedValue)
                 .opacity(isOn.wrappedValue ? 1 : 0.5)
-        }
-    }
-
-    private func pending(_ title: String, _ when: String) -> some View {
-        HStack {
-            Text(title).font(.headline).foregroundStyle(.secondary)
-            Spacer()
-            Text(when).font(.caption).foregroundStyle(.secondary)
         }
     }
 

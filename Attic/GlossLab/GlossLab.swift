@@ -45,6 +45,9 @@ final class GlossLab {
     var glassShadow = false { didSet { save(glassShadow, "glassShadow") } }
     /// 7, its own switch: a faint spill of light under the bottom edge.
     var glassSpill = false { didSet { save(glassSpill, "glassSpill") } }
+    /// 9. Highlights that move: 3's Edge light, drawn by Core Animation and
+    /// tilted a little towards the pointer once per display refresh.
+    var movingLight = false { didSet { save(movingLight, "movingLight") } }
 
     // MARK: Sliders
 
@@ -82,6 +85,11 @@ final class GlossLab {
     var shadowSoftDrop: Double = 6 { didSet { save(shadowSoftDrop, "shadowSoftDrop") } }
     /// 7, spill: its strength (white, 0 to 0.5).
     var spillStrength: Double = 0.14 { didSet { save(spillStrength, "spillStrength") } }
+    /// 9: how far the light's axis tilts towards the pointer, degrees (0 to
+    /// 30), and how far its lit run reaches down or pulls up with the
+    /// pointer, as a share of the height (0 to 0.2).
+    var movingLightTilt: Double = 10 { didSet { save(movingLightTilt, "movingLightTilt") } }
+    var movingLightReach: Double = 0.06 { didSet { save(movingLightReach, "movingLightReach") } }
 
     // MARK: The lab window's own state
 
@@ -140,6 +148,8 @@ final class GlossLab {
         double("shadowSoftLight", &shadowSoftLight); double("shadowSoftDark", &shadowSoftDark)
         double("shadowSoftRadius", &shadowSoftRadius); double("shadowSoftDrop", &shadowSoftDrop)
         double("spillStrength", &spillStrength)
+        bool("movingLight", &movingLight)
+        double("movingLightTilt", &movingLightTilt); double("movingLightReach", &movingLightReach)
         if let raw = defaults.string(forKey: Self.prefix + "clearBandMethod"), let value = ClearBandMethod(rawValue: raw) {
             clearBandMethod = value
         }
@@ -158,7 +168,7 @@ final class GlossLab {
     /// Every switch off: the trunk's look. Slider values are kept.
     func allOff() {
         rimFade = false; edgeLight = false; innerEdge = false; topLight = false; grain = false; oneRim = false
-        clearBand = false; glassShadow = false; glassSpill = false
+        clearBand = false; glassShadow = false; glassSpill = false; movingLight = false
     }
 
     /// The sliders back to the lead's starting values.
@@ -178,6 +188,7 @@ final class GlossLab {
         shadowSoftLight = fresh.shadowSoftLight; shadowSoftDark = fresh.shadowSoftDark
         shadowSoftRadius = fresh.shadowSoftRadius; shadowSoftDrop = fresh.shadowSoftDrop
         spillStrength = fresh.spillStrength
+        movingLightTilt = fresh.movingLightTilt; movingLightReach = fresh.movingLightReach
     }
 
     /// 0. 3D: dark glass lit from the top is Dark mode plus ideas 5 and 3.
@@ -203,6 +214,7 @@ final class GlossLab {
         6 Fine grain: \(on(grain)), \(f(grainPercent)) %
         7 A shadow that fits glass: \(on(glassShadow)), contact Light \(f(shadowContactLight)) Dark \(f(shadowContactDark)), soft Light \(f(shadowSoftLight)) Dark \(f(shadowSoftDark)), radius \(f(shadowSoftRadius)) pt, drop \(f(shadowSoftDrop)) pt
         7 Spill of light under the bottom edge: \(on(glassSpill)), \(f(spillStrength))
+        9 Highlights that move: \(on(movingLight)), tilt \(f(movingLightTilt)) deg, reach \(f(movingLightReach)) (draws 3's light with 3's values)
         10 One rim recipe for every control: \(on(oneRim))
         """
     }
@@ -219,7 +231,17 @@ enum GlossLabCounters {
     static var controlEdgeLight = 0
     /// The panel's exterior shadow (the trunk's, or idea 7's).
     static var shadowLayer = 0
-    static func reset() { surfaceLayer = 0; rimLayer = 0; stageSurface = 0; controlEdgeLight = 0; shadowLayer = 0 }
+    /// 9, which runs no SwiftUI body per pointer move: display refreshes
+    /// seen, gradient writes made, mask paths built, and the representable's
+    /// updates (SwiftUI-driven, never per pointer move).
+    static var movingTicks = 0
+    static var movingWrites = 0
+    static var movingPathBuilds = 0
+    static var movingUpdates = 0
+    static func reset() {
+        surfaceLayer = 0; rimLayer = 0; stageSurface = 0; controlEdgeLight = 0; shadowLayer = 0
+        movingTicks = 0; movingWrites = 0; movingPathBuilds = 0; movingUpdates = 0
+    }
 }
 #endif
 #endif
