@@ -90,6 +90,8 @@ final class CalendarPageModel: ObservableObject {
     /// Work done even if the resulting snapshot is unchanged.
     private(set) var rebuildCount = 0
     var nowTimerForTesting: Timer? { nowPositionTimer }
+    /// Test seam: whether the page counts as visible (`setVisible`).
+    var isVisibleForTesting: Bool { isVisible }
     /// Test seam: how many times the page asked the source for events.
     private(set) var sourceFetches = 0
     /// A deterministic test boundary for the currently requested event snapshot.

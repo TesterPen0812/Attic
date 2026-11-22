@@ -288,19 +288,25 @@ final class TasksTabHostTests: XCTestCase {
         }
     }
 
-    private func laterDrawing(_ hosted: Hosted, host: KeptContentHostingView, tab: TasksTab = .backlog) -> LaterDrawing {
+    /// `tracked`: rows read by id whether or not the model still lists them
+    /// (a row ticked or deleted while the tab was not drawn must have no
+    /// frame once it is drawn again).
+    private func laterDrawing(_ hosted: Hosted, host: KeptContentHostingView, tab: TasksTab = .backlog,
+                              tracked: [UUID: String] = [:]) -> LaterDrawing {
         let list = hosted.lists(in: host).filter { !$0.isHidden }.max { $0.frame.height < $1.frame.height }
         var rows: [String: CGRect] = [:]
         // Done draws its own list, by day (`TasksDonePage`).
         let listed = tab == .done ? hosted.model.doneDays().flatMap(\.rows) : hosted.model.rows(for: tab)
-        for row in listed {
-            guard let frame = hosted.pointer.frame(for: TasksRowID(tab: tab, id: row.id)) else { continue }
+        var titles = tracked
+        for row in listed { titles[row.id] = row.model.title }
+        for (id, title) in titles {
+            guard let frame = hosted.pointer.frame(for: TasksRowID(tab: tab, id: id)) else { continue }
             // The pointer adds the slide's offset and this takes it off
             // again: rounded to a thousandth of a point, so the arithmetic's
             // 1e-14 is not read as a move.
             let local = frame.offsetBy(dx: -hosted.pointer.pageOffset(tab), dy: 0)
             func round(_ value: CGFloat) -> CGFloat { (value * 1000).rounded() / 1000 }
-            rows[row.model.title] = CGRect(x: round(local.minX), y: round(local.minY), width: round(local.width), height: round(local.height))
+            rows[title] = CGRect(x: round(local.minX), y: round(local.minY), width: round(local.width), height: round(local.height))
         }
         return LaterDrawing(listWidth: list?.frame.width ?? -1, listHeight: list?.frame.height ?? -1, rows: rows)
     }
@@ -312,7 +318,15 @@ final class TasksTabHostTests: XCTestCase {
     /// `matchesRows` false: a tab shown keeps a row completed on it for a
     /// while, and a hidden one drops it at once, so only the width is
     /// compared with the tab shown throughout.
-    private func checkLatersFirstFrame(_ label: String, tab: TasksTab = .backlog, matchesRows: Bool = true,
+    /// `from`: the tab shown while the change is made (Now is let go when
+    /// Done is shown). Every row the tab listed before the change is read
+    /// in each frame, listed or not: until 22 Nov this read only the rows
+    /// the model still listed, so a row ticked while Now was not drawn and
+    /// still drawn in Now's first frame back went unread.
+    /// `resizes` false: the change leaves the list's size alone and changes
+    /// its rows.
+    private func checkLatersFirstFrame(_ label: String, tab: TasksTab = .backlog, from: TasksTab? = nil,
+                                       matchesRows: Bool = true, resizes: Bool = true,
                                        after change: (Hosted) throws -> Void) throws {
         let reference = try warmed(laterRows: 4, followsWindow: true)
         defer { reference.close() }
@@ -322,14 +336,25 @@ final class TasksTabHostTests: XCTestCase {
         let before = laterDrawing(reference, host: referenceHost, tab: tab)
         try change(reference)
         reference.spin(0.6)
+        // A row ticked on the tab shown is held in its place for a while
+        // (`TasksPageModel.hold`); the reference is read once it has gone.
+        for id in reference.model.held.keys { reference.model.releaseHold(id) }
+        reference.spin(0.6)
         let expected = laterDrawing(reference, host: referenceHost, tab: tab)
-        XCTAssertNotEqual(expected.listHeight, before.listHeight, "\(label): the change resizes the list, so the first frame can be stale")
+        if resizes {
+            XCTAssertNotEqual(expected.listHeight, before.listHeight, "\(label): the change resizes the list, so the first frame can be stale")
+        } else {
+            XCTAssertNotEqual(Set(expected.rows.keys), Set(before.rows.keys), "\(label): the change changes the rows, so the first frame can be stale")
+        }
 
         let hosted = try warmed(laterRows: 4, followsWindow: true)
         defer { hosted.close() }
         hosted.spin(0.3)
         let laterHost = hosts(hosted)[slot]
+        if let from { hosted.go(to: from) }
         XCTAssertFalse(laterHost.isInteractive, "\(label): the tab is hidden")
+        let listed = tab == .done ? hosted.model.doneDays().flatMap(\.rows) : hosted.model.rows(for: tab)
+        let tracked = Dictionary(listed.map { ($0.id, $0.model.title) }, uniquingKeysWith: { first, _ in first })
         try change(hosted)
         hosted.spin(0.6)
         withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: tab) }
@@ -339,7 +364,7 @@ final class TasksTabHostTests: XCTestCase {
         // waits), until the slide has ended and two turns read the same.
         var drawings: [LaterDrawing] = []
         let sampler = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 2_100_000) { _, _ in
-            MainActor.assumeIsolated { drawings.append(self.laterDrawing(hosted, host: laterHost, tab: tab)) }
+            MainActor.assumeIsolated { drawings.append(self.laterDrawing(hosted, host: laterHost, tab: tab, tracked: tracked)) }
         }
         CFRunLoopAddObserver(CFRunLoopGetMain(), sampler, .commonModes)
         waitForTestOperation("\(label): the slide to the tab ends and its list settles") {
@@ -348,7 +373,7 @@ final class TasksTabHostTests: XCTestCase {
         }
         CFRunLoopRemoveObserver(CFRunLoopGetMain(), sampler, .commonModes)
         CFRunLoopObserverInvalidate(sampler)
-        let settled = drawings.last ?? laterDrawing(hosted, host: laterHost, tab: tab)
+        let settled = drawings.last ?? laterDrawing(hosted, host: laterHost, tab: tab, tracked: tracked)
         let shown = drawings.firstIndex { $0.listWidth > 0 }
         let first = shown.map { drawings[$0] } ?? settled
         let differing = shown.map { drawings[$0...].filter { $0 != settled }.count } ?? -1
@@ -362,6 +387,10 @@ final class TasksTabHostTests: XCTestCase {
             }
         }
         XCTAssertNotNil(shown, "\(label): Later's list is drawn during the switch")
+        XCTAssertEqual(Set(first.rows.keys).subtracting(settled.rows.keys), [],
+                       "\(label): no row that left while the tab was not drawn is drawn in its first frame back")
+        XCTAssertEqual(Set(settled.rows.keys).subtracting(first.rows.keys), [],
+                       "\(label): every row the tab settles with is drawn in its first frame back")
         XCTAssertEqual(differing, 0, "\(label): from its first drawn frame on, Later's list never differs from its settled state (no stale frame, no jump)")
         XCTAssertGreaterThan(settled.rows.count, 0, "\(label): Later has rows to compare")
         XCTAssertEqual(first.listWidth, settled.listWidth, "\(label): the list's width in the first frame")
@@ -404,6 +433,127 @@ final class TasksTabHostTests: XCTestCase {
             let row = try XCTUnwrap(hosted.model.rows(for: .backlog).first { $0.status != .done })
             hosted.model.setStatus(.done, for: [row.id])
         }
+    }
+
+    // Now returns from Done after a change made while it was not drawn: the
+    // change is laid out in its first frame back, with no motion (a row
+    // that left has no frame, one that came is already in its place).
+    // Red on trunk a1597202: the ticked row kept its frame in Now's first
+    // frame back and left during the slide (PR 48's probe, 22 Nov).
+
+    /// The second open row of Now, by id.
+    private func nowsSecondRow(_ hosted: Hosted) throws -> UUID {
+        let open = hosted.model.rows(for: .now).filter { $0.status != .done }
+        XCTAssertGreaterThan(open.count, 1, "Now has open rows to change")
+        return try XCTUnwrap(open.dropFirst().first).id
+    }
+
+    func testNowIsRightInItsFirstFrameBackAfterARowIsTickedFromDone() throws {
+        try checkLatersFirstFrame("now-tick", tab: .now, from: .done, matchesRows: false, resizes: false) { hosted in
+            let id = try nowsSecondRow(hosted)
+            hosted.model.completeAcknowledged(id) { _ in }
+            XCTAssertTrue(hosted.model.settlePendingCompletionAcknowledgements(through: id), "the tick is saved")
+        }
+    }
+
+    func testNowIsRightInItsFirstFrameBackAfterARowIsDeletedFromDone() throws {
+        try checkLatersFirstFrame("now-delete", tab: .now, from: .done, resizes: false) { hosted in
+            let id = try nowsSecondRow(hosted)
+            XCTAssertTrue(hosted.model.delete([id]).isApplied, "the delete is saved")
+        }
+    }
+
+    func testNowIsRightInItsFirstFrameBackAfterARowIsAddedFromDone() throws {
+        try checkLatersFirstFrame("now-add", tab: .now, from: .done, resizes: false) { hosted in
+            XCTAssertNotNil(hosted.store.create(title: "Added while Now is not drawn", status: .todo))
+        }
+    }
+
+    // The family: a row that leaves any tab's list while that tab is not
+    // drawn. Later draws the same list as Now; Done draws its own
+    // (`TasksDonePage`), whose rows have no exit today, and is guarded so
+    // one added later cannot bring the fault back unseen.
+
+    /// How many reads of the return to `tab`, from the first in which its
+    /// list is drawn, still draw the row `id`, which left the tab while it
+    /// was not drawn.
+    private func staleReadsOnReturn(_ hosted: Hosted, to tab: TasksTab, of id: UUID, label: String) throws -> Int {
+        let slot = try XCTUnwrap(TasksTab.allCases.firstIndex(of: tab))
+        let host = hosts(hosted)[slot]
+        let row = TasksRowID(tab: tab, id: id)
+        var drawings: [LaterDrawing] = []
+        var still: [Bool] = []
+        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: tab) }
+        let sampler = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 2_100_000) { _, _ in
+            MainActor.assumeIsolated {
+                drawings.append(self.laterDrawing(hosted, host: host, tab: tab))
+                still.append(hosted.pointer.frame(for: row) != nil)
+            }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), sampler, .commonModes)
+        waitForTestOperation("\(label): the slide to the tab ends, its list settles and the row has gone") {
+            hosted.model.pagerSwipe.motion.position == CGFloat(slot) && drawings.count >= 2
+                && drawings[drawings.count - 1] == drawings[drawings.count - 2] && drawings[drawings.count - 1].listWidth > 0
+                && still.last == false
+        }
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), sampler, .commonModes)
+        CFRunLoopObserverInvalidate(sampler)
+        let shown = try XCTUnwrap(drawings.firstIndex { $0.listWidth > 0 }, "\(label): the list is drawn during the switch")
+        let stale = still[shown...].filter { $0 }.count
+        print("RETURN_STALE \(label) reads=\(drawings.count) first_drawn_read=\(shown) stale_reads=\(stale)")
+        return stale
+    }
+
+    func testLaterIsRightInItsFirstFrameBackAfterARowIsDeletedFromNow() throws {
+        let hosted = try warmed(laterRows: 4, followsWindow: true)
+        defer { hosted.close() }
+        hosted.go(to: .backlog)
+        let id = try XCTUnwrap(hosted.model.rows(for: .backlog).dropFirst().first).id
+        XCTAssertNotNil(hosted.pointer.frame(for: TasksRowID(tab: .backlog, id: id)), "the row is drawn on Later")
+        hosted.go(to: .now)
+        XCTAssertTrue(hosted.model.delete([id]).isApplied, "the delete is saved")
+        hosted.spin(0.6)
+        XCTAssertEqual(try staleReadsOnReturn(hosted, to: .backlog, of: id, label: "later-delete"), 0,
+                       "a row deleted while Later was not drawn is not drawn in Later's first frame back")
+    }
+
+    func testDoneIsRightInItsFirstFrameBackAfterARowIsDeletedFromNow() throws {
+        let hosted = try warmed(laterRows: 4, followsWindow: true)
+        defer { hosted.close() }
+        let id = try nowsSecondRow(hosted)
+        hosted.model.completeAcknowledged(id) { _ in }
+        XCTAssertTrue(hosted.model.settlePendingCompletionAcknowledgements(through: id), "the tick is saved")
+        hosted.go(to: .done)
+        XCTAssertNotNil(hosted.pointer.frame(for: TasksRowID(tab: .done, id: id)), "the row is drawn on Done")
+        hosted.go(to: .now)
+        XCTAssertTrue(hosted.model.delete([id]).isApplied, "the delete is saved")
+        hosted.spin(0.6)
+        XCTAssertEqual(try staleReadsOnReturn(hosted, to: .done, of: id, label: "done-delete"), 0,
+                       "a row deleted while Done was not drawn is not drawn in Done's first frame back")
+    }
+
+    /// Only the return is laid out without motion: a row deleted on Now once
+    /// it is drawn again still leaves with its exit (it keeps a frame while
+    /// it goes, then has none).
+    func testNowKeepsItsDeleteMotionAfterTheReturnFromDone() throws {
+        let hosted = try warmed(laterRows: 4, followsWindow: true)
+        defer { hosted.close() }
+        hosted.go(to: .done)
+        hosted.go(to: .now)
+        let id = try nowsSecondRow(hosted)
+        let row = TasksRowID(tab: .now, id: id)
+        XCTAssertNotNil(hosted.pointer.frame(for: row), "the row is drawn before the delete")
+        var reads: [Bool] = []
+        let sampler = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 2_100_000) { _, _ in
+            MainActor.assumeIsolated { reads.append(hosted.pointer.frame(for: row) != nil) }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), sampler, .commonModes)
+        XCTAssertTrue(hosted.model.delete([id]).isApplied, "the delete is saved")
+        waitForTestOperation("the deleted row leaves") { reads.last == false }
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), sampler, .commonModes)
+        CFRunLoopObserverInvalidate(sampler)
+        print("DELETE_MOTION reads=\(reads.count) framed=\(reads.filter { $0 }.count)")
+        XCTAssertGreaterThan(reads.prefix { $0 }.count, 1, "the row keeps its frame for more than one frame while it leaves (its exit plays)")
     }
 
     /// TAB-STALL (host-boundary.md §5.1): a switch made by code inside

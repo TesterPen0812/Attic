@@ -24,6 +24,7 @@ PARALLEL_CHECKS = {
     'ROUND_TRIPS': 'round-trips',
     'NOTES_SEEDS': 'notes-editor-seeds',
     'UNIT_CONTINUATION': 'unit-continuation',
+    'RELEASE_BUILD': 'release-build',
 }
 
 
