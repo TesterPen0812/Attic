@@ -22,8 +22,9 @@ final class TasksTabHostTests: XCTestCase {
 
     /// Every tab kept built, each in its own host. Warming waits for idle
     /// input, so this waits, bounded, for the span and the three hosts.
-    private func warmed(laterRows: Int = 0, atticPanel: Bool = false, line: UInt = #line) throws -> Hosted {
-        let hosted = try Hosted(height: 520, atticPanel: atticPanel)
+    private func warmed(laterRows: Int = 0, atticPanel: Bool = false, followsWindow: Bool = false,
+                        line: UInt = #line) throws -> Hosted {
+        let hosted = try Hosted(height: 520, atticPanel: atticPanel, followsWindow: followsWindow)
         for index in 0..<laterRows { _ = hosted.store.create(title: "Later \(index + 1)", status: .backlog) }
         waitForTestOperation("every tab kept built, each in its own host", line: line) {
             hosted.spin(0.05)
@@ -131,7 +132,279 @@ final class TasksTabHostTests: XCTestCase {
         print("HOST_GUARD resize roots_off=\(KeptContentHostCounts.roots.off) layouts_off=\(KeptContentHostCounts.layouts.off) layouts_on=\(KeptContentHostCounts.layouts.on) hidden_leaves=\(resizeLeaves)")
         XCTAssertEqual(KeptContentHostCounts.roots.off, 0, "a resize step sets no root in a hidden host")
     }
+    // MARK: Hidden tab hosts do no work (speed/hidden-host-no-layout)
+
+    /// Each host's own layout count since the last reset, in tab order.
+    private func layoutCounts(_ tabHosts: [KeptContentHostingView]) -> [Int] {
+        tabHosts.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] }
+    }
+
+    /// What one action reached: each host's layouts in tab order, and
+    /// hidden tabs' row bodies.
+    private struct HiddenHostReach {
+        let label: String
+        let layouts: [Int]
+        let hiddenLeaves: Int
+    }
+
+    /// Row clicks on Now (moving focus and staying) and a resize, with
+    /// Later and Done hidden; what each reached, recorded and printed.
+    private func reachOfClicksAndAResize() throws -> [HiddenHostReach] {
+        let hosted = try warmed(followsWindow: true)
+        defer { hosted.close() }
+        hosted.spin(0.5)
+        let tabHosts = hosts(hosted)
+        XCTAssertEqual(tabHosts.map(\.isInteractive), [true, false, false], "Now is shown; Later and Done are hidden")
+        let rows = hosted.model.rows(for: .now).filter { $0.status != .done }
+        XCTAssertGreaterThanOrEqual(rows.count, 2, "two rows to click in turn")
+        guard rows.count >= 2 else { return [] }
+        // The first click also brings the keyboard to the list.
+        try hosted.clickRow(rows[0].id, tab: .now)
+        hosted.spin(0.4)
+        TasksCellBodyCounts.records = true
+        defer { TasksCellBodyCounts.records = false }
+        func measure(_ label: String, _ action: () throws -> Void) rethrows -> HiddenHostReach {
+            KeptContentHostCounts.reset()
+            TasksCellBodyCounts.leaves = [:]
+            try action()
+            let reach = HiddenHostReach(label: label, layouts: layoutCounts(tabHosts),
+                                        hiddenLeaves: TasksCellBodyCounts.leaves.filter { $0.key.tab != .now }.values.reduce(0, +))
+            print("HIDDEN_HOST \(label) now=\(reach.layouts[0]) later=\(reach.layouts[1]) done=\(reach.layouts[2]) hidden_leaves=\(reach.hiddenLeaves)")
+            return reach
+        }
+        var reaches: [HiddenHostReach] = []
+        for (label, row) in [("click-move-1", rows[1]), ("click-stay-1", rows[1]),
+                             ("click-move-2", rows[0]), ("click-stay-2", rows[0])] {
+            reaches.append(try measure(label) {
+                try hosted.clickRow(row.id, tab: .now)
+                hosted.spin(0.4)
+            })
+        }
+        reaches.append(measure("resize") { resize(hosted) })
+        return reaches
+    }
+
+    /// Air, PR 41 844907fb (-O, queried): the hidden Later and Done hosts
+    /// each laid out once on every row click, moving focus or not, and about
+    /// as often as the shown host on every resize frame
+    /// (job1-ax-focus-per-click.md, "Why the whole host lays out"). A hidden
+    /// host lays out on neither and runs no row; the shown host still lays out.
+    func testHiddenTabHostsRunNoLayoutOnRowClicksAndAResize() throws {
+        let reaches = try reachOfClicksAndAResize()
+        for reach in reaches {
+            XCTAssertEqual(reach.layouts[1], 0, "\(reach.label): the hidden Later host laid out")
+            XCTAssertEqual(reach.layouts[2], 0, "\(reach.label): the hidden Done host laid out")
+            XCTAssertEqual(reach.hiddenLeaves, 0, "\(reach.label): a hidden tab's row ran")
+        }
+        let clicks = reaches.filter { $0.label.hasPrefix("click") }.map { $0.layouts[0] }.reduce(0, +)
+        XCTAssertGreaterThan(clicks, 0, "the shown host still lays out on row clicks")
+        XCTAssertGreaterThan(reaches.last?.layouts[0] ?? 0, 0, "the shown host still lays out on a resize")
+    }
+
+    /// Records each host's layouts on a tab switch, plain, after row clicks
+    /// and straight after a resize (PR 41 recorded 20 to 21 in use). The
+    /// lead compares these before and after a change to the hidden hosts.
+    func testTabSwitchLayoutCountsAreRecorded() throws {
+        let hosted = try warmed(followsWindow: true)
+        defer { hosted.close() }
+        hosted.spin(0.5)
+        let tabHosts = hosts(hosted)
+        func switchTo(_ tab: TasksTab, _ label: String) {
+            KeptContentHostCounts.reset()
+            hosted.go(to: tab)
+            let counts = layoutCounts(tabHosts)
+            print("TAB_SWITCH \(label) now=\(counts[0]) later=\(counts[1]) done=\(counts[2]) on=\(KeptContentHostCounts.layouts.on) off=\(KeptContentHostCounts.layouts.off) laid_out_in_set=\(KeptContentHostCounts.laidOutInSet) roots_on=\(KeptContentHostCounts.roots.on)")
+            // Every switch here is between Now and Later: Done is hidden
+            // throughout and lays out on none (19 a switch before the fix).
+            XCTAssertEqual(counts[2], 0, "\(label): the hidden Done host laid out during the switch")
+        }
+        switchTo(.backlog, "plain-to-later")
+        XCTAssertEqual(tabHosts.map(\.isInteractive), [false, true, false], "the hosts are in tab order")
+        switchTo(.now, "plain-to-now")
+        let rows = hosted.model.rows(for: .now).filter { $0.status != .done }
+        for row in rows.prefix(2) {
+            try hosted.clickRow(row.id, tab: .now)
+            hosted.spin(0.3)
+        }
+        switchTo(.backlog, "after-clicks-to-later")
+        switchTo(.now, "after-clicks-to-now")
+        resize(hosted)
+        switchTo(.backlog, "after-resize-to-later")
+        switchTo(.now, "after-resize-to-now")
+    }
+
+    /// Records what warming builds in the hidden hosts, and what the first
+    /// switch to a warmed Later then runs (its rows' bodies and layouts):
+    /// a hidden host that holds its layouts must still be built by warming.
+    func testWarmingBuildsTheHiddenTabsAndTheFirstSwitchIsRecorded() throws {
+        KeptContentHostCounts.reset()
+        TasksCellBodyCounts.records = true
+        TasksCellBodyCounts.leaves = [:]
+        defer { TasksCellBodyCounts.records = false }
+        let hosted = try warmed(laterRows: 4, followsWindow: true)
+        defer { hosted.close() }
+        hosted.spin(0.8)
+        let tabHosts = hosts(hosted)
+        func leaves(_ tab: TasksTab) -> Int { TasksCellBodyCounts.leaves.filter { $0.key.tab == tab }.values.reduce(0, +) }
+        func rowsBuilt(_ tab: TasksTab) -> Int { TasksCellBodyCounts.leaves.keys.filter { $0.tab == tab }.count }
+        var counts = layoutCounts(tabHosts)
+        print("WARM built now=\(counts[0]) later=\(counts[1]) done=\(counts[2]) later_rows=\(rowsBuilt(.backlog)) later_leaves=\(leaves(.backlog))")
+        XCTAssertGreaterThan(counts[1], 0, "warming lays the hidden Later host out")
+        XCTAssertGreaterThan(rowsBuilt(.backlog), 0, "warming builds Later's rows")
+        KeptContentHostCounts.reset()
+        TasksCellBodyCounts.leaves = [:]
+        hosted.go(to: .backlog)
+        counts = layoutCounts(tabHosts)
+        print("WARM first-switch now=\(counts[0]) later=\(counts[1]) done=\(counts[2]) later_rows=\(rowsBuilt(.backlog)) later_leaves=\(leaves(.backlog))")
+    }
     #endif
+
+    // MARK: A hidden tab is right in its first frame
+
+    /// Widens and lengthens the window in steps, as a corner drag does
+    /// (the top stays put, so the page's clicks keep their places).
+    private func resize(_ hosted: Hosted, steps: Int = 8, by step: CGFloat = 6) {
+        for _ in 0..<steps {
+            var frame = hosted.window.frame
+            frame.size.width += step
+            frame.size.height += step
+            frame.origin.y -= step
+            hosted.window.setFrame(frame, display: true)
+            hosted.spin(0.03)
+        }
+        hosted.spin(0.2)
+    }
+
+    /// The Later list as drawn: the width of its list and each row's frame
+    /// in its slot, by title.
+    private struct LaterDrawing: Equatable {
+        var listWidth: CGFloat
+        var listHeight: CGFloat
+        var rows: [String: CGRect]
+        var summary: String {
+            "list=\(listWidth)x\(listHeight) rows=\(rows.count) " + rows.sorted { $0.value.minY < $1.value.minY }
+                .prefix(3).map { "\($0.key)@\(Int($0.value.minX)),\(Int($0.value.minY)),\(Int($0.value.width))x\(Int($0.value.height))" }
+                .joined(separator: " ")
+        }
+    }
+
+    private func laterDrawing(_ hosted: Hosted, host: KeptContentHostingView, tab: TasksTab = .backlog) -> LaterDrawing {
+        let list = hosted.lists(in: host).filter { !$0.isHidden }.max { $0.frame.height < $1.frame.height }
+        var rows: [String: CGRect] = [:]
+        // Done draws its own list, by day (`TasksDonePage`).
+        let listed = tab == .done ? hosted.model.doneDays().flatMap(\.rows) : hosted.model.rows(for: tab)
+        for row in listed {
+            guard let frame = hosted.pointer.frame(for: TasksRowID(tab: tab, id: row.id)) else { continue }
+            // The pointer adds the slide's offset and this takes it off
+            // again: rounded to a thousandth of a point, so the arithmetic's
+            // 1e-14 is not read as a move.
+            let local = frame.offsetBy(dx: -hosted.pointer.pageOffset(tab), dy: 0)
+            func round(_ value: CGFloat) -> CGFloat { (value * 1000).rounded() / 1000 }
+            rows[row.model.title] = CGRect(x: round(local.minX), y: round(local.minY), width: round(local.width), height: round(local.height))
+        }
+        return LaterDrawing(listWidth: list?.frame.width ?? -1, listHeight: list?.frame.height ?? -1, rows: rows)
+    }
+
+    /// Makes `change` while Later is hidden, switches to Later, and reads the
+    /// list in the switch's first frame. It must equal the list once
+    /// settled (no stale frame, no one-frame jump) and a Later list shown
+    /// throughout the same change.
+    /// `matchesRows` false: a tab shown keeps a row completed on it for a
+    /// while, and a hidden one drops it at once, so only the width is
+    /// compared with the tab shown throughout.
+    private func checkLatersFirstFrame(_ label: String, tab: TasksTab = .backlog, matchesRows: Bool = true,
+                                       after change: (Hosted) throws -> Void) throws {
+        let reference = try warmed(laterRows: 4, followsWindow: true)
+        defer { reference.close() }
+        let slot = try XCTUnwrap(TasksTab.allCases.firstIndex(of: tab))
+        reference.go(to: tab)
+        let referenceHost = hosts(reference)[slot]
+        let before = laterDrawing(reference, host: referenceHost, tab: tab)
+        try change(reference)
+        reference.spin(0.6)
+        let expected = laterDrawing(reference, host: referenceHost, tab: tab)
+        XCTAssertNotEqual(expected.listHeight, before.listHeight, "\(label): the change resizes the list, so the first frame can be stale")
+
+        let hosted = try warmed(laterRows: 4, followsWindow: true)
+        defer { hosted.close() }
+        hosted.spin(0.3)
+        let laterHost = hosts(hosted)[slot]
+        XCTAssertFalse(laterHost.isInteractive, "\(label): the tab is hidden")
+        try change(hosted)
+        hosted.spin(0.6)
+        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: tab) }
+        // The app's own frames: each turn of the run loop commits, and the
+        // commit runs the window's layout and display; nothing is laid out
+        // by hand. Read once a turn, after the commit (before the loop
+        // waits), until the slide has ended and two turns read the same.
+        var drawings: [LaterDrawing] = []
+        let sampler = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 2_100_000) { _, _ in
+            MainActor.assumeIsolated { drawings.append(self.laterDrawing(hosted, host: laterHost, tab: tab)) }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), sampler, .commonModes)
+        waitForTestOperation("\(label): the slide to the tab ends and its list settles") {
+            hosted.model.pagerSwipe.motion.position == CGFloat(slot) && drawings.count >= 2
+                && drawings[drawings.count - 1] == drawings[drawings.count - 2] && drawings[drawings.count - 1].listWidth > 0
+        }
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), sampler, .commonModes)
+        CFRunLoopObserverInvalidate(sampler)
+        let settled = drawings.last ?? laterDrawing(hosted, host: laterHost, tab: tab)
+        let shown = drawings.firstIndex { $0.listWidth > 0 }
+        let first = shown.map { drawings[$0] } ?? settled
+        let differing = shown.map { drawings[$0...].filter { $0 != settled }.count } ?? -1
+        print("FIRST_FRAME \(label) first_drawn_read=\(shown ?? -1) of \(drawings.count) differing_after=\(differing) first=\(first.summary) | settled=\(settled.summary) | reference=\(expected.summary)")
+        if let shown {
+            for (index, drawing) in drawings.enumerated().dropFirst(shown) where drawing != settled {
+                let rows = drawing.rows.filter { settled.rows[$0.key] != $0.value }
+                    .map { "\($0.key)@\($0.value) settled \(settled.rows[$0.key].map { "\($0)" } ?? "absent")" }
+                let gone = settled.rows.keys.filter { drawing.rows[$0] == nil }
+                print("FIRST_FRAME_DIFF \(label) read=\(index) list=\(drawing.listWidth)x\(drawing.listHeight) rows=\(rows.prefix(4)) missing=\(gone.prefix(4))")
+            }
+        }
+        XCTAssertNotNil(shown, "\(label): Later's list is drawn during the switch")
+        XCTAssertEqual(differing, 0, "\(label): from its first drawn frame on, Later's list never differs from its settled state (no stale frame, no jump)")
+        XCTAssertGreaterThan(settled.rows.count, 0, "\(label): Later has rows to compare")
+        XCTAssertEqual(first.listWidth, settled.listWidth, "\(label): the list's width in the first frame")
+        XCTAssertEqual(first.listHeight, settled.listHeight, "\(label): the list's height in the first frame")
+        XCTAssertEqual(first.rows, settled.rows, "\(label): the rows' frames in the first frame")
+        XCTAssertEqual(settled.listWidth, expected.listWidth, "\(label): the list's width matches a Later shown throughout")
+        XCTAssertEqual(settled.listHeight, expected.listHeight, "\(label): the list's height matches a Later shown throughout")
+        if matchesRows, tab == .done {
+            // Two windows seeded apart can order Done's ties differently
+            // (inferred: same-day rows by completion time, stamped at each
+            // seed), so Done is matched by its titles and its row geometry.
+            XCTAssertEqual(Set(settled.rows.keys), Set(expected.rows.keys), "\(label): the rows match a Done shown throughout")
+            let places = { (drawing: LaterDrawing) in drawing.rows.values.sorted { ($0.minY, $0.minX) < ($1.minY, $1.minX) } }
+            XCTAssertEqual(places(settled), places(expected), "\(label): the rows' places match a Done shown throughout")
+        } else if matchesRows {
+            XCTAssertEqual(settled.rows, expected.rows, "\(label): the rows match a Later shown throughout")
+        }
+    }
+
+    func testLaterIsRightInItsFirstFrameAfterAResizeWhileHidden() throws {
+        try checkLatersFirstFrame("resize") { resize($0, by: 6) }
+    }
+
+    /// Done holds its layouts while hidden too. Not red on the base: there
+    /// a hidden host laid out at every resize step, so it was never stale.
+    func testDoneIsRightInItsFirstFrameAfterAResizeWhileHidden() throws {
+        try checkLatersFirstFrame("done-resize", tab: .done) { resize($0, by: 6) }
+    }
+
+    func testLaterIsRightInItsFirstFrameAfterARowIsAddedWhileHidden() throws {
+        try checkLatersFirstFrame("add") { hosted in
+            resize(hosted, by: 6)
+            XCTAssertNotNil(hosted.store.create(title: "Added while Later is hidden", status: .backlog))
+        }
+    }
+
+    func testLaterIsRightInItsFirstFrameAfterARowIsCompletedWhileHidden() throws {
+        try checkLatersFirstFrame("complete", matchesRows: false) { hosted in
+            resize(hosted, by: 6)
+            let row = try XCTUnwrap(hosted.model.rows(for: .backlog).first { $0.status != .done })
+            hosted.model.setStatus(.done, for: [row.id])
+        }
+    }
 
     /// TAB-STALL (host-boundary.md §5.1): a switch made by code inside
     /// `withAnimation`, outside an event, reaches the page: its body reads the

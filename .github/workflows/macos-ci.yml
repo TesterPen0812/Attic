@@ -728,8 +728,26 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  release-build:
+    needs: validate-inputs
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
+    name: Release build (local-only, ad hoc)
+    runs-on: macos-26
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+      # Every other lane builds Local or Debug, so code that compiles only
+      # with DEBUG can break Release unseen. This builds the app exactly as
+      # --release-like does (Release, ATTIC_LOCAL_ONLY, ad hoc, its guards).
+      - name: Build the app in the Release configuration
+        run: |
+          Scripts/launch_local_preview.zsh --release-like --build-only \
+            --derived-data "$RUNNER_TEMP/AtticReleaseLike"
+
   required:
-    needs: [validate-inputs, macos, round-trips, notes-seeds, unit-continuation]
+    needs: [validate-inputs, macos, round-trips, notes-seeds, unit-continuation, release-build]
     if: ${{ always() && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Require macOS and generated coverage
     runs-on: ubuntu-latest
@@ -742,6 +760,7 @@ jobs:
           ROUND_TRIPS: ${{ needs.round-trips.result }}
           NOTES_SEEDS: ${{ needs.notes-seeds.result }}
           UNIT_CONTINUATION: ${{ needs.unit-continuation.result }}
+          RELEASE_BUILD: ${{ needs.release-build.result }}
         run: python3 Scripts/ci_required_checks.py --parallel
 
 
