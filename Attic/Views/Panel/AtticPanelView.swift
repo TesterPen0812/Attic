@@ -936,13 +936,20 @@ private struct PanelClearedNotices: View {
             store: store, noteStore: noteStore, canvasSession: canvasSession,
             toasts: toasts, page: page
         )
-        .padding(.horizontal, horizontalInset)
-        .padding(.bottom, bottomPadding)
+        // The stack's own height, measured before the padding: with nothing
+        // up it is 0 and so is the room the Canvas host is sent, whatever
+        // the clearance, so a page's bottom row growing runs no Canvas host
+        // (PR52 B1). With a notice or toast up the value is the same as
+        // before: the stack plus the padding below it.
         .background {
             GeometryReader { proxy in
-                Color.clear.preference(key: PanelNoticeHeightPreferenceKey.self, value: proxy.size.height)
+                let stack = proxy.size.height
+                Color.clear.preference(key: PanelNoticeHeightPreferenceKey.self,
+                                       value: stack > 0.5 ? stack + bottomPadding : 0)
             }
         }
+        .padding(.horizontal, horizontalInset)
+        .padding(.bottom, bottomPadding)
     }
 }
 
@@ -1118,8 +1125,9 @@ final class PanelNoticeClearance: ObservableObject {
     @Published var value: CGFloat = PanelPageNoticeClearancePreferenceKey.defaultValue
 }
 
-/// The notices' measured height. The shell writes it and does not observe
-/// it; the Canvas host, its one reader, does.
+/// The notices' measured height with the padding below them, or 0 when
+/// no notice or toast is up. The shell writes it and does not observe it;
+/// the Canvas host, its one reader, does.
 @MainActor
 final class PanelNoticeHeight: ObservableObject {
     @Published var value: CGFloat = 0
