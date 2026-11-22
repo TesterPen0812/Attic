@@ -594,7 +594,7 @@ extension GlossLabTrackerSeed {
         let context = ModelContext(container)
         guard (try? context.fetchCount(FetchDescriptor<TaskItem>())) == 0,
               (try? context.fetchCount(FetchDescriptor<NoteItem>())) == 0 else { return nil }
-        let plan = plan(.tracker)
+        let plan = plan(tracker)
         do {
             try insertTasks(plan, in: container)
             UserDefaults.standard.set(true, forKey: seededKey)
