@@ -403,6 +403,9 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     func updateNSView(_ container: KeptContentContainer, context: Context) {
         guard let host = container.host else { return }
         let coordinator = context.coordinator
+        #if DEBUG
+        KeptContentHostCounts.update(drawn: drawn)
+        #endif
         // Drawn first, so a host that held its layouts while hidden is
         // marked for the pass that takes this root.
         host.isDrawn = drawn
@@ -433,6 +436,9 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     }
 
     private func root(_ context: Context) -> AnyView {
+        // A new root brings its own values: the environment a hidden root
+        // handed its content is not handed to the next one.
+        context.coordinator.hold.output = nil
         let forwarded = KeptEnvironment(source: context.environment, hold: context.coordinator.hold, holding: !drawn)
         // Inside the forwarded environment, which would replace it.
         let known = content().environment(\.keptHost, context.coordinator.reference)
@@ -462,6 +468,13 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
 /// values, and a hidden Later tab then mounted 9 to 17 rows (resize's
 /// HB5B census on c6042b47). Drawn again, it takes the current values in
 /// the update that draws it, before its first frame.
+///
+/// Not drawn, the content is also handed the very value it was given
+/// before, not one built again: the transform still runs on every pass of
+/// the panel (a size write, a click's action pass), and a value built again
+/// holds the same values but is new to SwiftUI, so every environment reader
+/// in the hidden tab re-checked on each of them (rows-rerun-fable.md,
+/// probe 3: 244 such replacements in a drive against 2).
 struct KeptEnvironment: ViewModifier {
     let source: EnvironmentValues
     var hold: KeptEnvironmentHold?
@@ -555,19 +568,33 @@ struct KeptEnvironment: ViewModifier {
         let hold = hold
         let holding = holding
         let palette = source.atticPanelThemePalette
-        return content
+        #if DEBUG
+        // Counts each environment the content takes as new
+        // (`KeptContentHostCounts.environments`).
+        let counted = content.transformEnvironment(\.self) { _ in KeptContentHostCounts.environment(drawn: !holding) }
+        #else
+        let counted = content
+        #endif
+        return counted
             .transformEnvironment(\.self) { values in
                 if let hold {
+                    #if DEBUG
+                    if holding, let held = hold.held { hold.logChanges(from: held, to: values) }
+                    #endif
+                    // Hidden, the value this root handed its content before.
+                    if holding, let output = hold.output {
+                        values = output
+                        return
+                    }
                     if holding, let held = hold.held {
-                        #if DEBUG
-                        hold.logChanges(from: held, to: values)
-                        #endif
                         values = held
                     } else {
                         hold.held = values
                     }
                 }
                 for entry in Self.entries { entry.copy(source, &values) }
+                // Kept while hidden; a drawn run builds its value each time.
+                hold?.output = holding ? values : nil
             }
             // The panel's default text styles (AtticPanelView's
             // `foregroundStyle`) travel as a style, not a named value.
@@ -580,6 +607,9 @@ struct KeptEnvironment: ViewModifier {
 @MainActor
 final class KeptEnvironmentHold {
     var held: EnvironmentValues?
+    /// What the transform handed a hidden root's content, handed back on
+    /// that root's later runs. Cleared by a drawn run and by a new root.
+    var output: EnvironmentValues?
 
     #if DEBUG
     /// Names what changes in a hidden host's own environment (the lead's
@@ -613,6 +643,11 @@ enum KeptContentHostCounts {
     /// Root sets that laid the host out in their own pass.
     static var laidOutInSet = 0
     static var roots = Split()
+    /// `updateNSView` calls, by drawn or not.
+    static var updates = Split()
+    /// Environments handed to the content that SwiftUI took as new, by the
+    /// root's drawn or not (`KeptEnvironment.body`).
+    static var environments = Split()
     static var accessibilityChildrenCalls = Split()
     static var accessibilityHits = Split()
     /// Layouts by host (a host's own count, whatever its state).
@@ -623,6 +658,8 @@ enum KeptContentHostCounts {
         layouts = Split()
         laidOutInSet = 0
         roots = Split()
+        updates = Split()
+        environments = Split()
         accessibilityChildrenCalls = Split()
         accessibilityHits = Split()
     }
@@ -632,6 +669,8 @@ enum KeptContentHostCounts {
         layoutsByHost[ObjectIdentifier(host), default: 0] += 1
     }
     fileprivate static func root(drawn: Bool) { count(&roots, drawn) }
+    fileprivate static func update(drawn: Bool) { count(&updates, drawn) }
+    fileprivate static func environment(drawn: Bool) { count(&environments, drawn) }
     fileprivate static func accessibilityChildren(interactive: Bool) { count(&accessibilityChildrenCalls, interactive) }
     fileprivate static func accessibilityHit(interactive: Bool) { count(&accessibilityHits, interactive) }
 
