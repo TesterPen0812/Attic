@@ -132,8 +132,21 @@ switched off (see [What is not active](#what-is-not-active)).
      --optimized
    ```
 
-   `--optimized` builds with `-O`, which is what to use when judging speed or
-   feel. `--verify` checks that the running preview is the build on disk.
+   Two optimized modes:
+
+   - `--release-like` builds the app as a user would run it: the `Release`
+     configuration (no `DEBUG`, no `ATTIC_IDLE_SAMPLER`, no
+     `ATTIC_FIRST_TOUCH_LOG`), `-O` whole module, no debug dylib and no
+     testability, with the same local-only entitlements, `ATTIC_LOCAL_ONLY`,
+     ad hoc signature, preview identity and `development.store`. Use it for a
+     copy someone runs every day and for judging felt speed.
+   - `--optimized` keeps the `Local` configuration with `-O` whole module.
+     It still compiles `DEBUG` and the `Local` diagnostic flags, so probe and
+     timing builds that read those seams use it; its numbers include the
+     debug-only work.
+
+   `./script/build_and_run.sh --release-like` passes the mode through.
+   `--verify` checks that the running preview is the build on disk.
 
    Fresh preview identities start empty. Sample notes and tasks are seeded only
    by explicit test fixtures.

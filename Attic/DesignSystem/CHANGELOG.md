@@ -1,3 +1,16 @@
+## 2026-11-21 · Find close and filter clear: the list returns whole, with its motion
+
+When Find closes or a tag filter is cleared, the Tasks list comes back whole
+and keeps the motion it has on the trunk: the returning rows drop into place
+on `settle` and the day headings take their turn. No animation was removed
+and no new one added. Behind a kept tab host (PR 41) the returning rows were
+drawn thin for about 1.3 s after Esc, because the host was laid out in a
+later pass of its own with no animation. A kept host now lays a drawn root
+out in the pass that sets it (`KeptContentHostingView.setRoot`), under that
+update's transaction. Delete, complete, reorder and a new row arriving are
+unchanged. The owner's fallback of 21 Nov 2026 (the list returns at once,
+un-animated) was not needed and is not built.
+
 ## 2026-11-21 · Context-menu body count seam (DEBUG, tasks-breadth-1b)
 
 `atticContextMenu`'s modifier counts its body runs in DEBUG builds, per tag

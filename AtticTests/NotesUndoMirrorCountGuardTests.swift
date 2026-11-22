@@ -258,14 +258,11 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
 
             // Printed, not asserted: a toast alone, no Tasks step (the
             // priority change posts one, the tick does not). It stays up
-            // while the priority change is counted.
-            // It is also the Calendar columns' positive control: the same
-            // settle sees the hidden Calendar host, page and route host run.
-            let toastOnly = measure(rig, "toast only", { rig.toasts.show("Counted toast") {} },
-                                    saved: { rig.toasts.current?.message == "Counted toast" })
-            for key in ["CalendarPageHost", "CalendarPage", "route.calendar"] {
-                XCTAssertGreaterThan(toastOnly[key, default: 0], 0, "harness: the settle sees the hidden \(key) run")
-            }
+            // while the priority change is counted. (A toast running the
+            // hidden Calendar is SPEED-TOAST-HIDDEN-CALENDAR, guarded in
+            // testAToastRunsNoHiddenCalendarOrNotesHost.)
+            _ = measure(rig, "toast only", { rig.toasts.show("Counted toast") {} },
+                        saved: { rig.toasts.current?.message == "Counted toast" })
 
             let prioritised = rig.plain[1]
             let priority = measure(rig, "priority", {
@@ -292,6 +289,72 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
             for key in ["NotesPageHost", "NotesEditorPage", "NotesLibraryView", "route.notes"] {
                 XCTAssertGreaterThan(control[key, default: 0], 0, "harness: the settle sees the hidden \(key) run")
             }
+            // The Calendar columns' positive control: the same settle sees
+            // the hidden Calendar host, page and route host run when their
+            // layout changes.
+            assertCalendarColumnsAreLive(rig)
+        }
+    }
+
+    /// A panel size change gives every page a new layout, which the hidden
+    /// Calendar host, page and route host read: the counters are live.
+    private func assertCalendarColumnsAreLive(_ rig: Rig, file: StaticString = #filePath, line: UInt = #line) {
+        let original = rig.state.panelSize
+        let resized = CGSize(width: original.width, height: original.height - 20)
+        let control = measure(rig, "panel resized", { rig.state.updatePanelSize(resized) },
+                              saved: { rig.state.panelSize == resized })
+        for key in ["CalendarPageHost", "CalendarPage", "route.calendar"] {
+            XCTAssertGreaterThan(control[key, default: 0], 0, "harness: the settle sees the hidden \(key) run",
+                                 file: file, line: line)
+        }
+        rig.state.updatePanelSize(original)
+        settle(rig)
+    }
+
+    // MARK: - A toast runs no hidden page (SPEED-TOAST-HIDDEN-CALENDAR)
+
+    /// A toast changes only the notices. Posting one, replacing it with a
+    /// failure and dismissing it must run none of the hidden Calendar and
+    /// Notes views; the hidden Canvas host, the one reader of the notices'
+    /// height, still gets it while the toast is up and loses it after.
+    func testAToastRunsNoHiddenCalendarOrNotesHost() throws {
+        // Printed beside the counts: how often the shell's body ran.
+        var shellRuns = 0
+        #if ATTIC_LOCAL_ONLY
+        let previousShell = PanelInvalidationProbe.shell
+        PanelInvalidationProbe.shell = { shellRuns += 1 }
+        defer { PanelInvalidationProbe.shell = previousShell }
+        #endif
+        try withRig { rig in
+            XCTAssertNil(rig.toasts.current, "harness: no toast is up before the first post")
+            let steps: [(String, () -> Void, () -> Bool)] = [
+                ("toast posted", { rig.toasts.show("Counted toast") {} },
+                 { rig.toasts.current?.message == "Counted toast" }),
+                ("toast replaced by a failure", { _ = rig.toasts.showFailure("Counted failure") },
+                 { rig.toasts.current?.message == "Counted failure" }),
+                ("toast dismissed", { rig.toasts.dismiss() }, { rig.toasts.current == nil }),
+            ]
+            for (label, control, saved) in steps {
+                settle(rig)
+                let shellBefore = shellRuns
+                let canvasBefore = PanelCanvasNoticeAwareHost.bodyEvaluations
+                let counts = measure(rig, label, control, saved: saved)
+                print("TOAST_HIDDEN_COUNTS \(label) shell=\(shellRuns - shellBefore) "
+                      + "canvasHost=\(PanelCanvasNoticeAwareHost.bodyEvaluations - canvasBefore) "
+                      + "canvasBanner=\(PanelCanvasNoticeAwareHost.lastErrorBannerHeight)")
+                for key in Self.hidden {
+                    XCTAssertEqual(counts[key, default: 0], 0,
+                                   "\(label): the hidden \(key) ran, though nothing in it reads the toast")
+                }
+                if rig.toasts.current != nil {
+                    XCTAssertGreaterThan(PanelCanvasNoticeAwareHost.lastErrorBannerHeight, 0,
+                                         "\(label): the hidden Canvas keeps clear of the toast")
+                } else {
+                    XCTAssertEqual(PanelCanvasNoticeAwareHost.lastErrorBannerHeight, 0,
+                                   "\(label): the hidden Canvas gives the room back once the toast is gone")
+                }
+            }
+            assertCalendarColumnsAreLive(rig)
         }
     }
 

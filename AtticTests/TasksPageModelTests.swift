@@ -226,6 +226,7 @@ final class TasksPageModelTests: XCTestCase {
     func testE02ListSnapshotReusesRowIDsStatusGroupsAndSelectionRuns() throws {
         let a = try XCTUnwrap(add("A")), b = try XCTUnwrap(add("B")), c = try XCTUnwrap(add("C"))
         let initial = model.listSnapshot(for: .now)
+        XCTAssertEqual(initial.ids, initial.rows.map(\.id), "Keyboard completion uses the displayed order")
         XCTAssertEqual(Set(initial.ids), Set([a, b, c]))
         XCTAssertEqual(initial.idsByStatus[.todo], initial.ids)
         XCTAssertEqual(initial.selectionRuns.count, 0)
@@ -255,6 +256,7 @@ final class TasksPageModelTests: XCTestCase {
 
         let added = try XCTUnwrap(add("D"))
         let changed = model.listSnapshot(for: .now)
+        XCTAssertEqual(changed.ids, changed.rows.map(\.id), "The order stays in sync after insertion")
         XCTAssertTrue(changed.ids.contains(added))
         XCTAssertEqual(changed.idsByStatus[.todo], changed.ids)
         XCTAssertEqual(model.eligibleRowIDs(for: .now), Set(changed.ids))
@@ -1191,5 +1193,42 @@ final class TasksPageModelTests: XCTestCase {
 
             print("TASKS_HUNT12_SEED seed=\(seed) steps=\(steps) checkpoints=\(steps / epochSize)")
         }
+    }
+    // MARK: Every published value announces itself (pr41-fable)
+
+    /// The model declares its own `objectWillChange`, so a `@Published` on
+    /// it would store and send nothing (T7: a panel hide never reached the
+    /// page and the drag committed). Each of these sets announces itself.
+    func testEveryPublishedValueOfTheTasksModelAnnouncesItself() throws {
+        var sends = 0
+        let observation = model.objectWillChange.sink { _ in sends += 1 }
+        defer { observation.cancel() }
+        var silent: [String] = []
+        func expectSend(_ name: String, _ change: () -> Void) {
+            let before = sends
+            change()
+            if sends == before { silent.append(name) }
+        }
+        expectSend("pendingSearchFocus") { model.pendingSearchFocus = true }
+        expectSend("pasteOffer") { model.pasteOffer = TaskPasteOffer("first\nsecond") }
+        expectSend("hides") { model.pageDidHide() }
+        expectSend("returnFocusRequest") { model.requestReturnFocus(UUID()) }
+        expectSend("pickerFailure") { _ = model.pickerChange(on: UUID()) { .failed(.taskGone) } }
+        print("ANNOUNCE silent \(silent)")
+        XCTAssertEqual(silent, [], "every published value of the Tasks model sends objectWillChange")
+    }
+
+    /// No `@Published` on a class that declares its own `objectWillChange`:
+    /// such a class sends by hand or through `@StoredThenSent`.
+    func testTheTasksModelHasNoPublishedProperty() throws {
+        func published(_ object: Any) -> [String] {
+            Mirror(reflecting: object).children.compactMap { child in
+                String(describing: type(of: child.value)).hasPrefix("Published<") ? (child.label ?? "?") : nil
+            }
+        }
+        let message = "a class that declares its own objectWillChange sends by hand or through @StoredThenSent; @Published on it sends nothing"
+        XCTAssertEqual(published(model!), [], "TasksPageModel: " + message)
+        XCTAssertEqual(published(model.doneResults), [], "TasksDoneResults: " + message)
+        XCTAssertEqual(published(model.doneSearchInput), [], "TasksDoneSearchInput: " + message)
     }
 }

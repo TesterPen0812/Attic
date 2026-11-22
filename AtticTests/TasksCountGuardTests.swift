@@ -601,6 +601,53 @@ final class TasksCountGuardTests: XCTestCase {
         XCTAssertEqual(model.rows(for: .now).map(\.id), [held, changed, try task("M")])
     }
 
+    // MARK: - Plain waste
+
+    /// The night job's a2f6599d: the list page watches the snapshot's
+    /// ordered IDs for the keyboard's completion focus transfer instead of
+    /// projecting its rows' IDs again on every pass. The watch sees the
+    /// same values only if the snapshot's IDs are its rows' order on every
+    /// path that makes a snapshot. One tick on a tracker-shaped Now (80
+    /// open, tagged): after the press and the save (the held row restated
+    /// in place, which carries the built IDs over) and after the release (a
+    /// full build), on Now and Later.
+    func testGuardCompletionSnapshotIDsAreTheRowsOrder() throws {
+        let store = try makeStore(open: 80, later: 12, tagged: true)
+        var services = TasksPageServices()
+        services.acknowledgementDelay = .seconds(25)
+        services.doneHold = .seconds(25)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        let hosting = page(model, store)
+        func assertSnapshotOrder(_ when: String) {
+            for tab in [TasksTab.now, .backlog] {
+                let snapshot = model.listSnapshot(for: tab)
+                XCTAssertFalse(snapshot.ids.isEmpty, "\(tab) has rows \(when)")
+                XCTAssertEqual(snapshot.ids, snapshot.rows.map(\.id), "\(tab)'s snapshot IDs are its rows' order \(when)")
+            }
+        }
+        assertSnapshotOrder("before the tick")
+        let id = try XCTUnwrap(model.rows(for: .now).first?.id)
+        let restates = model.rowsRestateCount[.now, default: 0]
+
+        model.completeAcknowledged(id) { _ in }  // press: the row is held, ticked
+        settle(hosting)
+        XCTAssertNotNil(model.held[id], "the press holds the row")
+        assertSnapshotOrder("after the press")
+        model.settlePendingCompletionAcknowledgements(through: id)  // the save
+        settle(hosting)
+        XCTAssertEqual(store.task(withID: id)?.status, .done)
+        assertSnapshotOrder("after the save")
+        let restated = model.rowsRestateCount[.now, default: 0] - restates
+        XCTAssertGreaterThan(restated, 0, "the hold restated Now in place, so that path was checked")
+        model.releaseHold(id)  // the release: the row leaves Now
+        settle(hosting)
+        settle(hosting)
+        XCTAssertNil(model.held[id])
+        XCTAssertFalse(model.listSnapshot(for: .now).ids.contains(id), "the ticked row left Now")
+        assertSnapshotOrder("after the release")
+        print("GUARD_COMPLETION_IDS open=80 now_restated_during_hold=\(restated)")
+    }
+
     // MARK: - Rig
 
     private static let size = CGSize(width: 344, height: 520)
