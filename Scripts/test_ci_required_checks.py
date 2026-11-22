@@ -201,6 +201,8 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertNotIn('continue-on-error', job)
         self.assertNotIn('--signing-identity', job)
         self.assertNotIn('test-without-building', job)
+        # A shared runner takes 33-38 min for this build; 40 cut it off twice.
+        self.assertIn('timeout-minutes: 75', job)
         self.assertEqual(PARALLEL_CHECKS['RELEASE_BUILD'], 'release-build')
 
     def test_exhaustive_unit_suites_are_partitioned_across_required_runners(self):
