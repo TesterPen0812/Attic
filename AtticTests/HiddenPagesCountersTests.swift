@@ -725,10 +725,9 @@ final class HiddenPagesCountersTests: XCTestCase {
             print("HIDDEN_COUNTS C5 drag-total " + Self.line(drag))
             XCTAssertEqual(rig.state.panelSize, dragSize(start, step: Self.dragSteps), "harness: the drag reached its size")
             XCTAssertGreaterThan(drag["shell", default: 0], 0, "harness: the size writes reached the shell")
-            // Calendar is recorded, not asserted, until its hand-off holds no
-            // closure (the shell re-runs on each write and rebuilds its route
-            // host; the plan's M2, speed/hidden-calendar-slot).
-            for page in hidden where page != .calendar {
+            // Calendar too (M2): the shell re-runs on each write, and its
+            // hand-off to the hidden Calendar must compare equal.
+            for page in hidden {
                 for view in Self.hiddenPageViews[page, default: []] {
                     XCTAssertEqual(drag[view, default: 0], 0,
                                    "C5 \(page): \(view) ran on the \(Self.dragSteps) size writes of a live resize on Tasks")
