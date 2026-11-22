@@ -364,6 +364,114 @@ final class LibraryDeleteRefreshTests: XCTestCase {
         await otherNotes.waitForAttachmentReconciliation()
     }
 
+    // A delete through a library that isn't the lifecycle's: the commit step
+    // reads the other library's stores, so this library refreshes its own,
+    // but never reads Tasks again after a task store's save that already
+    // read them fresh.
+
+    /// A second library and Notes controller take both lifecycle roles, so the
+    /// commit step reads their stores, not `library`'s.
+    private func handLifecycleToAnotherLibrary() async throws -> (tasks: TaskStore, notes: NoteStore) {
+        let fixedDate = date
+        let otherTasks = TaskStore(container: container, now: { fixedDate })
+        let otherNotes = NoteStore(container: container, now: { fixedDate }, attachmentFileStore: makeTestAttachmentFileStore())
+        otherLibrary = AtticLibrary(tasks: otherTasks, notes: otherNotes, canvases: CanvasStore(container: container))
+        otherController = NotesPageController(store: otherNotes, journal: coordinator.journal)
+        XCTAssertTrue(coordinator.lifecycleLibrary === otherLibrary)
+        XCTAssertTrue(coordinator.lifecycleNotes === otherController)
+        await otherNotes.waitForAttachmentReconciliation()
+        return (otherTasks, otherNotes)
+    }
+
+    func testTaskDeleteThroughALibraryThatIsNotTheLifecyclesReloadsItsTasksOnce() async throws {
+        let other = try await handLifecycleToAnotherLibrary()
+        var notesPublished = 0, otherReloads = 0
+        let reloads = taskReloads {
+            otherReloads = taskReloads(of: other.tasks) {
+                notesPublished = revisionPublishes { XCTAssertTrue(library.delete(AtticItemRef(.task, plain))) }
+            }
+        }
+        XCTAssertEqual(reloads, 1, "the deleting library's Tasks reload once: its own save")
+        XCTAssertEqual(notesPublished, 1, "its Notes, which the commit step misses, refresh once")
+        XCTAssertEqual(otherReloads, 1, "the commit step reloads the lifecycle's Tasks once")
+        XCTAssertNil(tasks.task(withID: plain), "the deleting library's Tasks dropped the task")
+        XCTAssertNil(other.tasks.task(withID: plain))
+        XCTAssertTrue(try rowDeleted(plain))
+        await other.notes.waitForAttachmentReconciliation()
+    }
+
+    func testANoteDeleteAfterATaskDeleteThroughThatLibraryStillReloadsTasks() async throws {
+        // The task store's last save read fresh, but a note delete does not
+        // save through it: deleting a task's writing takes the task out of
+        // Tasks, which only the library's refresh shows here.
+        let other = try await handLifecycleToAnotherLibrary()
+        XCTAssertTrue(library.delete(AtticItemRef(.task, plain)))
+        XCTAssertNotNil(tasks.task(withID: owner))
+        let reloads = taskReloads { XCTAssertTrue(library.delete(AtticItemRef(.note, writing))) }
+        XCTAssertEqual(reloads, 1, "a note delete still reloads the library's Tasks once")
+        XCTAssertNil(tasks.task(withID: owner), "the task left Tasks with its writing")
+        XCTAssertNil(notes.note(withID: writing))
+        XCTAssertTrue(try rowDeleted(owner))
+        XCTAssertTrue(library.undo.undo(in: .note(writing)))
+        XCTAssertNotNil(tasks.task(withID: owner), "Undo brought the task back to Tasks")
+        await other.notes.waitForAttachmentReconciliation()
+    }
+
+    func testATaskDeleteThroughThatLibraryStillTakesItsWritingOutOfNotes() async throws {
+        let other = try await handLifecycleToAnotherLibrary()
+        XCTAssertNotNil(notes.note(withID: writing))
+        let published = revisionPublishes { XCTAssertTrue(library.delete(AtticItemRef(.task, owner))) }
+        XCTAssertEqual(published, 1, "the deleting library's Notes refresh once")
+        XCTAssertNil(notes.note(withID: writing), "the task's writing left Notes with it")
+        XCTAssertNil(other.notes.note(withID: writing))
+        XCTAssertTrue(try rowDeleted(writing))
+        await other.notes.waitForAttachmentReconciliation()
+    }
+
+    func testACanvasDeleteAfterATaskDeleteThroughThatLibraryStillRefreshesTheOtherStores() async throws {
+        let other = try await handLifecycleToAnotherLibrary()
+        let board = try XCTUnwrap(canvases.createCanvas(name: "Board"))
+        _ = try XCTUnwrap(canvases.createCanvas(name: "Spare"))
+        XCTAssertTrue(library.delete(AtticItemRef(.task, plain)))
+        var published = 0
+        let reloads = taskReloads {
+            published = revisionPublishes { XCTAssertTrue(library.delete(AtticItemRef(.canvas, board.id))) }
+        }
+        XCTAssertEqual(reloads, 1, "a canvas delete still reloads Tasks once")
+        XCTAssertEqual(published, 1, "a canvas delete still refreshes Notes once")
+        XCTAssertFalse(canvases.canvases.contains { $0.id == board.id })
+        await other.notes.waitForAttachmentReconciliation()
+    }
+
+    func testATaskDeleteWhoseOwnReadFailedIsReadAgainByThatLibrary() async throws {
+        let other = try await handLifecycleToAnotherLibrary()
+        // The save's fresh read and its fallback refresh both fail; the
+        // library's refresh is then the read that confirms the list.
+        tasks.listRefreshFailures = 2
+        XCTAssertTrue(library.delete(AtticItemRef(.task, plain)), "the delete is durable")
+        XCTAssertEqual(tasks.listRefreshFailures, 0, "both failing reads were reached")
+        XCTAssertFalse(tasks.hasUnresolvedTaskReload, "the library read Tasks again after the failed read")
+        XCTAssertNil(tasks.errorNotice, "and that read succeeded")
+        XCTAssertNil(tasks.task(withID: plain))
+        XCTAssertTrue(try rowDeleted(plain))
+        await other.notes.waitForAttachmentReconciliation()
+    }
+
+    func testANoteDeleteThroughThatLibraryReadsItsNotesAsBefore() async throws {
+        // Pinned as it is: the store's save reads Notes fresh and the
+        // library's refresh reads them again. NoteStore has no record that
+        // its save read (a plain commit does not), so that double is left for
+        // the board, not skipped here.
+        let other = try await handLifecycleToAnotherLibrary()
+        notes.resetFullNoteReloadCount()
+        let published = revisionPublishes { XCTAssertTrue(library.delete(AtticItemRef(.note, loose))) }
+        XCTAssertEqual(published, 3, "the save publishes twice and the library's refresh once")
+        XCTAssertEqual(notes.fullNoteReloadCount, 2, "the save's read and the library's")
+        XCTAssertNil(notes.note(withID: loose))
+        XCTAssertNil(other.notes.note(withID: loose))
+        await other.notes.waitForAttachmentReconciliation()
+    }
+
     func testCanvasDeleteStillRefreshesTheOtherStores() throws {
         let board = try XCTUnwrap(canvases.createCanvas(name: "Board"))
         _ = try XCTUnwrap(canvases.createCanvas(name: "Spare"))
