@@ -6,6 +6,8 @@ readonly script_dir=${0:A:h}
 readonly repository_root=${script_dir:h}
 readonly ui_lock_path=/tmp/attic-exclusive-ui.lock
 readonly xcodebuild_command=${ATTIC_XCODEBUILD_COMMAND:-/usr/bin/xcodebuild}
+# Test seam, like the one above: the launcher tests stub the signature reads.
+readonly codesign_command=${ATTIC_CODESIGN_COMMAND:-/usr/bin/codesign}
 
 usage() {
     /bin/cat <<'USAGE'
@@ -31,8 +33,21 @@ Options:
   --appearance MODE            Explicit isolated override: system, light, or dark.
   --optimized                  Keep the Local configuration and its local-only
                                entitlements, but build optimized (-O, whole
-                               module, no debug dylib, no testability), to
-                               judge feel and speed as a release would.
+                               module, no debug dylib, no testability). It
+                               still compiles DEBUG and the Local-only
+                               ATTIC_IDLE_SAMPLER and ATTIC_FIRST_TOUCH_LOG
+                               flags, for probe and timing builds that need
+                               those seams; it is not the app a user runs.
+  --release-like               Build the app as a user would run it: the
+                               Release configuration (no DEBUG, no
+                               ATTIC_IDLE_SAMPLER, no ATTIC_FIRST_TOUCH_LOG,
+                               -O whole module, no debug dylib, no
+                               testability) with the same local-only
+                               entitlements, ATTIC_LOCAL_ONLY, ad hoc signing
+                               and preview identity. Symbols are kept, and
+                               the store stays the preview's development.store.
+                               Not combinable with --optimized,
+                               --first-touch-log or --configuration.
   --first-touch-log            Include the preview-only first-touch diagnostics.
   --build-only                 Build and emit provenance without launching.
   --verify                     Build and launch nothing: check that exactly one
@@ -73,6 +88,8 @@ configuration="Local"
 appearance=""
 build_only=false
 optimized=false
+release_like=false
+configuration_given=false
 first_touch_log=false
 verify_only=false
 dry_run=false
@@ -132,6 +149,7 @@ while (( $# > 0 )); do
         --configuration)
             (( $# >= 2 )) || fail "--configuration requires a value"
             configuration=$2
+            configuration_given=true
             shift 2
             ;;
         --appearance)
@@ -145,6 +163,10 @@ while (( $# > 0 )); do
             ;;
         --optimized)
             optimized=true
+            shift
+            ;;
+        --release-like)
+            release_like=true
             shift
             ;;
         --first-touch-log)
@@ -168,6 +190,16 @@ while (( $# > 0 )); do
             ;;
     esac
 done
+
+if $release_like; then
+    # The user-run build: no DEBUG and no diagnostic flags may come back in.
+    ! $optimized || fail "--release-like cannot be combined with --optimized"
+    ! $first_touch_log || fail "--release-like cannot be combined with --first-touch-log"
+    ! $configuration_given || fail "--release-like cannot be combined with --configuration"
+    [[ "$signing_identity" == - && -z "$development_team" ]] \
+        || fail "--release-like cannot be combined with a signing identity or team; it is ad hoc only"
+    configuration="Release"
+fi
 
 [[ -n "$display_name" ]] || fail "display name cannot be empty"
 [[ "$display_name" =~ '^[^/[:cntrl:]]+$' && "$display_name" != . && "$display_name" != .. ]] || fail "display name must be a single path-safe component"
@@ -208,6 +240,7 @@ readonly manifest_file="$state_dir/manifest.txt"
 readonly entitlements_file="$state_dir/entitlements.plist"
 readonly signature_file="$state_dir/signature.txt"
 readonly preview_info_plist="$state_dir/Info.plist"
+readonly build_settings_file="$state_dir/build-settings.txt"
 readonly launch_provenance_file="$state_dir/launch-provenance.txt"
 # Bounded waits: a new instance must appear, map its images and then stay up.
 readonly launch_appear_timeout_seconds=20
@@ -337,6 +370,24 @@ if $optimized; then
         ENABLE_TESTABILITY=NO
     )
 fi
+if $release_like; then
+    # Release already has no DEBUG and no Local diagnostic flags; pin the
+    # rest so a later project change cannot quietly bring them back. Symbols
+    # stay (no strip) so traces symbolicate and nm can check the binary.
+    build_arguments+=(
+        SWIFT_OPTIMIZATION_LEVEL=-O
+        SWIFT_COMPILATION_MODE=wholemodule
+        ENABLE_DEBUG_DYLIB=NO
+        ENABLE_TESTABILITY=NO
+        STRIP_INSTALLED_PRODUCT=NO
+    )
+    # Without DEBUG the app resolves the Production store name; keep the
+    # same development.store in the preview's own container that a Local
+    # preview opens (as Scripts/install_daily_app.zsh does).
+    store_environment=Development
+else
+    store_environment=unchanged
+fi
 
 print_resolved_configuration() {
     print -- "branch=$branch_name"
@@ -349,7 +400,10 @@ print_resolved_configuration() {
     print -- "preview_app=$preview_app"
     print -- "signing_identity=$signing_identity"
     print -- "appearance=${appearance:-unchanged}"
+    print -- "configuration=$configuration"
     print -- "optimized=$optimized"
+    print -- "release_like=$release_like"
+    print -- "store_environment=$store_environment"
     print -- "first_touch_log=$first_touch_log"
 }
 
@@ -376,6 +430,28 @@ fi
 /bin/mkdir -p "$state_dir"
 /bin/cp "$repository_root/Attic/Info.plist" "$preview_info_plist"
 /usr/bin/plutil -replace CFBundleDisplayName -string "$display_name" "$preview_info_plist"
+if [[ "$store_environment" == Development ]]; then
+    /usr/bin/plutil -replace AtticCloudKitEnvironment -string Development "$preview_info_plist"
+fi
+
+code_sign_entitlements="not resolved (read only for --release-like)"
+if $release_like; then
+    # Resolve the app target's settings with the exact build arguments
+    # (without -quiet) and refuse to build anything that is not local-only.
+    "$xcodebuild_command" "${build_arguments[@]:#-quiet}" -showBuildSettings >"$build_settings_file" 2>/dev/null \
+        || fail "could not resolve the release-like build settings"
+    app_settings=$(/usr/bin/awk '/^Build settings for action build and target /{inside = ($0 ~ / target Attic:$/); next} inside' "$build_settings_file")
+    [[ -n "$app_settings" ]] || fail "release-like build settings have no Attic target"
+    resolved_setting() { print -r -- "$app_settings" | /usr/bin/sed -n "s/^ *$1 = //p" | /usr/bin/head -1; }
+    resolved_flags=" $(resolved_setting OTHER_SWIFT_FLAGS) $(resolved_setting SWIFT_ACTIVE_COMPILATION_CONDITIONS) "
+    [[ "$resolved_flags" == *" -DATTIC_LOCAL_ONLY "* || "$resolved_flags" == *" ATTIC_LOCAL_ONLY "* ]] \
+        || fail "release-like build settings lack ATTIC_LOCAL_ONLY; refusing to build a non-local-only app"
+    [[ "$resolved_flags" != *(" DEBUG "|" -DDEBUG "|ATTIC_IDLE_SAMPLER|ATTIC_FIRST_TOUCH_LOG)* ]] \
+        || fail "release-like build settings carry DEBUG or a Local diagnostic flag; refusing to build"
+    code_sign_entitlements=$(resolved_setting CODE_SIGN_ENTITLEMENTS)
+    [[ -n "$code_sign_entitlements" ]] || fail "release-like build settings name no CODE_SIGN_ENTITLEMENTS"
+    print -- "code_sign_entitlements=$code_sign_entitlements"
+fi
 
 "$xcodebuild_command" "${build_arguments[@]}" build
 [[ -d "$built_app" && -x "$built_executable" ]] || fail "expected build product is missing: $built_app"
@@ -385,13 +461,23 @@ actual_executable_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' 
 [[ "$actual_display_name" == "$display_name" ]] || fail "built display name does not match the requested identity"
 [[ "$actual_bundle_id" == "$bundle_id" ]] || fail "built bundle ID does not match the requested identity"
 [[ "$actual_executable_name" == "$executable_name" ]] || fail "built executable name does not match the requested identity"
+if [[ "$store_environment" == Development ]]; then
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :AtticCloudKitEnvironment' "$built_app/Contents/Info.plist" 2>/dev/null)" == Development ]] \
+        || fail "release-like build does not pin the preview's development store"
+fi
 
-/usr/bin/codesign --verify --deep --strict "$built_app"
-/usr/bin/codesign -d --entitlements - --xml "$built_app" >"$entitlements_file" 2>/dev/null
-/usr/bin/codesign -dv --verbose=4 "$built_app" >"$signature_file" 2>&1
+"$codesign_command" --verify --deep --strict "$built_app"
+"$codesign_command" -d --entitlements - --xml "$built_app" >"$entitlements_file" 2>/dev/null
+"$codesign_command" -dv --verbose=4 "$built_app" >"$signature_file" 2>&1
 
-if /usr/bin/grep -Eq 'com\.apple\.developer\.icloud|com\.apple\.developer\.ubiquity|aps-environment' "$entitlements_file"; then
-    fail "Local preview unexpectedly contains CloudKit, ubiquity, or APNs entitlements"
+# Any iCloud, CloudKit container-environment, ubiquity or push key is a hard
+# stop (com.apple.developer.icloud-*, com.apple.developer.ubiquity-*,
+# aps-environment and com.apple.developer.aps-environment).
+cloud_keys=$(/usr/bin/grep -oE '<key>[^<]*</key>' "$entitlements_file" \
+    | /usr/bin/sed -E 's#</?key>##g' \
+    | /usr/bin/grep -E '^com\.apple\.developer\.(icloud|ubiquity)|aps-environment$' || true)
+if [[ -n "$cloud_keys" ]]; then
+    fail "built app carries iCloud or push entitlements (${(j:, :)${(f)cloud_keys}}); refusing a non-local-only preview"
 fi
 
 executable_hash=$(/usr/bin/shasum -a 256 "$built_executable" | /usr/bin/awk '{print $1}')
@@ -400,12 +486,13 @@ executable_hash=$(/usr/bin/shasum -a 256 "$built_executable" | /usr/bin/awk '{pr
     print -- "executable=$built_executable"
     print -- "executable_sha256=$executable_hash"
     print -- "executable_inode_size_sha256=$(file_identity "$built_executable")"
-    if $optimized; then
+    if $optimized || $release_like; then
         print -- "debug_dylib=none (optimized)"
     else
         print -- "debug_dylib=${built_executable}.debug.dylib"
         print -- "debug_dylib_inode_size_sha256=$(file_identity "${built_executable}.debug.dylib")"
     fi
+    print -- "code_sign_entitlements=$code_sign_entitlements"
     print -- "entitlements=$entitlements_file"
     print -- "signature=$signature_file"
 } >"$manifest_file"
