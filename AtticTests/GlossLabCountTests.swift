@@ -171,7 +171,7 @@ final class GlossLabCountTests: XCTestCase {
 
     private struct Moving: CustomStringConvertible {
         var ticks = 0, writes = 0, paths = 0, updates = 0
-        static func read() -> Moving {
+        @MainActor static func read() -> Moving {
             Moving(ticks: GlossLabCounters.movingTicks, writes: GlossLabCounters.movingWrites,
                    paths: GlossLabCounters.movingPathBuilds, updates: GlossLabCounters.movingUpdates)
         }
