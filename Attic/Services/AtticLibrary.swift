@@ -637,7 +637,14 @@ final class AtticLibrary {
             // Read before the restore clears the record of what came back.
             let owned = itemOwnership(ownedMembers(of: ref), deleted: true, noteID: ref.kind == .note ? ref.id : nil)
             guard let committed = restoreReportingCommit(ref) else { return nil }
-            if !committed || !lifecycleRefreshed(after: ref) { refreshItemStores() }
+            if !committed || !lifecycleRefreshed(after: ref) {
+                // The store that restored has already read itself: a task store's save from a fresh read, or a note
+                // store after a grouped restore (the commit step's refresh, or its own where that step misses it).
+                // Each such read ends in `NoteStore.refresh()`, which clears `lastErrorMessage` only on success, so
+                // a failed one is read again here.
+                refreshItemStores(freshTasks: ref.kind == .task ? tasks.freshAfterSave : nil,
+                                  freshNotes: ref.kind == .note && committed && notes?.lastErrorMessage == nil ? notes : nil)
+            }
             return UndoStep(
                 name: "Restore \(Self.noun(for: ref.kind))",
                 lifecycle: .restore,
@@ -1499,14 +1506,18 @@ final class AtticLibrary {
     ///
     /// `freshTasks`: the task store already presented this commit from a fresh read of every row (its own save's
     /// reload succeeded), so it is not read again; the tag pass still counts the task kind as read, because that
-    /// reload reconciled it. Returns the note store when its reload in this pass succeeded, so the Notes controller
+    /// reload reconciled it. `freshNotes`, the same for the note store: a grouped note restore has already read it.
+    /// Returns the note store when it was read in this pass (or was fresh), so the Notes controller
     /// presenting from that same object does not read it again.
     @discardableResult
-    func refreshItemStores(freshTasks: TaskStore? = nil) -> NoteStore? {
+    func refreshItemStores(freshTasks: TaskStore? = nil, freshNotes: NoteStore? = nil) -> NoteStore? {
         var notesRead: NoteStore?
         tags.refreshing {
             if let freshTasks, freshTasks === tasks { tasks.tagInventoryRefreshed() } else { tasks.refresh() }
-            if let notes, notes.refresh() { notesRead = notes }
+            if let notes, let freshNotes, freshNotes === notes {
+                notes.tagInventoryRefreshed()
+                notesRead = notes
+            } else if let notes, notes.refresh() { notesRead = notes }
             canvases?.refresh()
         }
         return notesRead
