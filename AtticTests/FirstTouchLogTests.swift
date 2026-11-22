@@ -138,8 +138,9 @@ final class FirstTouchLogTests: XCTestCase {
 /// ATTIC_FRAME_MONITOR=1 no display link is installed.
 @MainActor
 final class AtticFrameMonitorTests: XCTestCase {
-    func testNoMonitorIsInstalledWithoutTheLaunchVariable() throws {
-        try XCTSkipIf(AtticFrameMonitor.isRunning, "this host was launched with ATTIC_FRAME_MONITOR=1")
+    func testNoMonitorIsInstalledWithoutTheLaunchVariable() {
+        // The unit-test host is never launched with ATTIC_FRAME_MONITOR=1.
+        XCTAssertFalse(AtticFrameMonitor.isRunning)
         AtticFrameMonitor.startIfRequested(environment: [:])
         AtticFrameMonitor.startIfRequested(environment: ["ATTIC_FRAME_MONITOR": "0"])
         AtticFrameMonitor.startIfRequested(environment: ["ATTIC_FRAME_MONITOR": "true"])

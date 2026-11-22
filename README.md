@@ -152,8 +152,10 @@ switched off (see [What is not active](#what-is-not-active)).
    `ATTIC_MEASURE` and `get-task-allow` appear only in this mode, and the
    summary line labels its numbers `debug=0 measure=1 opt=1`. The frame
    monitor also compiles there and runs only with `ATTIC_FRAME_MONITOR=1`
-   (`--frame-monitor`; the label adds `frame_monitor=on|off`). Seed and other
-   launch seams stay `DEBUG`-only.
+   (`--frame-monitor`; the label adds `frame_monitor=on|off`). The other
+   `DEBUG`-only launch seams stay out of it. The performance seed compiles in
+   every configuration and runs only with its own launch variables, into its
+   own performance store, as before.
 
    `./script/build_and_run.sh --release-like` passes the mode through.
    `--verify` checks that the running preview is the build on disk.
