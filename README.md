@@ -150,7 +150,9 @@ switched off (see [What is not active](#what-is-not-active)).
    measuring drivers read (without the Local memory records), and
    `get-task-allow` so a profiler can attach. The guards check that
    `ATTIC_MEASURE` and `get-task-allow` appear only in this mode, and the
-   summary line labels its numbers `debug=0 measure=1 opt=1`. Seed and
+   summary line labels its numbers `debug=0 measure=1 opt=1`. The frame
+   monitor also compiles there and runs only with `ATTIC_FRAME_MONITOR=1`
+   (`--frame-monitor`; the label adds `frame_monitor=on|off`). Seed and other
    launch seams stay `DEBUG`-only.
 
    `./script/build_and_run.sh --release-like` passes the mode through.

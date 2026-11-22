@@ -257,15 +257,17 @@ class LaunchLocalPreviewTest < Minitest::Test
     measure_command = measure[/^build_command=.*$/]
 
     assert_includes measure, "measure=true"
-    assert_includes measure, "build_label=debug=0 measure=1 opt=1"
-    assert_includes plain, "build_label=debug=0 measure=0 opt=1"
+    assert_includes measure, "build_label=debug=0 measure=1 opt=1 frame_monitor=off"
+    assert_includes plain, "build_label=debug=0 measure=0 opt=1 frame_monitor=off"
     refute_includes plain_command, "ATTIC_MEASURE"
-    # The only differences: the flag, and the copied entitlements file.
+    # The only differences: the flag, and the app-only entitlements file
+    # (a global CODE_SIGN_ENTITLEMENTS would also re-sign the agent helper).
     expected = plain_command
       .sub("-DATTIC_LOCAL_ONLY", "-DATTIC_LOCAL_ONLY\\ -DATTIC_MEASURE")
-      .sub(/ build $/, " CODE_SIGN_ENTITLEMENTS=")
+      .sub(/ build $/, " ATTIC_MACOS_ENTITLEMENTS=")
     assert measure_command.start_with?(expected), "#{measure_command}\nis not\n#{expected}..."
-    assert_match(%r{ CODE_SIGN_ENTITLEMENTS=\S*/PreviewState/measure\.entitlements build $}, measure_command)
+    assert_match(%r{ ATTIC_MACOS_ENTITLEMENTS=\S*/PreviewState/measure\.entitlements build $}, measure_command)
+    refute_includes measure_command, "CODE_SIGN_ENTITLEMENTS"
     refute_includes measure_command, "ATTIC_FIRST_TOUCH_LOG"
     refute_includes measure_command, "ATTIC_IDLE_SAMPLER"
   end
@@ -289,8 +291,7 @@ class LaunchLocalPreviewTest < Minitest::Test
     source = File.read(File.join(ROOT, "Attic", "AtticNotesLocal.entitlements"))
     keys = ->(xml) { xml.scan(%r{<key>([^<]*)</key>}).flatten.sort }
     assert_equal (keys.(source) + ["com.apple.security.get-task-allow"]).sort, keys.(signing)
-    assert_match(%r{^summary build_label=debug=0 measure=1 opt=1 configuration=Release get_task_allow=true cloud_push_keys=0 }, stdout)
-    assert_includes stdout, "build_label=debug=0 measure=1 opt=1"
+    assert_match(%r{^summary build_label=debug=0 measure=1 opt=1 frame_monitor=off configuration=Release get_task_allow=true cloud_push_keys=0 }, stdout)
   end
 
   def test_measure_refuses_settings_without_attic_measure
@@ -337,7 +338,31 @@ class LaunchLocalPreviewTest < Minitest::Test
     stdout, stderr, status = stubbed_release_like_build(swift_flags: "$(inherited) -DATTIC_LOCAL_ONLY")
 
     assert status.success?, stderr
-    assert_match(/^summary build_label=debug=0 measure=0 opt=1 configuration=Release get_task_allow=absent cloud_push_keys=0 /, stdout)
+    assert_match(/^summary build_label=debug=0 measure=0 opt=1 frame_monitor=off configuration=Release get_task_allow=absent cloud_push_keys=0 /, stdout)
+  end
+
+  def test_frame_monitor_is_a_launch_variable_labelled_on_the_summary
+    stdout, stderr, status = dry_run("--release-like", "--measure", "--frame-monitor")
+    assert status.success?, stderr
+    assert_includes stdout, "build_label=debug=0 measure=1 opt=1 frame_monitor=on"
+    assert_match(/^launch_command=\/usr\/bin\/open -n --env ATTIC_FRAME_MONITOR=1 /, stdout)
+    # The build itself is the same: the monitor runs only on the variable.
+    plain_measure, = dry_run("--release-like", "--measure")
+    assert_equal plain_measure[/^build_command=.*$/], stdout[/^build_command=.*$/]
+    refute_includes plain_measure, "ATTIC_FRAME_MONITOR"
+
+    _stdout, stderr, status = dry_run("--release-like", "--frame-monitor")
+    refute status.success?
+    assert_includes stderr, "--frame-monitor with --release-like requires --measure"
+  end
+
+  def test_frame_monitor_compiles_for_measure_and_reads_its_variable_only_at_start
+    monitor = File.read(File.join(ROOT, "Attic", "Performance", "AtticFrameMonitor.swift"))
+    assert_includes monitor, "#if DEBUG || ATTIC_MEASURE\n"
+    assert_equal 1, monitor.scan("ATTIC_FRAME_MONITOR\"]").size
+    assert_includes File.read(File.join(ROOT, "Attic", "Performance", "NoteDragProbe.swift")), "#if DEBUG\n"
+    delegate = File.read(File.join(ROOT, "Attic", "App", "AppDelegate.swift"))
+    assert_includes delegate, "#if DEBUG || ATTIC_MEASURE\n        AtticFrameMonitor.startIfRequested()\n        #endif\n"
   end
 
   def test_desktop_run_passes_release_like_through_and_finds_its_product

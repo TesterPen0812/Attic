@@ -53,6 +53,13 @@ Options:
                                measuring drivers read, and nothing else, plus
                                get-task-allow so a profiler can attach. Its
                                numbers are labelled debug=0 measure=1 opt=1.
+  --frame-monitor              Launch with ATTIC_FRAME_MONITOR=1 (per-frame
+                               log on stdout; it has its own per-frame cost).
+                               Needs a build that compiles the monitor: DEBUG
+                               or --measure, not plain --release-like. The
+                               label says frame_monitor=on|off for launches by
+                               this script; a driver that launches the binary
+                               itself labels its own environment.
   --first-touch-log            Include the preview-only first-touch diagnostics.
   --build-only                 Build and emit provenance without launching.
   --verify                     Build and launch nothing: check that exactly one
@@ -95,6 +102,7 @@ build_only=false
 optimized=false
 release_like=false
 measure=false
+frame_monitor=false
 configuration_given=false
 first_touch_log=false
 verify_only=false
@@ -179,6 +187,10 @@ while (( $# > 0 )); do
             measure=true
             shift
             ;;
+        --frame-monitor)
+            frame_monitor=true
+            shift
+            ;;
         --first-touch-log)
             first_touch_log=true
             shift
@@ -212,6 +224,8 @@ if $release_like; then
 fi
 # The measure build is the release-like build plus ATTIC_MEASURE only.
 ! $measure || $release_like || fail "--measure requires --release-like"
+# Plain release-like does not compile the frame monitor.
+! $frame_monitor || ! $release_like || $measure || fail "--frame-monitor with --release-like requires --measure"
 
 [[ -n "$display_name" ]] || fail "display name cannot be empty"
 [[ "$display_name" =~ '^[^/[:cntrl:]]+$' && "$display_name" != . && "$display_name" != .. ]] || fail "display name must be a single path-safe component"
@@ -404,15 +418,20 @@ if $release_like; then
 else
     store_environment=unchanged
 fi
+typeset -a launch_environment
+launch_environment=()
+$frame_monitor && launch_environment=(--env ATTIC_FRAME_MONITOR=1)
 # The settings read sees the project's own entitlements file; the measure
 # build then signs with a copy that adds only get-task-allow.
 typeset -a settings_arguments
 settings_arguments=("${build_arguments[@]:#-quiet}")
+$frame_monitor && frame_monitor_state=on || frame_monitor_state=off
 if $measure; then
-    build_arguments+=("CODE_SIGN_ENTITLEMENTS=$measure_entitlements_file")
-    build_label="debug=0 measure=1 opt=1"
+    # App-only override point (the embedded agent helper keeps its own).
+    build_arguments+=("ATTIC_MACOS_ENTITLEMENTS=$measure_entitlements_file")
+    build_label="debug=0 measure=1 opt=1 frame_monitor=$frame_monitor_state"
 elif $release_like; then
-    build_label="debug=0 measure=0 opt=1"
+    build_label="debug=0 measure=0 opt=1 frame_monitor=off"
 else
     build_label="not resolved (release-like only)"
 fi
@@ -432,6 +451,7 @@ print_resolved_configuration() {
     print -- "optimized=$optimized"
     print -- "release_like=$release_like"
     print -- "measure=$measure"
+    print -- "frame_monitor=$frame_monitor_state"
     print -- "build_label=$build_label"
     print -- "store_environment=$store_environment"
     print -- "first_touch_log=$first_touch_log"
@@ -453,7 +473,7 @@ if $dry_run; then
     if [[ -n "$appearance" ]]; then
         print -- "appearance_command=explicit isolated defaults update for $bundle_id ($appearance)"
     fi
-    $build_only || print -- "launch_command=/usr/bin/open -n $preview_app"
+    $build_only || print -- "launch_command=/usr/bin/open -n ${launch_environment[*]} $preview_app"
     exit 0
 fi
 
@@ -641,7 +661,7 @@ canonical_preview_executable="$(cd "${preview_executable:h}" && pwd -P)/${previe
 # Batch 4 integration run, PID 9983 passed a 1.5 s health check and was torn
 # down as the invoking command returned, while a LaunchServices launch of the
 # same bundle (PID 10135) stayed up.
-/usr/bin/open -n --stdout "$stdout_log" --stderr "$stderr_log" "$preview_app" \
+/usr/bin/open -n "${launch_environment[@]}" --stdout "$stdout_log" --stderr "$stderr_log" "$preview_app" \
     || fail "LaunchServices could not open $preview_app"
 
 launched_pid=""
