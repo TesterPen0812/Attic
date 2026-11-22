@@ -9,6 +9,10 @@ struct PanelShellSurface: ViewModifier {
     let cornerSize: CGFloat
     /// The exterior shadow, when the native window leaves room for it.
     let elevation: AtticPanelSurfaceElevation?
+    #if ATTIC_GLOSS_LAB
+    /// Gloss lab idea 7: the window's transparent margin, which holds the shadow.
+    var glossLabMargin: CGFloat = AtticStyle.panelElevationMargin
+    #endif
 
     func body(content: Content) -> some View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
@@ -41,8 +45,14 @@ struct PanelShellSurface: ViewModifier {
                 // Outside the clip on purpose: the shadow belongs to the
                 // visible squircle, not to the rectangular AppKit window.
                 if let elevation {
+                    #if ATTIC_GLOSS_LAB
+                    // Gloss lab idea 7; the trunk's shadow while it is off.
+                    GlossLabPanelShadow(shape: shape, cornerSize: cornerSize, elevation: elevation, margin: glossLabMargin)
+                        .allowsHitTesting(false)
+                    #else
                     AtticPanelOutsideShadow(shape: shape, elevation: elevation)
                         .allowsHitTesting(false)
+                    #endif
                 }
             }
     }

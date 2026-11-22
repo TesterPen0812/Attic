@@ -630,10 +630,19 @@ struct AtticPanelView: View {
             .environment(\.colorScheme, systemColorScheme)
             .foregroundStyle(panelThemePalette.primaryForegroundColor, panelThemePalette.secondaryForegroundColor)
             .environment(\.controlActiveState, .key)
+            #if ATTIC_GLOSS_LAB
+            .modifier(PanelShellSurface(
+                cornerSize: cornerRadius,
+                elevation: Self.showsSurfaceElevation ? panelSurfaceTreatment.surfaceElevation : nil,
+                // Gloss lab idea 7: the margin each window already keeps.
+                glossLabMargin: uiState.isFloating ? AtticStyle.panelElevationMargin : AtticStyle.dockedPanelMargin
+            ))
+            #else
             .modifier(PanelShellSurface(
                 cornerSize: cornerRadius,
                 elevation: Self.showsSurfaceElevation ? panelSurfaceTreatment.surfaceElevation : nil
             ))
+            #endif
             .atticContextMenu { panelMenuCommands }
     }
 

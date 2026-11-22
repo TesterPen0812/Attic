@@ -221,4 +221,124 @@ struct GlossLabControlEdgeLight<S: InsettableShape>: View {
         }
     }
 }
+
+/// 2. The ring between the panel's squircle and the same squircle inset by
+/// `width`. The inner curve is the outer one inset and walked the other way
+/// (mirrored about the centre), so the inside is a hole under either fill
+/// rule.
+struct GlossRing: Shape {
+    var outer: Squircle
+    var width: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = outer.path(in: rect)
+        let inner = outer.inset(by: width).path(in: rect)
+        let mirror = CGAffineTransform(translationX: rect.midX, y: 0).scaledBy(x: -1, y: 1).translatedBy(x: -rect.midX, y: 0)
+        path.addPath(inner, transform: mirror)
+        return path
+    }
+}
+
+/// 2. A band of Apple's Clear glass around the edge, regular glass inside
+/// it, in place of the panel's one regular glass. Two honest ways to lay
+/// it, both Apple's own glass with nothing drawn to imitate it:
+/// - ring: Clear on the ring only, Regular on the inset squircle; the two
+///   glasses sit side by side and neither is over the other;
+/// - stacked: Clear under the whole panel, Regular over its inner part
+///   (glass over glass, which Apple says does not sample the glass under it).
+/// Either may share one `GlassEffectContainer` (spacing 0) or not.
+struct GlossClearBandGlass: View {
+    let cornerSize: CGFloat
+    let width: CGFloat
+    let method: GlossLab.ClearBandMethod
+    let sharesContainer: Bool
+
+    var body: some View {
+        let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
+        if sharesContainer {
+            GlassEffectContainer(spacing: 0) { glasses(shape) }
+        } else {
+            glasses(shape)
+        }
+    }
+
+    private func glasses(_ shape: Squircle) -> some View {
+        let inner = shape.inset(by: width)
+        return ZStack {
+            switch method {
+            case .ring:
+                let ring = GlossRing(outer: shape, width: width)
+                ring.fill(Color.clear).glassEffect(.clear, in: ring)
+            case .stacked:
+                shape.fill(Color.clear).glassEffect(.clear, in: shape)
+            }
+            inner.fill(Color.clear).glassEffect(.regular, in: inner)
+        }
+    }
+}
+
+/// 7. The panel's exterior shadow. With 7 and its spill off it is the
+/// trunk's `AtticPanelOutsideShadow`, untouched. With 7 on: a tight
+/// contact shadow and a wide soft one, both cast only outside the
+/// squircle, the soft one held inside the window's transparent margin
+/// (the trunk's own extent rule, radius x 2 + drop). With the spill on: a
+/// faint white glow under the bottom edge, cast by a band just inside it.
+/// The panel's window, its margin and its geometry are the trunk's.
+struct GlossLabPanelShadow: View {
+    let shape: Squircle
+    let cornerSize: CGFloat
+    let elevation: AtticPanelSurfaceElevation
+    /// The window's transparent margin around the surface, pt.
+    let margin: CGFloat
+    @Environment(\.atticDesign) private var design
+
+    /// The spill's glow: radius and drop, pt (extent 2 x 8 + 4 = 20).
+    static let spillRadius: CGFloat = 8
+    static let spillDrop: CGFloat = 4
+    static let spillCasterHeight: CGFloat = 10
+
+    /// The soft shadow's radius, held so radius x 2 + drop fits the margin.
+    static func softRadius(_ wanted: CGFloat, drop: CGFloat, margin: CGFloat) -> CGFloat {
+        max(0, min(wanted, (margin - abs(drop)) / 2))
+    }
+
+    var body: some View {
+        #if DEBUG
+        let _ = GlossLabCounters.shadowLayer += 1
+        #endif
+        let lab = GlossLab.shared
+        if !lab.glassShadow && !lab.glassSpill {
+            AtticPanelOutsideShadow(shape: shape, elevation: elevation)
+        } else {
+            let dark = design.mode == .dark
+            let inset = AtticPanelOutsideShadow.casterInset
+            ZStack {
+                if lab.glassShadow {
+                    let drop = CGFloat(lab.shadowSoftDrop)
+                    shape.fill(Color.black).padding(inset)
+                        .shadow(color: .black.opacity(dark ? lab.shadowSoftDark : lab.shadowSoftLight),
+                                radius: Self.softRadius(CGFloat(lab.shadowSoftRadius), drop: drop, margin: margin),
+                                x: 0, y: drop)
+                    shape.fill(Color.black).padding(inset)
+                        .shadow(color: .black.opacity(dark ? lab.shadowContactDark : lab.shadowContactLight),
+                                radius: 1, x: 0, y: 1)
+                } else {
+                    AtticPanelOutsideShadow(shape: shape, elevation: elevation)
+                }
+                if lab.glassSpill {
+                    Rectangle().fill(Color.white)
+                        .frame(height: Self.spillCasterHeight)
+                        .padding(.horizontal, cornerSize)
+                        .padding(.bottom, inset)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        .shadow(color: .white.opacity(lab.spillStrength),
+                                radius: Self.softRadius(Self.spillRadius, drop: Self.spillDrop, margin: margin),
+                                x: 0, y: Self.spillDrop)
+                }
+                shape.fill(Color.black).blendMode(.destinationOut)
+            }
+            .compositingGroup()
+        }
+    }
+}
 #endif

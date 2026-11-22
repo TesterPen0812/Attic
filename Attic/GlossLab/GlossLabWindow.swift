@@ -171,7 +171,17 @@ struct GlossLabView: View {
                     slider("Width", $lab.rimFadeWidth, 0...16, unit: " pt")
                 }
 
-                pending("2 · A band of Clear glass", "Pass 2")
+                toggle("2 · A band of Clear glass", $lab.clearBand) {
+                    slider("Width", $lab.clearBandWidth, 4...12, unit: " pt")
+                    Picker("Laid", selection: $lab.clearBandMethod) {
+                        ForEach(GlossLab.ClearBandMethod.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    Toggle("One glass container", isOn: $lab.clearBandContainer)
+                    Text("Apple's Clear and Regular glass only. Glass on Glass surfaces; the panel's own fill still lies over both (use 1 to bare the rim).")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 toggle("3 · Edge light on the panel", $lab.edgeLight) {
                     slider("Width", $lab.edgeLightWidth, 1...4, unit: " pt")
@@ -197,7 +207,22 @@ struct GlossLabView: View {
                     slider("Strength", $lab.grainPercent, 0...4, unit: " %")
                 }
 
-                pending("7 · A shadow that fits glass", "Pass 2")
+                toggle("7 · A shadow that fits glass", $lab.glassShadow) {
+                    slider("Contact: Light", $lab.shadowContactLight, 0...0.6)
+                    slider("Contact: Dark", $lab.shadowContactDark, 0...0.8)
+                    slider("Soft: Light", $lab.shadowSoftLight, 0...0.4)
+                    slider("Soft: Dark", $lab.shadowSoftDark, 0...0.6)
+                    slider("Soft: radius", $lab.shadowSoftRadius, 4...18, unit: " pt")
+                    slider("Soft: drop", $lab.shadowSoftDrop, 0...10, unit: " pt")
+                    Text("The soft shadow stays inside the window's margin: radius × 2 + drop is held to 40 pt docked, 28 pt for a pulled-out page.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                toggle("7 · Spill of light under the bottom edge", $lab.glassSpill) {
+                    slider("Strength", $lab.spillStrength, 0...0.5)
+                    Text("Shows over a dark desktop.").font(.caption).foregroundStyle(.secondary)
+                }
                 pending("8 · The island as a droplet", "Pass 3 (a note)")
                 pending("9 · Highlights that move", "Pass 3")
 
@@ -239,7 +264,7 @@ struct GlossLabView: View {
 
     private func slider(_ label: String, _ value: Binding<Double>, _ range: ClosedRange<Double>, unit: String = "") -> some View {
         HStack(spacing: 8) {
-            Text(label).frame(width: 84, alignment: .leading)
+            Text(label).frame(width: 104, alignment: .leading)
             Slider(value: value, in: range)
             Text(String(format: "%.2f", value.wrappedValue) + unit)
                 .monospacedDigit()

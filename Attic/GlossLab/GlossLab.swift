@@ -39,6 +39,12 @@ final class GlossLab {
     var grain = false { didSet { save(grain, "grain") } }
     /// 10. One rim recipe for every control.
     var oneRim = false { didSet { save(oneRim, "oneRim") } }
+    /// 2. A band of Apple's Clear glass around the edge, regular glass inside.
+    var clearBand = false { didSet { save(clearBand, "clearBand") } }
+    /// 7. A shadow that fits glass (in place of the trunk's elevation).
+    var glassShadow = false { didSet { save(glassShadow, "glassShadow") } }
+    /// 7, its own switch: a faint spill of light under the bottom edge.
+    var glassSpill = false { didSet { save(glassSpill, "glassSpill") } }
 
     // MARK: Sliders
 
@@ -60,6 +66,22 @@ final class GlossLab {
     var bottomShadeDark: Double = 0.14 { didSet { save(bottomShadeDark, "bottomShadeDark") } }
     /// 6: grain strength, percent (0 to 4).
     var grainPercent: Double = 1.5 { didSet { save(grainPercent, "grainPercent") } }
+    /// 2: the band's width, pt (4 to 12), how the two glasses are laid, and
+    /// whether they share one glass container.
+    var clearBandWidth: Double = 7 { didSet { save(clearBandWidth, "clearBandWidth") } }
+    var clearBandMethod: ClearBandMethod = .ring { didSet { save(clearBandMethod.rawValue, "clearBandMethod") } }
+    var clearBandContainer = false { didSet { save(clearBandContainer, "clearBandContainer") } }
+    /// 7: the tight contact shadow (Light, Dark) and the wide soft one
+    /// (Light, Dark, radius, drop). The soft one is held inside the
+    /// window's transparent margin (28 pt floating, 40 pt docked).
+    var shadowContactLight: Double = 0.16 { didSet { save(shadowContactLight, "shadowContactLight") } }
+    var shadowContactDark: Double = 0.34 { didSet { save(shadowContactDark, "shadowContactDark") } }
+    var shadowSoftLight: Double = 0.10 { didSet { save(shadowSoftLight, "shadowSoftLight") } }
+    var shadowSoftDark: Double = 0.26 { didSet { save(shadowSoftDark, "shadowSoftDark") } }
+    var shadowSoftRadius: Double = 15 { didSet { save(shadowSoftRadius, "shadowSoftRadius") } }
+    var shadowSoftDrop: Double = 6 { didSet { save(shadowSoftDrop, "shadowSoftDrop") } }
+    /// 7, spill: its strength (white, 0 to 0.5).
+    var spillStrength: Double = 0.14 { didSet { save(spillStrength, "spillStrength") } }
 
     // MARK: The lab window's own state
 
@@ -72,6 +94,19 @@ final class GlossLab {
             case .black: "Black"
             case .white: "White"
             case .picture: "Picture"
+            }
+        }
+    }
+
+    /// 2: Clear in a ring beside Regular inside it (no glass over glass), or
+    /// Clear under the whole panel with Regular stacked over its inner part.
+    enum ClearBandMethod: String, CaseIterable, Identifiable {
+        case ring, stacked
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .ring: "Ring beside"
+            case .stacked: "Stacked"
             }
         }
     }
@@ -98,6 +133,16 @@ final class GlossLab {
         double("topLightLight", &topLightLight); double("bottomShadeLight", &bottomShadeLight)
         double("topLightDark", &topLightDark); double("bottomShadeDark", &bottomShadeDark)
         double("grainPercent", &grainPercent)
+        bool("clearBand", &clearBand); bool("glassShadow", &glassShadow); bool("glassSpill", &glassSpill)
+        bool("clearBandContainer", &clearBandContainer)
+        double("clearBandWidth", &clearBandWidth)
+        double("shadowContactLight", &shadowContactLight); double("shadowContactDark", &shadowContactDark)
+        double("shadowSoftLight", &shadowSoftLight); double("shadowSoftDark", &shadowSoftDark)
+        double("shadowSoftRadius", &shadowSoftRadius); double("shadowSoftDrop", &shadowSoftDrop)
+        double("spillStrength", &spillStrength)
+        if let raw = defaults.string(forKey: Self.prefix + "clearBandMethod"), let value = ClearBandMethod(rawValue: raw) {
+            clearBandMethod = value
+        }
         if let raw = defaults.string(forKey: Self.prefix + "backdrop"), let value = Backdrop(rawValue: raw) { backdrop = value }
     }
 
@@ -113,6 +158,7 @@ final class GlossLab {
     /// Every switch off: the trunk's look. Slider values are kept.
     func allOff() {
         rimFade = false; edgeLight = false; innerEdge = false; topLight = false; grain = false; oneRim = false
+        clearBand = false; glassShadow = false; glassSpill = false
     }
 
     /// The sliders back to the lead's starting values.
@@ -126,6 +172,12 @@ final class GlossLab {
         topLightDark = fresh.topLightDark; bottomShadeDark = fresh.bottomShadeDark
         grainPercent = fresh.grainPercent
         topLightKeepsOut = true
+        clearBandWidth = fresh.clearBandWidth; clearBandMethod = fresh.clearBandMethod
+        clearBandContainer = fresh.clearBandContainer
+        shadowContactLight = fresh.shadowContactLight; shadowContactDark = fresh.shadowContactDark
+        shadowSoftLight = fresh.shadowSoftLight; shadowSoftDark = fresh.shadowSoftDark
+        shadowSoftRadius = fresh.shadowSoftRadius; shadowSoftDrop = fresh.shadowSoftDrop
+        spillStrength = fresh.spillStrength
     }
 
     /// 0. 3D: dark glass lit from the top is Dark mode plus ideas 5 and 3.
@@ -144,10 +196,13 @@ final class GlossLab {
         Mode: \(mode)
         Backdrop: \(backdrop.title)
         1 Bare glass at the rim: \(on(rimFade)), width \(f(rimFadeWidth)) pt
+        2 A band of Clear glass: \(on(clearBand)), width \(f(clearBandWidth)) pt, \(clearBandMethod.title), one container: \(on(clearBandContainer))
         3 Edge light on the panel: \(on(edgeLight)), width \(f(edgeLightWidth)) pt, Light \(f(edgeLightLight)), Dark \(f(edgeLightDark)), bottom line \(f(edgeLightShade))
         4 A second inner edge: \(on(innerEdge)), inset \(f(innerEdgeInset)) pt, strength \(f(innerEdgeStrength))
         5 Light from the top: \(on(topLight)), Light top \(f(topLightLight)) shade \(f(bottomShadeLight)), Dark top \(f(topLightDark)) shade \(f(bottomShadeDark)), keeps out from under the controls: \(on(topLightKeepsOut))
         6 Fine grain: \(on(grain)), \(f(grainPercent)) %
+        7 A shadow that fits glass: \(on(glassShadow)), contact Light \(f(shadowContactLight)) Dark \(f(shadowContactDark)), soft Light \(f(shadowSoftLight)) Dark \(f(shadowSoftDark)), radius \(f(shadowSoftRadius)) pt, drop \(f(shadowSoftDrop)) pt
+        7 Spill of light under the bottom edge: \(on(glassSpill)), \(f(spillStrength))
         10 One rim recipe for every control: \(on(oneRim))
         """
     }
@@ -162,7 +217,9 @@ enum GlossLabCounters {
     static var stageSurface = 0
     /// Edge light builds on glass controls (the trunk's or idea 10's).
     static var controlEdgeLight = 0
-    static func reset() { surfaceLayer = 0; rimLayer = 0; stageSurface = 0; controlEdgeLight = 0 }
+    /// The panel's exterior shadow (the trunk's, or idea 7's).
+    static var shadowLayer = 0
+    static func reset() { surfaceLayer = 0; rimLayer = 0; stageSurface = 0; controlEdgeLight = 0; shadowLayer = 0 }
 }
 #endif
 #endif
