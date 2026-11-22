@@ -169,7 +169,7 @@ class LaunchLocalPreviewTest < Minitest::Test
     </dict></plist>
   XML
 
-  def stubbed_release_like_build(swift_flags:, conditions: "", entitlements: LOCAL_ENTITLEMENTS)
+  def stubbed_release_like_build(swift_flags:, conditions: "", entitlements: LOCAL_ENTITLEMENTS, measure: false)
     Dir.mktmpdir("attic-release-like-guard") do |dir|
       dir = File.realpath(dir)
       { "xcodebuild" => STUB_XCODEBUILD, "codesign" => STUB_CODESIGN }.each do |name, body|
@@ -186,11 +186,13 @@ class LaunchLocalPreviewTest < Minitest::Test
         "STUB_LOG" => File.join(dir, "stub.log")
       }
       stdout, stderr, status = Open3.capture3(
-        env, SCRIPT, "--release-like", "--build-only",
+        env, SCRIPT, "--release-like", *(measure ? ["--measure"] : []), "--build-only",
         "--derived-data", File.join(dir, "dd"), chdir: ROOT
       )
       built = File.exist?(env["STUB_LOG"])
-      return [stdout, stderr, status, built]
+      signing_file = File.join(dir, "dd", "PreviewState", "measure.entitlements")
+      signing = File.exist?(signing_file) ? File.read(signing_file) : nil
+      return [stdout, stderr, status, built, signing]
     end
   end
 
@@ -239,6 +241,129 @@ class LaunchLocalPreviewTest < Minitest::Test
     assert status.success?, stderr
     assert built
     assert_includes stdout, "code_sign_entitlements=Attic/AtticNotesLocal.entitlements"
+  end
+
+  MEASURE_FLAGS = "$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_MEASURE"
+  TASK_ALLOW_ENTITLEMENTS = LOCAL_ENTITLEMENTS.sub(
+    "</dict>", "<key>com.apple.security.get-task-allow</key><true/>\n</dict>"
+  )
+
+  def test_measure_adds_only_attic_measure_to_the_release_like_build
+    plain, plain_stderr, plain_status = dry_run("--release-like")
+    measure, stderr, status = dry_run("--release-like", "--measure")
+    assert plain_status.success?, plain_stderr
+    assert status.success?, stderr
+    plain_command = plain[/^build_command=.*$/]
+    measure_command = measure[/^build_command=.*$/]
+
+    assert_includes measure, "measure=true"
+    assert_includes measure, "build_label=debug=0 measure=1 opt=1 frame_monitor=off"
+    assert_includes plain, "build_label=debug=0 measure=0 opt=1 frame_monitor=off"
+    refute_includes plain_command, "ATTIC_MEASURE"
+    # The only differences: the flag, and the app-only entitlements file
+    # (a global CODE_SIGN_ENTITLEMENTS would also re-sign the agent helper).
+    expected = plain_command
+      .sub("-DATTIC_LOCAL_ONLY", "-DATTIC_LOCAL_ONLY\\ -DATTIC_MEASURE")
+      .sub(/ build $/, " ATTIC_MACOS_ENTITLEMENTS=")
+    assert measure_command.start_with?(expected), "#{measure_command}\nis not\n#{expected}..."
+    assert_match(%r{ ATTIC_MACOS_ENTITLEMENTS=\S*/PreviewState/measure\.entitlements ENTITLEMENTS_DONT_REMOVE_GET_TASK_ALLOW=YES build $}, measure_command)
+    refute_includes plain_command, "GET_TASK_ALLOW"
+    refute_includes measure_command, "CODE_SIGN_ENTITLEMENTS"
+    refute_includes measure_command, "ATTIC_FIRST_TOUCH_LOG"
+    refute_includes measure_command, "ATTIC_IDLE_SAMPLER"
+  end
+
+  def test_measure_requires_release_like
+    [[], ["--optimized"], ["--first-touch-log"]].each do |extra|
+      _stdout, stderr, status = dry_run("--measure", *extra)
+
+      refute status.success?, "--measure #{extra.join(' ')} must be rejected"
+      assert_includes stderr, "--measure requires --release-like"
+    end
+  end
+
+  def test_measure_build_signs_with_the_project_entitlements_plus_get_task_allow
+    stdout, stderr, status, built, signing = stubbed_release_like_build(
+      swift_flags: MEASURE_FLAGS, entitlements: TASK_ALLOW_ENTITLEMENTS, measure: true
+    )
+
+    assert status.success?, stderr
+    assert built
+    source = File.read(File.join(ROOT, "Attic", "AtticNotesLocal.entitlements"))
+    keys = ->(xml) { xml.scan(%r{<key>([^<]*)</key>}).flatten.sort }
+    assert_equal (keys.(source) + ["com.apple.security.get-task-allow"]).sort, keys.(signing)
+    assert_match(%r{^summary build_label=debug=0 measure=1 opt=1 frame_monitor=off configuration=Release get_task_allow=true cloud_push_keys=0 }, stdout)
+  end
+
+  def test_measure_refuses_settings_without_attic_measure
+    _stdout, stderr, status, built = stubbed_release_like_build(
+      swift_flags: "$(inherited) -DATTIC_LOCAL_ONLY", entitlements: TASK_ALLOW_ENTITLEMENTS, measure: true
+    )
+
+    refute status.success?
+    assert_includes stderr, "measure build settings lack ATTIC_MEASURE"
+    refute built
+  end
+
+  def test_plain_release_like_refuses_settings_with_attic_measure
+    ["$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_MEASURE", "$(inherited) -DATTIC_LOCAL_ONLY"].each_with_index do |flags, index|
+      conditions = index.zero? ? "" : "$(inherited) ATTIC_MEASURE"
+      _stdout, stderr, status, built = stubbed_release_like_build(swift_flags: flags, conditions: conditions)
+
+      refute status.success?, "#{flags} #{conditions} must stop the build"
+      assert_includes stderr, "carry ATTIC_MEASURE without --measure"
+      refute built
+    end
+  end
+
+  def test_measure_build_refuses_a_signature_without_get_task_allow
+    _stdout, stderr, status, built = stubbed_release_like_build(swift_flags: MEASURE_FLAGS, measure: true)
+
+    refute status.success?
+    assert_includes stderr, "measure build lacks get-task-allow"
+    assert built
+  end
+
+  def test_plain_release_like_refuses_a_signature_with_get_task_allow
+    _stdout, stderr, status, built, signing = stubbed_release_like_build(
+      swift_flags: "$(inherited) -DATTIC_LOCAL_ONLY", entitlements: TASK_ALLOW_ENTITLEMENTS
+    )
+
+    refute status.success?
+    assert_includes stderr, "release-like build carries get-task-allow"
+    assert built
+    assert_nil signing, "plain release-like must not write a measure entitlements file"
+  end
+
+  def test_plain_release_like_summary_is_labelled_without_measure
+    stdout, stderr, status = stubbed_release_like_build(swift_flags: "$(inherited) -DATTIC_LOCAL_ONLY")
+
+    assert status.success?, stderr
+    assert_match(/^summary build_label=debug=0 measure=0 opt=1 frame_monitor=off configuration=Release get_task_allow=absent cloud_push_keys=0 /, stdout)
+  end
+
+  def test_frame_monitor_is_a_launch_variable_labelled_on_the_summary
+    stdout, stderr, status = dry_run("--release-like", "--measure", "--frame-monitor")
+    assert status.success?, stderr
+    assert_includes stdout, "build_label=debug=0 measure=1 opt=1 frame_monitor=on"
+    assert_match(/^launch_command=\/usr\/bin\/open -n --env ATTIC_FRAME_MONITOR=1 /, stdout)
+    # The build itself is the same: the monitor runs only on the variable.
+    plain_measure, = dry_run("--release-like", "--measure")
+    assert_equal plain_measure[/^build_command=.*$/], stdout[/^build_command=.*$/]
+    refute_includes plain_measure, "ATTIC_FRAME_MONITOR"
+
+    _stdout, stderr, status = dry_run("--release-like", "--frame-monitor")
+    refute status.success?
+    assert_includes stderr, "--frame-monitor with --release-like requires --measure"
+  end
+
+  def test_frame_monitor_compiles_for_measure_and_reads_its_variable_only_at_start
+    monitor = File.read(File.join(ROOT, "Attic", "Performance", "AtticFrameMonitor.swift"))
+    assert_includes monitor, "#if DEBUG || ATTIC_MEASURE\n"
+    assert_equal 1, monitor.scan("ATTIC_FRAME_MONITOR\"]").size
+    assert_includes File.read(File.join(ROOT, "Attic", "Performance", "NoteDragProbe.swift")), "#if DEBUG\n"
+    delegate = File.read(File.join(ROOT, "Attic", "App", "AppDelegate.swift"))
+    assert_includes delegate, "#if DEBUG || ATTIC_MEASURE\n        AtticFrameMonitor.startIfRequested()\n        #endif\n"
   end
 
   def test_desktop_run_passes_release_like_through_and_finds_its_product

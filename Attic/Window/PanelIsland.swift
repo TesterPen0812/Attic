@@ -1546,7 +1546,7 @@ final class PanelIslandWindows {
     /// its drag and release.
     func updatePassthrough(at point: CGPoint, eventTimestamp: TimeInterval? = nil) {
         if island.isVisible {
-            #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+            #if (ATTIC_FIRST_TOUCH_LOG || ATTIC_MEASURE) && ATTIC_LOCAL_ONLY && arch(arm64)
             let callbackNS = DispatchTime.now().uptimeNanoseconds
             // Begin before track() changes the observable model state, so its
             // first SwiftUI-facing work is charged to the island-wake span.
@@ -1562,7 +1562,7 @@ final class PanelIslandWindows {
             }
             #endif
             model.track(pointer: point, rest: restFrame, awake: islandFrame)
-            #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+            #if (ATTIC_FIRST_TOUCH_LOG || ATTIC_MEASURE) && ATTIC_LOCAL_ONLY && arch(arm64)
             if tracingWake, model.isAwake {
                 IdleLatencyTrace.point("view_dispatch_done")
                 IdleLatencyTrace.firstFrameOpportunity(in: island.contentView)

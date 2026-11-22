@@ -5,7 +5,7 @@ import XCTest
 
 final class FirstTouchLogTests: XCTestCase {
     func testFeatureIsCompileTimeRestrictedToLocalARMPreviews() {
-        #if ATTIC_FIRST_TOUCH_LOG && ATTIC_LOCAL_ONLY && arch(arm64)
+        #if (ATTIC_FIRST_TOUCH_LOG || ATTIC_MEASURE) && ATTIC_LOCAL_ONLY && arch(arm64)
         XCTAssertTrue(FirstTouchLogAvailability.enabled)
         #else
         XCTAssertFalse(FirstTouchLogAvailability.enabled)
@@ -131,3 +131,20 @@ final class FirstTouchLogTests: XCTestCase {
     }
     #endif
 }
+
+#if DEBUG || ATTIC_MEASURE
+/// The frame monitor compiles into DEBUG and ATTIC_MEASURE builds, and the
+/// launch environment alone decides whether it runs: without
+/// ATTIC_FRAME_MONITOR=1 no display link is installed.
+@MainActor
+final class AtticFrameMonitorTests: XCTestCase {
+    func testNoMonitorIsInstalledWithoutTheLaunchVariable() {
+        // The unit-test host is never launched with ATTIC_FRAME_MONITOR=1.
+        XCTAssertFalse(AtticFrameMonitor.isRunning)
+        AtticFrameMonitor.startIfRequested(environment: [:])
+        AtticFrameMonitor.startIfRequested(environment: ["ATTIC_FRAME_MONITOR": "0"])
+        AtticFrameMonitor.startIfRequested(environment: ["ATTIC_FRAME_MONITOR": "true"])
+        XCTAssertFalse(AtticFrameMonitor.isRunning)
+    }
+}
+#endif

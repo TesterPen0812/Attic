@@ -30,8 +30,10 @@ final class AppQuitRequestGate {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        #if DEBUG
+        #if DEBUG || ATTIC_MEASURE
         AtticFrameMonitor.startIfRequested()
+        #endif
+        #if DEBUG
         // Preview builds only: `--attic-gallery` opens the design-system
         // gallery instead of starting the panel (Release has no gallery).
         switch AppRuntimeEnvironment().galleryLaunch {
