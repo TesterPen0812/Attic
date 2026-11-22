@@ -609,9 +609,10 @@ enum AtticMotionScale {
     }
 
     /// One removal for Tasks rows, Notes rows, Notes cards and completed
-    /// tasks. Their existing insertion recipes stay as they are.
+    /// tasks. Their existing insertion recipes stay as they are. It plays
+    /// only in an update that animates (`AtticDeleteExit`).
     static func deleteExit(reduceMotion: Bool) -> AnyTransition {
-        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: deleteScale)).animation(exit)
+        reduceMotion ? .opacity : AnyTransition(AtticDeleteExit())
     }
 
     /// A list row: added, it drops into its place on `settle` (round 9);
@@ -640,6 +641,30 @@ enum AtticMotionScale {
     /// `motion`, or Reduced's choice (`reducedChange`) when motion is reduced.
     static func resolved(_ motion: Animation?, reduceMotion: Bool) -> Animation? {
         reduceMotion ? reducedChange : motion
+    }
+}
+
+/// A deleted item's exit (`AtticMotionScale.deleteExit`): it fades and
+/// shrinks to `deleteScale` on `exit`, in place of the animation its list
+/// moves on (`gapClose`). An update with no animation removes it at once.
+///
+/// The exit used to carry its own animation (`.animation(exit)` on the
+/// transition), and SwiftUI plays such an animation in an update that has
+/// none. A kept host drawn again takes what changed while it was not drawn
+/// in its first layout, which has none (`KeptContentHost`): a row ticked
+/// or deleted meanwhile was drawn in the tab's first frame back and left
+/// during the slide (the trunk at a1597202; ticked-row-fable.md).
+struct AtticDeleteExit: Transition {
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        let leaving = !phase.isIdentity
+        let exit = AtticMotionScale.exit
+        content
+            .opacity(leaving ? 0 : 1)
+            .scaleEffect(leaving ? AtticMotionScale.deleteScale : 1)
+            .transaction { transaction in
+                guard leaving, transaction.animation != nil, !transaction.disablesAnimations else { return }
+                transaction.animation = exit
+            }
     }
 }
 
