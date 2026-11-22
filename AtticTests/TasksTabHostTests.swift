@@ -292,15 +292,17 @@ final class TasksTabHostTests: XCTestCase {
         }
     }
 
-    private func laterDrawing(_ hosted: Hosted, host: KeptContentHostingView) -> LaterDrawing {
+    private func laterDrawing(_ hosted: Hosted, host: KeptContentHostingView, tab: TasksTab = .backlog) -> LaterDrawing {
         let list = hosted.lists(in: host).filter { !$0.isHidden }.max { $0.frame.height < $1.frame.height }
         var rows: [String: CGRect] = [:]
-        for row in hosted.model.rows(for: .backlog) {
-            guard let frame = hosted.pointer.frame(for: TasksRowID(tab: .backlog, id: row.id)) else { continue }
+        // Done draws its own list, by day (`TasksDonePage`).
+        let listed = tab == .done ? hosted.model.doneDays().flatMap(\.rows) : hosted.model.rows(for: tab)
+        for row in listed {
+            guard let frame = hosted.pointer.frame(for: TasksRowID(tab: tab, id: row.id)) else { continue }
             // The pointer adds the slide's offset and this takes it off
             // again: rounded to a thousandth of a point, so the arithmetic's
             // 1e-14 is not read as a move.
-            let local = frame.offsetBy(dx: -hosted.pointer.pageOffset(.backlog), dy: 0)
+            let local = frame.offsetBy(dx: -hosted.pointer.pageOffset(tab), dy: 0)
             func round(_ value: CGFloat) -> CGFloat { (value * 1000).rounded() / 1000 }
             rows[row.model.title] = CGRect(x: round(local.minX), y: round(local.minY), width: round(local.width), height: round(local.height))
         }
@@ -314,26 +316,27 @@ final class TasksTabHostTests: XCTestCase {
     /// `matchesRows` false: a tab shown keeps a row completed on it for a
     /// while, and a hidden one drops it at once, so only the width is
     /// compared with the tab shown throughout.
-    private func checkLatersFirstFrame(_ label: String, matchesRows: Bool = true,
+    private func checkLatersFirstFrame(_ label: String, tab: TasksTab = .backlog, matchesRows: Bool = true,
                                        after change: (Hosted) throws -> Void) throws {
         let reference = try warmed(laterRows: 4, followsWindow: true)
         defer { reference.close() }
-        reference.go(to: .backlog)
-        let referenceHost = hosts(reference)[1]
-        let before = laterDrawing(reference, host: referenceHost)
+        let slot = try XCTUnwrap(TasksTab.allCases.firstIndex(of: tab))
+        reference.go(to: tab)
+        let referenceHost = hosts(reference)[slot]
+        let before = laterDrawing(reference, host: referenceHost, tab: tab)
         try change(reference)
         reference.spin(0.6)
-        let expected = laterDrawing(reference, host: referenceHost)
+        let expected = laterDrawing(reference, host: referenceHost, tab: tab)
         XCTAssertNotEqual(expected.listHeight, before.listHeight, "\(label): the change resizes the list, so the first frame can be stale")
 
         let hosted = try warmed(laterRows: 4, followsWindow: true)
         defer { hosted.close() }
         hosted.spin(0.3)
-        let laterHost = hosts(hosted)[1]
-        XCTAssertFalse(laterHost.isInteractive, "Later is hidden")
+        let laterHost = hosts(hosted)[slot]
+        XCTAssertFalse(laterHost.isInteractive, "\(label): the tab is hidden")
         try change(hosted)
         hosted.spin(0.6)
-        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: .backlog) }
+        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: tab) }
         // The app's own frames: the run loop turns, and each commit runs the
         // window's layout and display; nothing is laid out by hand. Read
         // after every turn of about 5 ms until the slide has settled.
@@ -341,10 +344,10 @@ final class TasksTabHostTests: XCTestCase {
         let end = Date().addingTimeInterval(1.2)
         while Date() < end {
             RunLoop.current.run(until: Date().addingTimeInterval(0.005))
-            drawings.append(laterDrawing(hosted, host: laterHost))
+            drawings.append(laterDrawing(hosted, host: laterHost, tab: tab))
         }
         hosted.spin(0.3)
-        let settled = laterDrawing(hosted, host: laterHost)
+        let settled = laterDrawing(hosted, host: laterHost, tab: tab)
         let shown = drawings.firstIndex { $0.listWidth > 0 }
         let first = shown.map { drawings[$0] } ?? settled
         let differing = shown.map { drawings[$0...].filter { $0 != settled }.count } ?? -1
@@ -372,6 +375,12 @@ final class TasksTabHostTests: XCTestCase {
 
     func testLaterIsRightInItsFirstFrameAfterAResizeWhileHidden() throws {
         try checkLatersFirstFrame("resize") { resize($0, by: 6) }
+    }
+
+    /// Done holds its layouts while hidden too. Not red on the base: there
+    /// a hidden host laid out at every resize step, so it was never stale.
+    func testDoneIsRightInItsFirstFrameAfterAResizeWhileHidden() throws {
+        try checkLatersFirstFrame("done-resize", tab: .done) { resize($0, by: 6) }
     }
 
     func testLaterIsRightInItsFirstFrameAfterARowIsAddedWhileHidden() throws {
