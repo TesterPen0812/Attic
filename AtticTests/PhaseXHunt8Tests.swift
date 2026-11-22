@@ -373,6 +373,70 @@ final class PhaseXHunt8Tests: XCTestCase {
         XCTAssertEqual(panel.noteDraft.pages.active?.noteID, noteID)
     }
 
+    /// PR 52 CI (44974512382): seed 4b421601 failed at step 84, ⇧⌘L on
+    /// Backlog right after Tasks -> Notes -> Calendar -> Backlog. This
+    /// replays that seed's own steps 0-83 as the hunt does, then sends ⇧⌘L
+    /// with no run-loop turn after the last switch: the page model already
+    /// says Backlog, so the hidden Notes page must not take the key.
+    func testKeyboardHuntSeed4B421601Step84ShortcutRightAfterSwitch() throws {
+        let panel = try makePanel()
+        defer { release(panel) }
+        let noteID = try openNoteOnNotes(panel, text: "Keyboard note \(UInt64(0x4B42_1601))")
+        panel.host.rootView.selectSection(.tasks)
+        spin(0.1)
+        var random = UInt64(0x4B42_1601)
+        func next(_ count: Int) -> Int {
+            random ^= random << 13
+            random ^= random >> 7
+            random ^= random << 17
+            return Int(random % UInt64(count))
+        }
+        let sections = PanelSection.allCases
+        var shown = false
+        var lastAction = -1
+        for step in 0..<85 {
+            let action = next(19)
+            lastAction = action
+            if step == 84 { break }
+            switch action {
+            case 0...4: panel.host.rootView.selectSection(sections[action])
+            case 5: panel.state.beginAdding()
+            case 6: panel.state.endAdding()
+            case 7: panel.state.requestPrimaryInputFocus()
+            case 8: panel.state.requestSearch()
+            case 9: panel.state.agentChat.draft.append("x")
+            case 10: if shown { panel.state.agentChat.open() }
+            case 11: panel.state.agentChat.escape()
+            case 12: if !shown { panel.state.panelDidReveal(); shown = true }
+            case 13: if shown { panel.state.panelDidHide(); shown = false }
+            case 14: panel.state.releasePageContent()
+            case 15: panel.state.loadPageContent()
+            case 16...18:
+                if shown, panel.state.isPageContentLoaded, panel.state.selectedSection != .notes {
+                    let keys: [(String, UInt16, NSEvent.ModifierFlags)] = [
+                        ("l", 37, [.command, .shift]), ("d", 2, .command), ("n", 45, .command)
+                    ]
+                    let (characters, code, modifiers) = keys[action - 16]
+                    _ = panel.window.performKeyEquivalent(with: try key(characters, code: code, modifiers, in: panel.window))
+                }
+            default: break
+            }
+            // The hunt's turn after each step, except after the last switch.
+            if step < 83 { spin(0.012) }
+        }
+        XCTAssertEqual(lastAction, 16, "harness: step 84 of seed 4b421601 is ⇧⌘L")
+        XCTAssertTrue(shown, "harness: the panel is revealed at step 84")
+        XCTAssertTrue(panel.state.isPageContentLoaded, "harness: the pages are built at step 84")
+        XCTAssertEqual(panel.state.selectedSection, .backlog, "harness: step 83 switched to Backlog")
+        XCTAssertFalse(panel.noteDraft.pages.isLibraryPresented, "harness: Notes' library is not up before the key")
+        _ = panel.window.performKeyEquivalent(with: try key("l", code: 37, [.command, .shift], in: panel.window))
+        XCTAssertFalse(panel.noteDraft.pages.isLibraryPresented,
+                       "hidden Notes took ⇧⌘L sent right after the switch to Backlog")
+        spin(0.1)
+        XCTAssertFalse(panel.noteDraft.pages.isLibraryPresented, "hidden Notes cannot show its library after the key")
+        XCTAssertEqual(panel.noteDraft.pages.active?.noteID, noteID, "hidden Notes session still owns its note")
+    }
+
     /// The Notes page stays built behind Tasks: its note keys (⇧⌘L All
     /// notes, ⌘D Duplicate) must not act on it from there.
     func testCoverageNotesKeysDoNotActFromBehindTasks() throws {
