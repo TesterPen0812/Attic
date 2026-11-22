@@ -358,6 +358,56 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
         }
     }
 
+    // MARK: - A clearance change runs no shell (SPEED-NOTICE-CLEARANCE-SHELL)
+
+    /// The Tasks page's bottom stack growing or shrinking (here a paste
+    /// offer over the bar, as the composer's date and tags row does) moves
+    /// the notices' clearance. Only the notices' padding reads it: neither
+    /// the shell nor any hidden Notes or Calendar view may run, while the
+    /// notices still get the new padding and give it back.
+    func testANoticeClearanceChangeRunsNoShellOrHiddenPage() throws {
+        var shellRuns = 0
+        #if ATTIC_LOCAL_ONLY
+        let previousShell = PanelInvalidationProbe.shell
+        PanelInvalidationProbe.shell = { shellRuns += 1 }
+        defer { PanelInvalidationProbe.shell = previousShell }
+        #endif
+        try withRig { rig in
+            settle(rig)
+            let resting = PanelNoticeClearanceProbe.lastBottomPadding
+            XCTAssertGreaterThan(resting, 0, "harness: the notices are padded above the bar before the change")
+            XCTAssertNil(rig.page.pasteOffer, "harness: no paste offer before the change")
+            let offer = try XCTUnwrap(TaskPasteOffer("Counted milk\nCounted eggs"))
+            func drawn(_ applied: @escaping () -> Bool) -> () -> Bool {
+                { rig.content.layoutSubtreeIfNeeded(); rig.panel.displayIfNeeded(); return applied() }
+            }
+            let steps: [(String, () -> Void, () -> Bool)] = [
+                ("clearance grows", { rig.page.pasteOffer = offer },
+                 drawn { PanelNoticeClearanceProbe.lastBottomPadding > resting + 0.5 }),
+                ("clearance shrinks", { rig.page.pasteOffer = nil },
+                 drawn { abs(PanelNoticeClearanceProbe.lastBottomPadding - resting) < 0.5 }),
+            ]
+            for (label, control, applied) in steps {
+                settle(rig)
+                let shellBefore = shellRuns
+                let paddedBefore = PanelNoticeClearanceProbe.applications
+                let counts = measure(rig, label, control, saved: applied)
+                let padded = PanelNoticeClearanceProbe.applications - paddedBefore
+                print("CLEARANCE_SHELL_COUNTS \(label) shell=\(shellRuns - shellBefore) notices=\(padded) "
+                      + "padding=\(PanelNoticeClearanceProbe.lastBottomPadding) resting=\(resting)")
+                XCTAssertEqual(shellRuns - shellBefore, 0,
+                               "\(label): the shell ran, though only the notices read the clearance")
+                for key in Self.hidden {
+                    XCTAssertEqual(counts[key, default: 0], 0,
+                                   "\(label): the hidden \(key) ran, though nothing in it reads the clearance")
+                }
+                // The positive control: the notices' padding was applied.
+                XCTAssertGreaterThan(padded, 0, "\(label): the notices took the new clearance")
+            }
+            assertCalendarColumnsAreLive(rig)
+        }
+    }
+
     // MARK: - What still reads the route
 
     private func undoItems(_ rig: Rig) -> [(title: String, enabled: Bool)] {
