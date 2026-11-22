@@ -338,13 +338,23 @@ final class TasksTabHostTests: XCTestCase {
         try change(hosted)
         hosted.spin(0.6)
         withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { hosted.model.select(tab: .backlog) }
-        // The window's own next display, as the app's first frame comes;
-        // no layout is forced first.
-        hosted.window.displayIfNeeded()
-        let first = laterDrawing(hosted, host: laterHost)
-        hosted.spin(1.2)
+        // The app's own frames: the run loop turns, and each commit runs the
+        // window's layout and display; nothing is laid out by hand. Read
+        // after every turn of about 5 ms until the slide has settled.
+        var drawings: [LaterDrawing] = []
+        let end = Date().addingTimeInterval(1.2)
+        while Date() < end {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.005))
+            drawings.append(laterDrawing(hosted, host: laterHost))
+        }
+        hosted.spin(0.3)
         let settled = laterDrawing(hosted, host: laterHost)
-        print("FIRST_FRAME \(label) first=\(first.summary) | settled=\(settled.summary) | reference=\(expected.summary)")
+        let shown = drawings.firstIndex { $0.listWidth > 0 }
+        let first = shown.map { drawings[$0] } ?? settled
+        let differing = shown.map { drawings[$0...].filter { $0 != settled }.count } ?? -1
+        print("FIRST_FRAME \(label) first_drawn_read=\(shown ?? -1) of \(drawings.count) differing_after=\(differing) first=\(first.summary) | settled=\(settled.summary) | reference=\(expected.summary)")
+        XCTAssertNotNil(shown, "\(label): Later's list is drawn during the switch")
+        XCTAssertEqual(differing, 0, "\(label): from its first drawn frame on, Later's list never differs from its settled state (no stale frame, no jump)")
         XCTAssertGreaterThan(settled.rows.count, 0, "\(label): Later has rows to compare")
         XCTAssertEqual(first.listWidth, settled.listWidth, "\(label): the list's width in the first frame")
         XCTAssertEqual(first.listHeight, settled.listHeight, "\(label): the list's height in the first frame")
