@@ -3126,11 +3126,21 @@ final class TasksPageModel: ObservableObject {
             quickLookOrder[id] = subtasks.map(\.id)
             return subtasks
         }
-        let known = subtasks.filter { order.contains($0.id) }
-            .sorted { (order.firstIndex(of: $0.id) ?? 0) < (order.firstIndex(of: $1.id) ?? 0) }
-        let new = subtasks.filter { !order.contains($0.id) }
+        let ranks = Dictionary(order.enumerated().lazy.map { ($0.element, $0.offset) },
+                               uniquingKeysWith: { first, _ in first })
+        var known: [(rank: Int, offset: Int, item: TaskItem)] = []
+        var new: [TaskItem] = []
+        for (offset, item) in subtasks.enumerated() {
+            if let rank = ranks[item.id] {
+                known.append((rank, offset, item))
+            } else {
+                new.append(item)
+            }
+        }
+        // Physical replicas share a rank: they keep their input order.
+        known.sort { ($0.rank, $0.offset) < ($1.rank, $1.offset) }
         if !new.isEmpty { quickLookOrder[id] = order + new.map(\.id) }
-        return known + new
+        return known.map(\.item) + new
     }
 
     /// A subtask moved on purpose (round 10; also its Undo and Redo, round

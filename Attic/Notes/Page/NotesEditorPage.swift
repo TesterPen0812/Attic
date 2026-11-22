@@ -133,10 +133,8 @@ struct NotesEditorPage: View {
 
     private var pageContent: some View {
         ZStack(alignment: .bottom) {
-            PanelComposerClearance(.notesPage) { extra in
-                content(extraBottom: extra)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             // The card or row growing into the note, under the bars.
             AtticGrowLayer(state: noteGrow, onFinish: { $noteGrow.finish($0) })
                 .allowsHitTesting(false)
@@ -276,9 +274,10 @@ struct NotesEditorPage: View {
             // leaves no note on screen, and its toast stays.)
             if opened != nil { dismissOwnToast() }
         }
-        .onChange(of: controller.undoRevision) { _, _ in
-            // Another action (or an Undo) moved the history on: a toast for
-            // a delete that Undo no longer reaches goes away.
+        .onReceive(controller.undoRevisionChanges) { _ in
+            // Another action (or an Undo) moved the history on, here or in
+            // a hidden page: a toast for a delete that Undo no longer
+            // reaches goes away. Runs without running the page's body.
             if let step = postedToastStep, controller.libraryUndoStepID != step { dismissOwnToast() }
         }
         .onChange(of: controller.presentationCount) { _, _ in
@@ -374,13 +373,16 @@ struct NotesEditorPage: View {
 
     // MARK: Content
 
+    // The card's room reaches the library through its scroll margin, and
+    // each leaf below that takes the number through its own narrow
+    // clearance: a room change never rebuilds the page.
     @ViewBuilder
-    private func content(extraBottom: CGFloat) -> some View {
+    private var content: some View {
         if let history = controller.historyBrowser {
             NoteHistoryPage(controller: controller, browser: history, layout: layout)
         } else if controller.isLibraryPresented {
             NotesLibraryView(model: library, controller: controller, store: noteStore, layout: layout,
-                             bottomClearance: bottomInset + extraBottom, bottomControls: bottomControls, searchFocused: $searchFocused,
+                             bottomClearance: bottomInset, bottomControls: bottomControls, searchFocused: $searchFocused,
                              searchOpen: $searchOpen,
                              rowCommands: { id in rowCommands(id) },
                              libraryCommands: { Self.historyCommands(for: controller) },
@@ -395,22 +397,28 @@ struct NotesEditorPage: View {
                                                   removal: .identity)
                                     : slide(from: Self.libraryEdge))
         } else if let review = controller.proposalReview, let changes = review.changes {
-            NoteProposalInPlaceReview(controller: controller, review: review, changes: changes,
-                columnInset: columnInset, topInset: topInset, bottomInset: bottomControls + bottomInset + extraBottom,
-                design: design)
+            PanelComposerClearance(.notesLeaf) { extra in
+                NoteProposalInPlaceReview(controller: controller, review: review, changes: changes,
+                    columnInset: columnInset, topInset: topInset, bottomInset: bottomControls + bottomInset + extra,
+                    design: design)
+            }
                 .overlay { AtticFloatingControlsBand(height: bottomControls) }
                 .accessibilitySortPriority(3)
         } else if let review = controller.proposalReview {
-            NoteProposalComparison(controller: controller, store: noteStore, review: review,
-                columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: layout.chromeInsets.bottom + extraBottom,
-                design: design)
+            PanelComposerClearance(.notesLeaf) { extra in
+                NoteProposalComparison(controller: controller, store: noteStore, review: review,
+                    columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: layout.chromeInsets.bottom + extra,
+                    design: design)
+            }
         } else if let session = controller.active {
-            NoteEditorRepresentable(session: session, chrome: chrome, columnInset: columnInset,
-                                    topInset: topInset, bottomInset: bottomControls + bottomInset + extraBottom, headerBottom: layout.headerBottom,
-                                    design: design, tagEditor: { AnyView(tagEditor(for: session)) },
-                                    tagCounts: { [noteStore] in
-                                        noteStore.tagCounts
-                                    })
+            PanelComposerClearance(.notesLeaf) { extra in
+                NoteEditorRepresentable(session: session, chrome: chrome, columnInset: columnInset,
+                                        topInset: topInset, bottomInset: bottomControls + bottomInset + extra, headerBottom: layout.headerBottom,
+                                        design: design, tagEditor: { AnyView(tagEditor(for: session)) },
+                                        tagCounts: { [noteStore] in
+                                            noteStore.tagCounts
+                                        })
+            }
                 .id(ObjectIdentifier(session.engine))
                 // Floating controls (owner, 2026-10-14): the note runs on to
                 // the panel's edges, under the header, visible through the

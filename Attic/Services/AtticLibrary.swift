@@ -600,7 +600,8 @@ final class AtticLibrary {
     /// task's or a note's store ends its delete with
     /// `WorkspaceItemLifecycle.didCommit`, which refreshes the lifecycle's
     /// library, so this library refreshes again only for a canvas (whose store
-    /// has no such step) or when the lifecycle reaches another library.
+    /// has no such step) or when the lifecycle reaches another library. A
+    /// restore asks this only after its store reported that commit step.
     private func lifecycleRefreshed(after ref: AtticItemRef) -> Bool {
         guard ref.kind != .canvas,
               let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) else { return false }
@@ -635,8 +636,8 @@ final class AtticLibrary {
         undo.perform(in: history) {
             // Read before the restore clears the record of what came back.
             let owned = itemOwnership(ownedMembers(of: ref), deleted: true, noteID: ref.kind == .note ? ref.id : nil)
-            guard performRestore(ref) else { return nil }
-            refreshItemStores()
+            guard let committed = restoreReportingCommit(ref) else { return nil }
+            if !committed || !lifecycleRefreshed(after: ref) { refreshItemStores() }
             return UndoStep(
                 name: "Restore \(Self.noun(for: ref.kind))",
                 lifecycle: .restore,
@@ -1046,15 +1047,26 @@ final class AtticLibrary {
     }
 
     func performRestore(_ ref: AtticItemRef) -> Bool {
+        restoreReportingCommit(ref) != nil
+    }
+
+    /// `performRestore`, saying whether the store ended the restore with
+    /// `WorkspaceItemLifecycle.didCommit`: nil when refused. A task's store
+    /// always does; a note's store only when it restores a deletion group (a
+    /// pre-group note restore reloads its own store only); a canvas's never.
+    private func restoreReportingCommit(_ ref: AtticItemRef) -> Bool? {
         switch ref.kind {
         case .task:
-            return tasks.restoreDeleted(taskID: ref.id) || fail(tasks.lastErrorMessage)
+            guard tasks.restoreDeleted(taskID: ref.id) else { _ = fail(tasks.lastErrorMessage); return nil }
+            return true
         case .note:
-            guard let notes else { return fail("Notes are unavailable.") }
-            return notes.restoreDeleted(noteID: ref.id) || fail(notes.lastErrorMessage)
+            guard let notes else { _ = fail("Notes are unavailable."); return nil }
+            guard let restored = notes.restoreDeletedNote(noteID: ref.id) else { _ = fail(notes.lastErrorMessage); return nil }
+            return restored.group != nil
         case .canvas:
-            guard let canvases else { return fail("Canvases are unavailable.") }
-            return canvases.restoreCanvas(ref.id) || fail(canvases.lastErrorMessage)
+            guard let canvases else { _ = fail("Canvases are unavailable."); return nil }
+            guard canvases.restoreCanvas(ref.id) else { _ = fail(canvases.lastErrorMessage); return nil }
+            return false
         }
     }
 

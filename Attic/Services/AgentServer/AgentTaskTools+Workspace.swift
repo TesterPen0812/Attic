@@ -482,6 +482,7 @@ extension AgentTaskTools {
         if let call, !(try call.readSet.isCurrent(in: ModelContext(store.container))) {
             call.conflicted = true; throw AgentToolError.notPerformed("The workspace changed.")
         }
+        try Self.prepared(notes.store)
         let restored = try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: call?.readSet.tokens ?? [], scopes: call?.readSet.scopes ?? [], in: notes.store.modelContext) {
             return notes.restoreTaskNote(noteID: noteID, staging: { try call?.stageResolution(in: $0) })
         }

@@ -32,6 +32,7 @@ enum NoteHistoryCaptureScene {
             .table(NoteTable(texts: [["Plan", "Status"], ["Earlier", "Kept"]]))])
         let store = controller.store
         guard case let .success(created) = store.createDocumentNote(id: UUID(), document: earlier, staged: [staged]) else { return }
+        guard store.prepareNoteEdit() else { return }
         let first = NoteVersion(noteID: created.noteID, createdAt: Date().addingTimeInterval(-7200), reason: .pause,
             content: try? NoteContentCodec.encode(earlier), contentFormat: 1, title: earlier.title, body: "",
             attachmentIDs: earlier.attachmentIDs, sourceRevisionID: created.revisionID)

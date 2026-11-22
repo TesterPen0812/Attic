@@ -74,6 +74,11 @@ final class HiddenPagesCountersTests: XCTestCase {
         let libraryBox: LibraryBox
         let seed: Seed
         let tally: Tally
+        let calendarState: CalendarPageState
+        /// The Calendar page's model (the panel built it behind Tasks).
+        @MainActor var calendarModel: CalendarPageModel {
+            calendarState.model(store: tasks, resumeDefaults: state.resumeDefaults, owner: .docked)
+        }
     }
 
     /// Subscription counts; read with the static counters into one snapshot.
@@ -93,10 +98,10 @@ final class HiddenPagesCountersTests: XCTestCase {
     /// Column order of every printed line.
     private static let columns = [
         "NotesPageHost", "NotesEditorPage", "NotesLibraryView",
-        "CalendarPageHost", "CalendarPage", "CalendarDayView",
+        "CalendarPageHost", "CalendarPage", "CalendarDayView", "dayTimeline",
         "DrawPageHost", "CanvasPageHost", "PanelCanvasNoticeAwareHost",
-        "clear.notesPage", "clear.calendarGrid", "clear.calendarDay", "clear.unnamed",
-        "clear0.notesPage", "clear0.calendarGrid", "clear0.calendarDay", "clear0.unnamed",
+        "clear.notesPage", "clear.notesLeaf", "clear.calendarGrid", "clear.calendarDay", "clear.unnamed",
+        "clear0.notesPage", "clear0.notesLeaf", "clear0.calendarGrid", "clear0.calendarDay", "clear0.unnamed",
         "room.$height", "room.$isOpen",
         "notesCtl.willChange", "notesCtl.$undoRevision", "draft.willChange",
         "store.total", "store.inventoryNotice", "store.bare",
@@ -209,6 +214,7 @@ final class HiddenPagesCountersTests: XCTestCase {
         let chrome = PanelChromeInteractionState()
         let tasksState = TasksPageState()
         let composerState = PanelComposerState()
+        let calendarState = CalendarPageState()
         let libraryBox = LibraryBox()
         let previousProbe = NotesEditorPage.lifetimeProbe
         NotesEditorPage.lifetimeProbe = { [libraryBox] _, model in libraryBox.model = model }
@@ -218,7 +224,7 @@ final class HiddenPagesCountersTests: XCTestCase {
             rootView: AtticPanelView(store: tasks, noteStore: notes, canvasSession: canvasSession,
                                      noteDraft: draft, chromeInteractionState: chrome, uiState: state,
                                      settings: AppSettings(defaults: defaults), tasksPageState: tasksState,
-                                     composerState: composerState),
+                                     calendarPageState: calendarState, composerState: composerState),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
         let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
         let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
@@ -260,14 +266,13 @@ final class HiddenPagesCountersTests: XCTestCase {
         XCTAssertGreaterThan(mounted["CalendarPageHost", default: 0], 0, "harness: the Calendar host counter is live")
         XCTAssertGreaterThan(mounted["DrawPageHost", default: 0] + mounted["CanvasPageHost", default: 0], 0,
                              "harness: the Draw host counter is live")
-        XCTAssertGreaterThan(mounted["clear.notesPage", default: 0] + mounted["clear0.notesPage", default: 0], 0,
-                             "harness: the Notes clearance counter is live")
+        XCTAssertGreaterThan(mounted["NotesLibraryView", default: 0], 0, "harness: the Notes library counter is live")
 
         let tally = Tally()
         tally.count("room.$height", composerState.room.$height.dropFirst())
         tally.count("room.$isOpen", composerState.room.$isOpen.dropFirst())
         tally.count("notesCtl.willChange", draft.pages.objectWillChange)
-        tally.count("notesCtl.$undoRevision", draft.pages.$undoRevision.dropFirst())
+        tally.count("notesCtl.$undoRevision", draft.pages.undoRevisionChanges)
         tally.count("draft.willChange", draft.objectWillChange)
         tally.count("store.total", notes.objectWillChange)
         tally.count("store.inventoryNotice", library.tags.inventoryChanges)
@@ -282,7 +287,8 @@ final class HiddenPagesCountersTests: XCTestCase {
 
         try body(Rig(container: container, tasks: tasks, notes: notes, library: library, draft: draft,
                      state: state, composerState: composerState, content: content, panel: panel, page: page,
-                     composer: composer, notesLibrary: notesLibrary, libraryBox: libraryBox, seed: seed, tally: tally))
+                     composer: composer, notesLibrary: notesLibrary, libraryBox: libraryBox, seed: seed, tally: tally,
+                     calendarState: calendarState))
         XCTAssertTrue(libraryBox.model === notesLibrary,
                       "harness: the Notes page kept the library model the counts subscribed to")
     }
@@ -297,11 +303,12 @@ final class HiddenPagesCountersTests: XCTestCase {
             "CalendarPageHost": CalendarPageHost.bodyEvaluations,
             "CalendarPage": CalendarPage.bodyEvaluations,
             "CalendarDayView": CalendarDayView.bodyEvaluations,
+            "dayTimeline": CalendarDayView.timelineBuilds,
             "DrawPageHost": DrawPageHost.bodyEvaluations,
             "CanvasPageHost": CanvasPageHost.bodyEvaluations,
             "PanelCanvasNoticeAwareHost": PanelCanvasNoticeAwareHost.bodyEvaluations,
         ]
-        let sites: [(String, PanelComposerClearanceSite)] = [("notesPage", .notesPage), ("calendarGrid", .calendarGrid),
+        let sites: [(String, PanelComposerClearanceSite)] = [("notesPage", .notesPage), ("notesLeaf", .notesLeaf), ("calendarGrid", .calendarGrid),
                                                              ("calendarDay", .calendarDay), ("unnamed", .unnamed)]
         for (name, site) in sites {
             v["clear." + name] = PanelComposerClearanceCounts.observed[site, default: 0]
@@ -378,13 +385,50 @@ final class HiddenPagesCountersTests: XCTestCase {
         rig.page.rows(for: .now).contains { $0.id == id }
     }
 
+    /// Every scroll view that holds the card's end keeper (Notes' library,
+    /// Calendar's grid or day), in hierarchy order.
+    private static func roomScrolls(in root: NSView) -> [NSScrollView] {
+        var found: [NSScrollView] = []
+        func walk(_ view: NSView) {
+            if view is PanelComposerScrollKeeper.Keeper, let scroll = view.enclosingScrollView,
+               !found.contains(where: { $0 === scroll }) {
+                found.append(scroll)
+            }
+            view.subviews.forEach(walk)
+        }
+        walk(root)
+        return found
+    }
+
     // MARK: - C1: the card's room per "+"
+
+    /// Mechanism 2's guard (lead's rule in `ops/design/hidden-pages.md`, "The guard for all four"): the card's room reaches a
+    /// hidden page only as its scroll view's bottom margin. On "+" or the add bar, no hidden page's clearance closure runs: Notes'
+    /// page-wide one and Calendar's grid and day ones are gone. On "+", Notes' hidden library list does not run either.
+    private static let roomClearanceSites = ["notesPage", "calendarGrid", "calendarDay"]
+
+    private static func clearanceCalls(_ counts: [String: Int], _ site: String) -> Int {
+        counts["clear." + site, default: 0] + counts["clear0." + site, default: 0]
+    }
+
+    private func assertRoomChangeReachesNoHiddenPage(_ counts: [String: Int], _ label: String, libraryList: Bool,
+                                                     file: StaticString = #filePath, line: UInt = #line) {
+        for site in Self.roomClearanceSites {
+            XCTAssertEqual(Self.clearanceCalls(counts, site), 0,
+                           "\(label): the \(site) clearance closure ran on the card's room change", file: file, line: line)
+        }
+        if libraryList {
+            XCTAssertEqual(counts["NotesLibraryView", default: 0], 0,
+                           "\(label): the hidden Notes library list ran on the card's room change", file: file, line: line)
+        }
+    }
 
     func testC1RoomPublishesAndClosureCallsPerPlus() throws {
         try withRig { rig in
             for round in 1...3 {
                 closeCard(rig)
-                measure(rig, "C1 library plus round=\(round)") { openCard(rig) }
+                let counts = measure(rig, "C1 library plus round=\(round)") { openCard(rig) }
+                assertRoomChangeReachesNoHiddenPage(counts, "C1 library plus round=\(round)", libraryList: true)
                 XCTAssertTrue(rig.composer.isOpen, "harness: \"+\" opened the card")
                 XCTAssertGreaterThan(rig.composerState.room.height, 0, "harness: the open card set the room")
             }
@@ -398,13 +442,79 @@ final class HiddenPagesCountersTests: XCTestCase {
             pump(rig.content, rig.panel)
             XCTAssertEqual(rig.draft.pages.active?.noteID, noteID, "harness: Notes rests on the open note")
             XCTAssertFalse(rig.draft.pages.isLibraryPresented, "harness: Notes left its library")
+            XCTAssertGreaterThan(PanelComposerClearanceCounts.observed[.notesLeaf, default: 0]
+                                 + PanelComposerClearanceCounts.unobserved[.notesLeaf, default: 0], 0,
+                                 "harness: the note editor's clearance counter is live")
             for round in 1...3 {
                 closeCard(rig)
-                measure(rig, "C1 openNote plus round=\(round)") { openCard(rig) }
+                let counts = measure(rig, "C1 openNote plus round=\(round)") { openCard(rig) }
+                // Only the open note's leaf takes the room: it runs, and no other clearance does.
+                assertRoomChangeReachesNoHiddenPage(counts, "C1 openNote plus round=\(round)", libraryList: false)
+                XCTAssertEqual(Self.clearanceCalls(counts, "unnamed"), 0, "C1 openNote plus round=\(round): an unnamed clearance ran")
+                XCTAssertGreaterThan(Self.clearanceCalls(counts, "notesLeaf"), 0,
+                                     "C1 openNote plus round=\(round): the open note's editor leaf did not take the room")
                 XCTAssertTrue(rig.composer.isOpen, "harness: \"+\" opened the card")
                 XCTAssertGreaterThan(rig.composerState.room.height, 0, "harness: the open card set the room")
             }
             closeCard(rig)
+        }
+    }
+
+    // MARK: - C1b: Calendar's grid and day per "+" and fold
+
+    /// Mechanism 2's guard for Calendar, with each scroll view mounted. Calendar opens on its grid, so C1 never had the day's
+    /// clearance in the tree to count. Here the day, then the grid, is mounted behind Tasks; the card opens and folds. Each time the
+    /// card's room changes inside the measured interval, the scroll view's native bottom inset follows it, no clearance closure
+    /// runs, and the day's timeline is not rebuilt.
+    func testC1bCalendarGridAndDayTakeTheRoomOnlyAsTheirMargin() throws {
+        try withRig { rig in
+            closeCard(rig)
+            XCTAssertFalse(rig.calendarModel.isDayView, "harness: Calendar rests on its grid")
+            let onGrid = Self.roomScrolls(in: rig.content)
+            let timelineBefore = CalendarDayView.timelineBuilds
+            rig.calendarModel.setDayView(true)
+            pump(rig.content, rig.panel)
+            XCTAssertEqual(rig.state.selectedSection, .tasks, "harness: Tasks is still current")
+            let onDay = Self.roomScrolls(in: rig.content)
+            let day = try XCTUnwrap(onDay.first { scroll in !onGrid.contains { $0 === scroll } },
+                                    "harness: the day's scroll view is mounted behind Tasks")
+            XCTAssertGreaterThan(CalendarDayView.timelineBuilds - timelineBefore, 0, "harness: the hidden day built its timeline")
+            assertOnlyTheMarginTakesTheRoom(rig, day, "C1b day", timeline: true)
+
+            rig.calendarModel.setDayView(false)
+            pump(rig.content, rig.panel)
+            let grid = try XCTUnwrap(Self.roomScrolls(in: rig.content).first { scroll in !onDay.contains { $0 === scroll } },
+                                     "harness: the grid's scroll view is mounted behind Tasks again")
+            assertOnlyTheMarginTakesTheRoom(rig, grid, "C1b grid", timeline: false)
+        }
+    }
+
+    /// Opens the card, then folds it, each as one measured interval: the room changes in it, `scroll`'s native bottom inset gains the
+    /// card's room past the bar's row and then gives it back, and no hidden page's clearance closure (nor, with `timeline`, the day's
+    /// timeline) runs.
+    private func assertOnlyTheMarginTakesTheRoom(_ rig: Rig, _ scroll: NSScrollView, _ label: String, timeline: Bool,
+                                                 file: StaticString = #filePath, line: UInt = #line) {
+        closeCard(rig)
+        pump(rig.content, rig.panel)
+        let closedInset = scroll.contentInsets.bottom
+        var steps: [(String, [String: Int])] = []
+        steps.append(("plus", measure(rig, "\(label) plus") { openCard(rig) }))
+        XCTAssertTrue(rig.composer.isOpen, "harness: \"+\" opened the card", file: file, line: line)
+        let extra = PanelComposerScrollRoom.extra(height: rig.composerState.room.height)
+        XCTAssertGreaterThan(extra, 0, "harness: the open card is taller than the bar's row", file: file, line: line)
+        XCTAssertEqual(scroll.contentInsets.bottom - closedInset, extra, accuracy: 1,
+                       "\(label): the native bottom inset took the card's room", file: file, line: line)
+        steps.append(("fold", measure(rig, "\(label) fold") { closeCard(rig) }))
+        XCTAssertEqual(scroll.contentInsets.bottom, closedInset, accuracy: 1,
+                       "\(label): the native bottom inset gave the room back", file: file, line: line)
+        for (step, counts) in steps {
+            XCTAssertGreaterThan(counts["room.$height", default: 0], 0,
+                                 "harness: \(label) \(step): the card's room changed in the measured interval", file: file, line: line)
+            assertRoomChangeReachesNoHiddenPage(counts, "\(label) \(step)", libraryList: false, file: file, line: line)
+            if timeline {
+                XCTAssertEqual(counts["dayTimeline", default: 0], 0,
+                               "\(label) \(step): the day's timeline was rebuilt on the card's room change", file: file, line: line)
+            }
         }
     }
 
@@ -494,11 +604,18 @@ final class HiddenPagesCountersTests: XCTestCase {
             }
             XCTAssertTrue(hasTask(titled: cardTitle, rig), "harness: the card created its task")
 
-            closeCard(rig)
+            // The add bar's room change: the card folds back into the bar's row. The card is open when the interval starts,
+            // and the fold comes to rest inside it.
+            if !rig.composer.isOpen { openCard(rig); pump(rig.content, rig.panel) }
+            XCTAssertTrue(rig.composer.isOpen, "harness: the card is open before the fold")
+            XCTAssertGreaterThan(rig.composerState.room.height, 0, "harness: the open card holds its room before the fold")
+            run("add-bar") { closeCard(rig) }
+
+            // The closed bar's own submission: a task-creation check, recorded in the table only.
             let barTitle = "Counted add bar task"
             rig.page.addBar = TaskAddBarText(text: barTitle)
             rig.page.addBarCaret = nil
-            run("add-bar") {
+            run("add-bar-create") {
                 _ = rig.page.submitAddBar()
                 rig.page.settlePendingCompletionAcknowledgements()
             }
@@ -517,12 +634,21 @@ final class HiddenPagesCountersTests: XCTestCase {
 
             let shown = ["NotesPageHost", "NotesEditorPage", "NotesLibraryView", "CalendarPageHost", "CalendarPage",
                          "CalendarDayView", "DrawPageHost", "CanvasPageHost", "PanelCanvasNoticeAwareHost",
-                         "clear.notesPage", "clear.calendarGrid", "clear.calendarDay", "room.$height",
+                         "clear.notesPage", "clear.notesLeaf", "clear.calendarGrid", "clear.calendarDay", "room.$height",
                          "notesCtl.willChange", "notesCtl.$undoRevision", "draft.willChange",
                          "store.total", "store.bare", "libModel.total", "libModel.sinkSends"]
             print("HIDDEN_TABLE " + (["control"] + shown).joined(separator: "\t"))
             for (name, counts) in table {
                 print("HIDDEN_TABLE " + ([name] + shown.map { String(counts[$0, default: 0]) }).joined(separator: "\t"))
+            }
+
+            // Asserted only for the triggers a merged fix owns; the rest of the table is recorded. Mechanism 2 owns "+" and the
+            // add bar's room change (the card folding back into the bar's row); each must change the room inside its interval.
+            // The add bar's own task creation still re-runs Notes' list (mechanism 1's trigger, not owned yet): recorded only.
+            for (name, counts) in table where name == "plus" || name == "add-bar" {
+                XCTAssertGreaterThan(counts["room.$height", default: 0], 0,
+                                     "harness: C4 \(name): the card's room changed in the measured interval")
+                assertRoomChangeReachesNoHiddenPage(counts, "C4 \(name)", libraryList: name == "plus")
             }
         }
     }

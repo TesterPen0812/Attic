@@ -1017,6 +1017,18 @@ final class AgentTaskTools {
         let stale: Bool
     }
 
+    /// A declared read set rides on the note store's current context, so that context must be the one the write
+    /// commits from: the store replaces a spent context here, before the set is attached, not inside the write.
+    /// Called after the tool's disposition, because computing it can save a background editor through the store, and
+    /// after the revision read, not before it: the in-app agent records its Undo snapshot from the store's
+    /// presentation before the tool runs, so a write whose base revision is behind must be refused (or become a
+    /// proposal) by the store's own revision check, never applied against a fresher read than the snapshot.
+    static func prepared(_ noteStore: NoteStore) throws {
+        guard noteStore.prepareNoteEdit() else {
+            throw AgentToolError.notPerformed(noteStore.lastErrorMessage ?? "The note could not be refreshed.")
+        }
+    }
+
     private func workspaceReadSet(_ arguments: [String: Any], note: NoteItem) throws -> WorkspaceWriteReadSet? {
         guard let taskID = note.taskID else { return nil }
         func decode(_ key: String) throws -> WorkspaceScopeToken {
@@ -1101,18 +1113,21 @@ final class AgentTaskTools {
         guard !document.isEmpty || !document.objectIDs.isEmpty else {
             throw AgentToolError.invalidArguments("A title or body must remain non-empty.")
         }
-        let stale = readSet?.stale == true || baseRevision != note.revisionToken
-        let disposition = stale ? NoteAgentWriteDisposition.proposal : noteStore.agentWriteDisposition(note.id)
+        // Only values cross `Self.prepared`, which may replace the store's context (the row `note` came from).
+        let noteID = note.id, noteRevision = note.revisionToken
+        let stale = readSet?.stale == true || baseRevision != noteRevision
+        let disposition = stale ? NoteAgentWriteDisposition.proposal : noteStore.agentWriteDisposition(noteID)
         let write = {
-            noteStore.agentWrite(noteID: note.id, baseRevisionToken: stale ? note.revisionToken : baseRevision,
+            noteStore.agentWrite(noteID: noteID, baseRevisionToken: stale ? noteRevision : baseRevision,
                                 document: document, agentName: agentName, disposition: disposition, requiresReview: stale)
         }
+        if readSet != nil { try Self.prepared(noteStore) }
         let result = try readSet.map { set in
             try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
         } ?? write()
         switch result {
         case .success(.applied):
-            let updated = noteStore.note(withID: note.id) ?? note
+            let updated = noteStore.note(withID: noteID) ?? note
             return try encode(["status": "applied", "note": serializeNote(updated)])
         case let .success(.pending(editID)):
             return try encode([
@@ -1173,18 +1188,21 @@ final class AgentTaskTools {
         guard !document.isEmpty || !document.objectIDs.isEmpty else {
             throw AgentToolError.invalidArguments("Deleting this table would leave the note empty: delete the note with delete_note instead.")
         }
-        let stale = readSet?.stale == true || baseRevision != note.revisionToken
-        let disposition = stale ? NoteAgentWriteDisposition.proposal : noteStore.agentWriteDisposition(note.id)
+        // Only values cross `Self.prepared`, which may replace the store's context (the row `note` came from).
+        let noteID = note.id, noteRevision = note.revisionToken
+        let stale = readSet?.stale == true || baseRevision != noteRevision
+        let disposition = stale ? NoteAgentWriteDisposition.proposal : noteStore.agentWriteDisposition(noteID)
         let write = {
-            noteStore.agentWrite(noteID: note.id, baseRevisionToken: stale ? note.revisionToken : baseRevision,
+            noteStore.agentWrite(noteID: noteID, baseRevisionToken: stale ? noteRevision : baseRevision,
                 document: document, agentName: self.agentName(arguments), disposition: disposition, requiresReview: stale)
         }
+        if readSet != nil { try Self.prepared(noteStore) }
         let result = try readSet.map { set in
             try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
         } ?? write()
         switch result {
         case .success(.applied):
-            let updated = noteStore.note(withID: note.id) ?? note
+            let updated = noteStore.note(withID: noteID) ?? note
             var payload: [String: Any] = ["status": "applied", "note": serializeNote(updated)]
             if let edited {
                 var block = current.blocks[index]
@@ -1224,19 +1242,22 @@ final class AgentTaskTools {
             throw AgentToolError.invalidArguments("base_revision is required: pass the note's revision from list_notes.")
         }
         let readSet = try workspaceReadSet(arguments, note: note)
-        let stale = readSet?.stale == true || base != note.revisionToken
-        let disposition = stale && readSet != nil ? NoteAgentWriteDisposition.proposal : noteStore.agentWriteDisposition(note.id)
+        // Only values cross `Self.prepared`, which may replace the store's context (the row `note` came from).
+        let noteID = note.id, noteRevision = note.revisionToken
+        let stale = readSet?.stale == true || base != noteRevision
+        let disposition = stale && readSet != nil ? NoteAgentWriteDisposition.proposal : noteStore.agentWriteDisposition(noteID)
         let write = {
-            noteStore.agentDelete(noteID: note.id, baseRevisionToken: readSet != nil && stale ? note.revisionToken : base,
+            noteStore.agentDelete(noteID: noteID, baseRevisionToken: readSet != nil && stale ? noteRevision : base,
                                   agentName: self.agentName(arguments), disposition: disposition)
         }
+        if readSet != nil { try Self.prepared(noteStore) }
         let result = try readSet.map { set in
             try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
         } ?? write()
         switch result {
         case .success(.applied):
-            library.recordCommittedDeletion(AtticItemRef(.note, note.id))
-            return try encode(["deleted": note.id.uuidString, "kind": "note", "status": "applied",
+            library.recordCommittedDeletion(AtticItemRef(.note, noteID))
+            return try encode(["deleted": noteID.uuidString, "kind": "note", "status": "applied",
                 "restorable_until": Self.dateFormatter.string(from: RecentlyDeletedPolicy.expiry(deletedAt: Date(), calendar: .autoupdatingCurrent))])
         case let .success(.pending(editID)):
             return try encode(["status": "pending", "kind": "note", "pending_edit": editID.uuidString,

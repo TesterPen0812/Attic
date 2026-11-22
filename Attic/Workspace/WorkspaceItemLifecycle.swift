@@ -193,7 +193,7 @@ enum WorkspaceItemLifecycle {
                let value = try WorkspaceRestoreNormalization.materialization(document, noteID: row.id, in: context) {
                 let prepared = try PreparedNoteDocument(value.document)
                 NoteStore.stageDocumentContent(prepared, format: value.document.format, on: [row],
-                    timestamp: timestamp, revision: row.revision, revisionID: normalizedRevisionIDs[row.id]!)
+                    timestamp: timestamp, revision: row.revision, revisionID: normalizedRevisionIDs[row.id]!, in: context)
                 row.tags = value.tags
             } else if has("TaskNoteAssociation", in: context),
                       try context.fetch(FetchDescriptor<TaskNoteAssociation>()).contains(where: { $0.noteID == row.id && $0.detachedPreservationID != nil }),
@@ -578,6 +578,13 @@ extension WorkspaceItemLifecycle {
         guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) else { return }
         let freshNotes = coordinator.lifecycleLibrary?.refreshItemStores(freshTasks: freshTasks)
         coordinator.lifecycleNotes?.publishWholeItemLifecycle(notesReadInThisCommit: freshNotes)
+    }
+
+    /// Whether `didCommit` reads `notes` again: through the lifecycle's library or its Notes controller. A note store
+    /// it does not reach (another library's, or one with no lifecycle) must refresh itself after its commit.
+    static func didCommitRefreshes(_ notes: NoteStore, in container: ModelContainer) -> Bool {
+        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) else { return false }
+        return coordinator.lifecycleLibrary?.notes === notes || coordinator.lifecycleNotes?.store === notes
     }
 }
 

@@ -243,6 +243,9 @@ enum NoteAgentWriteOutcome: Equatable {
     case pending(editID: UUID)
 }
 
+/// How a note-store command's entry treats a context replaced there (pr40-wall-design.md).
+enum NoteEditEntry { case decision, values }
+
 enum NoteAgentWriteDisposition: Equatable {
     case proposal, direct, refuse(String)
 }
@@ -427,6 +430,7 @@ extension NoteStore {
     /// says which happened so history records the actual result.
     @discardableResult
     func setPinnedOutcome(_ pinned: Bool, noteID: UUID) -> PinResult {
+        guard prepareNoteEdit() else { return .failed }
         let retainedEdits = RetainedNoteEdits()
         do {
             let replicas = try liveReplicas(of: noteID)
@@ -550,6 +554,9 @@ extension NoteStore {
         creatingTask: TaskDraft? = nil,
         pinned: Bool = false
     ) -> Result<(noteID: UUID, revisionID: UUID), NoteDocumentStoreError> {
+        // .values for a new note: the id is checked unused and the document validated against the fresh rows below.
+        // Resolving a proposal decides on the reviewed one, so it is a decision.
+        guard prepareNoteEdit(resolvingProposal == nil ? .values : .decision) else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let context = modelContext
         if let existing = try? replicasIncludingDeleted(of: id), !existing.isEmpty {
             if existing.contains(where: { $0.deletedAt != nil }) { return .failure(.noteMissing(id)) }
@@ -672,6 +679,8 @@ extension NoteStore {
         prepared: PreparedNoteDocument? = nil,
         tags: [String]? = nil
     ) -> Result<UUID, NoteDocumentStoreError> {
+        // .values: the document is the whole write; baseRevisionID is checked against the fresh rows' preflight.
+        guard prepareNoteEdit(.values) else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let preflight: NoteMutationPreflight
         do {
             preflight = try noteMutationPreflight(noteID, format: .document)
@@ -785,7 +794,7 @@ extension NoteStore {
                                 projection: PreparedNoteDocument, tags: String? = nil) -> UUID {
         let revisionID = UUID()
         Self.stageDocumentContent(projection, format: document.format, on: replicas,
-                                  timestamp: timestamp, revision: revision, revisionID: revisionID, tags: tags)
+                                  timestamp: timestamp, revision: revision, revisionID: revisionID, tags: tags, in: modelContext)
         for replica in replicas {
             documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true, projection.attachmentBlocks, projection.hasTaskNote)
             if let tags { replica.tagsRaw = tags }
@@ -795,8 +804,11 @@ extension NoteStore {
 
     static func stageDocumentContent(_ projection: PreparedNoteDocument, format: Int,
                                      on replicas: [NoteItem], timestamp: Date, revision: Int64,
-                                     revisionID: UUID, tags: String? = nil) {
-        if let context = replicas.first?.modelContext { WorkspaceLegacyBridge.prepareMutations(replicas, in: context) }
+                                     revisionID: UUID, tags: String? = nil, in context: ModelContext? = nil) {
+        // Rows not yet in any context (a new note's) are not prepared. Otherwise the staging writes through the
+        // caller's installed context when given, so the family guard counts rows carried from an older context
+        // even when the whole family came from it; else through the rows' own.
+        if let owner = replicas.first?.modelContext { WorkspaceLegacyBridge.prepareMutations(replicas, in: context ?? owner) }
         let preferred = canonicalReplicas(from: replicas)
         for replica in replicas {
             replica.installPreparedContent(projection)
@@ -1020,13 +1032,14 @@ extension NoteStore {
     /// already holds this exact revision.
     @discardableResult
     func recordVersion(noteID: UUID, reason: NoteVersionReason) -> Bool {
+        guard prepareNoteEdit() else { return false }
         guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { return false }
         let inserted: Int
         do { inserted = try stageDisplacedReplicas(preflight.replicas, reason: reason, timestamp: currentDate) }
         catch { recordError(error.localizedDescription); return false }
         if inserted == 0 { return true }
         guard commitStagedChanges() else { return false }
-        thinVersions(noteID: noteID)
+        thinVersions(noteID: noteID, entry: .values)
         return true
     }
 
@@ -1034,7 +1047,10 @@ extension NoteStore {
     /// for a week and each day for a month. Proposal bases and recovery bases
     /// remain until their owner is gone. Safety versions taken at exactly the
     /// same instant are kept together so divergent replicas are not collapsed.
-    func thinVersions(noteID: UUID) {
+    func thinVersions(noteID: UUID, entry: NoteEditEntry = .decision) {
+        // recordVersion passes .values after its own commit (only the id crosses): which versions go is read from the
+        // fresh rows below.
+        guard prepareNoteEdit(entry) else { return }
         let day: TimeInterval = 86_400
         let now = currentDate
         let targetID = noteID
@@ -1146,6 +1162,7 @@ extension NoteStore {
     /// first, in the same save: Restore succeeds only when both commit.
     func restoreVersion(_ versionID: UUID, noteID: UUID, expectedRevisionID: UUID? = nil,
                         preservationID: UUID? = nil) -> Result<String, NoteDocumentStoreError> {
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let preflight: NoteMutationPreflight
         do {
             preflight = try noteMutationPreflight(noteID, format: .editable)
@@ -1329,6 +1346,7 @@ extension NoteStore {
         requiresReview: Bool = false
     ) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
         if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let preflight: NoteMutationPreflight
         do {
             preflight = try noteMutationPreflight(noteID, format: disposition == .proposal ? .editable : .document)
@@ -1457,14 +1475,22 @@ extension NoteStore {
     /// Returns how many applied.
     @discardableResult
     func applyPendingEdits(noteID: UUID) -> Int {
+        guard prepareNoteEdit() else { return 0 }
         var applied = 0
-        for edit in pendingEdits(noteID: noteID) {
+        // Only ids cross the passes: each pass commits, and its entry may replace the context, so every decision is
+        // read from that pass's fresh rows (proposalEligible makes them agree; any row marked for review holds it).
+        for editID in pendingEdits(noteID: noteID).map(\.id) {
+            // Each pass commits; a journaled commit whose reload failed leaves the context spent for the next.
+            // .values after this command's first commit: only the id crosses; pendingEditRows, proposalEligible and
+            // the review/deletion/workspace checks below read the fresh rows.
+            guard prepareNoteEdit(.values) else { break }
             guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { break }
             let replicas = preflight.replicas
             let current = preflight.canonical
-            guard let editRows = try? pendingEditRows(edit.id),
+            guard let editRows = try? pendingEditRows(editID),
                   NotePhysicalFamilyRetention.proposalEligible(editRows, noteIDs: [noteID]),
-                  !edit.needsReview, !edit.isDeletion, edit.workspaceOperationData == nil else { continue }
+                  let edit = editRows.first, !editRows.contains(where: \.needsReview),
+                  !edit.isDeletion, edit.workspaceOperationData == nil else { continue }
             guard current.revisionToken == edit.baseRevisionToken,
                   let data = edit.proposedContent,
                   case let .editable(document) = NoteContentCodec.decode(data),
@@ -1510,6 +1536,7 @@ extension NoteStore {
     func agentDelete(noteID: UUID, baseRevisionToken: String, agentName: String,
                      disposition: NoteAgentWriteDisposition) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
         if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         let retainedEdits = RetainedNoteEdits()
         do {
             let preflight = try noteMutationPreflight(noteID, format: .editable)
@@ -1565,6 +1592,7 @@ extension NoteStore {
 
     @discardableResult
     func acknowledgeExternalEdit(noteID: UUID) -> Bool {
+        guard prepareNoteEdit() else { return false }
         guard let rows = try? liveReplicas(of: noteID), !rows.isEmpty else { return false }
         let retainedEdits = RetainedNoteEdits()
         retainedEdits.capture(rows)
@@ -1591,6 +1619,7 @@ extension NoteStore {
                              expectedSavedContent: Data?, expectedProposal: NoteProposalSignature,
                              preserving current: NoteDocument, merged: NoteDocument? = nil,
                              preservationID: UUID = UUID()) -> Result<String, NoteDocumentStoreError> {
+        guard prepareNoteEdit() else { return .failure(.saveFailed(lastErrorMessage ?? "The note could not be refreshed.")) }
         guard expectedProposal.workspaceOperation == nil else { return .failure(.saveFailed("Review and apply the whole workspace operation.")) }
         let retainedEdits = RetainedNoteEdits()
         do {
@@ -1729,7 +1758,7 @@ extension NoteStore {
         }
         stageDocumentContent(prepared, format: document.format, on: replicas, timestamp: timestamp,
                              revision: replicas.map(\.revision).max() ?? 0, revisionID: revisionID,
-                             tags: tags.map(AtticTag.encode))
+                             tags: tags.map(AtticTag.encode), in: context)
         stageAttachments(plan, noteID: noteID, context: context, timestamp: timestamp)
         let shown = Set(document.attachmentIDs)
         for row in attachments {

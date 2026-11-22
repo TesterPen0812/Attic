@@ -1,6 +1,15 @@
 import Combine
 import SwiftUI
 
+#if DEBUG
+/// Test seam (NotesUndoMirrorCountGuardTests): how many times each page's
+/// route host has run its body. A generic view holds no static storage.
+@MainActor
+enum TaskNoteRouteHostCounts {
+    static var bodyEvaluations: [PanelPage: Int] = [:]
+}
+#endif
+
 /// The task page's route on one panel page (UX plan § 5.3–5.4): the page
 /// opens over its origin and Back returns there exactly as it was left.
 ///
@@ -38,6 +47,9 @@ struct TaskNoteRouteHost<Origin: View>: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = TaskNoteRouteHostCounts.bodyEvaluations[page, default: 0] += 1
+        #endif
         let _ = routeStateRevision
         let shown = isReady ? displayedTaskID : nil
         let looks = Self.looks(grow, shown: shown != nil)

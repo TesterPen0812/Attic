@@ -125,8 +125,10 @@ final class PanelComposerRoom: ObservableObject {
 /// read it (the clearance's content-closure counts); release ignores it.
 enum PanelComposerClearanceSite: Hashable {
     case unnamed
-    /// Notes' whole page content (`NotesEditorPage.pageContent`).
+    /// Notes' whole page content (no longer wrapped: the card's room reaches the library through its scroll margin).
     case notesPage
+    /// Notes' leaves that take the number (the note editor, the in-place review, the comparison).
+    case notesLeaf
     /// Calendar's month grid scroll view (`CalendarPage.scroller`).
     case calendarGrid
     /// Calendar's day hours scroll view (`CalendarDayView.hours`).
@@ -144,7 +146,8 @@ enum PanelComposerClearanceCounts {
 }
 #endif
 
-/// Observe only the content that needs the card's extra scroll clearance.
+/// The card's extra scroll clearance for a leaf that takes the number;
+/// never a list or a page (a scroll view takes `panelComposerScrollRoom`).
 struct PanelComposerClearance<Content: View>: View {
     @Environment(\.panelComposerRoom) private var room
     let content: (CGFloat) -> Content
@@ -186,6 +189,41 @@ struct PanelComposerClearance<Content: View>: View {
             #endif
             content(max(0, room.height - AtticControlSize.addBarHeight))
         }
+    }
+}
+
+/// A scroll view's one bottom content margin: `base`, plus the open card's
+/// room past the bar's row (P4). Only this modifier observes the room, so a
+/// room change re-runs its body alone, never the scroll view's content.
+struct PanelComposerScrollRoom: ViewModifier {
+    let base: CGFloat
+    @Environment(\.panelComposerRoom) private var room
+
+    /// The card's room past the bar's row, for a card `height` tall.
+    static func extra(height: CGFloat) -> CGFloat { max(0, height - AtticControlSize.addBarHeight) }
+
+    func body(content: Content) -> some View {
+        if let room {
+            content.modifier(Observed(room: room, base: base))
+        } else {
+            content.contentMargins(.bottom, base, for: .scrollContent)
+        }
+    }
+
+    private struct Observed: ViewModifier {
+        @ObservedObject var room: PanelComposerRoom
+        let base: CGFloat
+
+        func body(content: Content) -> some View {
+            content.contentMargins(.bottom, base + PanelComposerScrollRoom.extra(height: room.height), for: .scrollContent)
+        }
+    }
+}
+
+extension View {
+    /// The scroll view's bottom content margin, with the open card's room.
+    func panelComposerScrollRoom(base: CGFloat) -> some View {
+        modifier(PanelComposerScrollRoom(base: base))
     }
 }
 

@@ -293,9 +293,14 @@ final class NotesPageController: ObservableObject {
     /// Moves on each `present()`: the page puts the keyboard back in the
     /// note (Notes reopens where you left it, caret included).
     @Published private(set) var presentationCount = 0
-    /// Follows the undo route's revision, so menus that read the library's
-    /// undo names redraw when a step is recorded, undone or dropped.
-    @Published private(set) var undoRevision: UInt64 = 0
+    /// Each change of the undo route's history (a step recorded, undone or
+    /// dropped, in any page), sent without invalidating the controller:
+    /// the menus read the library's undo names when they open, and only the
+    /// delete toast's check runs on every change. Sent synchronously from
+    /// inside the route's own change: receivers must not change the route.
+    /// Erased once, so `onReceive` sees the same publisher on every body run.
+    let undoRevisionChanges: AnyPublisher<UInt64, Never>
+    private let undoRevisionSubject: PassthroughSubject<UInt64, Never>
 
     let store: NoteStore
     let librarySummaries = NotesLibrarySummaryCache()
@@ -882,6 +887,9 @@ final class NotesPageController: ObservableObject {
          decodeRecoveryDocument: @escaping @Sendable (Data) async -> NoteDocument? = { bytes in
              await Task.detached(priority: .userInitiated) { NoteContentCodec.decode(bytes).document }.value
          }) {
+        let undoRevisionSubject = PassthroughSubject<UInt64, Never>()
+        self.undoRevisionSubject = undoRevisionSubject
+        undoRevisionChanges = undoRevisionSubject.eraseToAnyPublisher()
         self.store = store
         self.journal = journal
         self.defaults = defaults
@@ -1206,7 +1214,7 @@ final class NotesPageController: ObservableObject {
               canLeaveComposition(in: session) else { return false }
         return await performAfterRecovery {
             guard self.isReviewSessionCurrent(session), !session.isImporting, self.canLeaveComposition(in: session),
-                  self.preserve(session),
+                  self.preserve(session), self.store.prepareNoteEdit(),
                   let edit = self.store.pendingEdits(noteID: session.noteID).first(where: { id == nil || $0.id == id }),
                   let family = try? self.store.pendingEditRows(edit.id),
                   NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [session.noteID]) else { return false }
@@ -4226,13 +4234,18 @@ extension NotesPageController {
     /// separate, ordinary note (the task had a newer own note) and the
     /// step's id (the toast's Undo targets exactly that step).
     func restoreTaskNote(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> (separate: Bool, stepID: UUID?)? {
-        let before = (try? store.replicasIncludingDeleted(of: noteID)) ?? []
-        let owner = before.first?.taskID
-        let independent = before.allSatisfy { $0.deletionGroupID == nil }
-        let historyID: UndoHistoryID = owner.map { .taskWorkspace($0) } ?? .note(noteID)
+        // Read before the restore. With a command library this reads fresh
+        // contexts; the store-context fallback's groups are replaced below
+        // from what the restore did.
         let owned = noteHistoryOwnership(noteID, deleted: true)
-        guard store.restoreDeleted(noteID: noteID, staging: staging) else { return nil }
-        let separate = store.lastRestoreWasSeparate
+        guard let restored = store.restoreDeletedNote(noteID: noteID, staging: staging) else { return nil }
+        // The owner and the kind of deletion come from this restore's own
+        // result (the rows it brought back), not from a store-wide record a
+        // nested restore could change.
+        let owner = restored.owner, separate = restored.separate
+        let independent = restored.group == nil
+        if lifecycleHistoryLibrary == nil { owned.groups = restored.group.map { [$0] } ?? [] }
+        let historyID: UndoHistoryID = owner.map { .taskWorkspace($0) } ?? .note(noteID)
         undoRoute.record(UndoStep(
             name: String(localized: "Restore Note"),
             lifecycle: .restore,
@@ -4393,9 +4406,10 @@ extension NotesPageController {
     /// Follows `route` for the library's actions from now on.
     func attachUndoRoute(_ route: UndoRoute) {
         undoRoute = route
-        undoRevision = route.revision
+        // The first value is the new route's own: a toast tied to the old
+        // route's history is checked against it.
         undoRevisionSubscription = route.$revision.sink { [weak self] revision in
-            self?.undoRevision = revision
+            self?.undoRevisionSubject.send(revision)
         }
     }
 
@@ -4452,7 +4466,10 @@ extension NotesPageController {
             if store.restoreDeleted(noteID: noteID) { outcome = .applied }
             else { outcome = store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete }
         } else {
-            guard let copies = try? store.replicasIncludingDeleted(of: noteID) else { return .failed }
+            // Decided from disk: the store's context may be spent and still hold
+            // this note's earlier values, while the restore reads after its entry.
+            guard let copies = try? ModelContext(store.container).fetch(
+                FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) else { return .failed }
             let current = Set(copies.compactMap(\.deletionGroupID))
             guard owned.groups.isEmpty || !current.isEmpty && current.isSubset(of: owned.groups) else { return .obsolete }
             if store.restoreDeleted(noteID: noteID) { outcome = .applied }

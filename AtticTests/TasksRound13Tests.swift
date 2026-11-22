@@ -97,6 +97,37 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(hosted.model.editingTitleID, next.id, "Return edits the visibly focused task")
     }
 
+    /// Review 8, kept by the night job's a2f6599d (the focus watch reads
+    /// the snapshot's ordered IDs): Space completes the row the keyboard is
+    /// on, and once that row leaves Now the keyboard moves to the row that
+    /// took its place. (The selection is printed, not asserted: it is empty
+    /// afterwards on the trunk too, a separate board finding.)
+    func testSpaceOnTheFocusedRowMovesTheKeyboardToTheRowThatTookItsPlace() throws {
+        try requireKeyWindowTests()
+        var services = TasksPageServices()
+        services.acknowledgementDelay = .milliseconds(50)
+        services.doneHold = .milliseconds(300)
+        let hosted = try Hosted(height: 520, services: services)
+        defer { hosted.close() }
+        hosted.press("\u{F701}", keyCode: 125)
+        hosted.press("\t", keyCode: 48)
+        let focused = try XCTUnwrap(hosted.model.keyboardFocus?.id, "Tab gave a row the keyboard")
+        let before = hosted.model.rows(for: .now).map(\.id)
+        let index = try XCTUnwrap(before.firstIndex(of: focused))
+        XCTAssertLessThan(index + 1, before.count, "a row below takes its place")
+        let expected = before[index + 1]
+
+        hosted.press(" ", keyCode: 49)
+        func stillOnNow() -> Bool { hosted.model.rows(for: .now).contains { $0.id == focused } }
+        for _ in 0..<40 where stillOnNow() { hosted.spin(0.1) }  // the save, then the hold's release
+        XCTAssertFalse(stillOnNow(), "the completed row left Now")
+        XCTAssertEqual(hosted.store.task(withID: focused)?.status, .done)
+        hosted.spin(0.4)
+        print("FOCUS_TRANSFER completed=\(focused) expected=\(expected) "
+              + "focus=\(hosted.model.keyboardFocus?.id.uuidString ?? "nil") selection=\(hosted.model.selection.map(\.uuidString))")
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, expected, "the keyboard moved to the row that took its place")
+    }
+
     func testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
             throw XCTSkip("native keyboard interaction runs on CI only")
