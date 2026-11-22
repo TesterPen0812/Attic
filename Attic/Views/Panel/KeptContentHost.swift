@@ -553,6 +553,7 @@ struct KeptEnvironment: ViewModifier {
                 if let hold {
                     if holding, let held = hold.held {
                         #if DEBUG
+                        KeptContentHostCounts.heldEnvironment()
                         hold.logChanges(from: held, to: values)
                         #endif
                         values = held
@@ -610,9 +611,12 @@ enum KeptContentHostCounts {
     static var accessibilityHits = Split()
     /// Layouts by host (a host's own count, whatever its state).
     static var layoutsByHost: [ObjectIdentifier: Int] = [:]
+    /// Runs of a hidden host's environment transform (the held branch).
+    static var heldEnvironments = 0
 
     static func reset() {
         layoutsByHost = [:]
+        heldEnvironments = 0
         layouts = Split()
         laidOutInSet = 0
         roots = Split()
@@ -624,6 +628,7 @@ enum KeptContentHostCounts {
         count(&layouts, interactive)
         layoutsByHost[ObjectIdentifier(host), default: 0] += 1
     }
+    fileprivate static func heldEnvironment() { heldEnvironments += 1 }
     fileprivate static func root(drawn: Bool) { count(&roots, drawn) }
     fileprivate static func accessibilityChildren(interactive: Bool) { count(&accessibilityChildrenCalls, interactive) }
     fileprivate static func accessibilityHit(interactive: Bool) { count(&accessibilityHits, interactive) }

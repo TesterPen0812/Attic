@@ -139,11 +139,12 @@ final class TasksTabHostTests: XCTestCase {
         tabHosts.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] }
     }
 
-    /// What one action reached: each host's layouts in tab order, and
-    /// hidden tabs' row bodies.
+    /// What one action reached: each host's layouts in tab order, runs of
+    /// a hidden host's held environment, and hidden tabs' row bodies.
     private struct HiddenHostReach {
         let label: String
         let layouts: [Int]
+        let heldEnvironments: Int
         let hiddenLeaves: Int
     }
 
@@ -168,8 +169,9 @@ final class TasksTabHostTests: XCTestCase {
             TasksCellBodyCounts.leaves = [:]
             try action()
             let reach = HiddenHostReach(label: label, layouts: layoutCounts(tabHosts),
+                                        heldEnvironments: KeptContentHostCounts.heldEnvironments,
                                         hiddenLeaves: TasksCellBodyCounts.leaves.filter { $0.key.tab != .now }.values.reduce(0, +))
-            print("HIDDEN_HOST \(label) now=\(reach.layouts[0]) later=\(reach.layouts[1]) done=\(reach.layouts[2]) hidden_leaves=\(reach.hiddenLeaves)")
+            print("HIDDEN_HOST \(label) now=\(reach.layouts[0]) later=\(reach.layouts[1]) done=\(reach.layouts[2]) held_env=\(reach.heldEnvironments) hidden_leaves=\(reach.hiddenLeaves)")
             return reach
         }
         var reaches: [HiddenHostReach] = []
@@ -199,6 +201,20 @@ final class TasksTabHostTests: XCTestCase {
         let clicks = reaches.filter { $0.label.hasPrefix("click") }.map { $0.layouts[0] }.reduce(0, +)
         XCTAssertGreaterThan(clicks, 0, "the shown host still lays out on row clicks")
         XCTAssertGreaterThan(reaches.last?.layouts[0] ?? 0, 0, "the shown host still lays out on a resize")
+    }
+
+    /// A hidden host's held environment ran on every click, on the base
+    /// (fcac8045) and with hidden layouts held (736fcaea) alike: 2 a click,
+    /// one a hidden host, and 0 on a resize (Air unit host, 22 Nov). Its
+    /// stack is the window's root host's own layout (ViewGraph.updateOutputs,
+    /// GraphHost.updatePreferences) pulling the hidden host's
+    /// transformEnvironment, with no layout of the hidden host (A4: the
+    /// focus, window and accessibility values changed). It does not run
+    /// while the host is hidden. Red: no fix yet.
+    func testHiddenTabHostsRunNoEnvironmentOnRowClicksAndAResize() throws {
+        for reach in try reachOfClicksAndAResize() {
+            XCTAssertEqual(reach.heldEnvironments, 0, "\(reach.label): a hidden host's environment ran")
+        }
     }
 
     /// Records each host's layouts on a tab switch, plain, after row clicks
