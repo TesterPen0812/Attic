@@ -35,6 +35,42 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         }
     }
 
+    /// Whether the content is drawn: the tab shown, or one a move passes
+    /// (`KeptContentHost.drawn`). A host not drawn takes its hidden root in
+    /// one layout pass and then holds every layout until it is drawn again
+    /// (host-boundary.md §4.2): a click changed its own environment (the
+    /// window's focus, key and accessibility values) and a resize changed
+    /// its size, and each laid it out, with nothing on screen to show for
+    /// it (Air, PR 41 844907fb: once a click, as often as the shown host on
+    /// a resize). A request made while it holds is owed; drawn again, the
+    /// host is marked for layout in the update that draws it, so the pass
+    /// before its first frame takes the current size, environment and root
+    /// together.
+    var isDrawn = true {
+        didSet {
+            guard isDrawn != oldValue, isDrawn else { return }
+            holdsLayout = false
+            if owesLayout {
+                owesLayout = false
+                super.needsLayout = true
+            }
+        }
+    }
+    /// Hidden, and its hidden root laid out: a layout is owed, not run.
+    private var holdsLayout = false
+    private var owesLayout = false
+
+    override var needsLayout: Bool {
+        get { super.needsLayout }
+        set {
+            if newValue, holdsLayout {
+                owesLayout = true
+                return
+            }
+            super.needsLayout = newValue
+        }
+    }
+
     /// Whether accessibility reads the content. A host that comes into use
     /// takes clicks and the keyboard at once, but joins accessibility only
     /// after its first drawn frame: a client's read mounts the rows it asks
@@ -174,6 +210,8 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// was then laid out a second time for them: twice a row click, where
     /// AppKit's one pass takes the root and the actions together.
     func setRoot(_ root: AnyView, laidOut: Bool, under transaction: Transaction) {
+        // A hidden root is taken in one pass (`isDrawn`).
+        if !isDrawn { holdsLayout = false }
         withTransaction(transaction) {
             rootView = root
             if laidOut, window != nil {
@@ -193,7 +231,13 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         #if DEBUG
         KeptContentHostCounts.layout(interactive: isInteractive, host: self)
         #endif
+        // AppKit reached a host that holds (a request it marked itself).
+        if holdsLayout {
+            owesLayout = true
+            return
+        }
         AtticOverlayHierarchy.layoutPass { super.layout() }
+        if !isDrawn, !bounds.isEmpty { holdsLayout = true }
     }
 
     /// HB-09 (host-boundary.md §5.1, hb09-key-note §1): whether a focus
@@ -342,6 +386,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         let container = KeptContentContainer()
         let host = KeptContentHostingView(rootView: root(context))
         context.coordinator.reference.host = host
+        host.isDrawn = drawn
         host.isInteractive = interactive
         host.autoresizingMask = [.width, .height]
         host.frame = container.bounds
@@ -358,6 +403,9 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     func updateNSView(_ container: KeptContentContainer, context: Context) {
         guard let host = container.host else { return }
         let coordinator = context.coordinator
+        // Drawn first, so a host that held its layouts while hidden is
+        // marked for the pass that takes this root.
+        host.isDrawn = drawn
         // Two hidden updates in a row set nothing (as `TasksKeptPage`'s
         // equality, which this boundary carries across the host).
         if drawn || !coordinator.hiddenRootSet {
