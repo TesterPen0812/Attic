@@ -835,48 +835,7 @@ struct AtticSurfaceBackground<S: Shape>: View {
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticDesign) private var design
 
-    #if ATTIC_GLOSS_LAB
     var body: some View {
-        if let glossRimFade, model.kind != .solid {
-            ZStack {
-                underlay
-                if !isChrome {
-                    AtticGlassLift(shape: shape, strength: model.glassLift(enabled: design.brightenGlass),
-                                   leavesControlBands: liftLeavesControlBands)
-                }
-                ZStack {
-                    shape.fill(model.backing.color)
-                    tint
-                }
-                .mask { glossRimFade }
-            }
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-        } else {
-            trunkBody
-        }
-    }
-
-    @ViewBuilder
-    private var tint: some View {
-        if !model.tintStops.isEmpty {
-            if let tintHeight {
-                ZStack(alignment: .top) {
-                    model.washColor.withAlpha(model.tintOpacity(at: 1)).color
-                    LinearGradient(stops: model.tintGradientStops, startPoint: .top, endPoint: .bottom)
-                        .frame(height: tintHeight)
-                }
-                .clipShape(shape)
-            } else {
-                shape.fill(LinearGradient(stops: model.tintGradientStops, startPoint: .top, endPoint: .bottom))
-            }
-        }
-    }
-
-    private var trunkBody: some View {
-    #else
-    var body: some View {
-    #endif
         ZStack {
             if model.kind != .solid {
                 underlay
@@ -887,7 +846,12 @@ struct AtticSurfaceBackground<S: Shape>: View {
                                    leavesControlBands: liftLeavesControlBands)
                 }
                 // The foundation, with Dark's dark tint over it (A37).
+                #if ATTIC_GLOSS_LAB
                 shape.fill(model.backing.color)
+                    .glossLabRimFade(glossRimFade)
+                #else
+                shape.fill(model.backing.color)
+                #endif
             } else if model.porcelain {
                 // Visual A: the flat surface, with its top sheen kept within
                 // the first 24 pt.
@@ -902,6 +866,12 @@ struct AtticSurfaceBackground<S: Shape>: View {
             } else {
                 shape.fill(model.base.color)
             }
+            #if ATTIC_GLOSS_LAB
+            Group {
+                tint
+            }
+            .glossLabRimFade(model.kind != .solid ? glossRimFade : nil)
+            #else
             if !model.tintStops.isEmpty {
                 if let tintHeight {
                     ZStack(alignment: .top) {
@@ -914,6 +884,7 @@ struct AtticSurfaceBackground<S: Shape>: View {
                     shape.fill(LinearGradient(stops: model.tintGradientStops, startPoint: .top, endPoint: .bottom))
                 }
             }
+            #endif
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -965,6 +936,35 @@ struct AtticSurfaceBackground<S: Shape>: View {
         }
     }
 }
+
+#if ATTIC_GLOSS_LAB
+extension AtticSurfaceBackground {
+    /// The Tint as the trunk draws it (Gloss lab: wrapped so idea 1 can fade it).
+    @ViewBuilder
+    var tint: some View {
+        if !model.tintStops.isEmpty {
+            if let tintHeight {
+                ZStack(alignment: .top) {
+                    model.washColor.withAlpha(model.tintOpacity(at: 1)).color
+                    LinearGradient(stops: model.tintGradientStops, startPoint: .top, endPoint: .bottom)
+                        .frame(height: tintHeight)
+                }
+                .clipShape(shape)
+            } else {
+                shape.fill(LinearGradient(stops: model.tintGradientStops, startPoint: .top, endPoint: .bottom))
+            }
+        }
+    }
+}
+
+extension View {
+    /// Gloss lab idea 1: masks this layer with the rim fade; nil draws it as it is.
+    @ViewBuilder
+    func glossLabRimFade(_ mask: GlossRimFadeMask?) -> some View {
+        if let mask { self.mask { mask } } else { self }
+    }
+}
+#endif
 
 /// The glass lift (owner, 2026-11-11, option C): an additive white in the
 /// surface's shape. It raises every level by the same amount, so the
