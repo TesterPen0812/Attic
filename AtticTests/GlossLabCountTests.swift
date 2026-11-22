@@ -103,20 +103,39 @@ final class GlossLabCountTests: XCTestCase {
         add(attachment)
     }
 
-    /// Flipping a switch re-runs only the lab's own layers, once.
-    func testFlippingASwitchRerunsOnlyTheLabLayers() {
+    /// Flipping a switch live (as the owner does in the lab) re-runs only
+    /// the layer that reads it, and flipping it back does the same.
+    func testFlippingEachSwitchLiveRerunsOnlyItsLayer() {
         let lab = GlossLab.shared
         lab.allOff(); lab.resetSliders()
         let (panel, view) = host()
         defer { panel.orderOut(nil); panel.close(); lab.allOff() }
         spin()
-        GlossLabCounters.reset()
-        lab.edgeLight = true
-        spin()
-        view.layoutSubtreeIfNeeded()
-        XCTAssertEqual(GlossLabCounters.rimLayer, 1)
-        XCTAssertEqual(GlossLabCounters.stageSurface, 0)
-        XCTAssertEqual(GlossLabCounters.surfaceLayer, 0)
+        typealias Read = () -> Int
+        let cases: [(String, ReferenceWritableKeyPath<GlossLab, Bool>, Read)] = [
+            ("1 rim fade", \.rimFade, { GlossLabCounters.stageSurface }),
+            ("3 edge light", \.edgeLight, { GlossLabCounters.rimLayer }),
+            ("4 inner edge", \.innerEdge, { GlossLabCounters.rimLayer }),
+            ("5 top light", \.topLight, { GlossLabCounters.surfaceLayer }),
+            ("6 grain", \.grain, { GlossLabCounters.surfaceLayer }),
+            ("10 one rim", \.oneRim, { GlossLabCounters.controlEdgeLight }),
+        ]
+        var lines: [String] = []
+        for (name, key, read) in cases {
+            for value in [true, false] {
+                GlossLabCounters.reset()
+                lab[keyPath: key] = value
+                spin()
+                view.layoutSubtreeIfNeeded()
+                panel.displayIfNeeded()
+                let total = GlossLabCounters.stageSurface + GlossLabCounters.surfaceLayer + GlossLabCounters.rimLayer
+                    + GlossLabCounters.controlEdgeLight
+                lines.append("\(name) \(value ? "on" : "off"): own layer \(read()), all lab-touched bodies \(total)")
+                XCTAssertGreaterThanOrEqual(read(), 1, "\(name) \(value ? "on" : "off") did not re-run its layer")
+                XCTAssertEqual(total, read(), "\(name) re-ran more than its own layer")
+            }
+        }
+        print("GLOSS_LAB_FLIPS\n\(lines.joined(separator: "\n"))\nGLOSS_LAB_FLIPS_END")
     }
 
     /// Idea 1's mask is a linear alpha ramp: step k leaves alpha (k + 1) / n.
