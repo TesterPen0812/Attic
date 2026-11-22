@@ -220,6 +220,29 @@ final class TasksTabHostTests: XCTestCase {
         switchTo(.backlog, "after-resize-to-later")
         switchTo(.now, "after-resize-to-now")
     }
+
+    /// Records what warming builds in the hidden hosts, and what the first
+    /// switch to a warmed Later then runs (its rows' bodies and layouts):
+    /// a hidden host that holds its layouts must still be built by warming.
+    func testWarmingBuildsTheHiddenTabsAndTheFirstSwitchIsRecorded() throws {
+        KeptContentHostCounts.reset()
+        TasksCellBodyCounts.records = true
+        TasksCellBodyCounts.leaves = [:]
+        defer { TasksCellBodyCounts.records = false }
+        let hosted = try warmed(laterRows: 4, followsWindow: true)
+        defer { hosted.close() }
+        hosted.spin(0.8)
+        let tabHosts = hosts(hosted)
+        func leaves(_ tab: TasksTab) -> Int { TasksCellBodyCounts.leaves.filter { $0.key.tab == tab }.values.reduce(0, +) }
+        func rowsBuilt(_ tab: TasksTab) -> Int { TasksCellBodyCounts.leaves.keys.filter { $0.tab == tab }.count }
+        var counts = layoutCounts(tabHosts)
+        print("WARM built now=\(counts[0]) later=\(counts[1]) done=\(counts[2]) later_rows=\(rowsBuilt(.backlog)) later_leaves=\(leaves(.backlog)) held_env=\(KeptContentHostCounts.heldEnvironments)")
+        KeptContentHostCounts.reset()
+        TasksCellBodyCounts.leaves = [:]
+        hosted.go(to: .backlog)
+        counts = layoutCounts(tabHosts)
+        print("WARM first-switch now=\(counts[0]) later=\(counts[1]) done=\(counts[2]) later_rows=\(rowsBuilt(.backlog)) later_leaves=\(leaves(.backlog))")
+    }
     #endif
 
     // MARK: A hidden tab is right in its first frame
@@ -261,7 +284,11 @@ final class TasksTabHostTests: XCTestCase {
     /// list in the switch's first frame. It must equal the list once
     /// settled (no stale frame, no one-frame jump) and a Later list shown
     /// throughout the same change.
-    private func checkLatersFirstFrame(_ label: String, after change: (Hosted) throws -> Void) throws {
+    /// `matchesRows` false: a tab shown keeps a row completed on it for a
+    /// while, and a hidden one drops it at once, so only the width is
+    /// compared with the tab shown throughout.
+    private func checkLatersFirstFrame(_ label: String, matchesRows: Bool = true,
+                                       after change: (Hosted) throws -> Void) throws {
         let reference = try warmed(laterRows: 4, followsWindow: true)
         defer { reference.close() }
         reference.go(to: .backlog)
@@ -287,7 +314,9 @@ final class TasksTabHostTests: XCTestCase {
         XCTAssertEqual(first.listWidth, settled.listWidth, "\(label): the list's width in the first frame")
         XCTAssertEqual(first.rows, settled.rows, "\(label): the rows' frames in the first frame")
         XCTAssertEqual(settled.listWidth, expected.listWidth, "\(label): the list's width matches a Later shown throughout")
-        XCTAssertEqual(settled.rows, expected.rows, "\(label): the rows match a Later shown throughout")
+        if matchesRows {
+            XCTAssertEqual(settled.rows, expected.rows, "\(label): the rows match a Later shown throughout")
+        }
     }
 
     func testLaterIsRightInItsFirstFrameAfterAResizeWhileHidden() throws {
@@ -302,7 +331,7 @@ final class TasksTabHostTests: XCTestCase {
     }
 
     func testLaterIsRightInItsFirstFrameAfterARowIsCompletedWhileHidden() throws {
-        try checkLatersFirstFrame("complete") { hosted in
+        try checkLatersFirstFrame("complete", matchesRows: false) { hosted in
             resize(hosted, by: 6)
             let row = try XCTUnwrap(hosted.model.rows(for: .backlog).first { $0.status != .done })
             hosted.model.setStatus(.done, for: [row.id])
