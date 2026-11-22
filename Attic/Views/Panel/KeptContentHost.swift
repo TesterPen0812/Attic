@@ -568,7 +568,14 @@ struct KeptEnvironment: ViewModifier {
         let hold = hold
         let holding = holding
         let palette = source.atticPanelThemePalette
-        return Self.counted(content, holding: holding)
+        #if DEBUG
+        // Counts each environment the content takes as new
+        // (`KeptContentHostCounts.environments`).
+        let counted = content.transformEnvironment(\.self) { _ in KeptContentHostCounts.environment(drawn: !holding) }
+        #else
+        let counted = content
+        #endif
+        return counted
             .transformEnvironment(\.self) { values in
                 if let hold {
                     #if DEBUG
@@ -594,20 +601,6 @@ struct KeptEnvironment: ViewModifier {
             .foregroundStyle(palette.primaryForegroundColor, palette.secondaryForegroundColor)
     }
 }
-
-#if DEBUG
-extension KeptEnvironment {
-    /// Counts each environment the content is handed that SwiftUI takes as
-    /// new (`KeptContentHostCounts.environments`).
-    fileprivate static func counted(_ content: Content, holding: Bool) -> some View {
-        content.transformEnvironment(\.self) { _ in KeptContentHostCounts.environment(drawn: !holding) }
-    }
-}
-#else
-extension KeptEnvironment {
-    fileprivate static func counted(_ content: Content, holding: Bool) -> Content { content }
-}
-#endif
 
 /// The environment a kept host derives itself, as last drawn (or as first
 /// seen, for a host that has never been drawn).
@@ -653,7 +646,7 @@ enum KeptContentHostCounts {
     /// `updateNSView` calls, by drawn or not.
     static var updates = Split()
     /// Environments handed to the content that SwiftUI took as new, by the
-    /// root's drawn or not (`KeptEnvironment.counted`).
+    /// root's drawn or not (`KeptEnvironment.body`).
     static var environments = Split()
     static var accessibilityChildrenCalls = Split()
     static var accessibilityHits = Split()
