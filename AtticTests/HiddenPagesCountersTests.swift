@@ -79,6 +79,9 @@ final class HiddenPagesCountersTests: XCTestCase {
         /// The scroll views Notes' library holds (the card's end keeper's),
         /// taken before any other page was built.
         let notesScrolls: Set<ObjectIdentifier>
+        /// The shell's chrome state: AppKit's top drag lane reads the top
+        /// row's footprint from it.
+        let chrome: PanelChromeInteractionState
         /// The Calendar page's model (the panel built it behind Tasks).
         @MainActor var calendarModel: CalendarPageModel {
             calendarState.model(store: tasks, resumeDefaults: state.resumeDefaults, owner: .docked)
@@ -301,7 +304,7 @@ final class HiddenPagesCountersTests: XCTestCase {
         try body(Rig(container: container, tasks: tasks, notes: notes, library: library, draft: draft,
                      state: state, composerState: composerState, content: content, panel: panel, page: page,
                      composer: composer, notesLibrary: notesLibrary, libraryBox: libraryBox, seed: seed, tally: tally,
-                     calendarState: calendarState, tasksState: tasksState, notesScrolls: notesScrolls))
+                     calendarState: calendarState, tasksState: tasksState, notesScrolls: notesScrolls, chrome: chrome))
         XCTAssertTrue(libraryBox.model === notesLibrary,
                       "harness: the Notes page kept the library model the counts subscribed to")
     }
@@ -881,6 +884,85 @@ final class HiddenPagesCountersTests: XCTestCase {
                 print("HIDDEN_SHOWN page=\(page) before=\(before.values.sorted()) first=\((first ?? [:]).values.sorted()) "
                       + "settled=\(settled.values.sorted())")
             }
+        }
+    }
+
+    /// The Tasks tab drawn in the pager: its host's width.
+    private func drawnTasksHostWidths(_ rig: Rig) -> [CGFloat] {
+        var found: [CGFloat] = []
+        func walk(_ view: NSView) {
+            if let host = view as? KeptContentHostingView, host.isDrawn, !host.isHiddenOrHasHiddenAncestor {
+                found.append(host.bounds.width)
+            }
+            view.subviews.forEach(walk)
+        }
+        walk(rig.content)
+        return found
+    }
+
+    /// SPEED-TASKSPAGE-BODY-ON-WRITE (rows-rerun-fable.md §4): on each size
+    /// write of a drag on Tasks, `TasksPage.body` ran (`@self changed`): its
+    /// equality compared the whole layout, the panel's size included, though
+    /// the pager takes its size from its own geometry. A size write that
+    /// leaves the page's insets as they were runs no `TasksPage.body`, and
+    /// the drawn tab still takes each size in its first frame. Past the
+    /// reading column's width the insets follow the width, so the page runs
+    /// there (the control: the counter is live).
+    func testC8ASizeWriteOnTasksRunsNoTasksPageBodyAndTheListFollows() throws {
+        try withRig { rig in
+            XCTAssertEqual(rig.state.selectedSection, .tasks, "harness: Tasks is shown")
+            let start = rig.state.panelSize
+            XCTAssertLessThan(dragSize(start, step: Self.dragSteps).width, PanelPageLayout.readingWidth,
+                              "harness: the drag stays inside the reading column")
+            rig.state.setInteractionLock(.windowResize, isActive: true)
+            pump(rig.content, rig.panel)
+            // The top row's right-hand controls sit at a fixed distance
+            // from the panel's right edge, whatever its width.
+            let dockWidth = rig.chrome.modeDockWidth
+            var pageRuns: [Int] = []
+            for step in 1...Self.dragSteps {
+                let size = dragSize(start, step: step)
+                let before = (TasksPageRenderProbe.bodyRuns, TasksPage.tabsEvaluations, KeptContentHostCounts.updates,
+                              KeptContentHostCounts.roots, KeptContentHostCounts.environments, Self.shellRuns)
+                resize(rig, to: size)
+                var first: [CGFloat] = []
+                waitForTestOperation("the first frame after size write \(step) on Tasks") {
+                    frame(rig)
+                    guard Self.shellRuns > before.5 else { return false }
+                    first = drawnTasksHostWidths(rig)
+                    return true
+                }
+                pump(rig.content, rig.panel)
+                let runs = TasksPageRenderProbe.bodyRuns - before.0
+                pageRuns.append(runs)
+                print("TASKSPAGE_WRITE step=\(step) width=\(size.width) page=\(runs) tabs=\(TasksPage.tabsEvaluations - before.1) "
+                      + "updates=\(KeptContentHostCounts.updates.on - before.2.on)/\(KeptContentHostCounts.updates.off - before.2.off) "
+                      + "roots=\(KeptContentHostCounts.roots.on - before.3.on)/\(KeptContentHostCounts.roots.off - before.3.off) "
+                      + "envs=\(KeptContentHostCounts.environments.on - before.4.on)/\(KeptContentHostCounts.environments.off - before.4.off) "
+                      + "first=\(first) settled=\(drawnTasksHostWidths(rig))")
+                XCTAssertEqual(first.count, 1, "harness: one Tasks tab is drawn")
+                XCTAssertEqual(first.first ?? -1, size.width, accuracy: 0.5,
+                               "C8 step \(step): the drawn Tasks tab's first frame after a size write is not at its new width")
+            }
+            XCTAssertEqual(pageRuns, Array(repeating: 0, count: Self.dragSteps),
+                           "C8: a size write that leaves the page's insets alone runs no TasksPage.body")
+            print("TASKSPAGE_WRITE dock before=\(dockWidth) after=\(rig.chrome.modeDockWidth)")
+            XCTAssertGreaterThan(dockWidth, 0, "harness: the top row reported its right-hand controls")
+            XCTAssertEqual(rig.chrome.modeDockWidth, dockWidth, accuracy: 0.5,
+                           "C8: the top row's right-hand footprint follows the drag (AppKit's drag lane)")
+
+            // Past the reading column (U-42) the insets change with the width.
+            let wide = CGSize(width: PanelPageLayout.readingWidth + 100, height: start.height)
+            resize(rig, to: wide)
+            pump(rig.content, rig.panel)
+            let wideBefore = TasksPageRenderProbe.bodyRuns
+            resize(rig, to: CGSize(width: wide.width + 8, height: wide.height))
+            pump(rig.content, rig.panel)
+            let wideRuns = TasksPageRenderProbe.bodyRuns - wideBefore
+            print("TASKSPAGE_WRITE wide page=\(wideRuns)")
+            XCTAssertGreaterThan(wideRuns, 0, "C8 control: a write that moves the reading column's insets runs the page")
+            release(rig)
+            pump(rig.content, rig.panel)
         }
     }
 

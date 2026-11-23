@@ -233,7 +233,7 @@ struct TasksPage: View {
             // travels through the panel on a cross-page slide. During that
             // travel the inner clip must not cut rows in the middle of the
             // shared glass; its outer rim provides the visible boundary.
-            .modifier(TasksPagerWindowClip(transit: panelPageTransit, width: layout.panelSize.width))
+            .modifier(TasksPagerWindowClip(transit: panelPageTransit))
             // The controls float over the lists in both, in the page's own
             // layer. Outside the page's clip: on a page switch the top row
             // stays in place while the page slides away (Accepted
@@ -967,7 +967,9 @@ struct TasksPage: View {
     /// Whether `x` is on the open search field's stretch of the top row
     /// (the whole row, inset to the chrome on both sides).
     private func searchLineContains(x: CGFloat) -> Bool {
-        let field = PanelTopRowLayout.fieldFrame(layout)
+        var live = layout
+        live.panelSize = pageSize
+        let field = PanelTopRowLayout.fieldFrame(live)
         return x >= field.minX && x <= field.maxX
     }
 
@@ -1571,6 +1573,10 @@ struct TasksPage: View {
     }
 
     private var bottomInset: CGFloat { max(AtticSpacing.panelMargin, layout.chromeInsets.bottom) }
+    /// The page's size now, for event handlers: its own view's bounds.
+    /// `layout.panelSize` is the size when the body last ran, which a size
+    /// write no longer updates (`==`).
+    private var pageSize: CGSize { pointer.view?.bounds.size ?? layout.panelSize }
 
     private var bottomMargin: CGFloat { TasksViewport.bottomMargin(bottomInset: bottomInset) }
 
@@ -1582,7 +1588,7 @@ struct TasksPage: View {
     /// list hang, 2026-10-28); a row not laid out yet is jumped to.
     private func revealRow(_ id: UUID, in tab: TasksTab, proxy: ScrollViewProxy, glides: Bool) -> Bool {
         let frame = pointer.frame(for: TasksRowID(tab: tab, id: id))
-        let viewport = pointer.view?.bounds.height ?? layout.panelSize.height
+        let viewport = pageSize.height
         let reveal = TasksViewport.reveal(frame: frame, height: rowHeight(id, in: tab),
                                           viewport: viewport,
                                           listTop: listTop,
@@ -1861,11 +1867,11 @@ struct TasksPage: View {
                     let expanded = CGRect(origin: frame.origin,
                                           size: CGSize(width: frame.width, height: max(frame.height, estimatedHeight(row))))
                     let reveal = TasksViewport.reveal(frame: expanded, height: expanded.height,
-                                                      viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
+                                                      viewport: pageSize.height,
                                                       listTop: listTop, bottomMargin: bottomMargin,
                                                       bottomClearance: bottomClearance)
                     guard let delta = TasksViewport.revealDelta(reveal, frame: expanded,
-                                                                 viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
+                                                                 viewport: pageSize.height,
                                                                  listTop: listTop, bottomClearance: bottomClearance),
                           delta > 0 else { return }
                     if let scroll = listProxies.scrollViews[tab] {
@@ -4055,9 +4061,18 @@ struct TasksPageFocusedContent<Content: View>: View, Equatable {
 /// parent redrawing (a lock, the panel's key state, another page showing)
 /// passes the same inputs and does not redraw the list. The chrome's
 /// callbacks are the shell's and do not change what the page shows.
+///
+/// The panel's size is left out (SPEED-TASKSPAGE-BODY-ON-WRITE): the body
+/// draws nothing from it. The pager and the top row take their sizes from
+/// their own geometry, and event handlers read the page's live size
+/// (`pageSize`). A size write that leaves the insets as they were (the
+/// corner, the reading column) runs no body here.
 extension TasksPage: Equatable {
     nonisolated static func == (lhs: TasksPage, rhs: TasksPage) -> Bool {
-        lhs.model === rhs.model && lhs.store === rhs.store && lhs.layout == rhs.layout
+        lhs.model === rhs.model && lhs.store === rhs.store
+            && lhs.layout.cornerSize == rhs.layout.cornerSize
+            && lhs.layout.contentInsets == rhs.layout.contentInsets
+            && lhs.layout.chromeInsets == rhs.layout.chromeInsets
             && lhs.addBarFocusSnapshot == rhs.addBarFocusSnapshot
     }
 }
@@ -5673,11 +5688,10 @@ struct TasksEdgeBackdrops: View {
 /// outer glass clip, so let the moving Tasks page draw across its local edges.
 private struct TasksPagerWindowClip: ViewModifier {
     let transit: PanelPageTransit?
-    let width: CGFloat
 
     func body(content: Content) -> some View {
         if let transit {
-            content.modifier(Observing(transit: transit, width: width))
+            content.modifier(Observing(transit: transit))
         } else {
             content.clipped()
         }
@@ -5685,18 +5699,20 @@ private struct TasksPagerWindowClip: ViewModifier {
 
     private struct Observing: ViewModifier {
         @ObservedObject var transit: PanelPageTransit
-        let width: CGFloat
 
         func body(content: Content) -> some View {
-            content.clipShape(HorizontalClip(extensionWidth: transit.sliding ? width : 0))
+            content.clipShape(HorizontalClip(extends: transit.sliding))
         }
     }
 
+    /// While a slide moves, the clip reaches one page width past each
+    /// side: the page's own width, from its frame, so the page never reads
+    /// the panel's size (a size write does not re-run its body).
     private struct HorizontalClip: Shape {
-        let extensionWidth: CGFloat
+        let extends: Bool
 
         func path(in rect: CGRect) -> Path {
-            Path(rect.insetBy(dx: -extensionWidth, dy: 0))
+            Path(rect.insetBy(dx: extends ? -rect.width : 0, dy: 0))
         }
     }
 }

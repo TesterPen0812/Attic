@@ -195,8 +195,10 @@ final class TasksBreadthGuardTests: XCTestCase {
         hosted.spin(0.3)
         func runs(_ name: String, _ body: () throws -> Void) rethrows -> [UUID: Int] {
             let base = TasksCellBodyCounts.evaluations
+            let pageBase = TasksPageRenderProbe.bodyRuns
             try body()
             hosted.spin(0.3)
+            print("BREADTH_KEY_PAGE \(name) page=\(TasksPageRenderProbe.bodyRuns - pageBase)")
             let ran = Dictionary(uniqueKeysWithValues: TasksCellBodyCounts.evaluations.compactMap { row, count in
                 row.tab == .now && count > base[row, default: 0] ? (row.id, count - base[row, default: 0]) : nil
             })

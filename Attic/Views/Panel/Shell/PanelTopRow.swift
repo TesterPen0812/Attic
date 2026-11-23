@@ -410,8 +410,15 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
                         pageSwitch()
                         PanelTopRowMoreButton(page: page, commands: moreCommands)
                     }
-                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: PanelPageLayout.coordinateSpace).minX } action: {
-                        report(trailingStart: $0)
+                    // From the controls' start to the panel's right edge,
+                    // both read here: a page whose body does not re-run for
+                    // a size write (Tasks) passes a layout with the size it
+                    // last drew at.
+                    .onGeometryChange(for: CGFloat.self) { [fallbackWidth = layout.panelSize.width] proxy in
+                        let width = proxy.bounds(of: PanelPageLayout.coordinateSpace)?.width ?? fallbackWidth
+                        return width - proxy.frame(in: PanelPageLayout.coordinateSpace).minX
+                    } action: {
+                        report(trailing: $0)
                     }
                     .padding(.trailing, control + gap)
                 }
@@ -446,8 +453,8 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
         state?.setLeading(max(layout.chromeInsets.leading + PanelTopRowLayout.control, maxX), for: page)
     }
 
-    private func report(trailingStart minX: CGFloat) {
-        state?.setTrailing(max(0, layout.panelSize.width - minX), for: page)
+    private func report(trailing: CGFloat) {
+        state?.setTrailing(max(0, trailing), for: page)
     }
 }
 
