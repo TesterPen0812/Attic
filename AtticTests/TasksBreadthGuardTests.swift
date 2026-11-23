@@ -567,10 +567,21 @@ final class TasksBreadthGuardTests: XCTestCase {
         XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 1, "the catch-up after that frame is counted late")
         // The route names what the list was built for and the call that
         // built it ahead of its rows (here the page's pass, in this test).
+        // The model records the first two itself. The calls' names come
+        // from `dladdr`, which another build may not resolve: they are
+        // printed either way and checked only when the host's own resolved.
         print("SEAM_LATE_ROUTE \(TasksRowStateCounts.lateRoutes)")
         let route = TasksRowStateCounts.lateRoutes.first ?? ""
         XCTAssertTrue(route.hasPrefix("now: today"), "the route names the tab and the input: \(route)")
-        XCTAssertTrue(route.contains("list built by") && route.contains("TasksPage"), "the route names the call that built the list: \(route)")
+        let builtBy = route.range(of: "; list built by ")
+        XCTAssertNotNil(builtBy, "the route records that the list was built ahead of its rows: \(route)")
+        let calls = (builtBy.map { String(route[$0.upperBound...]) } ?? "").components(separatedBy: " < ")
+        let hosts = calls.filter { $0.contains("Attic") && !$0.contains("AtticTests") }
+        if hosts.isEmpty {
+            print("SEAM_LATE_ROUTE_NAMES none of the host's resolved")
+        } else {
+            XCTAssertTrue(hosts.contains { $0.contains("TasksPage") }, "the route names the call that built the list: \(route)")
+        }
         XCTAssertTrue(TasksCellBodyCounts.cellStates[row].map { TasksRowStateValue.sameRow($0.row, listed) } == true,
                       "the next frame is right")
         TasksRowStateCounts.reset()
