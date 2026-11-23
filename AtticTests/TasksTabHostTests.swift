@@ -489,8 +489,8 @@ final class TasksTabHostTests: XCTestCase {
     /// read and none catching up after the frame. `laidOut`: the frame is
     /// laid out and displayed at once, before the run loop turns (what a
     /// send of another transaction or AppKit's on-demand layout does);
-    /// otherwise it is the app's own next frame. The swipe is then let go
-    /// where it began.
+    /// otherwise it is the app's own next frame, waited for by what it
+    /// draws. The swipe is then let go where it began.
     private func checkASwipesNeighbours(_ name: String, _ hosted: Hosted, on shown: TasksTab, neighbours: [TasksTab],
                                         laidOut: Bool, change: () throws -> Void) rethrows {
         hosted.spin(0.8)
@@ -518,7 +518,12 @@ final class TasksTabHostTests: XCTestCase {
             hosted.window.contentView?.layoutSubtreeIfNeeded()
             hosted.window.displayIfNeeded()
         } else {
-            RunLoop.current.run(until: Date().addingTimeInterval(1.0 / 30))
+            waitForTestOperation("\(step): the app's own frame draws the pager and the neighbours' rows") {
+                TasksPagerPassCount.passes > passes && neighbours.allSatisfy { tab in
+                    (tab == .done ? hosted.model.doneDays().isEmpty : hosted.model.rows(for: tab).isEmpty)
+                        || TasksCellBodyCounts.drawnRuns.contains { $0.drawn && $0.row.tab == tab }
+                }
+            }
         }
         XCTAssertGreaterThan(TasksPagerPassCount.passes, passes, "\(step): the pager ran, so a frame was drawn")
         for tab in neighbours {
