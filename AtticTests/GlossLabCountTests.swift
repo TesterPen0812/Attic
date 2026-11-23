@@ -22,7 +22,7 @@ final class GlossLabCountTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval = 0.2) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
-    private func host(elevation: AtticPanelSurfaceElevation? = nil, tilesPage: Bool = false) -> (NSPanel, NSView) {
+    private func host(elevation: AtticPanelSurfaceElevation? = nil, tilesPage: Bool = false, smokedContent: Bool = false) -> (NSPanel, NSView) {
         let size = CGSize(width: 360, height: 560)
         let panel = KeyPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -47,6 +47,10 @@ final class GlossLabCountTests: XCTestCase {
             }
             Spacer()
         }
+        // 14, Smoky in Light: the live panel's content modifier, under the
+        // shell as there (only where a test asks for it).
+        .modifier(GlossSmokedContent(tilesPage: smokedContent && tilesPage, theme: .original, contrast: .standard,
+                                     palette: AtticPanelTheme.original.palette(for: ColorScheme.light)))
         .modifier(PanelShellSurface(cornerSize: 26, elevation: elevation, glossLabTilesPage: tilesPage))
         .environment(\.glossTilesGround, tilesPage)
         .atticDesign(design)
@@ -247,6 +251,76 @@ final class GlossLabCountTests: XCTestCase {
         print("GLOSS_LAB_TILES\n\(lines.joined(separator: "\n"))\nGLOSS_LAB_TILES_END")
     }
 
+    /// 14's second round (23 Nov): with Tiles, Sheet behind, Smoky in Light
+    /// and the tile edge on, the panel's own surface, rim and shadow are
+    /// back behind the tiles; one resize write runs no more of the shell's
+    /// bodies than with every switch off, and the tiles' layer a bounded
+    /// number of times.
+    func testTilesSheetSmokyEdgeOneResizeWrite() {
+        let lab = GlossLab.shared
+        lab.allOff(); lab.resetSliders()
+        let (panel, view) = host(elevation: .light, tilesPage: true, smokedContent: true)
+        defer { panel.orderOut(nil); panel.close(); lab.allOff(); lab.resetSliders() }
+        spin()
+        var size = CGSize(width: 380, height: 590)
+        func resize() -> (Count, Int) {
+            GlossLabCounters.reset()
+            panel.setContentSize(size)
+            size.width += 20; size.height += 30
+            view.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            spin()
+            return (bodies(), GlossLabCounters.tilesLayer)
+        }
+        let (off, offTiles) = resize()
+        var lines = ["all off, one resize write: \(off), tiles layer \(offTiles)"]
+
+        GlossLabCounters.reset()
+        lab.tiles = true; lab.tilesSheet = true; lab.tilesSmoky = true; lab.tilesEdge = 0.5
+        spin()
+        view.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        let turnedOn = bodies(), turnedOnTiles = GlossLabCounters.tilesLayer
+        lines.append("14 + sheet + smoky + edge on: \(turnedOn), tiles layer \(turnedOnTiles)")
+        XCTAssertGreaterThanOrEqual(turnedOnTiles, 1, "the switches on did not run the tiles' layer")
+
+        let (on, onTiles) = resize()
+        lines.append("14 + sheet + smoky + edge on, one resize write: \(on), tiles layer \(onTiles)")
+        XCTAssertLessThanOrEqual(on.stage, off.stage); XCTAssertLessThanOrEqual(on.controlLight, off.controlLight)
+        XCTAssertLessThanOrEqual(on.rim, off.rim); XCTAssertLessThanOrEqual(on.surface, off.surface)
+        XCTAssertLessThanOrEqual(on.shadow, off.shadow)
+        XCTAssertLessThanOrEqual(onTiles, 3, "the tiles' layer ran \(onTiles) times on one resize write")
+        // Sheet behind keeps the panel's own surface, rim and shadow.
+        XCTAssertFalse(GlossTiles.replacePanel(tilesPage: true, design: design))
+        XCTAssertTrue(GlossTiles.smoked(tilesPage: true, design: design))
+        print("GLOSS_LAB_TILES2\n\(lines.joined(separator: "\n"))\nGLOSS_LAB_TILES2_END")
+    }
+
+    /// 14's second round: Smoky in Light is Light only and the tiles' page
+    /// only; its dim is black at Smoke · Light; with Sheet behind a
+    /// control wears the dim only on a smoked page.
+    func testSmokyIsLightAndTilesPageOnly() {
+        let lab = GlossLab.shared
+        lab.allOff(); lab.resetSliders()
+        defer { lab.allOff(); lab.resetSliders() }
+        var dark = design; dark.mode = .dark
+        lab.tilesSmoky = true
+        XCTAssertFalse(GlossTiles.smoked(tilesPage: true, design: design), "smoked with Tiles off")
+        lab.tiles = true
+        XCTAssertTrue(GlossTiles.smoked(tilesPage: true, design: design))
+        XCTAssertFalse(GlossTiles.smoked(tilesPage: false, design: design), "smoked off the tiles' page")
+        XCTAssertFalse(GlossTiles.smoked(tilesPage: true, design: dark), "smoked in Dark")
+        XCTAssertEqual(GlossTiles.dim(design: design, smoked: true), Color.black.opacity(0.22))
+        XCTAssertEqual(GlossTiles.dim(design: design, smoked: false), Color.white.opacity(0.55))
+        XCTAssertEqual(GlossTiles.dim(design: dark, smoked: false), Color.black.opacity(0.50))
+        XCTAssertNotNil(GlossTiles.controlDim(ground: true, smoked: false, design: design), "no panel behind: a control keeps the dim")
+        lab.tilesSheet = true
+        XCTAssertNil(GlossTiles.controlDim(ground: true, smoked: false, design: design), "the panel is behind: no dim")
+        XCTAssertEqual(GlossTiles.controlDim(ground: true, smoked: true, design: design), Color.black.opacity(0.22))
+        XCTAssertNil(GlossTiles.controlDim(ground: false, smoked: true, design: design))
+    }
+
     /// 14 on a page without tiles (every page but Tasks): the switch is
     /// not read there, so flipping it re-runs nothing of the shell.
     func testTilesAreNotReadOffTheirPage() {
@@ -262,6 +336,27 @@ final class GlossLabCountTests: XCTestCase {
             view.layoutSubtreeIfNeeded()
             panel.displayIfNeeded()
             XCTAssertEqual(bodies(), Count(), "14 \(value ? "on" : "off") re-ran the shell off its page")
+        }
+    }
+
+    /// 14's second round: with Tiles off, Sheet behind, Smoky in Light and
+    /// the tile edge are not read, on the tiles' page or off it.
+    func testSecondRoundSwitchesAreNotReadWithTilesOff() {
+        let lab = GlossLab.shared
+        lab.allOff(); lab.resetSliders()
+        for tilesPage in [true, false] {
+            let (panel, view) = host(elevation: .light, tilesPage: tilesPage, smokedContent: true)
+            defer { panel.orderOut(nil); panel.close(); lab.allOff(); lab.resetSliders() }
+            spin()
+            for value in [true, false] {
+                GlossLabCounters.reset()
+                lab.tilesSheet = value; lab.tilesSmoky = value; lab.tilesEdge = value ? 1 : 0.5
+                spin()
+                view.layoutSubtreeIfNeeded()
+                panel.displayIfNeeded()
+                XCTAssertEqual(bodies(), Count(), "second-round switches \(value ? "on" : "off") re-ran the shell with Tiles off (tiles page \(tilesPage))")
+                XCTAssertEqual(GlossLabCounters.tilesLayer, 0, "the tiles' layer ran with Tiles off (tiles page \(tilesPage))")
+            }
         }
     }
 
@@ -604,7 +699,8 @@ final class GlossLabValuesTests: XCTestCase {
         lab.apply(try XCTUnwrap(GlossLab.presets.first { $0.id == "refractingRim" }))
         let again = GlossLab(defaults: defaults)
         XCTAssertEqual(again.currentPreset?.id, "refractingRim", "an applied preset is kept")
-        XCTAssertTrue(again.clearBand); XCTAssertEqual(again.clearBandWidth, 16)
+        // The preset starts at 6 pt since 23 Nov (owner: "Yes, 6 pt"; it was 16).
+        XCTAssertTrue(again.clearBand); XCTAssertEqual(again.clearBandWidth, 6)
     }
 
     /// Fix round 2: the backdrop follows the panel's visibility, not only
@@ -764,11 +860,49 @@ final class GlossLabValuesTests: XCTestCase {
         let tiles = GlossLab(defaults: nil)
         let preset = try XCTUnwrap(GlossLab.presets.first { $0.id == "controlCentreTiles" })
         tiles.apply(preset)
-        XCTAssertEqual(preset.dark, true)
+        // Second round, 23 Nov (brief item 5): the preset no longer sets
+        // Dark (it was `true`); the mode is the app's own.
+        XCTAssertNil(preset.dark)
         XCTAssertTrue(tiles.tiles); XCTAssertTrue(tiles.clearControls)
         XCTAssertFalse(tiles.clearBody || tiles.clearBand || tiles.neutralGlass, "glass is set under the tiles")
         XCTAssertFalse(tiles.rimFade || tiles.edgeLight || tiles.innerEdge || tiles.glassShadow)
         XCTAssertEqual(tiles.tilesDimDark, 50)
+        // Second round: Sheet behind, Smoky in Light, corner 22, gap 10,
+        // tile edge 0.5, the dims as they were.
+        XCTAssertTrue(tiles.tilesSheet); XCTAssertTrue(tiles.tilesSmoky)
+        XCTAssertEqual(tiles.tilesCorner, 22); XCTAssertEqual(tiles.tilesGap, 10); XCTAssertEqual(tiles.tilesEdge, 0.5)
+        XCTAssertEqual(tiles.tilesDimLight, 55); XCTAssertEqual(tiles.tilesSmokeLight, 22)
+    }
+
+    /// 14's second round (23 Nov): Sheet behind, Smoky in Light, Smoke ·
+    /// Light and the tile edge load, are written down by Copy values, and
+    /// All off and Reset sliders reach them.
+    func testTilesSecondRoundValuesLoadCopyAndReset() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "GlossLab.tiles")
+        defaults.set(true, forKey: "GlossLab.tilesSheet")
+        defaults.set(true, forKey: "GlossLab.tilesSmoky")
+        defaults.set(30.0, forKey: "GlossLab.tilesSmokeLight")
+        defaults.set(0.7, forKey: "GlossLab.tilesEdge")
+        defaults.set(34.0, forKey: "GlossLab.tilesCorner")
+        defaults.set(18.0, forKey: "GlossLab.tilesGap")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.tilesSheet); XCTAssertTrue(lab.tilesSmoky)
+        XCTAssertEqual(lab.tilesSmokeLight, 30); XCTAssertEqual(lab.tilesEdge, 0.7)
+        XCTAssertEqual(lab.tilesCorner, 34); XCTAssertEqual(lab.tilesGap, 18)
+        let text = lab.valuesText(app: Self.app(mode: "Light"))
+        XCTAssertTrue(text.contains("corner 34.00 pt, gap 18.00 pt,"), text)
+        XCTAssertTrue(text.contains("sheet behind: on, smoky in Light: on, smoke Light 30.00 %, edge 0.70"), text)
+        lab.allOff()
+        XCTAssertFalse(lab.tiles || lab.tilesSheet || lab.tilesSmoky)
+        lab.resetSliders()
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertEqual(fresh.tilesSmokeLight, 22); XCTAssertEqual(fresh.tilesEdge, 0.5)
+        XCTAssertFalse(fresh.tilesSheet || fresh.tilesSmoky, "the second round's switches start off")
+        XCTAssertEqual(lab.labLines, fresh.labLines)
+        XCTAssertEqual(GlossLab(defaults: defaults).labLines, fresh.labLines, "All off and Reset sliders were not saved")
     }
 }
 #endif

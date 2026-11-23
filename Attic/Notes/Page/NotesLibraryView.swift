@@ -456,6 +456,10 @@ struct NotesLibraryView: View {
                 } else {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         preamble(groups)
+                            #if ATTIC_GLOSS_LAB
+                            // Gloss lab idea 14: the lines above the groups are a tile.
+                            .glossTile("line:preamble", leads: true)
+                            #endif
                         // Foldable sections that work and look like Tasks' date
                         // groups (the owner's panel design, 2026-10-27).
                         ForEach(groups) { group in
@@ -467,6 +471,10 @@ struct NotesLibraryView: View {
                             }
                             // The header's text on the rows' thumbnails.
                             .padding(.leading, Self.headerShift)
+                            #if ATTIC_GLOSS_LAB
+                            // Gloss lab idea 14: each group, its heading and its rows, is a tile.
+                            .glossTile("group:" + group.id, leads: true)
+                            #endif
                             .id("group:" + group.id)
                             .accessibilityIdentifier("notes-library-group-\(group.id)")
                             if !folded {
@@ -481,6 +489,9 @@ struct NotesLibraryView: View {
                                         .padding(.top, row.id == group.rows.first?.id ? 0 : NotesLibraryRowMetrics.rowGap)
                                         .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
                                         .matchedGeometryEffect(id: row.id, in: layoutMotion)
+                                        #if ATTIC_GLOSS_LAB
+                                        .glossTile("group:" + group.id)
+                                        #endif
                                         .id(row.id)
                                         .background { NotesRevealAnchor(id: row.id, reveal: reveal) }
                                         .atticContextMenu { rowCommands(row.id) }
@@ -494,6 +505,14 @@ struct NotesLibraryView: View {
                             }
                         }
                     }
+                    #if ATTIC_GLOSS_LAB
+                    // Gloss lab idea 14: each group's tile, behind its rows;
+                    // the panel treats Notes as a tiles page while the list
+                    // (never the board, the editor or the history) is shown.
+                    .backgroundPreferenceValue(GlossTileBounds.self) { GlossTilesBackground(anchors: $0) }
+                    .onAppear { GlossTilesNotesList.shared.shown = true }
+                    .onDisappear { GlossTilesNotesList.shared.shown = false }
+                    #endif
                     .modifier(AtticDeleteGapMotion(
                         ids: model.orderedIDs(model.unfolded(groups)),
                         travel: AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion),

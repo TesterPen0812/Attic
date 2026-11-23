@@ -652,22 +652,42 @@ enum GlossTiles {
 
     /// Whether the tiles stand in for the panel's own surface: only on the
     /// page that has them (`tilesPage`, read first, so the switch is not
-    /// read anywhere else).
+    /// read anywhere else), and not while Sheet behind keeps the panel.
     static func replacePanel(tilesPage: Bool, design: AtticDesignContext) -> Bool {
-        tilesPage && on(design: design)
+        tilesPage && on(design: design) && !GlossLab.shared.tilesSheet
+    }
+
+    /// Whether the tiles' page is smoked: Smoky in Light, in Light, on the
+    /// page that has tiles (each read only after the one before it).
+    static func smoked(tilesPage: Bool, design: AtticDesignContext) -> Bool {
+        tilesPage && design.mode == .light && on(design: design) && GlossLab.shared.tilesSmoky
+    }
+
+    /// The tiles' dim: black at Smoke · Light on a smoked page (whose
+    /// content is drawn as in Dark), else white in Light, black in Dark.
+    static func dim(design: AtticDesignContext, smoked: Bool) -> Color {
+        let lab = GlossLab.shared
+        if smoked { return Color.black.opacity(lab.tilesSmokeLight / 100) }
+        let dark = design.mode == .dark
+        return (dark ? Color.black : Color.white).opacity((dark ? lab.tilesDimDark : lab.tilesDimLight) / 100)
     }
 
     /// The dim a glass control wears while the tiles stand in for the
     /// panel under it (`ground`, read first): the tiles' own dim, so a
     /// control is a small tile, as in Control Centre. Without it a control
     /// has nothing of ours behind it and its symbol is lost over a
-    /// backdrop of its own lightness.
-    static func controlDim(ground: Bool, design: AtticDesignContext) -> Color? {
+    /// backdrop of its own lightness. With Sheet behind the panel is back
+    /// under the controls, so they wear the dim only on a smoked page.
+    static func controlDim(ground: Bool, smoked: Bool, design: AtticDesignContext) -> Color? {
         guard ground, on(design: design) else { return nil }
-        let lab = GlossLab.shared
-        let dark = design.mode == .dark
-        return (dark ? Color.black : Color.white).opacity((dark ? lab.tilesDimDark : lab.tilesDimLight) / 100)
+        guard smoked || !GlossLab.shared.tilesSheet else { return nil }
+        return dim(design: design, smoked: smoked)
     }
+
+    /// The tile edge's band: three strokes inside the 1 pt line, 1, 2 and
+    /// 3 pt wide, each at this share of the edge's strength, so the band is
+    /// lightest next to the line and fades out over 3 pt.
+    static let edgeBandShare: Double = 0.18
 
     /// One frame per tile: the union of its members' frames, pulled in at
     /// the sides, top to bottom. Empty members and empty tiles are left out.
@@ -696,6 +716,57 @@ extension EnvironmentValues {
     }
 }
 
+private struct GlossTilesSmokedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// 14, Smoky in Light: true inside a smoked page's content, whose
+    /// `atticDesign` says Dark while the app is in Light, so the tiles and
+    /// the controls there take the Smoke · Light dim.
+    var glossTilesSmoked: Bool {
+        get { self[GlossTilesSmokedKey.self] }
+        set { self[GlossTilesSmokedKey.self] = newValue }
+    }
+}
+
+/// 14, Smoky in Light: the panel's content (pages, bars, controls; never
+/// the panel's own surface, which sits outside it) drawn as in Dark while
+/// the app is in Light on a page that has tiles. Every value is set always,
+/// to the one above it when not smoked, so the content keeps its identity.
+struct GlossSmokedContent: ViewModifier {
+    let tilesPage: Bool
+    let theme: AtticPanelTheme
+    let contrast: ColorSchemeContrast
+    let palette: AtticPanelThemePalette
+    @Environment(\.atticDesign) private var design
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        let smoked = GlossTiles.smoked(tilesPage: tilesPage, design: design)
+        var shown = design
+        if smoked { shown.mode = .dark }
+        let shownPalette = smoked ? theme.palette(for: ColorScheme.dark, contrast: contrast) : palette
+        return content
+            .environment(\.atticDesign, shown)
+            .environment(\.colorScheme, smoked ? .dark : colorScheme)
+            .environment(\.atticPanelThemePalette, shownPalette)
+            .environment(\.glossTilesSmoked, smoked)
+            .foregroundStyle(shownPalette.primaryForegroundColor, shownPalette.secondaryForegroundColor)
+    }
+}
+
+/// 14 on the Notes page: whether its list (not the board, the editor or
+/// the history) is shown, so the panel treats Notes as a tiles page. The
+/// list writes it as it comes and goes; the panel reads it only on the
+/// Notes page with Tiles on.
+@MainActor
+@Observable
+final class GlossTilesNotesList {
+    static let shared = GlossTilesNotesList()
+    var shown = false
+}
+
 /// 14: the bounds of a list's entries, under their tiles' keys.
 struct GlossTileBounds: PreferenceKey {
     static var defaultValue: [String: [Anchor<CGRect>]] { [:] }
@@ -722,12 +793,15 @@ struct GlossTileMember: ViewModifier {
 }
 
 /// 14: the tiles behind a list, one piece of Clear glass per key with the
-/// dim over it (white in Light, black in Dark). A lazy list reports only
-/// the entries it has built, so a long group's tile ends at the last one
-/// built, past the visible part.
+/// dim over it (white in Light, black in Dark; black at Smoke · Light on a
+/// smoked page). With Sheet behind a tile is the dim alone, no glass, over
+/// the panel's own. The tile edge, when on, is drawn over each tile. A
+/// lazy list reports only the entries it has built, so a long group's tile
+/// ends at the last one built, past the visible part.
 struct GlossTilesBackground: View {
     let anchors: [String: [Anchor<CGRect>]]
     @Environment(\.atticDesign) private var design
+    @Environment(\.glossTilesSmoked) private var smoked
 
     var body: some View {
         #if DEBUG
@@ -735,8 +809,8 @@ struct GlossTilesBackground: View {
         #endif
         if GlossTiles.on(design: design), !anchors.isEmpty {
             let lab = GlossLab.shared
-            let dark = design.mode == .dark
-            let dim = (dark ? Color.black : Color.white).opacity((dark ? lab.tilesDimDark : lab.tilesDimLight) / 100)
+            let dim = GlossTiles.dim(design: design, smoked: smoked)
+            let edge = lab.tilesEdge
             let shape = RoundedRectangle(cornerRadius: lab.tilesCorner, style: .continuous)
             GeometryReader { geometry in
                 let tiles = GlossTiles.frames(anchors.mapValues { $0.map { geometry[$0] } }, sideInset: GlossTiles.sideInset)
@@ -761,14 +835,42 @@ struct GlossTilesBackground: View {
                     }
                     .compositingGroup()
                 }
-                GlassEffectContainer(spacing: 0) {
+                if lab.tilesSheet {
+                    // The panel's own glass is behind: a tile is its dim.
                     ZStack {
                         ForEach(tiles, id: \.key) { tile in
-                            shape.fill(Color.clear)
-                                .glassEffect(.clear, in: shape)
-                                .overlay { shape.fill(dim) }
+                            shape.fill(dim)
                                 .frame(width: tile.frame.width, height: tile.frame.height)
                                 .position(x: tile.frame.midX, y: tile.frame.midY)
+                        }
+                    }
+                } else {
+                    GlassEffectContainer(spacing: 0) {
+                        ZStack {
+                            ForEach(tiles, id: \.key) { tile in
+                                shape.fill(Color.clear)
+                                    .glassEffect(.clear, in: shape)
+                                    .overlay { shape.fill(dim) }
+                                    .frame(width: tile.frame.width, height: tile.frame.height)
+                                    .position(x: tile.frame.midX, y: tile.frame.midY)
+                            }
+                        }
+                    }
+                }
+                if edge > 0 {
+                    // The tile edge: a 1 pt bright line, then a lighter
+                    // band inside it fading out over 3 pt. Vector strokes.
+                    let band = Color.white.opacity(min(1, edge) * GlossTiles.edgeBandShare)
+                    ZStack {
+                        ForEach(tiles, id: \.key) { tile in
+                            ZStack {
+                                shape.strokeBorder(Color.white.opacity(min(1, edge)), lineWidth: 1)
+                                shape.inset(by: 1).strokeBorder(band, lineWidth: 1)
+                                shape.inset(by: 1).strokeBorder(band, lineWidth: 2)
+                                shape.inset(by: 1).strokeBorder(band, lineWidth: 3)
+                            }
+                            .frame(width: tile.frame.width, height: tile.frame.height)
+                            .position(x: tile.frame.midX, y: tile.frame.midY)
                         }
                     }
                 }

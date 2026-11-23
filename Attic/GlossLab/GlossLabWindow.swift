@@ -226,11 +226,17 @@ struct GlossLabView: View {
                 row("Clear glass controls", $lab.clearControls,
                     note: "The buttons and fields wear Clear glass too.") { EmptyView() }
                 row("Tiles", $lab.tiles,
-                    note: "On the Tasks page each group of tasks sits on its own piece of Clear glass, as Control Centre's tiles do, and the panel behind draws no glass. The body, rim, edge and shadow switches draw nothing there while this is on.") {
+                    note: "On the Tasks page and the Notes list each group sits on its own piece of Clear glass, as Control Centre's tiles do, and the panel behind draws no glass. The body, rim, edge and shadow switches draw nothing there while this is on, unless Sheet behind keeps the panel.") {
                     slider("Dim · \(modeName)", dark ? $lab.tilesDimDark : $lab.tilesDimLight, 0...80, unit: " %")
-                    slider("Corner", $lab.tilesCorner, 6...28, unit: " pt")
+                    slider("Corner", $lab.tilesCorner, 6...36, unit: " pt")
+                    slider("Tile edge", $lab.tilesEdge, 0...1)
+                    Toggle("Sheet behind (the panel's own glass; tiles without glass)", isOn: $lab.tilesSheet)
+                    Toggle("Smoky in Light (black dim, the page drawn as in Dark)", isOn: $lab.tilesSmoky)
+                    if lab.tilesSmoky {
+                        slider("Smoke · Light", $lab.tilesSmokeLight, 0...60, unit: " %")
+                    }
                     more {
-                        slider("Gap", $lab.tilesGap, 0...16, unit: " pt")
+                        slider("Gap", $lab.tilesGap, 0...20, unit: " pt")
                         slider("Shadow", $lab.tilesShadow, 0...0.5)
                         slider("Panel behind · \(modeName)", dark ? $lab.tilesPanelDark : $lab.tilesPanelLight, 0...60, unit: " %")
                     }

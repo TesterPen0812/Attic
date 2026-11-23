@@ -212,6 +212,7 @@ struct AtticRaisedMaterialModifier: ViewModifier {
     @Environment(\.atticControlCornerExponent) private var cornerExponent
     #if ATTIC_GLOSS_LAB
     @Environment(\.glossTilesGround) private var glossTilesGround
+    @Environment(\.glossTilesSmoked) private var glossTilesSmoked
     #endif
     #if DEBUG
     @Environment(\.atticMaterialProbeID) private var probeID
@@ -262,7 +263,7 @@ struct AtticRaisedMaterialModifier: ViewModifier {
                 }
                 // Gloss lab idea 14: over the tiles' bare panel a control
                 // wears the tiles' dim.
-                if let dim = GlossTiles.controlDim(ground: glossTilesGround, design: design) {
+                if let dim = GlossTiles.controlDim(ground: glossTilesGround, smoked: glossTilesSmoked, design: design) {
                     shape.fill(dim)
                 }
                 #endif

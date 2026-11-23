@@ -70,6 +70,15 @@ final class GlossLab {
     /// glass controls there wear the tiles' dim. Glass surface only; the
     /// other pages keep the panel as it is.
     var tiles = false { didSet { save(tiles, "tiles") } }
+    /// 14, its own switch (23 Nov, second round): the panel's own glass,
+    /// rim and shadow stay behind the tiles, as on a page without tiles,
+    /// and each tile is a fill and an edge with no glass of its own (glass
+    /// cannot show through glass).
+    var tilesSheet = false { didSet { save(tilesSheet, "tilesSheet") } }
+    /// 14, its own switch: in Light the tiles' dim is black (Smoke · Light),
+    /// the glass controls on the tiles' page wear it too, and that page's
+    /// text and symbols are drawn as in Dark. Dark is unchanged.
+    var tilesSmoky = false { didSet { save(tilesSmoky, "tilesSmoky") } }
 
     // MARK: Sliders
 
@@ -136,6 +145,11 @@ final class GlossLab {
     /// opacity, 0 to 0.5). It keeps a tile's outline over a backdrop of
     /// the tile's own lightness, where Clear glass shows no edge.
     var tilesShadow: Double = 0.14 { didSet { save(tilesShadow, "tilesShadow") } }
+    /// 14, Smoky in Light: the tiles' black dim in Light, % (0 to 60).
+    var tilesSmokeLight: Double = 22 { didSet { save(tilesSmokeLight, "tilesSmokeLight") } }
+    /// 14: the tile edge (0 to 1; 0 draws nothing): a 1 pt bright line on
+    /// each tile's edge and, inside it, a lighter band fading over 3 pt.
+    var tilesEdge: Double = 0.5 { didSet { save(tilesEdge, "tilesEdge") } }
 
     // MARK: The lab window's own state
 
@@ -203,6 +217,8 @@ final class GlossLab {
         double("tilesCorner", &tilesCorner); double("tilesGap", &tilesGap)
         double("tilesPanelLight", &tilesPanelLight); double("tilesPanelDark", &tilesPanelDark)
         double("tilesShadow", &tilesShadow)
+        bool("tilesSheet", &tilesSheet); bool("tilesSmoky", &tilesSmoky)
+        double("tilesSmokeLight", &tilesSmokeLight); double("tilesEdge", &tilesEdge)
         if let raw = defaults.string(forKey: Self.prefix + "clearBandMethod"), let value = ClearBandMethod(rawValue: raw) {
             clearBandMethod = value
         }
@@ -229,7 +245,7 @@ final class GlossLab {
         clearBand = false; glassShadow = false; glassSpill = false; movingLight = false
         neutralGlass = false; neutralControls = false
         clearBody = false; clearControls = false
-        tiles = false
+        tiles = false; tilesSheet = false; tilesSmoky = false
     }
 
     /// The sliders back to the lead's starting values.
@@ -253,6 +269,7 @@ final class GlossLab {
         tilesCorner = fresh.tilesCorner; tilesGap = fresh.tilesGap
         tilesPanelLight = fresh.tilesPanelLight; tilesPanelDark = fresh.tilesPanelDark
         tilesShadow = fresh.tilesShadow
+        tilesSmokeLight = fresh.tilesSmokeLight; tilesEdge = fresh.tilesEdge
     }
 
     /// A named combination of switches and values. `dark` is the mode it is
@@ -282,9 +299,14 @@ final class GlossLab {
             lab.clearControls = true
             lab.glassShadow = true
         },
+        // Second round, 23 Nov (owner: "these just dont feel the same"):
+        // smoky pieces with a bright edge on the panel's own pale sheet,
+        // fatter and further apart. The mode is the app's own.
         Preset(id: "controlCentreTiles", title: "Control Centre, tiles",
-               note: "Each group of tasks on its own piece of clear glass, no panel behind. Tasks page. Sets Dark.", dark: true) { lab in
-            lab.tiles = true; lab.tilesDimLight = 55; lab.tilesDimDark = 50
+               note: "Smoky tiles with a bright edge on the panel's own glass; Tasks and the Notes list.") { lab in
+            lab.tiles = true; lab.tilesSheet = true; lab.tilesSmoky = true
+            lab.tilesDimLight = 55; lab.tilesDimDark = 50
+            lab.tilesCorner = 22; lab.tilesGap = 10; lab.tilesEdge = 0.5
             lab.clearControls = true
         },
         Preset(id: "clearBareEdge", title: "Clear, bare edge",
@@ -296,8 +318,9 @@ final class GlossLab {
         },
         Preset(id: "refractingRim", title: "Refracting rim",
                note: "Today's glass with a clear rim that bends what is behind it.") { lab in
-            lab.clearBand = true; lab.clearBandWidth = 16
-            lab.rimFade = true; lab.rimFadeWidth = 16
+            // Owner, 23 Nov ("Yes, 6 pt"): it starts at 6 pt, not 16.
+            lab.clearBand = true; lab.clearBandWidth = 6
+            lab.rimFade = true; lab.rimFadeWidth = 6
             lab.edgeLight = true
         },
         Preset(id: "thickGlass", title: "Thick glass",
@@ -393,7 +416,7 @@ final class GlossLab {
         11 Neutral glass: \(on(neutralGlass)), amount \(f(neutralGlassAmount)) %, controls too: \(on(neutralControls))
         12 Clear glass body: \(on(clearBody)), Light white fill \(f(clearBodyFillLight)) %, Dark black fill \(f(clearBodyFillDark)) %
         13 Clear glass controls: \(on(clearControls))
-        14 Tiles (each group of tasks on its own Clear glass): \(on(tiles)), dim Light \(f(tilesDimLight)) % Dark \(f(tilesDimDark)) %, corner \(f(tilesCorner)) pt, gap \(f(tilesGap)) pt, panel behind Light \(f(tilesPanelLight)) % Dark \(f(tilesPanelDark)) %, shadow \(f(tilesShadow))
+        14 Tiles (each group of tasks on its own Clear glass): \(on(tiles)), dim Light \(f(tilesDimLight)) % Dark \(f(tilesDimDark)) %, corner \(f(tilesCorner)) pt, gap \(f(tilesGap)) pt, panel behind Light \(f(tilesPanelLight)) % Dark \(f(tilesPanelDark)) %, shadow \(f(tilesShadow)), sheet behind: \(on(tilesSheet)), smoky in Light: \(on(tilesSmoky)), smoke Light \(f(tilesSmokeLight)) %, edge \(f(tilesEdge))
         10 One rim recipe for every control: \(on(oneRim))
         """
     }

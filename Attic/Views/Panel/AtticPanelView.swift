@@ -625,8 +625,26 @@ struct AtticPanelView: View {
 
     // MARK: Surface, observation and theme
 
+    #if ATTIC_GLOSS_LAB
+    /// Gloss lab idea 14: the page shown has tiles: Tasks, or Notes while
+    /// its list is shown (read only with Tiles on).
+    private var glossLabTilesPage: Bool {
+        switch currentPage {
+        case .tasks: true
+        case .notes: GlossLab.shared.tiles && GlossTilesNotesList.shared.shown
+        case .calendar, .canvas: false
+        }
+    }
+
+    #endif
     private var surfacedPanel: some View {
         panelContent
+            #if ATTIC_GLOSS_LAB
+            // Gloss lab idea 14, Smoky in Light: the content of a page with
+            // tiles drawn as in Dark (never the panel's own surface).
+            .modifier(GlossSmokedContent(tilesPage: glossLabTilesPage, theme: settings.panelTheme,
+                                         contrast: colorSchemeContrast, palette: panelThemePalette))
+            #endif
             .environment(\.colorScheme, systemColorScheme)
             .foregroundStyle(panelThemePalette.primaryForegroundColor, panelThemePalette.secondaryForegroundColor)
             .environment(\.controlActiveState, .key)
@@ -636,10 +654,10 @@ struct AtticPanelView: View {
                 elevation: Self.showsSurfaceElevation ? panelSurfaceTreatment.surfaceElevation : nil,
                 // Gloss lab idea 7: the margin each window already keeps.
                 glossLabMargin: uiState.isFloating ? AtticStyle.panelElevationMargin : AtticStyle.dockedPanelMargin,
-                // Gloss lab idea 14: only the Tasks page has tiles.
-                glossLabTilesPage: PanelPage(uiState.selectedSection) == .tasks
+                // Gloss lab idea 14: Tasks, and the Notes list, have tiles.
+                glossLabTilesPage: glossLabTilesPage
             ))
-            .environment(\.glossTilesGround, PanelPage(uiState.selectedSection) == .tasks)
+            .environment(\.glossTilesGround, glossLabTilesPage)
             #else
             .modifier(PanelShellSurface(
                 cornerSize: cornerRadius,
