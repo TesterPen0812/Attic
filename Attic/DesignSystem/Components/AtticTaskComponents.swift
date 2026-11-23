@@ -1025,9 +1025,16 @@ private struct AtticLiveOwnFocusRing: ViewModifier {
     let pinned: Bool
     @FocusState private var focused: Bool
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    #if DEBUG
+    @State private var censusID = UUID()
+    #endif
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        #if DEBUG
+        let _ = AtticFocusReaderCensus.noteRing(censusID, keyboardFocusVisible: keyboardFocusVisible,
+                                                shown: keyboardFocusVisible ? (pinned || focused) : pinned, outline: outline)
+        #endif
         // A focus binding also installs a SwiftUI focus proxy. Register it
         // only for keyboard navigation, so mouse-driven buttons cannot
         // compete with a live AppKit text editor (R11B-01).

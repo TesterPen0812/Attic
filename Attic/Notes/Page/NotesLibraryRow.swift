@@ -58,10 +58,17 @@ struct NotesLibraryRow: View {
     @State private var hovered = false
     @State private var actionsHovered = false
     @FocusState private var actionsFocused: Bool
+    #if DEBUG
+    @State private var censusID = UUID()
+    #endif
 
     private typealias M = NotesLibraryRowMetrics
 
     var body: some View {
+        #if DEBUG
+        let _ = AtticFocusReaderCensus.noteNotesRow(censusID)
+        let _ = AtticFocusReaderCensus.noteNotesRowActions(censusID, focused: actionsFocused)
+        #endif
         let tokens = design.tokens
         let hover = forced == .hover || hovered
         let highlight = tokens.rowHighlight(selected: isSelected || isHighlighted, hovered: hover)

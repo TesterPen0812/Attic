@@ -151,3 +151,49 @@ extension View {
         modifier(AtticFocusRequestTarget(target: target, focused: focused))
     }
 }
+
+#if DEBUG
+/// DEBUG census of the views that hold a `@FocusState` only to draw
+/// something for the keyboard (a ring, a row's •••). Every such holder is a
+/// focus reader: SwiftUI re-checks it on each focus change in its graph,
+/// hidden pages included, whether or not anything can show. Each holder
+/// records itself, by instance, on every body run while `records` is on.
+@MainActor
+enum AtticFocusReaderCensus {
+    struct Ring: Equatable {
+        /// `atticKeyboardFocusVisible` as the holder last saw it.
+        var keyboardFocusVisible: Bool
+        /// Whether it drew its ring on that run.
+        var shown: Bool
+        var outline: String
+    }
+
+    static var records = false
+    /// Ring focus-state holders, by instance.
+    static var rings: [UUID: Ring] = [:]
+    /// `NotesLibraryRow` instances whose own body holds a focus state.
+    static var notesRows: Set<UUID> = []
+    /// The Notes rows' ••• buttons that hold their own focus state, with
+    /// whether each had the keyboard on its last run.
+    static var notesRowActions: [UUID: Bool] = [:]
+
+    static func noteRing(_ id: UUID, keyboardFocusVisible: Bool, shown: Bool, outline: AtticOwnFocusRing.Outline) {
+        guard records else { return }
+        rings[id] = Ring(keyboardFocusVisible: keyboardFocusVisible, shown: shown, outline: "\(outline)")
+    }
+
+    static func noteNotesRow(_ id: UUID) {
+        if records { notesRows.insert(id) }
+    }
+
+    static func noteNotesRowActions(_ id: UUID, focused: Bool) {
+        if records { notesRowActions[id] = focused }
+    }
+
+    static func reset() {
+        rings = [:]
+        notesRows = []
+        notesRowActions = [:]
+    }
+}
+#endif
