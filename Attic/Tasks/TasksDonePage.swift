@@ -89,6 +89,10 @@ struct TasksDonePage<Cell: View>: View {
     private func list(_ lines: [TasksDoneLine], turn: TasksFoldTurn?, places: [UUID: TasksFoldPlace],
                       runs: [UUID: AtticSelectionRun]) -> some View {
         ScrollViewReader { proxy in
+        #if ATTIC_GLOSS_LAB
+        // Gloss lab idea 14: each line's tile is its day's.
+        let tileKeys = TasksDoneLine.glossTileKeys(lines)
+        #endif
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 // The picked tags never hide finished tasks silently (13
@@ -102,6 +106,9 @@ struct TasksDonePage<Cell: View>: View {
                         model.showAll(on: .done)
                     }
                     .accessibilityIdentifier("tasks-done-view-line")
+                    #if ATTIC_GLOSS_LAB
+                    .glossTile("line:view")
+                    #endif
                 }
                 // One line a day heading or a row, each drawn by its slot's
                 // view (`TasksDoneSlots`); a row is scrolled to by its slot.
@@ -114,12 +121,19 @@ struct TasksDonePage<Cell: View>: View {
                                          folded: turn?.key == day.key ? turn?.headerFolded ?? day.folded : day.folded) {
                             toggleDay(day.key)
                         }
+                        #if ATTIC_GLOSS_LAB
+                        // Gloss lab idea 14: a day and its rows share a tile.
+                        .glossTile(tileKeys[line.id] ?? "day", leads: true)
+                        #endif
                     case let .row(row):
                         // A turning day's body closes or opens over its
                         // rows (fix round 2); every other row is open.
                         cell(row, runs[row.id] ?? .single)
                             .modifier(turn.flatMap { turn in places[row.id].map { TasksFoldBody(progress: turn.progress, place: $0) } }
                                 ?? TasksFoldBody(progress: 1, place: nil))
+                            #if ATTIC_GLOSS_LAB
+                            .glossTile(tileKeys[line.id] ?? "day")
+                            #endif
                     }
                 }
                 if model.doneLogFailure != nil {
@@ -129,6 +143,9 @@ struct TasksDonePage<Cell: View>: View {
                         .frame(height: AtticLayout.rowPitch)
                         .padding(.leading, AtticLayout.circleX)
                         .accessibilityIdentifier("tasks-done-load-failed")
+                        #if ATTIC_GLOSS_LAB
+                        .glossTile("line:tail", leads: true)
+                        #endif
                 } else if model.doneLogHasMore {
                     AtticLoadingRows(count: 2)
                         // Only a drawn page pages on; one drawn again with
@@ -145,6 +162,9 @@ struct TasksDonePage<Cell: View>: View {
                                     // T3: no results here, the other tabs' matches as links.
                                     elsewhere: query.isEmpty ? [] : model.searchMatchesElsewhere(from: .done),
                                     follow: { model.followSearch(from: .done, to: $0) })
+                        #if ATTIC_GLOSS_LAB
+                        .glossTile("line:empty", leads: true)
+                        #endif
                 } else if let count = model.doneSearchCount() {
                     // A quiet line under the results (v22 card B).
                     // And the other tabs' matches (T3).
@@ -154,8 +174,15 @@ struct TasksDonePage<Cell: View>: View {
                                        follow: { model.followSearch(from: .done, to: $0) })
                         .frame(height: AtticLayout.rowPitch)
                         .padding(.leading, TasksDesignMetrics.textX)
+                        #if ATTIC_GLOSS_LAB
+                        .glossTile("line:find", leads: true)
+                        #endif
                 }
             }
+            #if ATTIC_GLOSS_LAB
+            // Gloss lab idea 14: each day's tile, behind its rows.
+            .backgroundPreferenceValue(GlossTileBounds.self) { GlossTilesBackground(anchors: $0) }
+            #endif
             .padding(.bottom, bottomClearance - bottomMargin)
             // The log's place is kept while its page is not built (round 10).
             .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, pointer: pointer,
@@ -190,6 +217,22 @@ struct TasksDoneLine: Identifiable {
     let content: Content
 }
 
+#if ATTIC_GLOSS_LAB
+extension TasksDoneLine {
+    /// Gloss lab idea 14: the tile of every line, a heading's day key for
+    /// the heading and the rows under it.
+    static func glossTileKeys(_ lines: [TasksDoneLine]) -> [TasksDoneLineID: String] {
+        var keys: [TasksDoneLineID: String] = [:]
+        var current = "day"
+        for line in lines {
+            if case let .heading(day) = line.content { current = "group:" + day.key }
+            keys[line.id] = current
+        }
+        return keys
+    }
+}
+
+#endif
 /// A Done line's identity in the list: the slot (the view) that draws it.
 struct TasksDoneLineID: Hashable {
     let heading: Bool

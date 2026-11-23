@@ -629,4 +629,194 @@ enum GlossLabControlNeutral {
         return GlossNeutralGlass<Rectangle>.amount(lab)
     }
 }
+
+// MARK: 14 Tiles
+
+/// 14. Tiles (23 Nov, after the owner's Control Centre screenshot): on the
+/// Tasks page each group of rows wears its own piece of Apple's Clear glass
+/// with a dim under the text, and the panel behind draws no glass (glass
+/// cannot show through glass). Glass surface only.
+@MainActor
+enum GlossTiles {
+    /// A tile's side, inside its rows' bounds, pt: the rows' highlight sits
+    /// 8 in, so it keeps 4 inside the tile.
+    static let sideInset: CGFloat = 4
+    /// A tile's shadow: radius and drop, pt (it fits the gap between tiles).
+    static let shadowRadius: CGFloat = 5
+    static let shadowDrop: CGFloat = 2
+
+    /// Whether the lists draw tiles.
+    static func on(design: AtticDesignContext) -> Bool {
+        GlossLab.shared.tiles && design.tokens.panel.kind == .glass
+    }
+
+    /// Whether the tiles stand in for the panel's own surface: only on the
+    /// page that has them (`tilesPage`, read first, so the switch is not
+    /// read anywhere else).
+    static func replacePanel(tilesPage: Bool, design: AtticDesignContext) -> Bool {
+        tilesPage && on(design: design)
+    }
+
+    /// The dim a glass control wears while the tiles stand in for the
+    /// panel under it (`ground`, read first): the tiles' own dim, so a
+    /// control is a small tile, as in Control Centre. Without it a control
+    /// has nothing of ours behind it and its symbol is lost over a
+    /// backdrop of its own lightness.
+    static func controlDim(ground: Bool, design: AtticDesignContext) -> Color? {
+        guard ground, on(design: design) else { return nil }
+        let lab = GlossLab.shared
+        let dark = design.mode == .dark
+        return (dark ? Color.black : Color.white).opacity((dark ? lab.tilesDimDark : lab.tilesDimLight) / 100)
+    }
+
+    /// One frame per tile: the union of its members' frames, pulled in at
+    /// the sides, top to bottom. Empty members and empty tiles are left out.
+    nonisolated static func frames(_ members: [String: [CGRect]], sideInset: CGFloat) -> [(key: String, frame: CGRect)] {
+        members.compactMap { key, rects -> (key: String, frame: CGRect)? in
+            let live = rects.filter { $0.width > 0 && $0.height > 0 }
+            guard let first = live.first else { return nil }
+            let frame = live.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: sideInset, dy: 0)
+            guard frame.width > 0, frame.height > 0 else { return nil }
+            return (key, frame)
+        }
+        .sorted { ($0.frame.minY, $0.key) < ($1.frame.minY, $1.key) }
+    }
+}
+
+private struct GlossTilesGroundKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// 14: true inside the panel while the page shown has tiles, so the
+    /// glass controls there can wear the tiles' dim.
+    var glossTilesGround: Bool {
+        get { self[GlossTilesGroundKey.self] }
+        set { self[GlossTilesGroundKey.self] = newValue }
+    }
+}
+
+/// 14: the bounds of a list's entries, under their tiles' keys.
+struct GlossTileBounds: PreferenceKey {
+    static var defaultValue: [String: [Anchor<CGRect>]] { [:] }
+
+    static func reduce(value: inout [String: [Anchor<CGRect>]], nextValue: () -> [String: [Anchor<CGRect>]]) {
+        value.merge(nextValue(), uniquingKeysWith: +)
+    }
+}
+
+/// 14: one list entry (a heading, a row, a line) as a member of the tile
+/// `key`. With 14 off it reports nothing and adds no room. `leads` is an
+/// entry that starts a tile: it takes the gap above it, outside the tile.
+struct GlossTileMember: ViewModifier {
+    let key: String
+    var leads = false
+    @Environment(\.atticDesign) private var design
+
+    func body(content: Content) -> some View {
+        let on = GlossTiles.on(design: design)
+        content
+            .anchorPreference(key: GlossTileBounds.self, value: .bounds) { on ? [key: [$0]] : [:] }
+            .padding(.top, on && leads ? GlossLab.shared.tilesGap : 0)
+    }
+}
+
+/// 14: the tiles behind a list, one piece of Clear glass per key with the
+/// dim over it (white in Light, black in Dark). A lazy list reports only
+/// the entries it has built, so a long group's tile ends at the last one
+/// built, past the visible part.
+struct GlossTilesBackground: View {
+    let anchors: [String: [Anchor<CGRect>]]
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        #if DEBUG
+        let _ = GlossLabCounters.tilesLayer += 1
+        #endif
+        if GlossTiles.on(design: design), !anchors.isEmpty {
+            let lab = GlossLab.shared
+            let dark = design.mode == .dark
+            let dim = (dark ? Color.black : Color.white).opacity((dark ? lab.tilesDimDark : lab.tilesDimLight) / 100)
+            let shape = RoundedRectangle(cornerRadius: lab.tilesCorner, style: .continuous)
+            GeometryReader { geometry in
+                let tiles = GlossTiles.frames(anchors.mapValues { $0.map { geometry[$0] } }, sideInset: GlossTiles.sideInset)
+                if lab.tilesShadow > 0 {
+                    // A soft shadow cast only outside each tile: the
+                    // tiles' own shapes are cut out of it again, so
+                    // nothing of it shows through the Clear glass.
+                    ZStack {
+                        ForEach(tiles, id: \.key) { tile in
+                            shape.fill(Color.black)
+                                .frame(width: tile.frame.width, height: tile.frame.height)
+                                .position(x: tile.frame.midX, y: tile.frame.midY)
+                                .shadow(color: .black.opacity(lab.tilesShadow), radius: GlossTiles.shadowRadius,
+                                        x: 0, y: GlossTiles.shadowDrop)
+                        }
+                        ForEach(tiles, id: \.key) { tile in
+                            shape.fill(Color.black)
+                                .frame(width: tile.frame.width, height: tile.frame.height)
+                                .position(x: tile.frame.midX, y: tile.frame.midY)
+                                .blendMode(.destinationOut)
+                        }
+                    }
+                    .compositingGroup()
+                }
+                GlassEffectContainer(spacing: 0) {
+                    ZStack {
+                        ForEach(tiles, id: \.key) { tile in
+                            shape.fill(Color.clear)
+                                .glassEffect(.clear, in: shape)
+                                .overlay { shape.fill(dim) }
+                                .frame(width: tile.frame.width, height: tile.frame.height)
+                                .position(x: tile.frame.midX, y: tile.frame.midY)
+                        }
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+/// 14: the panel behind the tiles: a plain fill and no glass (white in
+/// Light, black in Dark; nothing at 0).
+struct GlossTilesPanelFill: View {
+    let cornerSize: CGFloat
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let lab = GlossLab.shared
+        let dark = design.mode == .dark
+        let amount = (dark ? lab.tilesPanelDark : lab.tilesPanelLight) / 100
+        Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
+            .fill((dark ? Color.black : Color.white).opacity(amount))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+/// 14: a piece of the panel's own edge or shadow, left out while the tiles
+/// stand in for the panel.
+struct GlossUnlessTiles<Content: View>: View {
+    let tilesPage: Bool
+    let content: Content
+    @Environment(\.atticDesign) private var design
+
+    init(tilesPage: Bool, @ViewBuilder content: () -> Content) {
+        self.tilesPage = tilesPage
+        self.content = content()
+    }
+
+    var body: some View {
+        if !GlossTiles.replacePanel(tilesPage: tilesPage, design: design) { content }
+    }
+}
+
+extension View {
+    /// 14: this list entry belongs to the tile `key` (nothing with 14 off).
+    func glossTile(_ key: String, leads: Bool = false) -> some View {
+        modifier(GlossTileMember(key: key, leads: leads))
+    }
+}
 #endif

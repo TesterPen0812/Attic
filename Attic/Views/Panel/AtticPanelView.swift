@@ -635,8 +635,11 @@ struct AtticPanelView: View {
                 cornerSize: cornerRadius,
                 elevation: Self.showsSurfaceElevation ? panelSurfaceTreatment.surfaceElevation : nil,
                 // Gloss lab idea 7: the margin each window already keeps.
-                glossLabMargin: uiState.isFloating ? AtticStyle.panelElevationMargin : AtticStyle.dockedPanelMargin
+                glossLabMargin: uiState.isFloating ? AtticStyle.panelElevationMargin : AtticStyle.dockedPanelMargin,
+                // Gloss lab idea 14: only the Tasks page has tiles.
+                glossLabTilesPage: PanelPage(uiState.selectedSection) == .tasks
             ))
+            .environment(\.glossTilesGround, PanelPage(uiState.selectedSection) == .tasks)
             #else
             .modifier(PanelShellSurface(
                 cornerSize: cornerRadius,

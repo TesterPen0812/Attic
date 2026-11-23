@@ -225,6 +225,16 @@ struct GlossLabView: View {
                 }
                 row("Clear glass controls", $lab.clearControls,
                     note: "The buttons and fields wear Clear glass too.") { EmptyView() }
+                row("Tiles", $lab.tiles,
+                    note: "On the Tasks page each group of tasks sits on its own piece of Clear glass, as Control Centre's tiles do, and the panel behind draws no glass. The body, rim, edge and shadow switches draw nothing there while this is on.") {
+                    slider("Dim · \(modeName)", dark ? $lab.tilesDimDark : $lab.tilesDimLight, 0...80, unit: " %")
+                    slider("Corner", $lab.tilesCorner, 6...28, unit: " pt")
+                    more {
+                        slider("Gap", $lab.tilesGap, 0...16, unit: " pt")
+                        slider("Shadow", $lab.tilesShadow, 0...0.5)
+                        slider("Panel behind · \(modeName)", dark ? $lab.tilesPanelDark : $lab.tilesPanelLight, 0...60, unit: " %")
+                    }
+                }
 
                 section("Edge")
                 row("Bare glass at the rim", $lab.rimFade,

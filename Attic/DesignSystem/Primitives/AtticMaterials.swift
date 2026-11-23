@@ -210,6 +210,9 @@ struct AtticRaisedMaterialModifier: ViewModifier {
     @Environment(\.atticControlGone) private var gone
     @Environment(\.atticControlReveal) private var reveal
     @Environment(\.atticControlCornerExponent) private var cornerExponent
+    #if ATTIC_GLOSS_LAB
+    @Environment(\.glossTilesGround) private var glossTilesGround
+    #endif
     #if DEBUG
     @Environment(\.atticMaterialProbeID) private var probeID
     #endif
@@ -256,6 +259,11 @@ struct AtticRaisedMaterialModifier: ViewModifier {
                 // so only the glass is drained.
                 if let amount = GlossLabControlNeutral.amount(design: design) {
                     GlossNeutralGlass(shape: shape, amount: amount)
+                }
+                // Gloss lab idea 14: over the tiles' bare panel a control
+                // wears the tiles' dim.
+                if let dim = GlossTiles.controlDim(ground: glossTilesGround, design: design) {
+                    shape.fill(dim)
                 }
                 #endif
                 if let fill = AtticGlassStateFill.fill(for: state, tokens: tokens) {
@@ -1179,6 +1187,9 @@ struct AtticPanelStageSurface: View {
     #if ATTIC_GLOSS_LAB
     /// Gloss lab: only the live panel (`PanelShellSurface`) takes idea 1.
     var glossLabPanel = false
+    /// Gloss lab idea 14: the page shown has tiles, which stand in for
+    /// this surface while 14 is on.
+    var glossLabTilesPage = false
     #endif
     @Environment(\.atticDesign) private var design
 
@@ -1187,19 +1198,24 @@ struct AtticPanelStageSurface: View {
         #if DEBUG
         let _ = GlossLabCounters.stageSurface += 1
         #endif
-        let lab = GlossLab.shared
-        let rimFade = glossLabPanel && lab.rimFade
-            ? GlossRimFadeMask(cornerSize: cornerSize, exponent: AtticStyle.panelSquircleExponent, width: lab.rimFadeWidth)
-            : nil
-        let neutral = glossLabPanel ? GlossNeutralGlass<Squircle>.amount(lab) : nil
-        let clearBody = glossLabPanel ? GlossClearBody.fill(lab, dark: design.tokens.panel.appearance == .dark) : nil
-        let clearBand = glossLabPanel && lab.clearBand && lab.clearBandWidth >= 0.5
-            ? GlossClearBandGlass(cornerSize: cornerSize, width: CGFloat(lab.clearBandWidth), method: lab.clearBandMethod,
-                                  sharesContainer: lab.clearBandContainer)
-            : nil
-        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
-                               liftLeavesControlBands: true, glossRimFade: rimFade, glossClearBand: clearBand, glossNeutral: neutral,
-                               glossClearBody: clearBody)
+        if glossLabPanel, GlossTiles.replacePanel(tilesPage: glossLabTilesPage, design: design) {
+            // 14: the tiles are the glass; the panel behind is a plain fill.
+            GlossTilesPanelFill(cornerSize: cornerSize)
+        } else {
+            let lab = GlossLab.shared
+            let rimFade = glossLabPanel && lab.rimFade
+                ? GlossRimFadeMask(cornerSize: cornerSize, exponent: AtticStyle.panelSquircleExponent, width: lab.rimFadeWidth)
+                : nil
+            let neutral = glossLabPanel ? GlossNeutralGlass<Squircle>.amount(lab) : nil
+            let clearBody = glossLabPanel ? GlossClearBody.fill(lab, dark: design.tokens.panel.appearance == .dark) : nil
+            let clearBand = glossLabPanel && lab.clearBand && lab.clearBandWidth >= 0.5
+                ? GlossClearBandGlass(cornerSize: cornerSize, width: CGFloat(lab.clearBandWidth), method: lab.clearBandMethod,
+                                      sharesContainer: lab.clearBandContainer)
+                : nil
+            AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
+                                   liftLeavesControlBands: true, glossRimFade: rimFade, glossClearBand: clearBand, glossNeutral: neutral,
+                                   glossClearBody: clearBody)
+        }
         #else
         AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
                                liftLeavesControlBands: true)

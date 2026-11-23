@@ -22,7 +22,7 @@ final class GlossLabCountTests: XCTestCase {
 
     private func spin(_ seconds: TimeInterval = 0.2) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
 
-    private func host(elevation: AtticPanelSurfaceElevation? = nil) -> (NSPanel, NSView) {
+    private func host(elevation: AtticPanelSurfaceElevation? = nil, tilesPage: Bool = false) -> (NSPanel, NSView) {
         let size = CGSize(width: 360, height: 560)
         let panel = KeyPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -34,9 +34,21 @@ final class GlossLabCountTests: XCTestCase {
             Color.clear.frame(height: 32).frame(maxWidth: .infinity)
                 .atticRaisedMaterial(cornerRadius: 16, interactive: false, edgeLight: true)
                 .padding(.horizontal, 16)
+            if tilesPage {
+                // 14: a list of two groups, a heading and a row each, as
+                // the Tasks lists mark theirs.
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 24).frame(maxWidth: .infinity).glossTile("a", leads: true)
+                    Color.clear.frame(height: 32).frame(maxWidth: .infinity).glossTile("a")
+                    Color.clear.frame(height: 24).frame(maxWidth: .infinity).glossTile("b", leads: true)
+                    Color.clear.frame(height: 32).frame(maxWidth: .infinity).glossTile("b")
+                }
+                .backgroundPreferenceValue(GlossTileBounds.self) { GlossTilesBackground(anchors: $0) }
+            }
             Spacer()
         }
-        .modifier(PanelShellSurface(cornerSize: 26, elevation: elevation))
+        .modifier(PanelShellSurface(cornerSize: 26, elevation: elevation, glossLabTilesPage: tilesPage))
+        .environment(\.glossTilesGround, tilesPage)
         .atticDesign(design)
         let view = NSHostingView(rootView: content)
         view.autoresizingMask = [.width, .height]
@@ -173,6 +185,84 @@ final class GlossLabCountTests: XCTestCase {
             }
         }
         print("GLOSS_LAB_FLIPS\n\(lines.joined(separator: "\n"))\nGLOSS_LAB_FLIPS_END")
+    }
+
+    /// 14 (Tiles), on the page that has tiles: flipping it re-runs the
+    /// panel's surface, the tiles' own layer and each control there once
+    /// (a control takes the tiles' dim); the rim,
+    /// grain and shadow layers are left out while it is on; and one resize
+    /// write with it on runs no more of the shell's bodies than with it
+    /// off, and the tiles' layer a bounded number of times.
+    func testTilesFlipAndOneResizeWrite() {
+        let lab = GlossLab.shared
+        lab.allOff(); lab.resetSliders()
+        let (panel, view) = host(elevation: .light, tilesPage: true)
+        defer { panel.orderOut(nil); panel.close(); lab.allOff() }
+        spin()
+        var size = CGSize(width: 380, height: 590)
+        func resize() -> (Count, Int) {
+            GlossLabCounters.reset()
+            panel.setContentSize(size)
+            size.width += 20; size.height += 30
+            view.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            spin()
+            return (bodies(), GlossLabCounters.tilesLayer)
+        }
+        let (off, offTiles) = resize()
+        var lines = ["14 off, one resize write: \(off), tiles layer \(offTiles)"]
+
+        GlossLabCounters.reset()
+        lab.tiles = true
+        spin()
+        view.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        let turnedOn = bodies(), turnedOnTiles = GlossLabCounters.tilesLayer
+        lines.append("14 on: \(turnedOn), tiles layer \(turnedOnTiles)")
+        XCTAssertGreaterThanOrEqual(turnedOn.stage, 1, "14 on did not re-run the panel's surface")
+        XCTAssertGreaterThanOrEqual(turnedOnTiles, 1, "14 on did not run the tiles' layer")
+        // The host's one control takes the tiles' dim, so it runs once.
+        XCTAssertLessThanOrEqual(turnedOn.controlLight, 1, "14 on ran the control more than once")
+        XCTAssertEqual(turnedOn.rim + turnedOn.surface + turnedOn.shadow, 0, "14 on ran a layer it leaves out")
+
+        let (on, onTiles) = resize()
+        lines.append("14 on, one resize write: \(on), tiles layer \(onTiles)")
+        XCTAssertLessThanOrEqual(on.stage, off.stage); XCTAssertLessThanOrEqual(on.controlLight, off.controlLight)
+        XCTAssertLessThanOrEqual(on.rim, off.rim); XCTAssertLessThanOrEqual(on.surface, off.surface)
+        XCTAssertLessThanOrEqual(on.shadow, off.shadow)
+        // The tiles follow the list's new width: their layer runs for the
+        // write, and not in a loop.
+        XCTAssertLessThanOrEqual(onTiles, 3, "the tiles' layer ran \(onTiles) times on one resize write")
+
+        GlossLabCounters.reset()
+        lab.tiles = false
+        spin()
+        view.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        let turnedOff = bodies()
+        lines.append("14 off again: \(turnedOff), tiles layer \(GlossLabCounters.tilesLayer)")
+        XCTAssertGreaterThanOrEqual(turnedOff.stage, 1, "14 off did not re-run the panel's surface")
+        XCTAssertLessThanOrEqual(turnedOff.controlLight, 1, "14 off ran the control more than once")
+        print("GLOSS_LAB_TILES\n\(lines.joined(separator: "\n"))\nGLOSS_LAB_TILES_END")
+    }
+
+    /// 14 on a page without tiles (every page but Tasks): the switch is
+    /// not read there, so flipping it re-runs nothing of the shell.
+    func testTilesAreNotReadOffTheirPage() {
+        let lab = GlossLab.shared
+        lab.allOff(); lab.resetSliders()
+        let (panel, view) = host(elevation: .light)
+        defer { panel.orderOut(nil); panel.close(); lab.allOff() }
+        spin()
+        for value in [true, false] {
+            GlossLabCounters.reset()
+            lab.tiles = value
+            spin()
+            view.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            XCTAssertEqual(bodies(), Count(), "14 \(value ? "on" : "off") re-ran the shell off its page")
+        }
     }
 
     private func movingLightView(in root: NSView) -> GlossMovingEdgeLightView? {
@@ -612,6 +702,73 @@ final class GlossLabValuesTests: XCTestCase {
         let fresh = GlossLab(defaults: nil)
         XCTAssertEqual(lab.movingLightTilt, fresh.movingLightTilt); XCTAssertEqual(lab.movingLightReach, fresh.movingLightReach)
         XCTAssertFalse(fresh.movingLight, "pass 3 starts off")
+    }
+
+    /// 14 (Tiles, 23 Nov): the switch and its values load, are written
+    /// down by Copy values, and All off and Reset sliders reach them.
+    func testTilesValuesLoadCopyAndReset() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "GlossLab.tiles")
+        defaults.set(55.0, forKey: "GlossLab.tilesDimLight")
+        defaults.set(20.0, forKey: "GlossLab.tilesDimDark")
+        defaults.set(22.0, forKey: "GlossLab.tilesCorner")
+        defaults.set(12.0, forKey: "GlossLab.tilesGap")
+        defaults.set(10.0, forKey: "GlossLab.tilesPanelLight")
+        defaults.set(25.0, forKey: "GlossLab.tilesPanelDark")
+        defaults.set(0.3, forKey: "GlossLab.tilesShadow")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.tiles)
+        XCTAssertEqual(lab.tilesDimLight, 55); XCTAssertEqual(lab.tilesDimDark, 20)
+        XCTAssertEqual(lab.tilesCorner, 22); XCTAssertEqual(lab.tilesGap, 12)
+        XCTAssertEqual(lab.tilesPanelLight, 10); XCTAssertEqual(lab.tilesPanelDark, 25)
+        XCTAssertEqual(lab.tilesShadow, 0.3)
+        let text = lab.valuesText(app: Self.app(mode: "Dark"))
+        XCTAssertTrue(text.contains("14 Tiles (each group of tasks on its own Clear glass): on, dim Light 55.00 % Dark 20.00 %, corner 22.00 pt, gap 12.00 pt, panel behind Light 10.00 % Dark 25.00 %, shadow 0.30"), text)
+        lab.allOff()
+        XCTAssertFalse(lab.tiles)
+        lab.resetSliders()
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertEqual(lab.labLines, fresh.labLines)
+        XCTAssertFalse(fresh.tiles, "14 starts off")
+        XCTAssertEqual(GlossLab(defaults: defaults).labLines, fresh.labLines, "All off and Reset sliders were not saved")
+    }
+
+    /// 14: a tile is the union of its members' frames, pulled in at the
+    /// sides; tiles come top to bottom; empty members and tiles are left out.
+    func testTileFramesAreTheUnionPerKey() {
+        let frames = GlossTiles.frames([
+            "b": [CGRect(x: 0, y: 100, width: 300, height: 24), CGRect(x: 0, y: 124, width: 300, height: 32)],
+            "a": [CGRect(x: 0, y: 32, width: 300, height: 32), CGRect(x: 0, y: 8, width: 300, height: 24), .zero],
+            "gone": [CGRect(x: 0, y: 200, width: 300, height: 0)],
+            "thin": [CGRect(x: 0, y: 300, width: 6, height: 32)],
+        ], sideInset: 4)
+        XCTAssertEqual(frames.map(\.key), ["a", "b"])
+        XCTAssertEqual(frames.first?.frame, CGRect(x: 4, y: 8, width: 292, height: 56))
+        XCTAssertEqual(frames.last?.frame, CGRect(x: 4, y: 100, width: 292, height: 56))
+        XCTAssertTrue(GlossTiles.frames([:], sideInset: 4).isEmpty)
+    }
+
+    /// 23 Nov, the owner on the Control Centre preset ("It doesn't" feel
+    /// like the real one): it now carries a dim under the text and none of
+    /// our drawn lines, and a second preset puts the tiles on with no
+    /// glass body under them.
+    func testControlCentrePresetsOf23Nov() throws {
+        let one = GlossLab(defaults: nil)
+        one.apply(try XCTUnwrap(GlossLab.presets.first { $0.id == "controlCentre" }))
+        XCTAssertTrue(one.clearBody); XCTAssertTrue(one.clearControls)
+        XCTAssertEqual(one.clearBodyFillDark, 35)
+        XCTAssertFalse(one.rimFade || one.edgeLight || one.edgeLightAround || one.innerEdge, "a drawn line is still on")
+        XCTAssertFalse(one.tiles)
+        let tiles = GlossLab(defaults: nil)
+        let preset = try XCTUnwrap(GlossLab.presets.first { $0.id == "controlCentreTiles" })
+        tiles.apply(preset)
+        XCTAssertEqual(preset.dark, true)
+        XCTAssertTrue(tiles.tiles); XCTAssertTrue(tiles.clearControls)
+        XCTAssertFalse(tiles.clearBody || tiles.clearBand || tiles.neutralGlass, "glass is set under the tiles")
+        XCTAssertFalse(tiles.rimFade || tiles.edgeLight || tiles.innerEdge || tiles.glassShadow)
+        XCTAssertEqual(tiles.tilesDimDark, 50)
     }
 }
 #endif

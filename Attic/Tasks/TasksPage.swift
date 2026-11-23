@@ -1725,6 +1725,9 @@ struct TasksPage: View {
                             model.showAll(on: tab)
                         }
                         .accessibilityIdentifier("tasks-view-line")
+                        #if ATTIC_GLOSS_LAB
+                        .glossTile("line:view")
+                        #endif
                     }
                     // The date groups (the owner's panel design): a header
                     // folds or unfolds its rows.
@@ -1741,6 +1744,10 @@ struct TasksPage: View {
                                 // A turning group's body closes or opens over
                                 // its rows (fix round 2).
                                 .modifier(Self.foldBody(turning ? turn : nil, place: turningPlaces[row.id]))
+                                #if ATTIC_GLOSS_LAB
+                                // Gloss lab idea 14: a row belongs to its group's tile.
+                                .glossTile("group:" + dateGroup.key)
+                                #endif
                                 // A row added drops into its place (round 9);
                                 // a row leaving fades and shrinks on the exit.
                                 .transition(AtticMotionScale.rowTransition(reduceMotion: design.reduceMotion))
@@ -1760,6 +1767,9 @@ struct TasksPage: View {
                                 .onDisappear { [pointer, tab, key = dateGroup.key] in
                                     if tab == .now { pointer.setHeaderFrame(nil, for: key) }
                                 }
+                                #if ATTIC_GLOSS_LAB
+                                .glossTile("group:" + dateGroup.key, leads: true)
+                                #endif
                                 .id("group:" + dateGroup.key)
                                 .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
                                 // A new day's heading comes in once the one
@@ -1772,6 +1782,9 @@ struct TasksPage: View {
                             // click opens that day on the Calendar page).
                             if dateGroup.kind == .today, !folded, let event = model.nextEvent(on: tab) {
                                 TasksNextEventRow(event: event, open: { model.openNextEvent() })
+                                    #if ATTIC_GLOSS_LAB
+                                    .glossTile("group:" + dateGroup.key)
+                                    #endif
                                     .id("next-event")
                         }
                         }
@@ -1784,6 +1797,9 @@ struct TasksPage: View {
                                            follow: { followSearch(from: tab, to: $0) })
                             .frame(height: AtticLayout.rowPitch)
                             .padding(.leading, TasksDesignMetrics.textX)
+                            #if ATTIC_GLOSS_LAB
+                            .glossTile("line:find", leads: true)
+                            #endif
                     } else if sections.open.isEmpty, sections.groups.isEmpty {
                         // The owner's panel design's empty states.
                         let empty = TasksPanelDesign.empty(tab: tab, query: query, view: view, picks: model.tagPicks(on: tab))
@@ -1793,6 +1809,9 @@ struct TasksPage: View {
                                         // T3: no results here, the other tabs' matches as links.
                                         elsewhere: query.isEmpty ? [] : model.searchMatchesElsewhere(from: tab),
                                         follow: { followSearch(from: tab, to: $0) })
+                            #if ATTIC_GLOSS_LAB
+                            .glossTile("line:empty", leads: true)
+                            #endif
                     }
                     // Done tasks recede into one quiet line; a click shows
                     // them under it (and hides them again).
@@ -1808,6 +1827,9 @@ struct TasksPage: View {
                             pointer.setCompletedTodayFrame(frame, for: tab)
                         }
                         .onDisappear { [pointer, tab] in pointer.setCompletedTodayFrame(nil, for: tab) }
+                        #if ATTIC_GLOSS_LAB
+                        .glossTile("line:done")
+                        #endif
                         // Under an empty message it is the next row (one
                         // row apart); after tasks, 12 below the last one.
                         .padding(.top, sections.open.isEmpty
@@ -1818,6 +1840,9 @@ struct TasksPage: View {
                             ForEach(sections.done) { row in
                                 cell(row, tab: tab, run: selectionRuns[row.id] ?? .single, drawn: drawn)
                                     .id(row.id)
+                                    #if ATTIC_GLOSS_LAB
+                                    .glossTile("line:done")
+                                    #endif
                                     .transition(.asymmetric(
                                         insertion: .identity,
                                         removal: AtticMotionScale.deleteExit(reduceMotion: design.reduceMotion)))
@@ -1828,6 +1853,10 @@ struct TasksPage: View {
                 .backgroundPreferenceValue(AtticSelectedRunBounds.self) { anchors in
                     AtticJoinedSelectedRuns(anchors: anchors)
                 }
+                #if ATTIC_GLOSS_LAB
+                // Gloss lab idea 14: each group's tile, behind its rows.
+                .backgroundPreferenceValue(GlossTileBounds.self) { GlossTilesBackground(anchors: $0) }
+                #endif
                 .animation(reorderFade.isEmpty ? AtticMotionScale.gapClose(travel, afterRowsLeave: rowsLeaving) : nil, value: ids)
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,

@@ -12,6 +12,10 @@ struct PanelShellSurface: ViewModifier {
     #if ATTIC_GLOSS_LAB
     /// Gloss lab idea 7: the window's transparent margin, which holds the shadow.
     var glossLabMargin: CGFloat = AtticStyle.panelElevationMargin
+    /// Gloss lab idea 14: the page shown has tiles (the Tasks page). While
+    /// 14 is on there, the tiles stand in for the surface, its rim and its
+    /// shadow.
+    var glossLabTilesPage = false
     #endif
 
     func body(content: Content) -> some View {
@@ -20,8 +24,8 @@ struct PanelShellSurface: ViewModifier {
             #if ATTIC_GLOSS_LAB
             // Gloss lab (experimental preview only): idea 6 (grain) over the
             // surface and under the content.
-            .background { GlossLabPanelSurfaceLayer(cornerSize: cornerSize) }
-            .background { AtticPanelStageSurface(cornerSize: cornerSize, glossLabPanel: true) }
+            .background { GlossUnlessTiles(tilesPage: glossLabTilesPage) { GlossLabPanelSurfaceLayer(cornerSize: cornerSize) } }
+            .background { AtticPanelStageSurface(cornerSize: cornerSize, glossLabPanel: true, glossLabTilesPage: glossLabTilesPage) }
             #else
             .background { AtticPanelStageSurface(cornerSize: cornerSize) }
             #endif
@@ -32,10 +36,13 @@ struct PanelShellSurface: ViewModifier {
             // note's title field) fell through to the app behind. 1/255 black
             // under the surface is invisible on every material.
             .background { shape.fill(Color.black.opacity(1.0 / 255)) }
-            .overlay { AtticPanelRim(cornerSize: cornerSize) }
             #if ATTIC_GLOSS_LAB
-            // Gloss lab: ideas 3 and 4 at the rim.
-            .overlay { GlossLabPanelRimLayer(cornerSize: cornerSize) }
+            // Gloss lab: the trunk's rim, then ideas 3 and 4 at the rim
+            // (none of them while idea 14's tiles stand in for the panel).
+            .overlay { GlossUnlessTiles(tilesPage: glossLabTilesPage) { AtticPanelRim(cornerSize: cornerSize) } }
+            .overlay { GlossUnlessTiles(tilesPage: glossLabTilesPage) { GlossLabPanelRimLayer(cornerSize: cornerSize) } }
+            #else
+            .overlay { AtticPanelRim(cornerSize: cornerSize) }
             #endif
             .clipShape(shape)
             // Keep the full surface in the native event region: blank
@@ -47,8 +54,10 @@ struct PanelShellSurface: ViewModifier {
                 if let elevation {
                     #if ATTIC_GLOSS_LAB
                     // Gloss lab idea 7; the trunk's shadow while it is off.
-                    GlossLabPanelShadow(shape: shape, cornerSize: cornerSize, elevation: elevation, margin: glossLabMargin)
-                        .allowsHitTesting(false)
+                    GlossUnlessTiles(tilesPage: glossLabTilesPage) {
+                        GlossLabPanelShadow(shape: shape, cornerSize: cornerSize, elevation: elevation, margin: glossLabMargin)
+                    }
+                    .allowsHitTesting(false)
                     #else
                     AtticPanelOutsideShadow(shape: shape, elevation: elevation)
                         .allowsHitTesting(false)

@@ -63,6 +63,13 @@ final class GlossLab {
     /// 13. Clear glass controls: the panel's glass controls wear Apple's
     /// Clear variant in place of Regular.
     var clearControls = false { didSet { save(clearControls, "clearControls") } }
+    /// 14. Tiles (23 Nov, after the owner's Control Centre screenshot): on
+    /// the Tasks page each group of rows wears its own piece of Apple's
+    /// Clear glass with a dim under the text, and the panel behind them
+    /// draws no glass of its own (glass cannot show through glass). The
+    /// glass controls there wear the tiles' dim. Glass surface only; the
+    /// other pages keep the panel as it is.
+    var tiles = false { didSet { save(tiles, "tiles") } }
 
     // MARK: Sliders
 
@@ -110,6 +117,25 @@ final class GlossLab {
     /// backdrop comes through); a guess for a first look, not a target.
     var clearBodyFillLight: Double = 15 { didSet { save(clearBodyFillLight, "clearBodyFillLight") } }
     var clearBodyFillDark: Double = 15 { didSet { save(clearBodyFillDark, "clearBodyFillDark") } }
+    /// 14: the dim over each tile's Clear glass, % (0 to 80): white in
+    /// Light, black in Dark. Apple's own guidance for Clear glass is a
+    /// dimming layer under the content. The starts are where the Air's
+    /// stills keep the text readable over a white and over a black
+    /// backdrop in both modes (35 and 40 did not); a first look, no pick.
+    var tilesDimLight: Double = 55 { didSet { save(tilesDimLight, "tilesDimLight") } }
+    var tilesDimDark: Double = 50 { didSet { save(tilesDimDark, "tilesDimDark") } }
+    /// 14: a tile's corner radius, pt (6 to 28), and the gap above a
+    /// group's heading, pt (0 to 16).
+    var tilesCorner: Double = 16 { didSet { save(tilesCorner, "tilesCorner") } }
+    var tilesGap: Double = 8 { didSet { save(tilesGap, "tilesGap") } }
+    /// 14: a plain fill on the panel behind the tiles, % (0 to 60): white
+    /// in Light, black in Dark. No glass. 0 is no panel at all.
+    var tilesPanelLight: Double = 0 { didSet { save(tilesPanelLight, "tilesPanelLight") } }
+    var tilesPanelDark: Double = 0 { didSet { save(tilesPanelDark, "tilesPanelDark") } }
+    /// 14: a soft shadow under each tile, cast only outside it (its
+    /// opacity, 0 to 0.5). It keeps a tile's outline over a backdrop of
+    /// the tile's own lightness, where Clear glass shows no edge.
+    var tilesShadow: Double = 0.14 { didSet { save(tilesShadow, "tilesShadow") } }
 
     // MARK: The lab window's own state
 
@@ -172,6 +198,11 @@ final class GlossLab {
         double("neutralGlassAmount", &neutralGlassAmount)
         bool("clearBody", &clearBody); bool("clearControls", &clearControls)
         double("clearBodyFillLight", &clearBodyFillLight); double("clearBodyFillDark", &clearBodyFillDark)
+        bool("tiles", &tiles)
+        double("tilesDimLight", &tilesDimLight); double("tilesDimDark", &tilesDimDark)
+        double("tilesCorner", &tilesCorner); double("tilesGap", &tilesGap)
+        double("tilesPanelLight", &tilesPanelLight); double("tilesPanelDark", &tilesPanelDark)
+        double("tilesShadow", &tilesShadow)
         if let raw = defaults.string(forKey: Self.prefix + "clearBandMethod"), let value = ClearBandMethod(rawValue: raw) {
             clearBandMethod = value
         }
@@ -198,6 +229,7 @@ final class GlossLab {
         clearBand = false; glassShadow = false; glassSpill = false; movingLight = false
         neutralGlass = false; neutralControls = false
         clearBody = false; clearControls = false
+        tiles = false
     }
 
     /// The sliders back to the lead's starting values.
@@ -217,6 +249,10 @@ final class GlossLab {
         movingLightTilt = fresh.movingLightTilt; movingLightReach = fresh.movingLightReach
         neutralGlassAmount = fresh.neutralGlassAmount
         clearBodyFillLight = fresh.clearBodyFillLight; clearBodyFillDark = fresh.clearBodyFillDark
+        tilesDimLight = fresh.tilesDimLight; tilesDimDark = fresh.tilesDimDark
+        tilesCorner = fresh.tilesCorner; tilesGap = fresh.tilesGap
+        tilesPanelLight = fresh.tilesPanelLight; tilesPanelDark = fresh.tilesPanelDark
+        tilesShadow = fresh.tilesShadow
     }
 
     /// A named combination of switches and values. `dark` is the mode it is
@@ -237,15 +273,19 @@ final class GlossLab {
             lab.clearBody = true; lab.clearBodyFillLight = 15; lab.clearBodyFillDark = 15
             lab.neutralGlass = true; lab.neutralGlassAmount = 60
         },
+        // Retuned on 23 Nov (owner: it does not feel like the real one):
+        // a dim under the text, as Apple asks of Clear glass, and none of
+        // our drawn lines. The glass's own bent edge is the rim.
         Preset(id: "controlCentre", title: "Control Centre",
-               note: "Clear grey glass, a bright rim all the way round, clear controls. Sets Dark.", dark: true) { lab in
-            lab.clearBody = true; lab.clearBodyFillLight = 10; lab.clearBodyFillDark = 0
+               note: "Clear glass with a dim under the text, clear controls, no drawn lines. Sets Dark.", dark: true) { lab in
+            lab.clearBody = true; lab.clearBodyFillLight = 35; lab.clearBodyFillDark = 35
             lab.clearControls = true
-            lab.rimFade = true; lab.rimFadeWidth = 10
-            lab.edgeLight = true; lab.edgeLightAround = true
-            lab.edgeLightWidth = 1.5; lab.edgeLightLight = 0.8; lab.edgeLightDark = 0.55
-            lab.innerEdge = true; lab.innerEdgeInset = 3; lab.innerEdgeStrength = 0.18
             lab.glassShadow = true
+        },
+        Preset(id: "controlCentreTiles", title: "Control Centre, tiles",
+               note: "Each group of tasks on its own piece of clear glass, no panel behind. Tasks page. Sets Dark.", dark: true) { lab in
+            lab.tiles = true; lab.tilesDimLight = 55; lab.tilesDimDark = 50
+            lab.clearControls = true
         },
         Preset(id: "clearBareEdge", title: "Clear, bare edge",
                note: "Clear glass with more fill under the text, bare at the rim where it bends.") { lab in
@@ -353,6 +393,7 @@ final class GlossLab {
         11 Neutral glass: \(on(neutralGlass)), amount \(f(neutralGlassAmount)) %, controls too: \(on(neutralControls))
         12 Clear glass body: \(on(clearBody)), Light white fill \(f(clearBodyFillLight)) %, Dark black fill \(f(clearBodyFillDark)) %
         13 Clear glass controls: \(on(clearControls))
+        14 Tiles (each group of tasks on its own Clear glass): \(on(tiles)), dim Light \(f(tilesDimLight)) % Dark \(f(tilesDimDark)) %, corner \(f(tilesCorner)) pt, gap \(f(tilesGap)) pt, panel behind Light \(f(tilesPanelLight)) % Dark \(f(tilesPanelDark)) %, shadow \(f(tilesShadow))
         10 One rim recipe for every control: \(on(oneRim))
         """
     }
@@ -376,8 +417,11 @@ enum GlossLabCounters {
     static var movingWrites = 0
     static var movingPathBuilds = 0
     static var movingUpdates = 0
+    /// 14: the tiles' own layer behind a list.
+    static var tilesLayer = 0
     static func reset() {
         surfaceLayer = 0; rimLayer = 0; stageSurface = 0; controlEdgeLight = 0; shadowLayer = 0
+        tilesLayer = 0
         movingTicks = 0; movingWrites = 0; movingPathBuilds = 0; movingUpdates = 0
     }
 }
