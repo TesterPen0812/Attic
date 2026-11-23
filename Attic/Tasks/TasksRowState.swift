@@ -184,6 +184,8 @@ final class TasksRowState {
     /// Catch-ups that came after a drawn cell had read its tab's states
     /// behind their list: a change no funnel announced before the frame.
     static var lateCatchUps = 0
+    /// Each late catch-up's tab and the inputs its list was built for.
+    static var lateRoutes: [String] = []
     /// The list reads running now (`cached`, `doneDays`).
     static var listReadDepth = 0
 
@@ -194,6 +196,7 @@ final class TasksRowState {
     static func reset() {
         writesDuringListRead = 0
         lateCatchUps = 0
+        lateRoutes = []
     }
 }
 

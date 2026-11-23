@@ -401,7 +401,8 @@ func verifyCIAccessibilityMode(_ expected: Any?, phase: String) {
 func assertNoRowStateWriteDuringAReadAndNoLateCatchUp(file: StaticString = #filePath, line: UInt = #line) {
     XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0, "a row state was written during a list read",
                    file: file, line: line)
-    XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0, "a drawn row's state caught up a frame late", file: file, line: line)
+    XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0,
+                   "a drawn row's state caught up a frame late: \(TasksRowStateCounts.lateRoutes)", file: file, line: line)
     TasksRowStateCounts.reset()
 }
 

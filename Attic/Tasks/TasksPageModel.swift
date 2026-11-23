@@ -262,7 +262,7 @@ final class TasksTitleDraftState: ObservableObject {
 /// (the shell keeps it in `TasksPageState`), so switching pages keeps what
 /// was typed, selected and expanded.
 @MainActor
-final class TasksPageModel: ObservableObject {
+final class TasksPageModel: ObservableObject, StoredListInputOwner {
     /// Declared here, so a `@Published` on this class sends nothing: every published value is `@StoredThenSent`.
     let objectWillChange = ObservableObjectPublisher()
     private static let live = NSHashTable<TasksPageModel>.weakObjects()
@@ -351,7 +351,7 @@ final class TasksPageModel: ObservableObject {
     /// The row a Shift-extension grows from (readable for the tests).
     private(set) var selectionAnchor: UUID?
     /// Rows whose quick look is open (remembered per row for the session).
-    @StoredThenSent private(set) var expanded: Set<UUID> = [] {
+    @StoredThenSent(listInput: true) private(set) var expanded: Set<UUID> = [] {
         didSet { if expanded != oldValue { rowStatesChanged(expanded.symmetricDifference(oldValue), runs: true) } }
     }
     @StoredThenSent private(set) var editingTitleID: UUID? {
@@ -467,12 +467,17 @@ final class TasksPageModel: ObservableObject {
     private var rowStatesBuild: [TasksTab: UInt64] = [:]
     /// A row-state sync is queued (`queueRowStateSync`).
     private var rowStateSyncQueued = false
+    /// Done log loads running (one calls another): the sync waits for the
+    /// outermost to end.
+    private var doneLogLoadDepth = 0
     /// `syncRowStates` is running: the lists it builds queue nothing.
     private var rowStateSyncing = false
     #if DEBUG
     /// Tabs a drawn cell read while their states were behind their list:
     /// the catch-up that follows came a frame late.
-    private var rowStatesDrawnBehind: Set<TasksTab> = []
+    private var rowStatesDrawnBehind: [TasksTab: String] = [:]
+    /// The inputs the last build of each list was for.
+    private var rowListBuildReason: [TasksTab: String] = [:]
     #endif
     #if DEBUG
     /// The state each mounted cell holds (the oracle's second check).
@@ -498,7 +503,7 @@ final class TasksPageModel: ObservableObject {
     }
     /// Finished rows held where they were for about a second, with the
     /// list and index they held (spec: "stays in place, then slides").
-    @StoredThenSent private(set) var held: [UUID: HeldPlace] = [:]
+    @StoredThenSent(listInput: true) private(set) var held: [UUID: HeldPlace] = [:]
     /// A row can acknowledge a press before its family transaction runs.
     /// Retain the intent until that transaction has settled, including failure.
     private var completingAfterAcknowledgement: [(id: UUID, settled: (CommandOutcome) -> Void)] = []
@@ -508,7 +513,7 @@ final class TasksPageModel: ObservableObject {
     private var acknowledgedRows: [UUID: TaskItem] = [:]
     private var acknowledgedDeleted: Set<UUID> = []
     private var acknowledgedCreated: [TaskItem] = []
-    @StoredThenSent private(set) var acknowledgementRevision: UInt64 = 0
+    @StoredThenSent(listInput: true) private(set) var acknowledgementRevision: UInt64 = 0
     private var acknowledgedTaskCommand: (() -> Bool)?
     /// Includes failures from commands that reenter settlement to preserve Undo order.
     private var acknowledgementFailures: UInt64 = 0
@@ -533,18 +538,18 @@ final class TasksPageModel: ObservableObject {
 
     /// Whether Now's "Completed today" shows its rows (remembered for the
     /// session: the model lives as long as the panel).
-    @StoredThenSent var completedTodayExpanded = false
+    @StoredThenSent(listInput: true) var completedTodayExpanded = false
     /// A row is being dragged on Now (Adaptive picks, "Drag a task into
     /// another day"): Today and Tomorrow show as empty headers to drop
     /// under. Set when the drag lifts and cleared when it ends.
-    @StoredThenSent var dayDragLive = false
+    @StoredThenSent(listInput: true) var dayDragLive = false
     /// Today's next event (`TasksNextEventFeed`), shown at the top of Now's
     /// Today; nil without Calendar access, with the switch off, or with no
     /// event still ahead today.
-    @StoredThenSent var nextEvent: TasksNextEvent?
+    @StoredThenSent(listInput: true) var nextEvent: TasksNextEvent? = nil
     /// The date groups folded, per page (the owner's panel design: a
     /// header's click folds or unfolds its group).
-    @StoredThenSent private(set) var foldedGroups: [TasksTab: Set<String>] = [:]
+    @StoredThenSent(listInput: true) private(set) var foldedGroups: [TasksTab: Set<String>] = [:]
 
     func folded(on tab: TasksTab) -> Set<String> { foldedGroups[tab] ?? [] }
 
@@ -667,14 +672,14 @@ final class TasksPageModel: ObservableObject {
     }
     /// Now's and Later's Find, per page (follow-up part 2, item 6; Done's
     /// is `doneSearch`). Read through `searchQuery(for:)`.
-    @StoredThenSent var listSearch: [TasksTab: String] = [:]
+    @StoredThenSent(listInput: true) var listSearch: [TasksTab: String] = [:]
     /// Now's and Later's View Options, per page (item 6); a page with the
     /// default view has none. Read through `viewOptions(for:)`.
-    @StoredThenSent var viewOptionsByTab: [TasksTab: TasksViewOptions] = [:]
+    @StoredThenSent(listInput: true) var viewOptionsByTab: [TasksTab: TasksViewOptions] = [:]
     /// The tags picked in the tag bar (owner, 2026-10-28; several since
     /// Accepted 2026-11-13, 2B), shared by Now, Backlog and Done (T6), for
     /// the app's session (not remembered across launches). None is All.
-    @StoredThenSent var tagPicks: TagPicks = .none {
+    @StoredThenSent(listInput: true) var tagPicks: TagPicks = .none {
         // Done draws from its own results (T6). A shared tag change while
         // Now or Later is active must not wake the retained offscreen Done
         // list; opening Done reads the current tags and rebuilds its cache.
@@ -762,6 +767,9 @@ final class TasksPageModel: ObservableObject {
             NotificationCenter.default.publisher(for: $0)
         }).sink { [weak self] notification in
             DispatchQueue.main.async { [weak self] in
+                // The day, the clock or the calendar moved: the drawn rows
+                // catch up before the send, as a list input's do.
+                self?.syncRowStates()
                 self?.objectWillChange.send()
                 self?.cellUpdates.objectWillChange.send()
                 self?.dateEnvironmentDidPublish?(notification)
@@ -813,6 +821,7 @@ final class TasksPageModel: ObservableObject {
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.noteOwnersRevision &+= 1
+                self.syncRowStates()
                 self.objectWillChange.send()
             }
             .store(in: &cancellables)
@@ -904,6 +913,21 @@ final class TasksPageModel: ObservableObject {
         let nextEvent: TasksNextEvent?
         /// A row is being dragged on Now: Today and Tomorrow show.
         let dayDrag: Bool
+
+        #if DEBUG
+        /// The inputs that differ (the late catch-up's report).
+        func changes(from old: RowsKey) -> String {
+            let fields: [(String, Bool)] = [
+                ("revision", revision != old.revision), ("acknowledgement", acknowledgementRevision != old.acknowledgementRevision),
+                ("noteOwners", noteOwners != old.noteOwners), ("held", held != old.held), ("expanded", expanded != old.expanded),
+                ("completedToday", completedExpanded != old.completedExpanded), ("today", today != old.today),
+                ("dateEnvironment", dateEnvironment != old.dateEnvironment), ("view", view != old.view),
+                ("search", search != old.search), ("tag", tag != old.tag), ("folded", folded != old.folded),
+                ("nextEvent", nextEvent != old.nextEvent), ("dayDrag", dayDrag != old.dayDrag)
+            ]
+            return fields.filter(\.1).map(\.0).joined(separator: "+")
+        }
+        #endif
 
         /// Everything but the store's data and the holds is the same.
         func sameList(as other: RowsKey) -> Bool {
@@ -1150,6 +1174,9 @@ final class TasksPageModel: ObservableObject {
                 IdleLatencyTrace.count("task_rows_cache_hit", 1)
                 return cached
             }
+            #if DEBUG
+            rowListBuildReason[tab] = key.changes(from: cached.key)
+            #endif
             if let restated = restated(cached, to: key) {
                 IdleLatencyTrace.count("task_rows_restated", 1)
                 #if DEBUG
@@ -1170,6 +1197,7 @@ final class TasksPageModel: ObservableObject {
         }
         IdleLatencyTrace.count("task_rows_cache_miss", 1)
         #if DEBUG
+        if rowsCache[tab] == nil { rowListBuildReason[tab] = "cache dropped" }
         rowsCacheMissCount[tab, default: 0] += 1
         #endif
         return keep(builtRows(tab, key: key), for: tab)
@@ -1520,6 +1548,17 @@ final class TasksPageModel: ObservableObject {
             let folded = key.folded.contains(day.key)
             return TasksDoneDay(id: day.id, title: day.title, rows: folded ? [] : day.rows, total: day.rows.count, folded: folded)
         }
+        #if DEBUG
+        if let old = doneCache?.key {
+            let fields: [(String, Bool)] = [("revision", key.revision != old.revision), ("loaded", key.loaded != old.loaded),
+                                            ("search", key.search != old.search), ("tag", key.tag != old.tag),
+                                            ("today", key.today != old.today), ("dateEnvironment", key.dateEnvironment != old.dateEnvironment),
+                                            ("folded", key.folded != old.folded)]
+            rowListBuildReason[.done] = fields.filter(\.1).map(\.0).joined(separator: "+")
+        } else {
+            rowListBuildReason[.done] = "first build"
+        }
+        #endif
         doneCache = (key, days)
         rowListBuilt(.done)
         return days
@@ -1575,6 +1614,7 @@ final class TasksPageModel: ObservableObject {
         guard !filterStay.isEmpty else { return }
         for tab in filterStay.keys { rowsCache[tab] = nil }
         filterStay = [:]
+        syncRowStates()
         objectWillChange.send()
     }
 
@@ -1651,6 +1691,11 @@ final class TasksPageModel: ObservableObject {
     /// Loads the Done log's first page for the current search, if the store
     /// or the search changed since.
     func loadDoneLogIfNeeded() {
+        // Run from `onAppear`, `onChange` and `.task` (TasksDonePage), so
+        // inside a commit that lays Done out again before a queued sync:
+        // Done's rows catch up as the outermost load ends, its families set.
+        doneLogLoadDepth += 1
+        defer { doneLogLoadDepth -= 1; if doneLogLoadDepth == 0 { syncQueuedRowStates() } }
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let tag = tagPicks
         let same = doneLogQuery == query && doneLogTag == tag
@@ -1850,6 +1895,9 @@ final class TasksPageModel: ObservableObject {
     /// walks canonical matching IDs, so duplicate replicas never stop it.
     /// A failed read keeps what loaded and stops until Retry.
     func loadMoreDoneLog(limit: Int = doneLogPageSize) {
+        // As `loadDoneLogIfNeeded`.
+        doneLogLoadDepth += 1
+        defer { doneLogLoadDepth -= 1; if doneLogLoadDepth == 0 { syncQueuedRowStates() } }
         guard doneLogHasMore, doneLogFailure == nil else { return }
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         if doneLogQuery != query || doneLogTag != tagPicks { loadDoneLogIfNeeded(); return }
@@ -1943,7 +1991,7 @@ final class TasksPageModel: ObservableObject {
     /// (`resetForReveal`).
     /// The tasks with a live note of their own (Phase 3): their rows show
     /// the note glyph, and deleting one says the note is kept (§ 2.7.1).
-    @StoredThenSent private(set) var noteOwners: Set<UUID> = []
+    @StoredThenSent(listInput: true) private(set) var noteOwners: Set<UUID> = []
     private(set) var noteOwnersRevision: UInt64 = 0
 
     private var noteOwnersObservation: AnyCancellable?
@@ -1954,8 +2002,9 @@ final class TasksPageModel: ObservableObject {
 
     func setNoteOwners(_ owners: Set<UUID>) {
         guard owners != noteOwners else { return }
-        noteOwners = owners
+        // The revision first: the set brings the rows up, then sends.
         noteOwnersRevision &+= 1
+        noteOwners = owners
     }
 
     /// Back from a task's page: the anchor row takes the keyboard again
@@ -2063,6 +2112,10 @@ final class TasksPageModel: ObservableObject {
             rowFailure = nil
             rowRetry = nil
         }
+        // A row command's funnel (PR 48 round 3): its change reaches the
+        // drawn rows now, once per action. A drop runs inside the gesture's
+        // own commit, which lays the list out again before any queued sync.
+        syncQueuedRowStates()
         return outcome
     }
 
@@ -3856,6 +3909,12 @@ extension TasksPageModel {
         return tabs
     }
 
+    /// A list input (`@StoredThenSent(listInput: true)`) was stored: the
+    /// drawn rows catch up before its send, which can flush a graph whose
+    /// bodies read the lists (TAB-STALL; a gesture's or an `onAppear`'s
+    /// change, made inside a commit, renders before a queued sync runs).
+    func listInputWillBeSent() { syncRowStates() }
+
     /// Outside any view update: each drawn tab's list is brought up to date
     /// (built only if what it is built from changed, as the next frame's
     /// read would build it), then every tab whose list was built since its
@@ -3876,7 +3935,10 @@ extension TasksPageModel {
             guard rowStatesBuild[tab] != built else { continue }
             rowStatesBuild[tab] = built
             #if DEBUG
-            if rowStatesDrawnBehind.remove(tab) != nil { TasksRowStateCounts.lateCatchUps += 1}
+            if let route = rowStatesDrawnBehind.removeValue(forKey: tab) {
+                TasksRowStateCounts.lateCatchUps += 1
+                TasksRowStateCounts.lateRoutes.append("\(tab): \(route)")
+            }
             #endif
             rowStatesListed(tab)
         }
@@ -3887,8 +3949,9 @@ extension TasksPageModel {
     /// its list, this frame drew them late (`TasksRowStateCounts.lateCatchUps`
     /// counts the catch-up that follows).
     func noteRowStateRead(tab: TasksTab, drawn: Bool) {
-        guard drawn, let applied = rowStatesBuild[tab], applied != rowListBuilds[tab, default: 0] else { return }
-        rowStatesDrawnBehind.insert(tab)
+        guard drawn, let applied = rowStatesBuild[tab], applied != rowListBuilds[tab, default: 0],
+              rowStatesDrawnBehind[tab] == nil else { return }
+        rowStatesDrawnBehind[tab] = rowListBuildReason[tab] ?? "unknown"
     }
     #endif
 
@@ -4057,6 +4120,13 @@ extension TasksPageModel {
 /// `objectWillChange` (as `TasksPageModel` does) gets nothing from
 /// `@Published`, which then stores and sends nothing (T7, pr41-fable): every
 /// published value of such a class is `@StoredThenSent`, or sent by hand.
+/// An owner with values marked `@StoredThenSent(listInput: true)`.
+@MainActor
+protocol StoredListInputOwner: AnyObject {
+    /// A list input was stored and is about to be sent.
+    func listInputWillBeSent()
+}
+
 @MainActor
 @propertyWrapper
 struct StoredThenSent<Value> {
@@ -4067,9 +4137,18 @@ struct StoredThenSent<Value> {
     }
 
     private let box: Box
+    /// A value the owner's row lists are built from (`listInput: true`):
+    /// stored, then the owner's dependents catch up, then sent.
+    private let listInput: Bool
 
     init(wrappedValue: Value) {
         box = Box(wrappedValue)
+        listInput = false
+    }
+
+    init(wrappedValue: Value, listInput: Bool) {
+        box = Box(wrappedValue)
+        self.listInput = listInput
     }
 
     @available(*, unavailable, message: "@StoredThenSent is for ObservableObject classes only")
@@ -4092,8 +4171,12 @@ struct StoredThenSent<Value> {
     ) -> Value where Owner.ObjectWillChangePublisher == ObservableObjectPublisher {
         get { owner[keyPath: storage].box.value }
         set {
-            let box = owner[keyPath: storage].box
+            let wrapper = owner[keyPath: storage]
+            let box = wrapper.box
             box.value = newValue
+            // A send can flush a graph whose bodies read the new value's
+            // lists (TAB-STALL): they are brought up before it.
+            if wrapper.listInput { (owner as? StoredListInputOwner)?.listInputWillBeSent() }
             owner.objectWillChange.send()
             box.changes.send(newValue)
         }

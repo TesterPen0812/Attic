@@ -561,6 +561,77 @@ final class TasksTabHostTests: XCTestCase {
                        "a row deleted while Later was not drawn is not drawn in Later's first frame back")
     }
 
+    /// PR 48 round 3, the family through the send (RULES §3 lesson 4): each
+    /// value a list is built from is set right after a pending transaction
+    /// (a plain selection change), the recipe
+    /// `testReleasingAHeldRowNeverReadsItHeldInsideTheSend` uses for `held`.
+    /// A flush inside the send runs the pager and the page, which read the
+    /// lists: the drawn rows are up to them already. Done's inputs come
+    /// through a drawn Done page. The tear-down holds both row-state counts
+    /// at zero; each step is also checked on its own, by name.
+    func testEveryListInputSentAfterAPendingChangeDrawsItsRowsOnTime() throws {
+        try requireKeyWindowTests()
+        var services = TasksPageServices()
+        services.doneHold = .seconds(3_600)
+        services.acknowledgementDelay = .seconds(3_600)
+        let hosted = try Hosted(height: 520, services: services)
+        defer { hosted.close() }
+        hosted.spin(0.3)
+        let model = hosted.model
+        let ids = model.rows(for: .now).filter { $0.status != .done }.map(\.id)
+        XCTAssertGreaterThan(ids.count, 3)
+        var turn = 0
+        func step(_ name: String, _ change: () throws -> Void) rethrows {
+            TasksRowStateCounts.reset()
+            turn += 1
+            if turn.isMultiple(of: 2) { model.selectOnly(ids[0]) } else { model.clearSelection() }
+            try change()
+            hosted.spin(0.3)
+            let writes = TasksRowStateCounts.writesDuringListRead, late = TasksRowStateCounts.lateCatchUps
+            print("FAMILY_SEND_\(name) writes=\(writes) late=\(late)")
+            XCTAssertEqual(writes, 0, "\(name): a row state was written during a list read")
+            XCTAssertEqual(late, 0, "\(name): the drawn rows caught up a frame late")
+            XCTAssertEqual(model.rowStateMismatches(), [], "\(name): the states agree with the model")
+        }
+        step("held") { model.completeAcknowledged(ids[2]) { _ in } }
+        step("acknowledgement") { _ = model.settlePendingCompletionAcknowledgements(through: ids[2]) }
+        step("held_release") { model.releaseHold(ids[2]) }
+        step("note_owners") { model.setNoteOwners([ids[0]]) }
+        step("expanded") { model.setExpanded(ids[1], true) }
+        step("expanded_closed") { model.setExpanded(ids[1], false) }
+        step("completed_today") { model.completedTodayExpanded = true }
+        step("view_options") { model.setViewOptions(TasksViewOptions(sort: .dueDate), for: .now) }
+        step("view_options_cleared") { model.setViewOptions(TasksViewOptions(), for: .now) }
+        step("search") { model.listSearch[.now] = "a" }
+        step("search_cleared") { model.listSearch[.now] = nil }
+        step("tag_pick") { model.tagPicks = TagPicks(["round3"]) }
+        step("tag_pick_cleared") { model.tagPicks = .none }
+        if let group = model.rows(for: .now).lazy.compactMap({ model.groupKey(of: $0.id, on: .now) }).first {
+            step("folded") { model.foldAllGroups([group], folded: true, on: .now) }
+            step("unfolded") { model.foldAllGroups([group], folded: false, on: .now) }
+        } else {
+            XCTFail("the demo has a date group to fold")
+        }
+        step("next_event") {
+            let start = Date().addingTimeInterval(3_600)
+            let event = CalendarEvent(id: "round3", title: "Stand-up", start: start, end: start.addingTimeInterval(1_800),
+                                      isAllDay: false, location: nil, calendarTitle: "Work",
+                                      colour: CalendarEventColour(red: 0.2, green: 0.4, blue: 0.8))
+            model.nextEvent = TasksNextEvent(event, calendar: model.services.calendar(), locale: model.services.locale)
+        }
+        step("next_event_cleared") { model.nextEvent = nil }
+        step("day_drag") { model.dayDragLive = true }
+        step("day_drag_ended") { model.dayDragLive = false }
+        hosted.go(to: .done)
+        XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0, "Done's first frame is on time")
+        step("done_search") { model.doneSearch = "a" }
+        step("done_search_cleared") { model.doneSearch = "" }
+        step("done_load_more") { model.loadMoreDoneLog() }
+        let done = try XCTUnwrap(model.doneDays().flatMap(\.rows).first?.id, "Done lists a row")
+        step("done_store_revision") { model.setStatus(.todo, for: [done]) }
+        hosted.go(to: .now)
+    }
+
     func testDoneIsRightInItsFirstFrameBackAfterARowIsDeletedFromNow() throws {
         let hosted = try warmed(laterRows: 4, followsWindow: true)
         defer { hosted.close() }
