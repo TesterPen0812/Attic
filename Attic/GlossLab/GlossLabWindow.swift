@@ -219,7 +219,7 @@ struct GlossLabView: View {
                     }
                     .pickerStyle(.segmented)
                     Toggle("One glass container", isOn: $lab.clearBandContainer)
-                    Text("Apple's Clear and Regular glass only. Glass on Glass surfaces; the panel's own fill still lies over both (use 1 to bare the rim).")
+                    Text("Apple's Clear and Regular glass only. Glass on Glass surfaces; the panel's own fill still lies over both (use 1 to bare the rim). With 12 on, the whole body is Clear and this band draws nothing.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -291,6 +291,14 @@ struct GlossLabView: View {
                     slider("Amount", $lab.neutralGlassAmount, 0...100, unit: " %")
                     Toggle("Controls too", isOn: $lab.neutralControls)
                     Text("What shows through the glass keeps its light and shade and loses its colour. Panel and island, Glass surface only; the Tint and our own colours stay.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                toggle("12 · Clear glass body", $lab.clearBody) {
+                    slider("Light: white fill", $lab.clearBodyFillLight, 0...80, unit: " %")
+                    slider("Dark: black fill", $lab.clearBodyFillDark, 0...80, unit: " %")
+                    Text("Apple's Clear glass over the whole body, with one plain fill for the text. More see-through: darker than today over dark backdrops, brighter over light ones. Try it with 11. Panel and island, Glass surface only.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

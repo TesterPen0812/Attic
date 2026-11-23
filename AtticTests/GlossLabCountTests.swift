@@ -91,6 +91,8 @@ final class GlossLabCountTests: XCTestCase {
             ("11 neutral glass", { $0.neutralGlass = true }),
             ("11 neutral glass, controls too", { $0.neutralGlass = true; $0.neutralControls = true }),
             ("11 neutral glass with 1", { $0.neutralGlass = true; $0.rimFade = true }),
+            ("12 clear body", { $0.clearBody = true }),
+            ("12 clear body with 1 and 11", { $0.clearBody = true; $0.rimFade = true; $0.neutralGlass = true }),
         ]
         for (name, configure) in switches {
             let count = oneResize(configure)
@@ -149,6 +151,7 @@ final class GlossLabCountTests: XCTestCase {
             ("9 moving light", \.movingLight, { GlossLabCounters.rimLayer }),
             ("11 neutral glass", \.neutralGlass, { GlossLabCounters.stageSurface }),
             ("11 controls too", \.neutralControls, { GlossLabCounters.controlEdgeLight }),
+            ("12 clear body", \.clearBody, { GlossLabCounters.stageSurface }),
         ]
         var lines: [String] = []
         for (name, key, read) in cases {
@@ -470,6 +473,33 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(lab.neutralGlassAmount, fresh.neutralGlassAmount)
         XCTAssertEqual(fresh.neutralGlassAmount, 60)
         XCTAssertFalse(fresh.neutralGlass || fresh.neutralControls, "11 starts off")
+    }
+
+    /// Idea 12's switch and fills load, are written down by Copy values,
+    /// and All off and Reset sliders reach them. The fill follows the mode.
+    func testClearBodyValuesLoadCopyAndReset() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "GlossLab.clearBody")
+        defaults.set(30.0, forKey: "GlossLab.clearBodyFillLight")
+        defaults.set(70.0, forKey: "GlossLab.clearBodyFillDark")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.clearBody)
+        XCTAssertEqual(GlossClearBody.fill(lab, dark: false), 0.30)
+        XCTAssertEqual(GlossClearBody.fill(lab, dark: true), 0.70)
+        let text = lab.valuesText(app: Self.app(mode: "Light"))
+        XCTAssertTrue(text.contains("12 Clear glass body: on, Light white fill 30.00 %, Dark black fill 70.00 %"), text)
+        lab.allOff()
+        XCTAssertFalse(lab.clearBody)
+        XCTAssertNil(GlossClearBody.fill(lab, dark: false), "off keeps Regular glass and draws no fill")
+        XCTAssertNil(GlossClearBody.fill(lab, dark: true))
+        lab.resetSliders()
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertEqual(lab.clearBodyFillLight, fresh.clearBodyFillLight)
+        XCTAssertEqual(lab.clearBodyFillDark, fresh.clearBodyFillDark)
+        XCTAssertEqual(fresh.clearBodyFillLight, 45); XCTAssertEqual(fresh.clearBodyFillDark, 45)
+        XCTAssertFalse(fresh.clearBody, "12 starts off")
     }
 
     /// Pass 3's switch and values load, are written down by Copy values,

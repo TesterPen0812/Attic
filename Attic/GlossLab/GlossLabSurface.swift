@@ -110,6 +110,36 @@ struct GlossNeutralGlass<S: Shape>: View {
     }
 }
 
+/// 12. Clear glass body: the one plain fill over Apple's Clear glass, in
+/// the surface's shape: white in Light, black in Dark. It keeps text
+/// readable; the glass under it lets more of the backdrop through than
+/// Regular does. The rim fade (idea 1) leaves the rim bare Clear glass.
+struct GlossClearBodyFill<S: Shape>: View {
+    let shape: S
+    let dark: Bool
+    /// The fill's opacity, 0 to 1.
+    let opacity: Double
+    var rimFade: GlossRimFadeMask?
+
+    var body: some View {
+        shape.fill(Color(.sRGB, white: dark ? 0 : 1, opacity: opacity))
+            .glossLabRimFade(rimFade)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+/// 12: the fill's opacity (0 to 1) for a surface in this mode, or nil when
+/// 12 is off. Non-nil also means "draw Clear glass". It reads the sliders
+/// only when 12 is on.
+@MainActor
+enum GlossClearBody {
+    static func fill(_ lab: GlossLab, dark: Bool) -> Double? {
+        guard lab.clearBody else { return nil }
+        return (dark ? lab.clearBodyFillDark : lab.clearBodyFillLight) / 100
+    }
+}
+
 /// 5. An additive white strongest at the top and gone by two thirds of the
 /// height, and a soft shade over the bottom third. With `keepsOut`, both
 /// leave the top and bottom control bands, as the lift does (Accepted

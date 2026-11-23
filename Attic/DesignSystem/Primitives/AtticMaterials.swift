@@ -843,10 +843,23 @@ struct AtticSurfaceBackground<S: Shape>: View {
     /// Gloss lab idea 11: drain the colour of what shows through the
     /// native glass (amount 0 to 1); nil draws nothing.
     var glossNeutral: Double?
+    /// Gloss lab idea 12: the body is Apple's Clear glass with one plain
+    /// fill of this opacity (0 to 1) over it; nil keeps Regular glass.
+    var glossClearBody: Double?
     #endif
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticDesign) private var design
+    #if ATTIC_GLOSS_LAB
+
+    /// Gloss lab idea 12, resolved for this surface: live native Glass
+    /// only. The island (the one surface that passes `nativeGlassSize`)
+    /// wears the panel's surface, so it takes 12 too.
+    private var glossClearBodyFill: Double? {
+        guard model.kind == .glass, capture == nil, !isChrome else { return nil }
+        return glossClearBody ?? (nativeGlassSize != nil ? GlossClearBody.fill(.shared, dark: model.appearance == .dark) : nil)
+    }
+    #endif
 
     var body: some View {
         ZStack {
@@ -860,6 +873,11 @@ struct AtticSurfaceBackground<S: Shape>: View {
                 if let amount = glossNeutral ?? (nativeGlassSize != nil ? GlossNeutralGlass<S>.amount(.shared) : nil),
                    model.kind == .glass, capture == nil, !isChrome {
                     GlossNeutralGlass(shape: shape, amount: amount, rimFade: glossRimFade)
+                }
+                // Gloss lab idea 12: the one plain fill over the Clear glass,
+                // over 11, under the lift, the foundation and the Tint.
+                if let fill = glossClearBodyFill {
+                    GlossClearBodyFill(shape: shape, dark: model.appearance == .dark, opacity: fill, rimFade: glossRimFade)
                 }
                 #endif
                 // "Brighten glass over dark backgrounds" (owner, 2026-11-11):
@@ -944,17 +962,21 @@ struct AtticSurfaceBackground<S: Shape>: View {
         } else if model.kind == .glass {
             Group {
                 #if ATTIC_GLOSS_LAB
-                if nativeGlassSize == nil, let glossClearBand {
+                // Gloss lab idea 12: Apple's Clear glass over the whole body.
+                // It wins over idea 2's band, which is Clear only at the rim.
+                let clearBody = glossClearBodyFill != nil
+                let glass: Glass = clearBody ? .clear : .regular
+                if nativeGlassSize == nil, !clearBody, let glossClearBand {
                     glossClearBand
                 } else if let nativeGlassSize {
                     GeometryReader { proxy in
-                        shape.fill(Color.clear).glassEffect(.regular, in: shape)
+                        shape.fill(Color.clear).glassEffect(glass, in: shape)
                             .frame(width: nativeGlassSize.width, height: nativeGlassSize.height)
                             .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
                     }
                     .clipShape(shape)
                 } else {
-                    shape.fill(Color.clear).glassEffect(.regular, in: shape)
+                    shape.fill(Color.clear).glassEffect(glass, in: shape)
                 }
                 #else
                 if let nativeGlassSize {
@@ -1164,12 +1186,14 @@ struct AtticPanelStageSurface: View {
             ? GlossRimFadeMask(cornerSize: cornerSize, exponent: AtticStyle.panelSquircleExponent, width: lab.rimFadeWidth)
             : nil
         let neutral = glossLabPanel ? GlossNeutralGlass<Squircle>.amount(lab) : nil
+        let clearBody = glossLabPanel ? GlossClearBody.fill(lab, dark: design.tokens.panel.appearance == .dark) : nil
         let clearBand = glossLabPanel && lab.clearBand
             ? GlossClearBandGlass(cornerSize: cornerSize, width: CGFloat(lab.clearBandWidth), method: lab.clearBandMethod,
                                   sharesContainer: lab.clearBandContainer)
             : nil
         AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
-                               liftLeavesControlBands: true, glossRimFade: rimFade, glossClearBand: clearBand, glossNeutral: neutral)
+                               liftLeavesControlBands: true, glossRimFade: rimFade, glossClearBand: clearBand, glossNeutral: neutral,
+                               glossClearBody: clearBody)
         #else
         AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent),
                                liftLeavesControlBands: true)
