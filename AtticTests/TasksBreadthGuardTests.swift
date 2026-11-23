@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -220,6 +221,140 @@ final class TasksBreadthGuardTests: XCTestCase {
         let next = try XCTUnwrap(hosted.model.keyboardFocus?.id, "Tab reached a row")
         XCTAssertEqual(tab, [c: 1, next: 1], "Tab: the old and the new row, once each")
         XCTAssertTrue(drawn(next).map(\.isFocused) == true, "the ring moved with Tab")
+    }
+
+    // MARK: - A click on the only selected row (STAY-CLICK, 23 Nov)
+
+    /// A click on the row that already is the whole selection changes
+    /// nothing, so the model sends nothing and no page body or cell runs
+    /// (the trunk sent: `click` stored `[id]` again and `StoredThenSent`
+    /// sends on every store, which ran `TasksPage.body` and re-checked the
+    /// drawn tab). The click still moves the anchor a Shift-click grows
+    /// from. A move, a ⌘-click and a ⇧-click still change and send; a
+    /// ⇧-click that draws the same range is a no-change click too.
+    func testAClickOnTheOnlySelectedRowSendsNothingWhileMoveShiftAndCommandClicksStillDo() throws {
+        let store = try makeStore(open: 12)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        let ids = model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(drawnRows(pointer, ids).count, 6, "the hosted page drew too few rows for the count to mean anything")
+        var sends = 0
+        let sink = model.objectWillChange.sink { _ in sends += 1 }
+        defer { sink.cancel() }
+        func turn(_ name: String, _ action: () -> Void) -> (sends: Int, page: Int, cells: [UUID: Int]) {
+            let sent = sends, pageRuns = TasksPageRenderProbe.bodyRuns, cells = TasksCellBodyCounts.evaluations
+            action()
+            settle(hosting)
+            settle(hosting)
+            let ran = TasksCellBodyCounts.evaluations.reduce(into: [UUID: Int]()) {
+                let added = $1.value - cells[$1.key, default: 0]
+                if added > 0 { $0[$1.key.id, default: 0] += added }
+            }
+            let result = (sends - sent, TasksPageRenderProbe.bodyRuns - pageRuns, ran)
+            print("STAY_CLICK \(name) sends=\(result.0) page=\(result.1) cells=\(ran.values.reduce(0, +)) cell_rows=\(ran.count)")
+            return result
+        }
+        let a = ids[1], b = ids[3], c = ids[4], d = ids[5]
+
+        let control = turn("control") {}
+        XCTAssertEqual(control.sends, 0, "control: nothing sends with no click")
+        XCTAssertEqual(control.page, 0, "control: no page body runs with no click")
+
+        model.click(a, modifiers: [], visible: ids)
+        settle(hosting); settle(hosting)
+        let move = turn("move") { model.click(b, modifiers: [], visible: ids) }
+        XCTAssertEqual(model.selection, [b], "move: the click selected B")
+        XCTAssertGreaterThan(move.sends, 0, "move: the new selection was sent")
+        XCTAssertNotNil(move.cells[a], "move: A's cell ran to drop its tint")
+        XCTAssertNotNil(move.cells[b], "move: B's cell ran to draw its tint")
+
+        let stay = turn("stay") { model.click(b, modifiers: [], visible: ids) }
+        XCTAssertEqual(model.selection, [b], "stay: B is still the selection")
+        XCTAssertEqual(model.selectionAnchorForTesting, b, "stay: B is the anchor")
+        XCTAssertEqual(stay.sends, 0, "stay: a click on the only selected row sent objectWillChange")
+        XCTAssertEqual(stay.page, 0, "stay: a click on the only selected row ran TasksPage.body")
+        XCTAssertEqual(stay.cells, [:], "stay: a click on the only selected row ran cells")
+
+        // ⌘ adds C, ⌘ takes it away again: B alone is selected, the anchor
+        // on C. A plain click on B changes no selection but moves the anchor
+        // back to B, so a ⇧-click on D then grows from B.
+        let add = turn("command_add") { model.click(c, modifiers: .command, visible: ids) }
+        XCTAssertEqual(model.selection, [b, c], "⌘-click added C")
+        XCTAssertGreaterThan(add.sends, 0, "⌘-click: the grown selection was sent")
+        let remove = turn("command_remove") { model.click(c, modifiers: .command, visible: ids) }
+        XCTAssertEqual(model.selection, [b], "⌘-click took C away")
+        XCTAssertGreaterThan(remove.sends, 0, "⌘-click: the shrunk selection was sent")
+        XCTAssertEqual(model.selectionAnchorForTesting, c)
+        let anchorStay = turn("anchor_stay") { model.click(b, modifiers: [], visible: ids) }
+        XCTAssertEqual(anchorStay.sends, 0, "stay after ⌘: nothing sent")
+        XCTAssertEqual(model.selectionAnchorForTesting, b, "stay after ⌘: the anchor moved back to B")
+        let extend = turn("shift_extend") { model.click(d, modifiers: .shift, visible: ids) }
+        XCTAssertEqual(model.selection, Set(ids[3...5]), "⇧-click grew from B to D")
+        XCTAssertGreaterThan(extend.sends, 0, "⇧-click: the range was sent")
+        XCTAssertNotNil(extend.cells[c], "⇧-click: C's cell ran to draw its tint")
+        let sameRange = turn("shift_same_range") { model.click(d, modifiers: .shift, visible: ids) }
+        XCTAssertEqual(model.selection, Set(ids[3...5]), "⇧-click again: the same range")
+        XCTAssertEqual(sameRange.sends, 0, "⇧-click again: an unchanged range sent objectWillChange")
+        XCTAssertEqual(sameRange.page, 0, "⇧-click again: an unchanged range ran TasksPage.body")
+    }
+
+    /// The same through real clicks in a key window (`rowClicked`: the
+    /// click, then the page's focus): a second click on the row that is
+    /// selected and holds the keyboard sends nothing and runs no page body
+    /// and no cell, and the row still draws its tint and ring.
+    func testARealClickOnTheOnlySelectedRowRunsNoPageBodyAndSendsNothing() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.window.makeKey()
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(ids.count, 4)
+        let a = ids[0], b = ids[1], c = ids[2], d = ids[3]
+        var sends = 0
+        let sink = hosted.model.objectWillChange.sink { _ in sends += 1 }
+        defer { sink.cancel() }
+        try hosted.clickRow(a, tab: .now)
+        hosted.spin(0.3)
+        func turn(_ name: String, _ body: () throws -> Void) rethrows -> (sends: Int, page: Int, cells: [UUID: Int]) {
+            let sent = sends, pageRuns = TasksPageRenderProbe.bodyRuns, base = TasksCellBodyCounts.evaluations
+            try body()
+            hosted.spin(0.3)
+            let ran = Dictionary(uniqueKeysWithValues: TasksCellBodyCounts.evaluations.compactMap { row, count in
+                row.tab == .now && count > base[row, default: 0] ? (row.id, count - base[row, default: 0]) : nil
+            })
+            let result = (sends - sent, TasksPageRenderProbe.bodyRuns - pageRuns, ran)
+            print("STAY_CLICK_KEY \(name) sends=\(result.0) page=\(result.1) rows=\(ran.count) runs=\(ran.values.reduce(0, +))")
+            return result
+        }
+        func drawn(_ id: UUID) -> (isSelected: Bool, isFocused: Bool)? { TasksCellBodyCounts.leafStates[TasksRowID(tab: .now, id: id)] }
+
+        let control = turn("control") {}
+        XCTAssertEqual(control.sends, 0, "control: nothing sends with no click")
+        XCTAssertEqual(control.page, 0, "control: no page body runs with no click")
+
+        let move = try turn("move") { try hosted.clickRow(b, tab: .now) }
+        XCTAssertEqual(hosted.model.selection, [b], "move: the click selected B")
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, b, "move: B holds the keyboard")
+        XCTAssertGreaterThan(move.sends, 0, "move: the new selection was sent")
+        XCTAssertNotNil(move.cells[a], "move: A ran")
+        XCTAssertNotNil(move.cells[b], "move: B ran")
+
+        let stay = try turn("stay") { try hosted.clickRow(b, tab: .now) }
+        XCTAssertEqual(hosted.model.selection, [b], "stay: B is still the selection")
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, b, "stay: B still holds the keyboard")
+        XCTAssertEqual(hosted.model.selectionAnchorForTesting, b, "stay: B is the anchor")
+        XCTAssertEqual(stay.sends, 0, "stay: a real click on the only selected row sent objectWillChange")
+        XCTAssertEqual(stay.page, 0, "stay: a real click on the only selected row ran TasksPage.body")
+        XCTAssertEqual(stay.cells, [:], "stay: a real click on the only selected row ran cells")
+        XCTAssertTrue(drawn(b).map { $0.isSelected && $0.isFocused } == true, "stay: B still draws the tint and the ring")
+
+        let add = try turn("command") { try hosted.clickRow(c, tab: .now, modifiers: .command) }
+        XCTAssertEqual(hosted.model.selection, [b, c], "⌘-click added C")
+        XCTAssertNotNil(add.cells[c], "⌘-click: C ran")
+        let extend = try turn("shift") { try hosted.clickRow(d, tab: .now, modifiers: .shift) }
+        XCTAssertEqual(hosted.model.selection, [c, d], "⇧-click grew from the ⌘-clicked C to D")
+        XCTAssertNotNil(extend.cells[d], "⇧-click: D ran")
     }
 
     /// Lead's condition 4: rows of tabs that are not drawn change while
