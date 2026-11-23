@@ -1094,6 +1094,7 @@ final class HiddenPagesCountersTests: XCTestCase {
                   + "rings_kv_on=\(rings.filter(\.keyboardFocusVisible).count) "
                   + "notes_row_bodies=\(notesRows) notes_row_actions=\(actions)")
             XCTAssertEqual(rings.count, 0, "with the mouse, a focus ring holds a focus state (a reader re-checked per click)")
+            XCTAssertGreaterThan(actions, 0, "harness: the hidden Notes library built its rows' •••")
             XCTAssertEqual(notesRows, 0, "a Notes row's body holds the •••'s focus state (a reader re-checked per click)")
 
             // The control: the keyboard drives, and the rings hold their focus state again.

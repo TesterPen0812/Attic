@@ -56,8 +56,9 @@ struct NotesLibraryRow: View {
     @Environment(\.atticForcedState) private var forced
     @Environment(\.atticTagColouring) private var colouring
     @State private var hovered = false
-    @State private var actionsHovered = false
-    @FocusState private var actionsFocused: Bool
+    /// Whether the ••• has the keyboard, as the ••• reports it. Its focus
+    /// state lives in the ••• alone, so the row's body is no focus reader.
+    @State private var actionsFocused = false
     #if DEBUG
     @State private var censusID = UUID()
     #endif
@@ -66,8 +67,7 @@ struct NotesLibraryRow: View {
 
     var body: some View {
         #if DEBUG
-        let _ = AtticFocusReaderCensus.noteNotesRow(censusID)
-        let _ = AtticFocusReaderCensus.noteNotesRowActions(censusID, focused: actionsFocused)
+        let _ = AtticFocusReaderCensus.noteNotesRow(censusID, self)
         #endif
         let tokens = design.tokens
         let hover = forced == .hover || hovered
@@ -163,11 +163,38 @@ struct NotesLibraryRow: View {
     }
 
     private func actionsButton(shown: Bool) -> some View {
+        NotesLibraryRowActionsButton(row: row, anchors: anchors, shown: shown, focused: $actionsFocused,
+                                     onShowActions: onShowActions)
+    }
+}
+
+/// A Notes row's "•••": the one part of the row that holds a focus state
+/// (it shows the ••• while it has the keyboard), reported to the row.
+private struct NotesLibraryRowActionsButton: View {
+    let row: AtticNoteRowModel
+    let anchors: AtticNoteRowAnchors
+    let shown: Bool
+    @Binding var focused: Bool
+    let onShowActions: () -> Void
+
+    @Environment(\.atticDesign) private var design
+    @State private var hovered = false
+    @FocusState private var actionsFocused: Bool
+    #if DEBUG
+    @State private var censusID = UUID()
+    #endif
+
+    private typealias M = NotesLibraryRowMetrics
+
+    var body: some View {
+        #if DEBUG
+        let _ = AtticFocusReaderCensus.noteNotesRowActions(censusID, focused: actionsFocused)
+        #endif
         Button(action: onShowActions) {
             AtticIcon(systemName: "ellipsis", size: AtticNoteMetrics.rowActionsGlyphSize, weight: .medium, ink: .icon)
                 .frame(width: M.actionsWidth, height: M.actionsHeight)
                 .background {
-                    if actionsHovered {
+                    if hovered {
                         AtticHighlight(fill: design.tokens.hover, cornerRadius: M.actionsRadius, run: .single, joinOverlap: 0)
                     }
                 }
@@ -176,9 +203,10 @@ struct NotesLibraryRow: View {
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
         .focused($actionsFocused)
+        .onChange(of: actionsFocused) { _, now in if focused != now { focused = now } }
         .atticOwnFocusRing(.rounded(radius: M.actionsRadius, height: M.actionsHeight))
         .background { AtticNoteRowAnchor(id: row.id, anchors: anchors, isMenuTrigger: shown) }
-        .onHover { actionsHovered = $0 }
+        .onHover { hovered = $0 }
         .opacity(shown ? 1 : 0)
         // ••• fades in and out with the hover, as a task row's does.
         .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: shown)

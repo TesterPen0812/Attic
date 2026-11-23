@@ -171,7 +171,7 @@ enum AtticFocusReaderCensus {
     static var records = false
     /// Ring focus-state holders, by instance.
     static var rings: [UUID: Ring] = [:]
-    /// `NotesLibraryRow` instances whose own body holds a focus state.
+    /// `NotesLibraryRow` instances whose own stored properties hold a focus state.
     static var notesRows: Set<UUID> = []
     /// The Notes rows' ••• buttons that hold their own focus state, with
     /// whether each had the keyboard on its last run.
@@ -182,8 +182,12 @@ enum AtticFocusReaderCensus {
         rings[id] = Ring(keyboardFocusVisible: keyboardFocusVisible, shown: shown, outline: "\(outline)")
     }
 
-    static func noteNotesRow(_ id: UUID) {
-        if records { notesRows.insert(id) }
+    /// Records the row when its own stored properties hold a focus state.
+    static func noteNotesRow(_ id: UUID, _ row: Any) {
+        guard records else { return }
+        if Mirror(reflecting: row).children.contains(where: { "\(type(of: $0.value))".hasPrefix("FocusState<") }) {
+            notesRows.insert(id)
+        }
     }
 
     static func noteNotesRowActions(_ id: UUID, focused: Bool) {
