@@ -892,11 +892,13 @@ final class AtticDesignSystemHostedTests: XCTestCase {
 
     /// A Notes row's •••: the keyboard still reaches it under Full Keyboard
     /// Access, the row learns it has the keyboard, and Space shows the
-    /// note's actions. CI's FKA mode runs it; the Air's preference is left alone.
+    /// note's actions. It runs only in CI's focused Full Keyboard Access job
+    /// (`macos-ci.yml`, `fka`); the unit lane leaves it out, and a local run
+    /// without Full Keyboard Access fails here rather than skip.
     func testANotesRowsActionsTakeTheKeyboardWithFullKeyboardAccess() throws {
         try requireKeyWindowTests()
         guard NSApp.isFullKeyboardAccessEnabled else {
-            throw XCTSkip("Native button Tab traversal requires Full Keyboard Access (CI or owner screen)")
+            return XCTFail("needs Full Keyboard Access: CI's fka job turns it on; the unit lane leaves this test out")
         }
         AtticFocusReaderCensus.reset(); AtticFocusReaderCensus.records = true
         defer { AtticFocusReaderCensus.records = false; AtticFocusReaderCensus.reset() }
