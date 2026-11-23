@@ -612,6 +612,130 @@ final class TasksBreadthGuardTests: XCTestCase {
         check("tab_to_now") { model.select(tab: .now) }
     }
 
+    /// PR 48 round 3 review P1-1: the file-migration sink runs in the
+    /// statuses' willSet. A family's files change status while Tasks draws
+    /// its row (Earlier files added, one removed from the task's note window,
+    /// a family migrated by the launch run): the drawn row shows the stored
+    /// status's files and paperclip count on the next frame, and keeps them
+    /// with nothing else touching the task.
+    func testAFamilysFileStatusReachesItsDrawnRowOnTheNextFrameAndStays() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let filesRoot = FileManager.default.temporaryDirectory.appendingPathComponent("TasksFileStatus-\(UUID().uuidString)")
+        addTeardownBlock {
+            // Migrated originals are read-only by design: make this test's
+            // own folder removable, then remove it.
+            if let files = FileManager.default.enumerator(at: filesRoot, includingPropertiesForKeys: nil) {
+                for case let url as URL in files { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path) }
+            }
+            try? FileManager.default.removeItem(at: filesRoot)
+        }
+        let store = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: filesRoot))
+        let library = AtticLibrary(tasks: store)
+        func files(_ names: [String]) async throws -> [TaskImageReference] {
+            let folder = filesRoot.appendingPathComponent("in-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let urls = try names.map { name -> URL in
+                let url = folder.appendingPathComponent(name)
+                try Data("\(name) \(UUID())".utf8).write(to: url)
+                return url
+            }
+            return try await store.taskImageFiles.importAttachments(urls, existing: [])
+        }
+        func insert(_ title: String, order: Int64, files: [TaskImageReference] = []) throws -> UUID {
+            let context = ModelContext(container)
+            let item = TaskItem(title: title, status: .todo, createdAt: Date(), manualOrder: order)
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            if !files.isEmpty { item.imageReferencesData = try JSONEncoder().encode(files) }
+            context.insert(item)
+            try context.save()
+            store.refresh()
+            return item.id
+        }
+        func addLegacy(_ added: [TaskImageReference], to id: UUID) throws {
+            let context = ModelContext(container)
+            for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == id {
+                row.imageReferencesData = try JSONEncoder().encode(row.attachments + added)
+            }
+            try context.save()
+            store.refresh()
+        }
+        /// The async seed runs on the main actor while the main run loop
+        /// turns (an expectation with a deadline).
+        func run(_ name: String, _ work: @escaping @MainActor () async throws -> Void) {
+            let finished = expectation(description: name)
+            Task { @MainActor in
+                do { try await work() } catch { XCTFail("\(name): \(error)") }
+                finished.fulfill()
+            }
+            wait(for: [finished], timeout: 20)
+        }
+        // A family whose files went into its note at launch, and a family
+        // still on the old path, before Tasks is built.
+        var family = UUID(), legacy = UUID()
+        var added: [TaskImageReference] = []
+        run("seed") {
+            family = try insert("Family with files", order: 9_000_000, files: try await files(["a.txt", "b.txt"]))
+            await store.fileMigration.runAtLaunch(tasks: store, isBusy: { _ in false })
+            legacy = try insert("Family on the old path", order: 8_000_000, files: try await files(["e.txt"]))
+            added = try await files(["c.txt", "d.txt"])
+        }
+        for index in 0..<3 { _ = try insert("Open task \(index)", order: 7_000_000 - Int64(index) * 1_024) }
+        XCTAssertEqual(store.fileMigration.status(of: family).kind, .migrated, "the family's files are in its note")
+        XCTAssertTrue(store.fileMigration.status(of: family).earlier.isEmpty, "and none is left behind")
+        XCTAssertNotEqual(store.fileMigration.status(of: legacy).kind, .migrated, "the second family is still on the old path")
+        XCTAssertEqual(added.count, 2)
+
+        let model = TasksPageModel(library: library, services: TasksPageServices())
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        func check(_ name: String, _ id: UUID, files expected: Int, file: StaticString = #filePath, line: UInt = #line) throws {
+            let task = try XCTUnwrap(store.task(withID: id), name, file: file, line: line)
+            let truth = store.fileMigration.rowFiles(for: task).map(\.id)
+            XCTAssertEqual(truth.count, expected, "\(name): the stored status gives \(expected) row files", file: file, line: line)
+            let listed = try XCTUnwrap(model.rows(for: .now).first { $0.id == id }, "\(name): Now lists the row", file: file, line: line)
+            XCTAssertEqual(listed.model.tileFiles.map(\.id), truth, "\(name): the listed row's files are the stored status's", file: file, line: line)
+            XCTAssertEqual(listed.model.attachments, truth.count, "\(name): the listed row's paperclip count", file: file, line: line)
+            XCTAssertNotNil(pointer.frame(for: TasksRowID(tab: .now, id: id)), "\(name): the row is drawn", file: file, line: line)
+            let drew = try XCTUnwrap(TasksCellBodyCounts.cellStates[TasksRowID(tab: .now, id: id)]?.row.model,
+                                     "\(name): the drawn cell read a state", file: file, line: line)
+            XCTAssertEqual(drew.tileFiles.map(\.id), truth, "\(name): the drawn row's files are the stored status's", file: file, line: line)
+            XCTAssertEqual(drew.attachments, truth.count, "\(name): the drawn row's paperclip count", file: file, line: line)
+        }
+        /// The change, one frame, the check; then two more frames with
+        /// nothing touching the task, and the check again.
+        func step(_ name: String, _ id: UUID, files expected: Int, _ change: () throws -> Void) throws {
+            TasksRowStateCounts.reset()
+            try change()
+            settle(hosting)
+            print("FILESTATUS_\(name) next_frame")
+            try check("\(name), next frame", id, files: expected)
+            settle(hosting)
+            settle(hosting)
+            try check("\(name), two frames on", id, files: expected)
+            print("FILESTATUS_\(name) writes=\(TasksRowStateCounts.writesDuringListRead) late=\(TasksRowStateCounts.lateCatchUps)")
+        }
+        try check("before", family, files: 0)
+        try check("before, old path", legacy, files: 1)
+        // Earlier files reach the migrated family (an old path wrote them).
+        try step("earlier_added", family, files: 2) {
+            try addLegacy(added, to: family)
+            store.fileMigration.refreshAfterLegacyChange(family, tasks: store)
+        }
+        // One is removed from the task's note window (`TaskNotePage`: the
+        // remove, then the status follows).
+        try step("earlier_removed", family, files: 1) {
+            XCTAssertTrue(library.removeTaskAttachment(added[1].id, from: family).isApplied, "the Earlier file is removed")
+            store.fileMigration.refreshAfterLegacyChange(family, tasks: store)
+        }
+        // The launch run moves the second family's file into its note.
+        try step("launch_migrated", legacy, files: 0) {
+            run("launch") { await store.fileMigration.runAtLaunch(tasks: store, isBusy: { _ in false }) }
+            XCTAssertEqual(store.fileMigration.status(of: legacy).kind, .migrated, "the launch run moved its file")
+        }
+        // The same run takes the first family's Earlier file into its note.
+        try check("after the launch run, the first family", family, files: 0)
+    }
+
     /// Astra R-1, Opus R-1: a row due 12 days ahead, then the clock jumps 15
     /// days. The date's text and day stay the same, its tone and whether it
     /// shows change: the row draws the new projection.
