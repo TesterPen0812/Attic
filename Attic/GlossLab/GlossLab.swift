@@ -104,9 +104,11 @@ final class GlossLab {
     /// 11: how much colour is drained, % (0 to 100): the grey fill's opacity.
     var neutralGlassAmount: Double = 60 { didSet { save(neutralGlassAmount, "neutralGlassAmount") } }
     /// 12: the fill over the Clear glass, % (0 to 80): white in Light,
-    /// black in Dark.
-    var clearBodyFillLight: Double = 45 { didSet { save(clearBodyFillLight, "clearBodyFillLight") } }
-    var clearBodyFillDark: Double = 45 { didSet { save(clearBodyFillDark, "clearBodyFillDark") } }
+    /// black in Dark. The start is where the Air's stills come nearest
+    /// the notification banners the owner showed (about half of the
+    /// backdrop comes through); a guess for a first look, not a target.
+    var clearBodyFillLight: Double = 15 { didSet { save(clearBodyFillLight, "clearBodyFillLight") } }
+    var clearBodyFillDark: Double = 15 { didSet { save(clearBodyFillDark, "clearBodyFillDark") } }
 
     // MARK: The lab window's own state
 

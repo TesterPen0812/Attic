@@ -498,7 +498,7 @@ final class GlossLabValuesTests: XCTestCase {
         let fresh = GlossLab(defaults: nil)
         XCTAssertEqual(lab.clearBodyFillLight, fresh.clearBodyFillLight)
         XCTAssertEqual(lab.clearBodyFillDark, fresh.clearBodyFillDark)
-        XCTAssertEqual(fresh.clearBodyFillLight, 45); XCTAssertEqual(fresh.clearBodyFillDark, 45)
+        XCTAssertEqual(fresh.clearBodyFillLight, 15); XCTAssertEqual(fresh.clearBodyFillDark, 15)
         XCTAssertFalse(fresh.clearBody, "12 starts off")
     }
 
