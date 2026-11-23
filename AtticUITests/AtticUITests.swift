@@ -8,6 +8,7 @@ final class AtticUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         if name.contains("testMainPanelIdle") {
             app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
             app.launchEnvironment["ATTIC_UI_TEST_PINNED"] = "1"

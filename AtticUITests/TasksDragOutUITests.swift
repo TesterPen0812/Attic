@@ -20,6 +20,7 @@ final class TasksDragOutUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchArguments += ["--attic-gallery", "--attic-tasks-page", "--attic-drag-no-drop-target"]
         app.launch()
         let deadline = Date().addingTimeInterval(15)

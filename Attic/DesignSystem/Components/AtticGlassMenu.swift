@@ -2408,12 +2408,47 @@ extension View {
     }
 }
 
+#if DEBUG
+/// Test seam: how many times each tagged context-menu modifier's body ran
+/// (a test tags a view's menus with `atticContextMenuCountTag`). Off unless
+/// a test turns it on.
+@MainActor enum AtticContextMenuBodyCounts {
+    static var records = false
+    static var runs: [AnyHashable: Int] = [:]
+
+    static func note(_ tag: AnyHashable?) {
+        guard records, let tag else { return }
+        runs[tag, default: 0] += 1
+    }
+
+    static func reset() { runs = [:] }
+}
+
+private struct AtticContextMenuCountTagKey: EnvironmentKey {
+    static let defaultValue: AnyHashable? = nil
+}
+
+extension EnvironmentValues {
+    /// DEBUG: the tag a context menu's body run is counted under.
+    var atticContextMenuCountTag: AnyHashable? {
+        get { self[AtticContextMenuCountTagKey.self] }
+        set { self[AtticContextMenuCountTagKey.self] = newValue }
+    }
+}
+#endif
+
 private struct AtticContextMenuModifier: ViewModifier {
     let build: () -> [AtticMenuCommand]
     @State private var anchor = AtticMenuAnchor.Holder()
     @Environment(\.atticCapture) private var capture
+    #if DEBUG
+    @Environment(\.atticContextMenuCountTag) private var countTag
+    #endif
 
     func body(content: Content) -> some View {
+        #if DEBUG
+        let _ = AtticContextMenuBodyCounts.note(countTag)
+        #endif
         // `ImageRenderer` captures cannot draw AppKit views: no anchors
         // there (as `.contextMenu` drew nothing).
         if capture != nil {

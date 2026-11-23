@@ -10,6 +10,16 @@ import XCTest
 /// key or the panel's accessibility hit walk.
 @MainActor
 final class TasksTabHostTests: XCTestCase {
+    override func setUp() async throws {
+        try await super.setUp()
+        await MainActor.run { TasksRowStateCounts.reset() }
+    }
+
+    override func tearDown() async throws {
+        await MainActor.run { assertNoRowStateWriteDuringAReadAndNoLateCatchUp() }
+        try await super.tearDown()
+    }
+
     private func hosts(_ hosted: Hosted) -> [KeptContentHostingView] {
         func walk(_ view: NSView) -> [KeptContentHostingView] {
             if let host = view as? KeptContentHostingView { return [host] }
@@ -469,6 +479,162 @@ final class TasksTabHostTests: XCTestCase {
         }
     }
 
+    // PR 48 takeover follow-up: a tab the pager's span draws (a swipe's
+    // neighbour) after a store change made while it was not drawn. The
+    // trunk draws that first frame right: its rows read the model.
+
+    /// The rows `tabs` drew since `drawnRuns` was emptied are their listed
+    /// rows, and the row states agree with the model.
+    private func assertTheRowsDrawnAreTheRowsListed(_ step: String, _ hosted: Hosted, tabs: [TasksTab]) {
+        for tab in tabs {
+            let listed = tab == .done ? hosted.model.doneDays().flatMap(\.rows) : hosted.model.rows(for: tab)
+            let rows = Dictionary(listed.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let drawn = Set(TasksCellBodyCounts.drawnRuns.filter { $0.drawn && $0.row.tab == tab }.map(\.row))
+            let checked = drawn.filter { rows[$0.id] != nil }
+            XCTAssertTrue(!checked.isEmpty || listed.isEmpty, "\(step): \(tab) drew its rows in that frame, so the check means something")
+            for row in checked {
+                guard let listedRow = rows[row.id] else { continue }
+                XCTAssertTrue(TasksCellBodyCounts.cellStates[row].map { TasksRowStateValue.sameRow($0.row, listedRow) } == true,
+                              "\(step): \(tab)'s \(listedRow.model.title) draws its row as listed in that frame")
+            }
+        }
+        XCTAssertEqual(hosted.model.rowStateMismatches(), [], "\(step): the states agree with the model in that frame")
+    }
+
+    /// Makes `change` while only the tab shown is drawn, starts a swipe and
+    /// draws a frame. Each of `neighbours` is then in the span: its drawn
+    /// rows must be its listed rows, no row state written during a list
+    /// read and none catching up after the frame. `laidOut`: the frame is
+    /// laid out and displayed at once, before the run loop turns (what a
+    /// send of another transaction or AppKit's on-demand layout does);
+    /// otherwise it is the app's own next frame, waited for by what it
+    /// draws. The swipe is then let go where it began.
+    private func checkASwipesNeighbours(_ name: String, _ hosted: Hosted, on shown: TasksTab, neighbours: [TasksTab],
+                                        laidOut: Bool, change: () throws -> Void) rethrows {
+        hosted.spin(0.8)
+        let step = "\(name), \(laidOut ? "laid_out" : "own_frame")"
+        XCTAssertEqual(hosted.model.tab, shown, "\(step): the tab shown")
+        let span = hosted.model.pagerSwipe.span
+        let slots = neighbours.compactMap { TasksTab.allCases.firstIndex(of: $0) }
+        XCTAssertTrue(slots.allSatisfy { !span.pages.contains($0) }, "\(step): the neighbours are not drawn before the swipe")
+        try change()
+        hosted.spin(0.6)
+        XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0, "\(step): the change itself is on time: \(TasksRowStateCounts.lateRoutes)")
+        TasksRowStateCounts.reset()
+        TasksCellBodyCounts.drawnRuns = []
+        let passes = TasksPagerPassCount.passes
+        var time = CACurrentMediaTime()
+        func send(_ phase: TasksPagerSwipe.Sample.Phase, dx: CGFloat = 0) {
+            time += 1.0 / 120
+            _ = hosted.model.pagerScrolled(.init(phase: phase, momentum: false, dx: dx, dy: 0, time: time, precise: true),
+                                           allowed: true)
+        }
+        send(.began)
+        send(.changed, dx: -14)
+        XCTAssertTrue(slots.allSatisfy { span.pages.contains($0) }, "\(step): the swipe put the neighbours in the span")
+        if laidOut {
+            hosted.window.contentView?.layoutSubtreeIfNeeded()
+            hosted.window.displayIfNeeded()
+        } else {
+            waitForTestOperation("\(step): the app's own frame draws the pager and the neighbours' rows") {
+                TasksPagerPassCount.passes > passes && neighbours.allSatisfy { tab in
+                    (tab == .done ? hosted.model.doneDays().isEmpty : hosted.model.rows(for: tab).isEmpty)
+                        || TasksCellBodyCounts.drawnRuns.contains { $0.drawn && $0.row.tab == tab }
+                }
+            }
+        }
+        XCTAssertGreaterThan(TasksPagerPassCount.passes, passes, "\(step): the pager ran, so a frame was drawn")
+        assertTheRowsDrawnAreTheRowsListed(step, hosted, tabs: neighbours)
+        // The fingers go back and lift: the page stays where it was.
+        send(.changed, dx: 14)
+        send(.ended)
+        hosted.spin(0.8)
+        XCTAssertEqual(hosted.model.tab, shown, "\(step): the swipe was let go where it began")
+        print("SPAN_FRAME_\(name)_\(laidOut ? "laid_out" : "own_frame") writes=\(TasksRowStateCounts.writesDuringListRead) late=\(TasksRowStateCounts.lateCatchUps) routes=\(TasksRowStateCounts.lateRoutes.map { $0.prefix(60) })")
+        XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0, "\(step): a row state was written during a list read")
+        XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0,
+                       "\(step): the neighbour's rows caught up after that frame: \(TasksRowStateCounts.lateRoutes)")
+        TasksRowStateCounts.reset()
+    }
+
+    func testATabASwipeDrawsAfterAStoreChangeMadeWhileItWasNotDrawnDrawsItsRowsOnTime() throws {
+        let hosted = try warmed(laterRows: 5)
+        defer { hosted.close() }
+        TasksCellBodyCounts.records = true
+        defer { TasksCellBodyCounts.records = false }
+        // Done has loaded its log once, as it has in use.
+        hosted.go(to: .done)
+        hosted.go(to: .now)
+        var turn = 0
+        let task = { (id: UUID) throws -> TaskItem in try XCTUnwrap(hosted.store.task(withID: id)) }
+        // Now is shown: a swipe draws Later beside it.
+        for laidOut in [true, false] {
+            turn += 1
+            checkASwipesNeighbours("later_create", hosted, on: .now, neighbours: [.backlog], laidOut: laidOut) {
+                XCTAssertNotNil(hosted.store.create(title: "Added while Later is not drawn \(turn)", status: .backlog))
+            }
+            try checkASwipesNeighbours("later_rename", hosted, on: .now, neighbours: [.backlog], laidOut: laidOut) {
+                let row = try XCTUnwrap(hosted.model.rows(for: .backlog).last { $0.status != .done })
+                XCTAssertTrue(hosted.store.rename(try task(row.id), to: "Renamed while Later is not drawn \(turn)"))
+            }
+            try checkASwipesNeighbours("later_complete", hosted, on: .now, neighbours: [.backlog], laidOut: laidOut) {
+                let row = try XCTUnwrap(hosted.model.rows(for: .backlog).first { $0.status != .done })
+                XCTAssertTrue(hosted.model.setStatus(.done, for: [row.id]).isApplied)
+            }
+        }
+        // Later is shown: a swipe draws Now and Done beside it.
+        hosted.go(to: .backlog)
+        for laidOut in [true, false] {
+            turn += 1
+            try checkASwipesNeighbours("now_create_and_complete", hosted, on: .backlog, neighbours: [.now, .done], laidOut: laidOut) {
+                XCTAssertNotNil(hosted.store.create(title: "Added while Now is not drawn \(turn)"))
+                let row = try XCTUnwrap(hosted.model.rows(for: .now).last { $0.status != .done })
+                XCTAssertTrue(hosted.model.setStatus(.done, for: [row.id]).isApplied)
+            }
+        }
+    }
+
+    /// The pager's span is also set when Tasks is shown again from another
+    /// page (`isPageShown`, TasksPageHost's calls), where the rows are now
+    /// brought up too. Store changes made while Tasks was away: the first
+    /// frame back draws the listed rows, with nothing written during a
+    /// list read and nothing catching up after it.
+    func testTheFirstFrameBackOnTasksAfterStoreChangesMadeWhileAwayDrawsItsRowsOnTime() throws {
+        let hosted = try warmed(laterRows: 5)
+        defer { hosted.close() }
+        TasksCellBodyCounts.records = true
+        defer { TasksCellBodyCounts.records = false }
+        for laidOut in [true, false] {
+            let step = "back on Tasks, \(laidOut ? "laid_out" : "own_frame")"
+            hosted.spin(0.6)
+            hosted.model.isPageShown = false
+            hosted.spin(0.3)
+            XCTAssertNotNil(hosted.store.create(title: "Added while Tasks is away, \(step)"))
+            let row = try XCTUnwrap(hosted.model.rows(for: .now).last { $0.status != .done })
+            XCTAssertTrue(hosted.store.rename(try XCTUnwrap(hosted.store.task(withID: row.id)), to: "Renamed while Tasks is away, \(step)"))
+            hosted.spin(0.6)
+            XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0, "\(step): nothing is late while away: \(TasksRowStateCounts.lateRoutes)")
+            TasksRowStateCounts.reset()
+            TasksCellBodyCounts.drawnRuns = []
+            hosted.model.isPageShown = true
+            hosted.model.pageDidReturn()
+            if laidOut {
+                hosted.window.contentView?.layoutSubtreeIfNeeded()
+                hosted.window.displayIfNeeded()
+            } else {
+                waitForTestOperation("\(step): the app's own frame draws Now's rows") {
+                    TasksCellBodyCounts.drawnRuns.contains { $0.drawn && $0.row.tab == .now }
+                }
+            }
+            assertTheRowsDrawnAreTheRowsListed(step, hosted, tabs: [.now])
+            hosted.spin(0.8)
+            print("SPAN_FRAME_back_on_tasks_\(laidOut ? "laid_out" : "own_frame") writes=\(TasksRowStateCounts.writesDuringListRead) late=\(TasksRowStateCounts.lateCatchUps) routes=\(TasksRowStateCounts.lateRoutes.map { $0.prefix(60) })")
+            XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0, "\(step): a row state was written during a list read")
+            XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0, "\(step): Now's rows caught up after that frame: \(TasksRowStateCounts.lateRoutes)")
+            TasksRowStateCounts.reset()
+        }
+    }
+
     // Now returns from Done after a change made while it was not drawn: the
     // change is laid out in its first frame back, with no motion (a row
     // that left has no frame, one that came is already in its place).
@@ -549,6 +715,77 @@ final class TasksTabHostTests: XCTestCase {
         hosted.spin(0.6)
         XCTAssertEqual(try staleReadsOnReturn(hosted, to: .backlog, of: id, label: "later-delete"), 0,
                        "a row deleted while Later was not drawn is not drawn in Later's first frame back")
+    }
+
+    /// PR 48 round 3, the family through the send (RULES §3 lesson 4): each
+    /// value a list is built from is set right after a pending transaction
+    /// (a plain selection change), the recipe
+    /// `testReleasingAHeldRowNeverReadsItHeldInsideTheSend` uses for `held`.
+    /// A flush inside the send runs the pager and the page, which read the
+    /// lists: the drawn rows are up to them already. Done's inputs come
+    /// through a drawn Done page. The tear-down holds both row-state counts
+    /// at zero; each step is also checked on its own, by name.
+    func testEveryListInputSentAfterAPendingChangeDrawsItsRowsOnTime() throws {
+        try requireKeyWindowTests()
+        var services = TasksPageServices()
+        services.doneHold = .seconds(3_600)
+        services.acknowledgementDelay = .seconds(3_600)
+        let hosted = try Hosted(height: 520, services: services)
+        defer { hosted.close() }
+        hosted.spin(0.3)
+        let model = hosted.model
+        let ids = model.rows(for: .now).filter { $0.status != .done }.map(\.id)
+        XCTAssertGreaterThan(ids.count, 3)
+        var turn = 0
+        func step(_ name: String, _ change: () throws -> Void) rethrows {
+            TasksRowStateCounts.reset()
+            turn += 1
+            if turn.isMultiple(of: 2) { model.selectOnly(ids[0]) } else { model.clearSelection() }
+            try change()
+            hosted.spin(0.3)
+            let writes = TasksRowStateCounts.writesDuringListRead, late = TasksRowStateCounts.lateCatchUps
+            print("FAMILY_SEND_\(name) writes=\(writes) late=\(late)")
+            XCTAssertEqual(writes, 0, "\(name): a row state was written during a list read")
+            XCTAssertEqual(late, 0, "\(name): the drawn rows caught up a frame late")
+            XCTAssertEqual(model.rowStateMismatches(), [], "\(name): the states agree with the model")
+        }
+        step("held") { model.completeAcknowledged(ids[2]) { _ in } }
+        step("acknowledgement") { _ = model.settlePendingCompletionAcknowledgements(through: ids[2]) }
+        step("held_release") { model.releaseHold(ids[2]) }
+        step("note_owners") { model.setNoteOwners([ids[0]]) }
+        step("expanded") { model.setExpanded(ids[1], true) }
+        step("expanded_closed") { model.setExpanded(ids[1], false) }
+        step("completed_today") { model.completedTodayExpanded = true }
+        step("view_options") { model.setViewOptions(TasksViewOptions(sort: .dueDate), for: .now) }
+        step("view_options_cleared") { model.setViewOptions(TasksViewOptions(), for: .now) }
+        step("search") { model.listSearch[.now] = "a" }
+        step("search_cleared") { model.listSearch[.now] = nil }
+        step("tag_pick") { model.tagPicks = TagPicks(["round3"]) }
+        step("tag_pick_cleared") { model.tagPicks = .none }
+        if let group = model.rows(for: .now).lazy.compactMap({ model.groupKey(of: $0.id, on: .now) }).first {
+            step("folded") { model.foldAllGroups([group], folded: true, on: .now) }
+            step("unfolded") { model.foldAllGroups([group], folded: false, on: .now) }
+        } else {
+            XCTFail("the demo has a date group to fold")
+        }
+        step("next_event") {
+            let start = Date().addingTimeInterval(3_600)
+            let event = CalendarEvent(id: "round3", title: "Stand-up", start: start, end: start.addingTimeInterval(1_800),
+                                      isAllDay: false, location: nil, calendarTitle: "Work",
+                                      colour: CalendarEventColour(red: 0.2, green: 0.4, blue: 0.8))
+            model.nextEvent = TasksNextEvent(event, calendar: model.services.calendar(), locale: model.services.locale)
+        }
+        step("next_event_cleared") { model.nextEvent = nil }
+        step("day_drag") { model.dayDragLive = true }
+        step("day_drag_ended") { model.dayDragLive = false }
+        hosted.go(to: .done)
+        XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0, "Done's first frame is on time")
+        step("done_search") { model.doneSearch = "a" }
+        step("done_search_cleared") { model.doneSearch = "" }
+        step("done_load_more") { model.loadMoreDoneLog() }
+        let done = try XCTUnwrap(model.doneDays().flatMap(\.rows).first?.id, "Done lists a row")
+        step("done_store_revision") { model.setStatus(.todo, for: [done]) }
+        hosted.go(to: .now)
     }
 
     func testDoneIsRightInItsFirstFrameBackAfterARowIsDeletedFromNow() throws {

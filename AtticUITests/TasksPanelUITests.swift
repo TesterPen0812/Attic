@@ -13,6 +13,7 @@ final class TasksPanelUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "demo"
         app.launch()
         app.activate()
@@ -252,6 +253,7 @@ final class TasksEmptyStateUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "caughtup"
         app.launch()
         app.activate()

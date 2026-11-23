@@ -323,8 +323,10 @@ final class KeptContentHostTests: XCTestCase {
             // The kept host itself, set at its root (HB-09's key).
             "keptHost",
         ]
-        // Declared fileprivate and set where they are read.
-        let setInside: Set<String> = ["atticMenuEntranceTime", "atticMaterialProbeID"]
+        // Declared fileprivate and set where they are read; and the DEBUG
+        // context-menu count tag, which `tasksCountTag` sets on each cell
+        // inside the host (`TasksReorderCell`), above the menus that read it.
+        let setInside: Set<String> = ["atticMenuEntranceTime", "atticMaterialProbeID", "atticContextMenuCountTag"]
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Attic")
         let folders = ["Tasks", "DesignSystem", "Design"].map { root.appendingPathComponent($0) }

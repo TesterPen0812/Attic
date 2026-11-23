@@ -19,6 +19,7 @@ final class ScrollEdgeUITests: XCTestCase {
         for (surface, mode) in [("solid", "light"), ("glass", "light"), ("glass", "dark")] {
             let app = XCUIApplication()
             app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+            app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
             app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "long"
             app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", surface]
             app.launch()
@@ -46,6 +47,7 @@ final class ScrollEdgeUITests: XCTestCase {
     func testFindAndTheAddBarTakeClicksOverScrolledRows() throws {
         let app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "long"
         app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "glass"]
         app.launch()
@@ -205,6 +207,7 @@ final class ScrollEdgeUITests: XCTestCase {
     private func launchPixelFixture(surface: String, mode: String, edge: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "long"
         app.launchEnvironment["ATTIC_UI_TEST_SCROLL_EDGES"] = edge
         app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", surface]

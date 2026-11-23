@@ -31,6 +31,7 @@ final class AtticKeyWindowUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_NONKEY_REVEAL"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_PAGE"] = "tasks"
         app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "demo"
@@ -73,6 +74,7 @@ final class AtticKeyWindowUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
         // Hold the real pin through cold accessibility startup and capture.
         // Pinning neither assigns input focus nor draws its ring: the
@@ -116,6 +118,7 @@ final class AtticKeyWindowUITests: XCTestCase {
     private func check(mode: String) throws {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_NONKEY_REVEAL"] = "1"
         app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", "solid"]
         app.launch()

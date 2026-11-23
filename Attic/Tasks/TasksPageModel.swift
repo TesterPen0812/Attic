@@ -262,7 +262,7 @@ final class TasksTitleDraftState: ObservableObject {
 /// (the shell keeps it in `TasksPageState`), so switching pages keeps what
 /// was typed, selected and expanded.
 @MainActor
-final class TasksPageModel: ObservableObject {
+final class TasksPageModel: ObservableObject, StoredListInputOwner {
     /// Declared here, so a `@Published` on this class sends nothing: every published value is `@StoredThenSent`.
     let objectWillChange = ObservableObjectPublisher()
     private static let live = NSHashTable<TasksPageModel>.weakObjects()
@@ -326,6 +326,10 @@ final class TasksPageModel: ObservableObject {
                 keyboardFocus = nil
                 keyboardFocusSelectionRevision = nil
             }
+            // The arriving tab's rows are brought up to its list before the
+            // send, so its first frame thaws them as the model holds them
+            // (a send can flush the graph: TAB-STALL above).
+            if newValue != tab { syncRowStates(arriving: newValue) }
         }
         didSet {
             // Remembered across relaunch (L7), where the page has a memory.
@@ -339,14 +343,20 @@ final class TasksPageModel: ObservableObject {
         // Before the store: a body run inside the send reads the revision
         // that goes with the selection it reads.
         willSet { if newValue != selection { selectionRevision += 1 } }
+        // After it: the row states derive from the stored selection.
+        didSet { if selection != oldValue { rowStatesChanged(selection.symmetricDifference(oldValue), runs: true) } }
     }
     private var selectionRevision = 0
     private var keyboardFocusSelectionRevision: Int?
     /// The row a Shift-extension grows from (readable for the tests).
     private(set) var selectionAnchor: UUID?
     /// Rows whose quick look is open (remembered per row for the session).
-    @StoredThenSent private(set) var expanded: Set<UUID> = []
-    @StoredThenSent private(set) var editingTitleID: UUID?
+    @StoredThenSent(listInput: true) private(set) var expanded: Set<UUID> = [] {
+        didSet { if expanded != oldValue { rowStatesChanged(expanded.symmetricDifference(oldValue), runs: true) } }
+    }
+    @StoredThenSent private(set) var editingTitleID: UUID? {
+        didSet { if editingTitleID != oldValue { rowStatesChanged([oldValue, editingTitleID]) } }
+    }
     /// The title being edited, with its shorthand (owner fix 4): what is
     /// typed as `#tag`, a date or `!` becomes a chip and applies on save.
     let titleDraft = TasksTitleDraftState()
@@ -389,14 +399,26 @@ final class TasksPageModel: ObservableObject {
     }
     /// A title, subtask or paste whose save failed: the text stays where it
     /// was typed and the row offers "Not saved · Retry" until a save works.
-    @StoredThenSent private(set) var failedSave: FailedSave?
+    @StoredThenSent private(set) var failedSave: FailedSave? {
+        didSet { if failedSave != oldValue { rowStatesChanged([oldValue?.rowID, failedSave?.rowID]) } }
+    }
 
     enum FailedSave: Equatable {
         case title(UUID)
         case newSubtask(UUID)
         case paste
+
+        /// The row whose "Not saved" line it is.
+        var rowID: UUID? {
+            switch self {
+            case let .title(id), let .newSubtask(id): id
+            case .paste: nil
+            }
+        }
     }
-    @StoredThenSent private(set) var newSubtaskParentID: UUID?
+    @StoredThenSent private(set) var newSubtaskParentID: UUID? {
+        didSet { if newSubtaskParentID != oldValue { rowStatesChanged([oldValue, newSubtaskParentID]) } }
+    }
     let subtaskDraft = TasksSubtaskDraftState()
     var newSubtaskTitle: String {
         get { subtaskDraft.newTitle }
@@ -404,22 +426,69 @@ final class TasksPageModel: ObservableObject {
     }
     /// A quick-look subtask being renamed in place (round 10), its text,
     /// and whether its save failed ("Not saved · Retry").
-    @StoredThenSent var renamingSubtaskID: UUID?
+    @StoredThenSent var renamingSubtaskID: UUID? {
+        // Its row is whichever lists the subtask: every live row is asked.
+        didSet { if renamingSubtaskID != oldValue { rowStatesChanged(nil) } }
+    }
     /// A rename belongs to the quick look it opened in. A move elsewhere
     /// cannot leave its editor holding that original page's keys.
-    var renamingSubtaskParentID: UUID?
+    var renamingSubtaskParentID: UUID? {
+        didSet { if renamingSubtaskParentID != oldValue { rowStatesChanged([oldValue, renamingSubtaskParentID]) } }
+    }
     var subtaskRename: String {
         get { subtaskDraft.rename }
         set { subtaskDraft.rename = newValue }
     }
-    @StoredThenSent var subtaskRenameFailed = false
+    @StoredThenSent var subtaskRenameFailed = false {
+        didSet { if subtaskRenameFailed != oldValue { rowStatesChanged(nil) } }
+    }
     /// The subtask line that has the keyboard (round 10b). Not published: it
     /// only steers which row a shortcut targets, and never redraws.
     var focusedSubtaskID: UUID?
     /// The task row that has the keyboard: the page's focus, copied here as
     /// it changes so the rows' cells read it as they draw (deep review
-    /// P2-04). Not published: the page tells the cells (`cellUpdates`).
-    var keyboardFocus: AtticRowFocusID?
+    /// P2-04). Not published: the rows of the old and the new focus are
+    /// told through their row states (slice 1b).
+    var keyboardFocus: AtticRowFocusID? {
+        didSet { if keyboardFocus != oldValue { rowStatesChanged([oldValue?.id, keyboardFocus?.id]) } }
+    }
+
+    /// Each listed row's state, per tab (slice 1b, `TasksRowState`): made
+    /// when its cell first builds, dropped when its row leaves the tab's
+    /// list. One entry per (tab, id): a task's physical replicas (one UUID)
+    /// are one row in the list, so one state.
+    private var rowStates: [TasksTab: [UUID: TasksRowState]] = [:]
+    /// Each tab's list builds (`keep`, Done's days), counted, and the build
+    /// its row states were last brought up to. A list read only builds and
+    /// counts; it never writes a row state (PR 48 round 3: a read can run in
+    /// a body, and a write there aborts the view update). The states catch
+    /// up in `syncRowStates`, outside any view update.
+    private var rowListBuilds: [TasksTab: UInt64] = [:]
+    private var rowStatesBuild: [TasksTab: UInt64] = [:]
+    /// A row-state sync is queued (`queueRowStateSync`).
+    private var rowStateSyncQueued = false
+    /// Done log loads running (one calls another): the sync and the
+    /// announcement wait for the outermost to end (`doneLogLoadEnded`).
+    private var doneLogLoadDepth = 0
+    /// `syncRowStates` is running: the lists it builds queue nothing.
+    private var rowStateSyncing = false
+    #if DEBUG
+    /// Tabs a drawn cell read while their states were behind their list:
+    /// the catch-up that follows came a frame late.
+    private var rowStatesDrawnBehind: [TasksTab: String] = [:]
+    /// The inputs the last build of each list was for.
+    private var rowListBuildReason: [TasksTab: String] = [:]
+    /// The call that last built each tab's list outside a sync (return
+    /// addresses, cheap to take). Named only in a late catch-up's route, so
+    /// a late frame says which pass or read built the list before its rows
+    /// were brought up (PR 48 takeover: CI's ten named only "revision").
+    private var rowListBuiltOutsideASyncBy: [TasksTab: [NSNumber]] = [:]
+    #endif
+    #if DEBUG
+    /// The state each mounted cell holds (the oracle's second check).
+    private var rowStateMounts: [ObjectIdentifier: RowStateMount] = [:]
+    private var rowStateCheckQueued = false
+    #endif
 
     /// Shared by native focus observation and the headless regression tests.
     func receiveKeyboardFocus(_ focus: AtticRowFocusID?, keyboardDriving: Bool) {
@@ -439,7 +508,7 @@ final class TasksPageModel: ObservableObject {
     }
     /// Finished rows held where they were for about a second, with the
     /// list and index they held (spec: "stays in place, then slides").
-    @StoredThenSent private(set) var held: [UUID: HeldPlace] = [:]
+    @StoredThenSent(listInput: true) private(set) var held: [UUID: HeldPlace] = [:]
     /// A row can acknowledge a press before its family transaction runs.
     /// Retain the intent until that transaction has settled, including failure.
     private var completingAfterAcknowledgement: [(id: UUID, settled: (CommandOutcome) -> Void)] = []
@@ -449,7 +518,7 @@ final class TasksPageModel: ObservableObject {
     private var acknowledgedRows: [UUID: TaskItem] = [:]
     private var acknowledgedDeleted: Set<UUID> = []
     private var acknowledgedCreated: [TaskItem] = []
-    @StoredThenSent private(set) var acknowledgementRevision: UInt64 = 0
+    @StoredThenSent(listInput: true) private(set) var acknowledgementRevision: UInt64 = 0
     private var acknowledgedTaskCommand: (() -> Bool)?
     /// Includes failures from commands that reenter settlement to preserve Undo order.
     private var acknowledgementFailures: UInt64 = 0
@@ -474,18 +543,18 @@ final class TasksPageModel: ObservableObject {
 
     /// Whether Now's "Completed today" shows its rows (remembered for the
     /// session: the model lives as long as the panel).
-    @StoredThenSent var completedTodayExpanded = false
+    @StoredThenSent(listInput: true) var completedTodayExpanded = false
     /// A row is being dragged on Now (Adaptive picks, "Drag a task into
     /// another day"): Today and Tomorrow show as empty headers to drop
     /// under. Set when the drag lifts and cleared when it ends.
-    @StoredThenSent var dayDragLive = false
+    @StoredThenSent(listInput: true) var dayDragLive = false
     /// Today's next event (`TasksNextEventFeed`), shown at the top of Now's
     /// Today; nil without Calendar access, with the switch off, or with no
     /// event still ahead today.
-    @StoredThenSent var nextEvent: TasksNextEvent?
+    @StoredThenSent(listInput: true) var nextEvent: TasksNextEvent? = nil
     /// The date groups folded, per page (the owner's panel design: a
     /// header's click folds or unfolds its group).
-    @StoredThenSent private(set) var foldedGroups: [TasksTab: Set<String>] = [:]
+    @StoredThenSent(listInput: true) private(set) var foldedGroups: [TasksTab: Set<String>] = [:]
 
     func folded(on tab: TasksTab) -> Set<String> { foldedGroups[tab] ?? [] }
 
@@ -572,6 +641,10 @@ final class TasksPageModel: ObservableObject {
     var doneSearch = "" {
         didSet {
             doneSearchTask?.cancel()
+            // Done's list is built from the query: its drawn rows catch up
+            // before either send below, as a list input's do (a send can
+            // run the Done page, which reads the list).
+            if doneSearch != oldValue { listInputWillBeSent() }
             doneSearchInput.replace(doneSearch)
             doneResults.objectWillChange.send()
         }
@@ -608,14 +681,14 @@ final class TasksPageModel: ObservableObject {
     }
     /// Now's and Later's Find, per page (follow-up part 2, item 6; Done's
     /// is `doneSearch`). Read through `searchQuery(for:)`.
-    @StoredThenSent var listSearch: [TasksTab: String] = [:]
+    @StoredThenSent(listInput: true) var listSearch: [TasksTab: String] = [:]
     /// Now's and Later's View Options, per page (item 6); a page with the
     /// default view has none. Read through `viewOptions(for:)`.
-    @StoredThenSent var viewOptionsByTab: [TasksTab: TasksViewOptions] = [:]
+    @StoredThenSent(listInput: true) var viewOptionsByTab: [TasksTab: TasksViewOptions] = [:]
     /// The tags picked in the tag bar (owner, 2026-10-28; several since
     /// Accepted 2026-11-13, 2B), shared by Now, Backlog and Done (T6), for
     /// the app's session (not remembered across launches). None is All.
-    @StoredThenSent var tagPicks: TagPicks = .none {
+    @StoredThenSent(listInput: true) var tagPicks: TagPicks = .none {
         // Done draws from its own results (T6). A shared tag change while
         // Now or Later is active must not wake the retained offscreen Done
         // list; opening Done reads the current tags and rebuilds its cache.
@@ -634,17 +707,20 @@ final class TasksPageModel: ObservableObject {
     /// Loaded pages of the Done log (lazily, a page at a time). Published
     /// through `doneResults`, as `doneSearch` is.
     private(set) var doneLogTasks: [TaskItem] = [] {
-        didSet { doneResults.objectWillChange.send() }
+        didSet { doneResultsChanged() }
     }
     private(set) var doneLogHasMore = false {
-        didSet { doneResults.objectWillChange.send() }
+        didSet { doneResultsChanged() }
     }
     /// A Done log read failed (Astra 18): what was loaded stays, and the
     /// page offers "Couldn't load more · Retry" instead of claiming there
     /// is nothing more.
     private(set) var doneLogFailure: String? {
-        didSet { doneResults.objectWillChange.send() }
+        didSet { doneResultsChanged() }
     }
+    /// The loaded pages changed inside a load and `doneResults` has not
+    /// said so yet (`doneResultsChanged`).
+    private var doneResultsUnsent = false
     /// The loaded Done log tasks' subtasks, read with their page (Astra 19):
     /// an archived row shows its checklist from its archived family.
     private var doneLogChildren: [UUID: [TaskItem]] = [:]
@@ -703,6 +779,9 @@ final class TasksPageModel: ObservableObject {
             NotificationCenter.default.publisher(for: $0)
         }).sink { [weak self] notification in
             DispatchQueue.main.async { [weak self] in
+                // The day, the clock or the calendar moved: the drawn rows
+                // catch up before the send, as a list input's do.
+                self?.syncRowStates()
                 self?.objectWillChange.send()
                 self?.cellUpdates.objectWillChange.send()
                 self?.dateEnvironmentDidPublish?(notification)
@@ -710,15 +789,47 @@ final class TasksPageModel: ObservableObject {
         }.store(in: &cancellables)
         // A task that left the list (deleted, cleaned up) leaves the
         // selection and the quick look too.
-        library.tasks.$revision.dropFirst()
-            .sink { [weak self] _ in
+        //
+        // The store's change reaches the drawn rows before anything can draw
+        // it (PR 48 takeover). Not from `$revision`: that sends in willSet,
+        // after the store's own `objectWillChange`, and SwiftUI runs bodies
+        // inside a send or as soon as the store's call returns (another
+        // transaction's send, a window laid out on demand), before a block
+        // queued on the run loop. The store names two moments instead:
+        // `.willSend`, its tasks and data revision final and nothing sent
+        // for the revision yet (`tasks`' own send has gone out, the lists'
+        // key not moved), when the lists built from them catch up; and
+        // `.stored`, when
+        // the lists built from `revision` itself do (Done's, a searched
+        // tab's). Between a value the lists are built from moving and its
+        // catch-up the store sends nothing and calls nobody else.
+        library.tasks.revisionMoments
+            .sink { [weak self] moment in
                 guard let self else { return }
-                self.noteRowsChanged(self.store.revisionChangedTaskIDs)
-                self.noteDoneLogChanged(self.store.revisionChangedTaskIDs)
-                self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
-                self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
+                if moment == .willSend {
+                    self.noteRowsChanged(self.store.revisionChangedTaskIDs)
+                    self.noteDoneLogChanged(self.store.revisionChangedTaskIDs)
+                    self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
+                    self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
+                }
+                self.syncRowStates()
             }
             .store(in: &cancellables)
+        // Row states follow their lists (PR 48 round 3): whatever a list is
+        // built from reaches the rows through one sync per change, made
+        // outside any view update (`queueRowStateSync`). The model's sends
+        // (every published value, the date sink's, a dropped list's), the
+        // store's revision above and Done's results.
+        objectWillChange
+            .sink { [weak self] _ in self?.queueRowStateSync() }
+            .store(in: &cancellables)
+        doneResults.objectWillChange
+            .sink { [weak self] _ in self?.queueRowStateSync() }
+            .store(in: &cancellables)
+        // The pager's drawn pages are not queued (PR 48 takeover): a tab the
+        // span is about to draw has its rows brought up as the span is
+        // stored, before its send, as a list input's are (`TasksPagerSpan`).
+        pagerSwipe.span.pagesWillBeDrawn = { [weak self] in self?.syncRowStates() }
         library.tags.inventoryChanges
             .sink { [weak self] in
                 self?.tagInventoryRevision &+= 1
@@ -735,11 +846,17 @@ final class TasksPageModel: ObservableObject {
             }
             .store(in: &cancellables)
         // Slice 2: a family's files moved into its note (or back).
+        // `@Published` sends in its willSet, before the new statuses are
+        // stored: the key moves, the rows catch up and the page is told only
+        // once they are (PR 48 round 3 review P1-1), as the date sink does.
         library.tasks.fileMigration.$statuses.dropFirst()
             .sink { [weak self] _ in
-                guard let self else { return }
-                self.noteOwnersRevision &+= 1
-                self.objectWillChange.send()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.noteOwnersRevision &+= 1
+                    self.syncRowStates()
+                    self.objectWillChange.send()
+                }
             }
             .store(in: &cancellables)
         // A subtask moved, or a move undone or redone (from here or the
@@ -830,6 +947,21 @@ final class TasksPageModel: ObservableObject {
         let nextEvent: TasksNextEvent?
         /// A row is being dragged on Now: Today and Tomorrow show.
         let dayDrag: Bool
+
+        #if DEBUG
+        /// The inputs that differ (the late catch-up's report).
+        func changes(from old: RowsKey) -> String {
+            let fields: [(String, Bool)] = [
+                ("revision", revision != old.revision), ("acknowledgement", acknowledgementRevision != old.acknowledgementRevision),
+                ("noteOwners", noteOwners != old.noteOwners), ("held", held != old.held), ("expanded", expanded != old.expanded),
+                ("completedToday", completedExpanded != old.completedExpanded), ("today", today != old.today),
+                ("dateEnvironment", dateEnvironment != old.dateEnvironment), ("view", view != old.view),
+                ("search", search != old.search), ("tag", tag != old.tag), ("folded", folded != old.folded),
+                ("nextEvent", nextEvent != old.nextEvent), ("dayDrag", dayDrag != old.dayDrag)
+            ]
+            return fields.filter(\.1).map(\.0).joined(separator: "+")
+        }
+        #endif
 
         /// Everything but the store's data and the holds is the same.
         func sameList(as other: RowsKey) -> Bool {
@@ -1061,6 +1193,12 @@ final class TasksPageModel: ObservableObject {
     func eligibleRowIDs(for tab: TasksTab) -> Set<UUID> { cached(tab).eligibleIDs }
 
     private func cached(_ tab: TasksTab) -> RowsSnapshot {
+        #if DEBUG
+        // Any row-state write made while this read runs is counted
+        // (`TasksRowStateCounts.writesDuringListRead`): none is allowed.
+        TasksRowStateCounts.listReadDepth += 1
+        defer { TasksRowStateCounts.listReadDepth -= 1 }
+        #endif
         let key = RowsKey(tab: tab, revision: trimmedQuery(for: tab).isEmpty ? store.taskDataRevision : store.revision, acknowledgementRevision: acknowledgementRevision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagPicks(on: tab),
@@ -1070,6 +1208,9 @@ final class TasksPageModel: ObservableObject {
                 IdleLatencyTrace.count("task_rows_cache_hit", 1)
                 return cached
             }
+            #if DEBUG
+            rowListBuildReason[tab] = key.changes(from: cached.key)
+            #endif
             if let restated = restated(cached, to: key) {
                 IdleLatencyTrace.count("task_rows_restated", 1)
                 #if DEBUG
@@ -1090,6 +1231,7 @@ final class TasksPageModel: ObservableObject {
         }
         IdleLatencyTrace.count("task_rows_cache_miss", 1)
         #if DEBUG
+        if rowsCache[tab] == nil { rowListBuildReason[tab] = "cache dropped" }
         rowsCacheMissCount[tab, default: 0] += 1
         #endif
         return keep(builtRows(tab, key: key), for: tab)
@@ -1099,6 +1241,7 @@ final class TasksPageModel: ObservableObject {
         rowsCache[tab] = snapshot
         rowsChangedSinceBuild[tab] = nil
         rowsChangeUnknown.remove(tab)
+        rowListBuilt(tab)
         return snapshot
     }
 
@@ -1427,6 +1570,10 @@ final class TasksPageModel: ObservableObject {
     /// cleanup) and the Done log, grouped by the day they were finished,
     /// newest first; filtered by the search.
     func doneDays() -> [TasksDoneDay] {
+        #if DEBUG
+        TasksRowStateCounts.listReadDepth += 1
+        defer { TasksRowStateCounts.listReadDepth -= 1 }
+        #endif
         let key = DoneKey(revision: store.revision, loaded: doneLogTasks.map(\.id), search: doneSearch, tag: tagPicks,
                           today: DueDay(date: services.now(), calendar: services.calendar()), dateEnvironment: dateEnvironment,
                           folded: folded(on: .done))
@@ -1435,7 +1582,19 @@ final class TasksPageModel: ObservableObject {
             let folded = key.folded.contains(day.key)
             return TasksDoneDay(id: day.id, title: day.title, rows: folded ? [] : day.rows, total: day.rows.count, folded: folded)
         }
+        #if DEBUG
+        if let old = doneCache?.key {
+            let fields: [(String, Bool)] = [("revision", key.revision != old.revision), ("loaded", key.loaded != old.loaded),
+                                            ("search", key.search != old.search), ("tag", key.tag != old.tag),
+                                            ("today", key.today != old.today), ("dateEnvironment", key.dateEnvironment != old.dateEnvironment),
+                                            ("folded", key.folded != old.folded)]
+            rowListBuildReason[.done] = fields.filter(\.1).map(\.0).joined(separator: "+")
+        } else {
+            rowListBuildReason[.done] = "first build"
+        }
+        #endif
         doneCache = (key, days)
+        rowListBuilt(.done)
         return days
     }
 
@@ -1480,6 +1639,7 @@ final class TasksPageModel: ObservableObject {
         stay.ids.insert(id)
         filterStay[tab] = stay
         rowsCache[tab] = nil
+        queueRowStateSync()
     }
 
     /// The view changed for the person (the panel hid, another tab): what
@@ -1488,6 +1648,7 @@ final class TasksPageModel: ObservableObject {
         guard !filterStay.isEmpty else { return }
         for tab in filterStay.keys { rowsCache[tab] = nil }
         filterStay = [:]
+        syncRowStates()
         objectWillChange.send()
     }
 
@@ -1561,9 +1722,38 @@ final class TasksPageModel: ObservableObject {
 
     private var doneCountCache: (key: DoneCountKey, count: (matches: Int, total: Int)?)?
 
+    /// The loaded Done log pages changed (`doneLogTasks`, whether there is
+    /// more, a failed read). Done's list is built from the loaded tasks, and
+    /// a load sets them before their families: `doneResults` says nothing
+    /// until the outermost load has ended and Done's drawn rows are up to
+    /// the list (PR 48 takeover; a send can run the Done page, which reads
+    /// the list, and each of these sent as it was set).
+    private func doneResultsChanged() {
+        doneResultsUnsent = true
+        guard doneLogLoadDepth == 0 else { return }
+        doneLogLoadDepth += 1
+        doneLogLoadEnded()
+    }
+
+    /// A Done log load ended; the outermost brings Done's rows up to what
+    /// it loaded, then announces it.
+    private func doneLogLoadEnded() {
+        doneLogLoadDepth -= 1
+        guard doneLogLoadDepth == 0 else { return }
+        guard doneResultsUnsent else { syncQueuedRowStates(); return }
+        doneResultsUnsent = false
+        syncRowStates()
+        doneResults.objectWillChange.send()
+    }
+
     /// Loads the Done log's first page for the current search, if the store
     /// or the search changed since.
     func loadDoneLogIfNeeded() {
+        // Run from `onAppear`, `onChange` and `.task` (TasksDonePage), so
+        // inside a commit that lays Done out again before a queued sync:
+        // Done's rows catch up as the outermost load ends, its families set.
+        doneLogLoadDepth += 1
+        defer { doneLogLoadEnded() }
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let tag = tagPicks
         let same = doneLogQuery == query && doneLogTag == tag
@@ -1763,6 +1953,9 @@ final class TasksPageModel: ObservableObject {
     /// walks canonical matching IDs, so duplicate replicas never stop it.
     /// A failed read keeps what loaded and stops until Retry.
     func loadMoreDoneLog(limit: Int = doneLogPageSize) {
+        // As `loadDoneLogIfNeeded`.
+        doneLogLoadDepth += 1
+        defer { doneLogLoadEnded() }
         guard doneLogHasMore, doneLogFailure == nil else { return }
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         if doneLogQuery != query || doneLogTag != tagPicks { loadDoneLogIfNeeded(); return }
@@ -1856,7 +2049,7 @@ final class TasksPageModel: ObservableObject {
     /// (`resetForReveal`).
     /// The tasks with a live note of their own (Phase 3): their rows show
     /// the note glyph, and deleting one says the note is kept (§ 2.7.1).
-    @StoredThenSent private(set) var noteOwners: Set<UUID> = []
+    @StoredThenSent(listInput: true) private(set) var noteOwners: Set<UUID> = []
     private(set) var noteOwnersRevision: UInt64 = 0
 
     private var noteOwnersObservation: AnyCancellable?
@@ -1867,8 +2060,9 @@ final class TasksPageModel: ObservableObject {
 
     func setNoteOwners(_ owners: Set<UUID>) {
         guard owners != noteOwners else { return }
-        noteOwners = owners
+        // The revision first: the set brings the rows up, then sends.
         noteOwnersRevision &+= 1
+        noteOwners = owners
     }
 
     /// Back from a task's page: the anchor row takes the keyboard again
@@ -1958,7 +2152,9 @@ final class TasksPageModel: ObservableObject {
         let token = UUID()
     }
 
-    @StoredThenSent private(set) var rowFailure: RowFailure?
+    @StoredThenSent private(set) var rowFailure: RowFailure? {
+        didSet { if rowFailure != oldValue { rowStatesChanged([oldValue?.id, rowFailure?.id]) } }
+    }
     private var rowRetry: (() -> CommandOutcome)?
 
     /// Shows `outcome` under row `id` when it failed (and clears that row's
@@ -1974,6 +2170,10 @@ final class TasksPageModel: ObservableObject {
             rowFailure = nil
             rowRetry = nil
         }
+        // A row command's funnel (PR 48 round 3): its change reaches the
+        // drawn rows now, once per action. A drop runs inside the gesture's
+        // own commit, which lays the list out again before any queued sync.
+        syncQueuedRowStates()
         return outcome
     }
 
@@ -2063,6 +2263,9 @@ final class TasksPageModel: ObservableObject {
     weak var rowPointer: TasksPointer?
 
     @StoredThenSent var isPageShown = true {
+        // Back on Tasks: the shown tab's rows catch up before the send, as a
+        // tab switch's do.
+        willSet { if newValue, !isPageShown { syncRowStates(arriving: tab) } }
         didSet {
             guard isPageShown != oldValue else { return }
             // Left for Notes or Canvas: the pager lets go (round 10); back
@@ -3149,7 +3352,12 @@ final class TasksPageModel: ObservableObject {
     /// come here: it keeps the hold.)
     func releaseQuickLookOrder(of id: UUID) {
         quickLookOrder[id] = nil
+        // The family's row may already be projected with the held order (a
+        // store change syncs the drawn rows in its own call, before this
+        // send): drop it on every tab, or the rebuilt list reuses it.
+        for tab in Array(rowProjections.keys) { removeRowProjection(id, from: tab) }
         rowsCache = [:]
+        queueRowStateSync()
     }
 
     func setExpanded(_ id: UUID, _ open: Bool) {
@@ -3500,7 +3708,9 @@ final class TasksPageModel: ObservableObject {
     }
 
     /// The Done log task whose details are open.
-    @StoredThenSent var doneDetailID: UUID?
+    @StoredThenSent var doneDetailID: UUID? {
+        didSet { if doneDetailID != oldValue { rowStatesChanged([oldValue, doneDetailID]) } }
+    }
 
     struct DoneDetail: Equatable {
         let title: String
@@ -3551,6 +3761,438 @@ final class TasksPageModel: ObservableObject {
     }
 }
 
+// MARK: - Row states (slice 1b)
+
+extension TasksPageModel {
+    /// What the tab's list holds now, read without building anything: the
+    /// rows as last built and the selection runs over them. Nil rows: the
+    /// list is not built (each state keeps its row until it is). Lazy: an
+    /// index of the rows only once more than a few are looked up, the runs
+    /// only when a run is asked for with more than one row selected, Done's
+    /// days flattened only for those.
+    private struct RowStateList {
+        private enum Source {
+            case none
+            case list(rows: [TasksListRow], ids: [UUID])
+            case done([TasksDoneDay])
+        }
+
+        let tab: TasksTab
+        private let source: Source
+        private let selected: Set<UUID>
+        private let expanded: Set<UUID>
+        private var flat: [TasksListRow]?
+        private var index: [UUID: Int]?
+        private var runs: [UUID: AtticSelectionRun]?
+        private var lookups = 0
+        /// The DEBUG oracle's lists do not count as list work.
+        var counts = true
+
+        init(tab: TasksTab, list: (rows: [TasksListRow], ids: [UUID])?, done: [TasksDoneDay]?,
+             selected: Set<UUID>, expanded: Set<UUID>) {
+            self.tab = tab
+            if let list { source = .list(rows: list.rows, ids: list.ids) } else if let done { source = .done(done) } else { source = .none }
+            self.selected = selected
+            self.expanded = expanded
+        }
+
+        var isBuilt: Bool { if case .none = source { false } else { true } }
+
+        private mutating func rows() -> [TasksListRow] {
+            switch source {
+            case .none: return []
+            case let .list(rows, _): return rows
+            case let .done(days):
+                if let flat { return flat }
+                let rows = days.flatMap(\.rows)
+                flat = rows
+                if counts { TasksPageModel.noteRowStateListWork(tab) }
+                return rows
+            }
+        }
+
+        /// Every listed row, in order (Done's days flattened once).
+        mutating func listedRows() -> [TasksListRow] { rows() }
+
+        /// Whether any of `ids` is listed: a scan of the list as it is,
+        /// building and counting nothing.
+        func lists(any ids: Set<UUID>) -> Bool {
+            switch source {
+            case .none: return false
+            case let .list(_, listIDs): return listIDs.contains(where: ids.contains)
+            case let .done(days): return days.contains { $0.rows.contains { ids.contains($0.id) } }
+            }
+        }
+
+        mutating func row(_ id: UUID) -> TasksListRow? {
+            guard isBuilt else { return nil }
+            lookups += 1
+            if index == nil, lookups <= 4 {
+                if case let .done(days) = source, flat == nil {
+                    for day in days { if let row = day.rows.first(where: { $0.id == id }) { return row } }
+                    return nil
+                }
+                return rows().first { $0.id == id }
+            }
+            if index == nil {
+                let rows = rows()
+                var built: [UUID: Int] = [:]
+                built.reserveCapacity(rows.count)
+                for (offset, row) in rows.enumerated() where built[row.id] == nil { built[row.id] = offset }
+                index = built
+                if counts { TasksPageModel.noteRowStateListWork(tab) }
+            }
+            return index?[id].map { rows()[$0] }
+        }
+
+        /// `TasksSelectionRuns.make`'s run for `id` (single with one row
+        /// or none selected, without building anything).
+        mutating func run(_ id: UUID) -> AtticSelectionRun {
+            guard isBuilt, selected.count > 1 else { return .single }
+            if runs == nil {
+                let ids: [UUID]
+                if case let .list(_, listIDs) = source { ids = listIDs } else { ids = rows().map(\.id) }
+                runs = TasksSelectionRuns.make(ids: ids, selected: selected, expanded: expanded)
+                if counts { TasksPageModel.noteRowStateListWork(tab) }
+            }
+            return runs?[id] ?? .single
+        }
+    }
+
+    #if DEBUG
+    /// Tests: how many times a tab's rows were indexed, flattened or had
+    /// their runs worked out for row states.
+    nonisolated(unsafe) static var rowStateListWork: [TasksTab: Int] = [:]
+    #endif
+
+    nonisolated fileprivate static func noteRowStateListWork(_ tab: TasksTab) {
+        #if DEBUG
+        rowStateListWork[tab, default: 0] += 1
+        #endif
+    }
+
+    /// Side-effect free: reads the caches, builds and counts nothing.
+    private func rowStateList(_ tab: TasksTab) -> RowStateList {
+        if tab == .done {
+            return RowStateList(tab: tab, list: nil, done: doneCache?.days, selected: selection, expanded: expanded)
+        }
+        let snapshot = rowsCache[tab]
+        return RowStateList(tab: tab, list: snapshot.map { ($0.rows, $0.ids) }, done: nil, selected: selection, expanded: expanded)
+    }
+
+    /// The one derivation of a row's state from the model. Every writer
+    /// and the DEBUG oracle call it; nothing sets a field by hand.
+    private func derivedRowState(_ id: UUID, tab: TasksTab, row: TasksListRow, run: AtticSelectionRun) -> TasksRowStateValue {
+        let renaming = renamingSubtaskID.flatMap { subtask in row.subtasks.contains { $0.id == subtask } ? subtask : nil }
+        return TasksRowStateValue(
+            row: row,
+            isSelected: selection.contains(id),
+            run: run,
+            isExpanded: expanded.contains(id) && row.status != .done,
+            isEditingTitle: editingTitleID == id,
+            isFocused: keyboardFocus == AtticRowFocusID(page: tab.rawValue, id: id),
+            failure: TasksRowFailureState(titleNotSaved: failedSave == .title(id),
+                                          newSubtaskNotSaved: failedSave == .newSubtask(id),
+                                          row: rowFailure?.id == id ? rowFailure : nil),
+            isDoneDetailOpen: tab == .done && doneDetailID == id,
+            subtaskEditing: TasksRowSubtaskEditing(isNewSubtaskParent: newSubtaskParentID == id,
+                                                   isRenameParent: renamingSubtaskParentID == id,
+                                                   renamingID: renaming,
+                                                   renameFailed: subtaskRenameFailed && renaming != nil))
+    }
+
+    /// A list not built (its cache emptied until the next pass) keeps the
+    /// state's row and run as they are.
+    private func derived(_ state: TasksRowState, in list: inout RowStateList) -> TasksRowStateValue {
+        guard list.isBuilt else { return derivedRowState(state.id, tab: state.tab, row: state.value.row, run: state.value.run) }
+        let row = list.row(state.id) ?? state.value.row
+        return derivedRowState(state.id, tab: state.tab, row: row, run: list.run(state.id))
+    }
+
+    /// The state a cell of `row` on `tab` observes: its live entry, or a
+    /// new one (the row's cell builds for the first time, or again after
+    /// the row left the list and came back), worked out from the row and
+    /// run the page's pass already has: no list is read.
+    func rowState(for row: TasksListRow, tab: TasksTab, run: AtticSelectionRun) -> TasksRowState {
+        if let state = rowStates[tab]?[row.id] { return state }
+        let state = TasksRowState(id: row.id, tab: tab, value: derivedRowState(row.id, tab: tab, row: row, run: run))
+        // A tab's first state is made from the list as built now.
+        if rowStates[tab]?.isEmpty ?? true { rowStatesBuild[tab] = rowListBuilds[tab, default: 0] }
+        rowStates[tab, default: [:]][row.id] = state
+        return state
+    }
+
+    // MARK: Row states follow their lists (PR 48 round 3)
+
+    /// A tab's list was built (`keep`, Done's days). Nothing is written
+    /// here: the read that built it may be running in a body. The tab's
+    /// states are behind until `syncRowStates` brings them up.
+    private func rowListBuilt(_ tab: TasksTab) {
+        rowListBuilds[tab, default: 0] &+= 1
+        guard !rowStateSyncing, rowStates[tab]?.isEmpty == false else { return }
+        #if DEBUG
+        rowListBuiltOutsideASyncBy[tab] = Thread.callStackReturnAddresses
+        #endif
+        queueRowStateSync()
+    }
+
+    #if DEBUG
+    /// The frames of ours in `addresses`, and the run loop's and SwiftUI's
+    /// that tell a pass in the run loop from one inside a send or a layout.
+    private static func lateRouteFrames(_ addresses: [NSNumber]?) -> String {
+        guard let addresses else { return "" }
+        let marks = ["Attic", "CFRunLoopDo", "CFRUNLOOP_IS", "flushTransactions", "layoutSubtree", "displayIfNeeded",
+                     "ObservableObjectPublisher", "withAnimation", "XCTestCase"]
+        var names: [String] = []
+        for address in addresses.dropFirst(2) {
+            var info = Dl_info()
+            guard dladdr(UnsafeRawPointer(bitPattern: address.uintValue), &info) != 0, let symbol = info.dli_sname else { continue }
+            let name = String(cString: symbol)
+            guard marks.contains(where: { name.contains($0) }), names.last != String(name.prefix(72)) else { continue }
+            names.append(String(name.prefix(72)))
+            if names.count == 14 { break }
+        }
+        return "; list built by " + names.joined(separator: " < ")
+    }
+    #endif
+
+    /// Something a list is built from may have changed (every send of this
+    /// model, a store revision, Done's results, the pager's drawn pages, a
+    /// dropped list): one sync runs once the change is done, before the
+    /// next frame is drawn. However many inputs one action changes, the
+    /// sync builds each drawn list once. A run loop block runs as soon as
+    /// the event, the main queue turn or the timer that made the change
+    /// returns to the run loop, in that same pass and in any mode, so
+    /// before the frame's commit (and before a test's drain returns); never
+    /// inside a view update.
+    func queueRowStateSync() {
+        guard !rowStateSyncQueued, !rowStates.isEmpty else { return }
+        rowStateSyncQueued = true
+        let main = CFRunLoopGetMain()
+        CFRunLoopPerformBlock(main, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            MainActor.assumeIsolated { self?.syncQueuedRowStates() }
+        }
+        CFRunLoopWakeUp(main)
+    }
+
+    private func syncQueuedRowStates() {
+        guard rowStateSyncQueued else { return }
+        syncRowStates()
+    }
+
+    /// The tabs the pager draws on its next pass (`TasksPagerPages`): the
+    /// one shown and those a move passes, while Tasks is shown; and a tab
+    /// about to be shown (`tab`'s and `isPageShown`'s `willSet`).
+    private func rowStateDrawnTabs(arriving: TasksTab?) -> Set<TasksTab> {
+        var tabs: Set<TasksTab> = arriving.map { [$0] } ?? []
+        guard isPageShown || arriving != nil else { return tabs }
+        tabs.insert(tab)
+        let span = pagerSwipe.span
+        for index in span.pages where index != span.skipped && TasksTab.allCases.indices.contains(index) {
+            tabs.insert(TasksTab.allCases[index])
+        }
+        return tabs
+    }
+
+    /// A list input (`@StoredThenSent(listInput: true)`) was stored: the
+    /// drawn rows catch up before its send, which can flush a graph whose
+    /// bodies read the lists (TAB-STALL; a gesture's or an `onAppear`'s
+    /// change, made inside a commit, renders before a queued sync runs).
+    func listInputWillBeSent() { syncRowStates() }
+
+    /// Outside any view update: each drawn tab's list is brought up to date
+    /// (built only if what it is built from changed, as the next frame's
+    /// read would build it), then every tab whose list was built since its
+    /// states last caught up has them brought up to it (`rowStatesListed`;
+    /// a frozen state takes the value in its mirror only). A tab not drawn
+    /// is not built here: it is built when it is about to be drawn.
+    func syncRowStates(arriving: TasksTab? = nil) {
+        rowStateSyncQueued = false
+        guard !rowStates.isEmpty else { return }
+        rowStateSyncing = true
+        defer { rowStateSyncing = false }
+        let drawn = rowStateDrawnTabs(arriving: arriving)
+        for tab in TasksTab.allCases where rowStates[tab]?.isEmpty == false {
+            if drawn.contains(tab) {
+                if tab == .done { _ = doneDays() } else { _ = cached(tab) }
+            }
+            let built = rowListBuilds[tab, default: 0]
+            guard rowStatesBuild[tab] != built else { continue }
+            rowStatesBuild[tab] = built
+            #if DEBUG
+            if let route = rowStatesDrawnBehind.removeValue(forKey: tab) {
+                TasksRowStateCounts.lateCatchUps += 1
+                TasksRowStateCounts.lateRoutes.append("\(tab): \(route)")
+            }
+            #endif
+            rowStatesListed(tab)
+        }
+    }
+
+    #if DEBUG
+    /// A drawn cell of `tab` read its state: if the tab's states are behind
+    /// its list, this frame drew them late (`TasksRowStateCounts.lateCatchUps`
+    /// counts the catch-up that follows).
+    func noteRowStateRead(tab: TasksTab, drawn: Bool) {
+        guard drawn, let applied = rowStatesBuild[tab], applied != rowListBuilds[tab, default: 0],
+              rowStatesDrawnBehind[tab] == nil else { return }
+        rowStatesDrawnBehind[tab] = (rowListBuildReason[tab] ?? "unknown")
+            + Self.lateRouteFrames(rowListBuiltOutsideASyncBy[tab])
+    }
+    #endif
+
+    /// The model changed what `ids` show (nil: any listed row), on every
+    /// tab: their live states are worked out again. `runs`: the selection
+    /// or the quick looks changed, so any row whose selection run moved is
+    /// written too. Equal values notify nobody; a frozen state takes the
+    /// value in its mirror only. A tab is skipped, its list unread, when
+    /// none of `ids` has a state there or is listed there: a run is made
+    /// from its own list's rows only.
+    func rowStatesChanged(_ ids: [UUID?]) {
+        rowStatesChanged(Set(ids.compactMap { $0 }))
+    }
+
+    func rowStatesChanged(_ ids: Set<UUID>?, runs: Bool = false) {
+        guard !rowStates.isEmpty, ids?.isEmpty != true || runs else { return }
+        for (tab, states) in rowStates where !states.isEmpty {
+            if let ids, !runs {
+                // An id-only change: a tab that has none of the ids is
+                // skipped without reading its list.
+                let touched = ids.compactMap { states[$0] }
+                guard !touched.isEmpty else { continue }
+                var list = rowStateList(tab)
+                for state in touched { state.apply(derived(state, in: &list)) }
+                continue
+            }
+            var list = rowStateList(tab)
+            if let ids, !ids.contains(where: { states[$0] != nil }), !list.lists(any: ids) { continue }
+            for state in states.values {
+                if ids?.contains(state.id) ?? true || list.run(state.id) != state.value.run {
+                    state.apply(derived(state, in: &list))
+                }
+            }
+        }
+        queueRowStateCheck()
+    }
+
+    /// The tab's list was built again (`keep`, or Done's days), and
+    /// `syncRowStates` brings its states up to it, outside any view update
+    /// (never the read that built it): states of rows that left it go, so an "all rows" route never grows with the
+    /// rows ever built; every other state is brought up to the new
+    /// list (its row, its run). A row that comes back gets a fresh state.
+    private func rowStatesListed(_ tab: TasksTab) {
+        guard let states = rowStates[tab], !states.isEmpty else { return }
+        var list = rowStateList(tab)
+        guard list.isBuilt else { return }
+        // One walk of the list, the states looked up by id: no index. A
+        // duplicated id takes its first row, as `row(_:)` does.
+        var kept: [UUID: TasksRowState] = [:]
+        kept.reserveCapacity(states.count)
+        for row in list.listedRows() where kept[row.id] == nil {
+            guard let state = states[row.id] else { continue }
+            state.apply(derivedRowState(row.id, tab: tab, row: row, run: list.run(row.id)))
+            kept[row.id] = state
+        }
+        rowStates[tab] = kept
+        queueRowStateCheck()
+    }
+
+    #if DEBUG
+    struct RowStateMount {
+        let row: TasksRowID
+        weak var state: TasksRowState?
+        let drawn: Bool
+    }
+
+    /// A cell's body ran with this state (`cell` is the cell's own
+    /// reports object, so a Done slot that draws another task replaces its
+    /// entry).
+    func noteRowStateMount(_ cell: AnyObject, row: TasksRowID, state: TasksRowState, drawn: Bool) {
+        guard TasksRowStateOracle.isOn else { return }
+        rowStateMounts[ObjectIdentifier(cell)] = RowStateMount(row: row, state: state, drawn: drawn)
+    }
+
+    func noteRowStateUnmount(_ cell: AnyObject) {
+        rowStateMounts[ObjectIdentifier(cell)] = nil
+    }
+
+    /// Tests: the live states (the registry's size and membership).
+    var rowStateIDsForTesting: [TasksTab: Set<UUID>] { rowStates.mapValues { Set($0.keys) } }
+
+    /// The oracle: each live state against a fresh derivation, field by
+    /// field; each state's untracked mirror against its tracked fields; and
+    /// each cell drawn on the shown tab, whose row is still listed, holds
+    /// that row's current state. Rebuilds no cache and counts nothing.
+    func rowStateMismatches() -> [String] {
+        var found: [String] = []
+        for (tab, states) in rowStates {
+            var list = rowStateList(tab); list.counts = false
+            for (id, state) in states {
+                if list.isBuilt, list.row(id) == nil {
+                    // Frozen or not, a state lives only while its row is listed.
+                    found.append("row \(id) on \(tab): its state lives but the row left the list")
+                    continue
+                }
+                // A frozen state's fields wait for the thaw; its mirror is
+                // checked below like any other.
+                if !state.isFrozen, state.read(drawn: true) != state.value {
+                    found.append("row \(id) on \(tab): the untracked mirror differs from its fields")
+                }
+                let fields = state.value.differences(from: derived(state, in: &list))
+                if !fields.isEmpty {
+                    found.append("row \(id) on \(tab): \(fields.joined(separator: ", ")) not as the model says")
+                }
+            }
+        }
+        if isPageShown {
+            // A row's old cell can stay mounted while it animates out (a
+            // delete undone mid-exit): a row is wrong only when none of its
+            // drawn cells holds its current state.
+            var holds: [UUID: Bool] = [:]
+            for mount in rowStateMounts.values where mount.drawn && mount.row.tab == self.tab {
+                let current = mount.state != nil && rowStates[mount.row.tab]?[mount.row.id] === mount.state
+                holds[mount.row.id] = (holds[mount.row.id] ?? false) || current
+            }
+            var list = rowStateList(self.tab); list.counts = false
+            // A listed row with no state yet (relisted by a read before its
+            // cell's next pass, a delete undone mid-exit) is skipped: that
+            // pass makes its state. A real stale cell's row has a state.
+            for (id, held) in holds where !held && rowStates[self.tab]?[id] != nil && list.row(id) != nil {
+                found.append("row \(id) on \(self.tab): no drawn cell holds its current state")
+            }
+        }
+        return found
+    }
+
+    /// Runs the oracle on every page model alive (a test's settle).
+    static func checkLiveRowStates() {
+        live.allObjects.forEach { $0.checkRowStates() }
+    }
+
+    /// Runs the oracle now and reports each difference.
+    func checkRowStates() {
+        guard let report = TasksRowStateOracle.report else { return }
+        // A sync still queued runs first: the oracle checks settled states.
+        syncQueuedRowStates()
+        rowStateMismatches().forEach(report)
+    }
+
+    /// After a write, the oracle runs once the main queue turns (every
+    /// writer finished its mutation by then).
+    private func queueRowStateCheck() {
+        guard TasksRowStateOracle.isOn, !rowStateCheckQueued else { return }
+        rowStateCheckQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            rowStateCheckQueued = false
+            checkRowStates()
+        }
+    }
+    #else
+    private func queueRowStateCheck() {}
+    #endif
+}
+
 /// A model value sent after it is stored (hb09-key-note §2; TAB-STALL,
 /// host-boundary.md §5.1). `@Published` sends its change before the store:
 /// with a transaction pending on a graph (a plain change just before, then
@@ -3564,6 +4206,13 @@ final class TasksPageModel: ObservableObject {
 /// `objectWillChange` (as `TasksPageModel` does) gets nothing from
 /// `@Published`, which then stores and sends nothing (T7, pr41-fable): every
 /// published value of such a class is `@StoredThenSent`, or sent by hand.
+/// An owner with values marked `@StoredThenSent(listInput: true)`.
+@MainActor
+protocol StoredListInputOwner: AnyObject {
+    /// A list input was stored and is about to be sent.
+    func listInputWillBeSent()
+}
+
 @MainActor
 @propertyWrapper
 struct StoredThenSent<Value> {
@@ -3574,9 +4223,18 @@ struct StoredThenSent<Value> {
     }
 
     private let box: Box
+    /// A value the owner's row lists are built from (`listInput: true`):
+    /// stored, then the owner's dependents catch up, then sent.
+    private let listInput: Bool
 
     init(wrappedValue: Value) {
         box = Box(wrappedValue)
+        listInput = false
+    }
+
+    init(wrappedValue: Value, listInput: Bool) {
+        box = Box(wrappedValue)
+        self.listInput = listInput
     }
 
     @available(*, unavailable, message: "@StoredThenSent is for ObservableObject classes only")
@@ -3599,8 +4257,12 @@ struct StoredThenSent<Value> {
     ) -> Value where Owner.ObjectWillChangePublisher == ObservableObjectPublisher {
         get { owner[keyPath: storage].box.value }
         set {
-            let box = owner[keyPath: storage].box
+            let wrapper = owner[keyPath: storage]
+            let box = wrapper.box
             box.value = newValue
+            // A send can flush a graph whose bodies read the new value's
+            // lists (TAB-STALL): they are brought up before it.
+            if wrapper.listInput { (owner as? StoredListInputOwner)?.listInputWillBeSent() }
             owner.objectWillChange.send()
             box.changes.send(newValue)
         }

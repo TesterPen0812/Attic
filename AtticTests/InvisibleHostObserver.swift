@@ -22,8 +22,27 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
         else { DispatchQueue.main.sync { MainActor.assumeIsolated { body() } } }
     }
 
+    /// The test running now: the Tasks row-state oracle reports to it.
+    nonisolated(unsafe) private static var current: XCTestCase?
+
+    func testCaseWillStart(_ testCase: XCTestCase) { Self.current = testCase }
+
+    func testCaseDidFinish(_ testCase: XCTestCase) { if Self.current === testCase { Self.current = nil } }
+
     func testBundleWillStart(_ testBundle: Bundle) {
         onMain {
+            // The whole lane runs the Tasks row-state oracle (slice 1b):
+            // after each settle every live row state must equal the model's
+            // derivation; a difference fails the running test, naming the
+            // row and the field.
+            TasksRowStateOracle.report = { message in
+                let text = "Tasks row-state oracle: \(message)"
+                if let test = Self.current {
+                    test.record(XCTIssue(type: .assertionFailure, compactDescription: text))
+                } else {
+                    print("ROW_STATE_ORACLE_OUTSIDE_TEST \(text)")
+                }
+            }
             guard TestPresentationPolicy.isInvisible else { return }
             let center = NotificationCenter.default
             tokens.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] notification in

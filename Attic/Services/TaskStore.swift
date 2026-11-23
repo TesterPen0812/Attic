@@ -398,6 +398,21 @@ final class TaskStore: ObservableObject {
     var tagInventoryRefreshed: () -> Void = {}
 
     @Published private(set) var revision: UInt64 = 0
+    /// The two moments of a `revision` for a listener that keeps something
+    /// drawn in step with the store (the Tasks page's row states, PR 48).
+    /// `$revision` sends in willSet, so its subscribers run before the value
+    /// is stored, and SwiftUI can run bodies inside that send or as soon as
+    /// the call returns: neither is a moment to bring drawn state up.
+    enum RevisionMoment {
+        /// The tasks, `taskDataRevision` and `revisionChangedTaskIDs` are
+        /// final and `revision` is about to move: nothing has been sent for
+        /// it yet. What `$revision`'s subscribers see, before any of them.
+        case willSend
+        /// `revision` is stored and this publication changes nothing more.
+        case stored
+    }
+    /// Sent at every publication of `revision`, around it (`RevisionMoment`).
+    let revisionMoments = PassthroughSubject<RevisionMoment, Never>()
     /// Task-row state changes only on durable task publications; task-writing
     /// search can publish `revision` without invalidating the unfiltered list.
     private(set) var taskDataRevision: UInt64 = 0
@@ -2879,8 +2894,28 @@ final class TaskStore: ObservableObject {
         doneSearchMatches = nil
         // This is a presentation invalidation; it writes no model rows.
         revisionChangedTaskIDs = []
+        publishRevision(taskData: false)
+    }
+
+    /// The one place `revision` and `taskDataRevision` move (PR 48
+    /// takeover): every publication goes through here, so none can move
+    /// either without the two moments (`RevisionMoment`) the Tasks page
+    /// keeps its drawn rows in step by. `taskData`: the tasks themselves
+    /// changed (a commit, a reload), not only the writing search.
+    ///
+    /// The caller has set `tasks` and `revisionChangedTaskIDs`. Nothing is
+    /// sent and nobody else is called between `taskDataRevision` moving and
+    /// `.willSend`, nor between `revision` being stored and `.stored`.
+    ///
+    /// The family index is stamped, not dropped: `tasks` drops it as it is
+    /// set, so an index built since (a list built at `.willSend`) is this
+    /// revision's. A reload dropped it here, which built it twice.
+    private func publishRevision(taskData: Bool) {
+        if taskData { taskDataRevision &+= 1 }
+        revisionMoments.send(.willSend)
         revision &+= 1
         familyIndexCache?.revision = revision
+        revisionMoments.send(.stored)
     }
 
     private func indexItemTasks(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
@@ -4534,9 +4569,7 @@ final class TaskStore: ObservableObject {
                 // reloadTasks already published one coherent revision when it
                 // was required. Plain commits publish here, exactly once.
                 revisionChangedTaskIDs = changedIDs
-                taskDataRevision &+= 1
-                revision &+= 1
-                familyIndexCache?.revision = revision
+                publishRevision(taskData: true)
             }
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
@@ -4682,9 +4715,7 @@ final class TaskStore: ObservableObject {
             $0.deletedAt == nil && $0.doneLoggedAt == nil
         }
         revisionChangedTaskIDs = nil
-        taskDataRevision &+= 1
-        revision &+= 1
-        familyIndexCache = nil
+        publishRevision(taskData: true)
     }
 
     /// CloudKit can't enforce a unique UUID attribute. If a malformed import

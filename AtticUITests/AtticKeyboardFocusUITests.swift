@@ -21,6 +21,7 @@ final class AtticKeyboardFocusUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_ROW_STATE_ORACLE"] = "1"
         app.launchArguments += ["--attic-gallery", "--attic-gallery-keyboard"]
         // The lab is an accessory (menu-bar) app turning itself into a
         // regular app at launch; on a busy desktop the first window can

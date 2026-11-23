@@ -531,6 +531,8 @@ final class Hosted {
 
     func spin(_ seconds: TimeInterval) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+        // Every settle checks the page's row states (slice 1b's oracle).
+        model.checkRowStates()
     }
 
     /// Selects a tab the way a tab click does (with its slide) and waits

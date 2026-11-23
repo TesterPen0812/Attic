@@ -482,6 +482,16 @@ final class TasksGoingInTests: XCTestCase {
 final class TasksGoingInHostedTests: XCTestCase {
     private var opened: [UUID] = []
 
+    override func setUp() async throws {
+        try await super.setUp()
+        await MainActor.run { TasksRowStateCounts.reset() }
+    }
+
+    override func tearDown() async throws {
+        await MainActor.run { assertNoRowStateWriteDuringAReadAndNoLateCatchUp() }
+        try await super.tearDown()
+    }
+
     private func hosted() throws -> Hosted {
         var services = TasksPageServices()
         services.openTaskNote = { [weak self] in self?.opened.append($0) }
