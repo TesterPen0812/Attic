@@ -532,6 +532,84 @@ final class TasksBreadthGuardTests: XCTestCase {
         TasksRowStateCounts.reset()
     }
 
+    /// PR 48 takeover (CI 45094041213, ten late catch-ups for a store
+    /// revision and Done's search): those changes reached the drawn rows
+    /// through a block queued on the run loop, and a frame can be drawn
+    /// before the loop runs it. Two ways are run here, each right after the
+    /// change with the run loop not turned: AppKit lays the window out and
+    /// draws it on demand, and SwiftUI runs the page inside the send of
+    /// another transaction (an animated selection change). In that frame
+    /// each drawn row draws its row as its list holds it, and no state
+    /// catches up after it.
+    func testAFrameDrawnRightAfterAStoreChangeOrDonesSearchDrawsItsRowsOnTime() throws {
+        var services = TasksPageServices()
+        services.doneHold = .seconds(25)
+        services.acknowledgementDelay = .seconds(25)
+        let store = try makeStore(open: 9)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        let ids = model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(drawnRows(pointer, ids).count, 5, "Now drew its rows")
+        var turn = 0
+        typealias Frame = (name: String, draw: () -> Void)
+        let laidOut: Frame = ("laid_out", { hosting.layoutSubtreeIfNeeded(); hosting.window?.displayIfNeeded() })
+        // A selection change is no list input: nothing brings the rows up
+        // before its send, and the send runs the pending store change.
+        let insideASend: Frame = ("inside_an_animated_send", {
+            withAnimation(.default) { model.selectOnly(ids[turn.isMultiple(of: 2) ? 7 : 8]) }
+        })
+        func check(_ name: String, on tab: TasksTab = .now, frames: [Frame], _ change: () throws -> Void) rethrows {
+            for frame in frames {
+                settle(hosting)
+                settle(hosting)
+                TasksRowStateCounts.reset()
+                turn += 1
+                let step = "\(name), \(frame.name)"
+                let passes = TasksPagerPassCount.passes
+                try change()
+                frame.draw()
+                // The frame, before the run loop turns.
+                XCTAssertGreaterThan(TasksPagerPassCount.passes, passes, "\(step): the pager ran, so a frame was drawn before the run loop turned")
+                let listed = tab == .done ? model.doneDays().flatMap(\.rows) : model.listSnapshot(for: tab).rows
+                var drawn = 0
+                for row in listed where pointer.frame(for: TasksRowID(tab: tab, id: row.id)) != nil {
+                    drawn += 1
+                    let drew = TasksCellBodyCounts.cellStates[TasksRowID(tab: tab, id: row.id)]
+                    XCTAssertTrue(drew.map { TasksRowStateValue.sameRow($0.row, row) } == true,
+                                  "\(step): \(row.model.title) draws its row as listed in that frame")
+                }
+                XCTAssertTrue(drawn > 0 || listed.isEmpty, "\(step): rows are drawn, so the check means something")
+                XCTAssertEqual(model.rowStateMismatches(), [], "\(step): the states agree with the model in that frame")
+                settle(hosting)
+                settle(hosting)
+                print("FRAME_AFTER_\(name)_\(frame.name) writes=\(TasksRowStateCounts.writesDuringListRead) late=\(TasksRowStateCounts.lateCatchUps) routes=\(TasksRowStateCounts.lateRoutes)")
+                XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0, "\(step): a row state was written during a list read")
+                XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0,
+                               "\(step): the drawn rows caught up after that frame: \(TasksRowStateCounts.lateRoutes)")
+                TasksRowStateCounts.reset()
+            }
+        }
+        let task = { (id: UUID) throws -> TaskItem in try XCTUnwrap(store.task(withID: id)) }
+        try check("store_rename", frames: [laidOut]) { XCTAssertTrue(store.rename(try task(ids[1]), to: "Renamed \(turn)")) }
+        check("store_create", frames: [laidOut, insideASend]) { XCTAssertNotNil(store.create(title: "Created \(turn)")) }
+        check("model_set_status", frames: [laidOut]) { XCTAssertTrue(model.setStatus(.done, for: [ids[2]]).isApplied) }
+        // Now, searched: its list is built from the store's `revision`
+        // itself, not its data revision (CI's searched Later, mid-drag).
+        model.setSearchQuery("Open", for: .now)
+        try check("searched_store_rename", frames: [laidOut, insideASend]) {
+            XCTAssertTrue(store.rename(try task(ids[3]), to: "Open, renamed \(turn)"))
+        }
+        model.setSearchQuery("", for: .now)
+        // Done, drawn: the store's revision and Done's search.
+        model.select(tab: .done)
+        settle(hosting, until: { model.pagerSwipe.motion.position == CGFloat(TasksTab.done.rawValue) })
+        let done = try XCTUnwrap(model.doneDays().flatMap(\.rows).first?.id, "Done lists a ticked row")
+        try check("done_store_rename", on: .done, frames: [laidOut]) { XCTAssertTrue(store.rename(try task(done), to: "Done, renamed")) }
+        check("done_search", on: .done, frames: [laidOut]) { model.doneSearch = "Done" }
+        check("done_search_cleared", on: .done, frames: [laidOut]) { model.doneSearch = "" }
+    }
+
     /// The family (RULES §3 lesson 4): every input a list is built from
     /// (`TasksPageModel.RowsKey`, Done's `DoneKey`) reaches the drawn rows
     /// through the sync before the frame. Each change is laid out the way
