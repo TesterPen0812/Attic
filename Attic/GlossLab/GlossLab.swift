@@ -188,6 +188,10 @@ final class GlossLab {
     /// and they are not part of `labLines`, so a preset still matches.
     var samplesShown = false { didSet { save(samplesShown, "samplesShown") } }
     var samplesSmoke: Double = 25 { didSet { save(samplesSmoke, "samplesSmoke") } }
+    /// The second row of sample cards (23 Nov, owner on the first six, all
+    /// dark with white text: "add a light option as well"): the same six
+    /// materials drawn as in Light, with dark text and a white veil.
+    var samplesLight = true { didSet { save(samplesLight, "samplesLight") } }
 
     init(defaults: UserDefaults?) {
         self.defaults = defaults
@@ -232,6 +236,7 @@ final class GlossLab {
         }
         if let raw = defaults.string(forKey: Self.prefix + "backdrop"), let value = Backdrop(rawValue: raw) { backdrop = value }
         bool("samplesShown", &samplesShown); double("samplesSmoke", &samplesSmoke)
+        bool("samplesLight", &samplesLight)
         // A launch argument (`-GlossLab.preset <id>`) shows a preset for
         // one run. Still loading, so nothing of it is saved.
         if let id = defaults.string(forKey: Self.prefix + "preset"), let preset = Self.presets.first(where: { $0.id == id }) {
@@ -403,7 +408,7 @@ final class GlossLab {
         Tint: \(app.tint), length \(Int((app.tintLength * 100).rounded())) %
         Brighten glass: \(on(app.brightenGlass))
         Backdrop: \(backdrop.title)
-        Material samples: \(on(samplesShown)), veil \(Int(samplesSmoke.rounded())) %
+        Material samples: \(on(samplesShown)), veil \(Int(samplesSmoke.rounded())) %, light row \(on(samplesLight))
         Preset: \(currentPreset?.title ?? "none (own values)")
         \(labLines)
         """

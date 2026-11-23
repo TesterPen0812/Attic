@@ -985,5 +985,71 @@ final class GlossLabValuesTests: XCTestCase {
         let half = CGPoint(x: 1800 - size.width / 2, y: 400)
         XCTAssertEqual(GlossSamples.frame(savedOrigin: half, size: size, visible: visible), CGRect(origin: half, size: size), "half on: kept")
     }
+
+    /// The light row (owner, 23 Nov: "add a light option as well"): on to
+    /// start with, loaded, written by Copy values, and no preset, All off
+    /// or Reset sliders touches it.
+    func testMaterialSamplesLightRowLoadsCopiesAndStaysOutOfPresets() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertTrue(fresh.samplesLight, "the light row starts on")
+        XCTAssertTrue(fresh.valuesText(app: Self.app(mode: "Light")).contains("Material samples: off, veil 25 %, light row on"))
+        defaults.set(false, forKey: "GlossLab.samplesLight")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertFalse(lab.samplesLight)
+        let text = lab.valuesText(app: Self.app(mode: "Light"))
+        XCTAssertTrue(text.contains("light row off"), text)
+        lab.samplesLight = true
+        lab.allOff(); lab.resetSliders()
+        XCTAssertTrue(lab.samplesLight, "All off or Reset sliders took the light row away")
+        let preset = try XCTUnwrap(GlossLab.presets.first { $0.id == "thickGlass" })
+        lab.apply(preset)
+        XCTAssertTrue(lab.samplesLight)
+        lab.samplesLight = false
+        XCTAssertEqual(lab.currentPreset?.id, "thickGlass", "the light row broke the preset's match")
+        XCTAssertFalse(GlossLab(defaults: defaults).samplesLight, "a change is kept")
+    }
+
+    /// The light row's cards: G to L in order, none sharing a letter with
+    /// the first row, and the window grows by one row of cards for them.
+    func testMaterialSamplesLightRowIsSixMoreCards() {
+        let all = GlossSample.allCases
+        XCTAssertEqual(all.map(\.lightLetter), ["G", "H", "I", "J", "K", "L"])
+        XCTAssertTrue(Set(all.map(\.lightLetter)).isDisjoint(with: Set(all.map(\.letter))))
+        XCTAssertEqual(all.map(\.lightTitle), ["Regular", "Regular + veil", "Regular, tinted", "Clear", "Clear + veil", "Dark + veil"])
+        let one = GlossSamples.windowSize(lightRow: false)
+        XCTAssertEqual(one, GlossSamples.windowSize)
+        let two = GlossSamples.windowSize(lightRow: true)
+        XCTAssertEqual(two.width, 1052)
+        // One row 190, a gap of 14, a second row of 150.
+        XCTAssertEqual(two.height, 354)
+    }
+
+    /// The window's top left corner is what is kept, so the light row
+    /// coming or going leaves the top edge where it was; a place saved
+    /// before there was a light row is read as the one-row window's.
+    func testSamplesWindowKeepsItsTopEdgeAcrossTheLightRow() {
+        let one = GlossSamples.windowSize(lightRow: false)
+        let two = GlossSamples.windowSize(lightRow: true)
+        XCTAssertNil(GlossSamples.origin(savedTopLeft: nil, savedOneRowOrigin: nil, size: two))
+        let old = CGPoint(x: 300, y: 400)
+        XCTAssertEqual(GlossSamples.origin(savedTopLeft: nil, savedOneRowOrigin: old, size: one), old, "one row: where it was")
+        XCTAssertEqual(GlossSamples.origin(savedTopLeft: nil, savedOneRowOrigin: old, size: two), CGPoint(x: 300, y: 236),
+                       "two rows hang from the same top edge (400 + 190 - 354)")
+        let topLeft = CGPoint(x: 120, y: 900)
+        XCTAssertEqual(GlossSamples.origin(savedTopLeft: topLeft, savedOneRowOrigin: old, size: two), CGPoint(x: 120, y: 546))
+        XCTAssertEqual(GlossSamples.origin(savedTopLeft: topLeft, savedOneRowOrigin: old, size: one), CGPoint(x: 120, y: 710))
+    }
+
+    /// The cards' view never resizes the window: the window is sized for
+    /// one row or two where it is shown.
+    func testSamplesWindowIsNotResizedByItsCards() throws {
+        let window = GlossSamplesWindows.makeWindow()
+        let host = try XCTUnwrap(window.contentView as? NSHostingView<GlossSamplesView>)
+        XCTAssertEqual(host.sizingOptions, [])
+        XCTAssertEqual(window.frame.size, GlossSamples.windowSize)
+    }
 }
 #endif
