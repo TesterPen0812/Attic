@@ -2894,6 +2894,24 @@ final class TaskStore: ObservableObject {
         doneSearchMatches = nil
         // This is a presentation invalidation; it writes no model rows.
         revisionChangedTaskIDs = []
+        publishRevision(taskData: false)
+    }
+
+    /// The one place `revision` and `taskDataRevision` move (PR 48
+    /// takeover): every publication goes through here, so none can move
+    /// either without the two moments (`RevisionMoment`) the Tasks page
+    /// keeps its drawn rows in step by. `taskData`: the tasks themselves
+    /// changed (a commit, a reload), not only the writing search.
+    ///
+    /// The caller has set `tasks` and `revisionChangedTaskIDs`. Nothing is
+    /// sent and nobody else is called between `taskDataRevision` moving and
+    /// `.willSend`, nor between `revision` being stored and `.stored`.
+    ///
+    /// The family index is stamped, not dropped: `tasks` drops it as it is
+    /// set, so an index built since (a list built at `.willSend`) is this
+    /// revision's. A reload dropped it here, which built it twice.
+    private func publishRevision(taskData: Bool) {
+        if taskData { taskDataRevision &+= 1 }
         revisionMoments.send(.willSend)
         revision &+= 1
         familyIndexCache?.revision = revision
@@ -4551,11 +4569,7 @@ final class TaskStore: ObservableObject {
                 // reloadTasks already published one coherent revision when it
                 // was required. Plain commits publish here, exactly once.
                 revisionChangedTaskIDs = changedIDs
-                taskDataRevision &+= 1
-                revisionMoments.send(.willSend)
-                revision &+= 1
-                familyIndexCache?.revision = revision
-                revisionMoments.send(.stored)
+                publishRevision(taskData: true)
             }
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
@@ -4701,15 +4715,7 @@ final class TaskStore: ObservableObject {
             $0.deletedAt == nil && $0.doneLoggedAt == nil
         }
         revisionChangedTaskIDs = nil
-        taskDataRevision &+= 1
-        revisionMoments.send(.willSend)
-        revision &+= 1
-        // `tasks` dropped the index as it was set above, and nothing has
-        // changed since: an index built from them in between (a list built
-        // at `.willSend`) is this revision's, as in a plain commit. It was
-        // dropped here, which built it twice for every reload.
-        familyIndexCache?.revision = revision
-        revisionMoments.send(.stored)
+        publishRevision(taskData: true)
     }
 
     /// CloudKit can't enforce a unique UUID attribute. If a malformed import
