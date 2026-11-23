@@ -473,18 +473,41 @@ final class TasksBreadthGuardTests: XCTestCase {
     /// states catch up in one sync outside any view update. At a55a1ab2 the
     /// read wrote them itself (`keep` → `rowStatesListed`), and a read in
     /// the pager's body aborted the update ("setting value during update").
+    ///
+    /// PR 48 takeover: a store change now brings the states up before its
+    /// call returns, so the read here follows a change nothing announces:
+    /// the day moves and no day-change notification is posted.
     func testAListReadBuildsTheListAndWritesNoRowState() throws {
+        let start = Date()
+        let clock = Clock(now: start)
+        var services = TasksPageServices()
+        services.now = { clock.now }
+        let due = DueDay(date: start, calendar: services.calendar())
+        let store = try makeStore(open: 6, due: due)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
+        let row = try XCTUnwrap(model.rows(for: .now).first { $0.due == due }, "the dated row is listed")
+        let state = model.rowState(for: row, tab: .now, run: .single)
+        clock.now = start.addingTimeInterval(2 * 86_400)
+        let listed = try XCTUnwrap(model.rows(for: .now).first { $0.id == row.id })
+        XCTAssertFalse(TasksRowStateValue.sameRow(listed, row), "the read built the new list")
+        XCTAssertTrue(TasksRowStateValue.sameRow(state.value.row, row), "the read wrote no row state")
+        XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0)
+        drain()
+        XCTAssertTrue(TasksRowStateValue.sameRow(state.value.row, listed), "the queued sync brought the state up")
+        XCTAssertEqual(model.rowStateMismatches(), [])
+    }
+
+    /// PR 48 takeover: a store change brings the row states up before its
+    /// call returns (`TaskStore.revisionMoments`), with no read and no turn
+    /// of the run loop, and writes them outside any list read.
+    func testAStoreChangeBringsTheRowStatesUpBeforeItsCallReturns() throws {
         let store = try makeStore(open: 6)
         let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
         let row = try XCTUnwrap(model.rows(for: .now).dropFirst().first)
         let state = model.rowState(for: row, tab: .now, run: .single)
         XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: row.id)), to: "Renamed by the store"))
-        let listed = try XCTUnwrap(model.rows(for: .now).first { $0.id == row.id })
-        XCTAssertEqual(listed.model.title, "Renamed by the store", "the read built the new list")
-        XCTAssertEqual(state.value.row.model.title, row.model.title, "the read wrote no row state")
+        XCTAssertEqual(state.value.row.model.title, "Renamed by the store", "the state is up as the call returns")
         XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0)
-        drain()
-        XCTAssertEqual(state.value.row.model.title, "Renamed by the store", "the queued sync brought the state up")
         XCTAssertEqual(model.rowStateMismatches(), [])
     }
 
@@ -511,24 +534,45 @@ final class TasksBreadthGuardTests: XCTestCase {
     /// no funnel announced in time). The pager's body builds the list and
     /// writes nothing, so no update aborts; the row draws its old state for
     /// that one frame, and the catch-up that follows is counted late.
+    ///
+    /// PR 48 takeover: until then the change here was a store rename, which
+    /// now reaches the rows before its call returns (the test below). The
+    /// seam keeps a change nothing announces: the day moves, no day-change
+    /// notification is posted, and a pass runs.
     func testAFrameLaidOutBeforeTheSyncCostsOneLateFrameAndNoCrash() throws {
-        let store = try makeStore(open: 6)
-        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let start = Date()
+        let clock = Clock(now: start)
+        var services = TasksPageServices()
+        services.now = { clock.now }
+        let due = DueDay(date: start, calendar: services.calendar())
+        let store = try makeStore(open: 6, due: due)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
         let pointer = TasksPointer()
         let hosting = page(model, store, pointer: pointer)
-        let id = model.rows(for: .now)[1].id
+        let id = try XCTUnwrap(model.rows(for: .now).first { $0.due == due }, "the dated row is listed").id
         let row = TasksRowID(tab: .now, id: id)
         XCTAssertNotNil(pointer.frame(for: row), "the row is drawn")
+        let before = try XCTUnwrap(TasksCellBodyCounts.cellStates[row]?.row, "the row drew")
         TasksRowStateCounts.reset()
-        XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: id)), to: "Renamed before the sync"))
+        clock.now = start.addingTimeInterval(2 * 86_400)
+        model.objectWillChange.send()
         hosting.layoutSubtreeIfNeeded()
         hosting.window?.displayIfNeeded()
-        XCTAssertNotEqual(TasksCellBodyCounts.cellStates[row]?.row.model.title, "Renamed before the sync",
-                          "the frame before the sync drew the old state")
+        let listed = try XCTUnwrap(model.rows(for: .now).first { $0.id == id })
+        XCTAssertFalse(TasksRowStateValue.sameRow(listed, before), "the day changed the row as listed")
+        XCTAssertTrue(TasksCellBodyCounts.cellStates[row].map { TasksRowStateValue.sameRow($0.row, before) } == true,
+                      "the frame before the sync drew the old state")
         XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0, "the read in the body wrote no state")
         settle(hosting)
         XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 1, "the catch-up after that frame is counted late")
-        XCTAssertEqual(TasksCellBodyCounts.cellStates[row]?.row.model.title, "Renamed before the sync", "the next frame is right")
+        // The route names what the list was built for and the call that
+        // built it ahead of its rows (here the page's pass, in this test).
+        print("SEAM_LATE_ROUTE \(TasksRowStateCounts.lateRoutes)")
+        let route = TasksRowStateCounts.lateRoutes.first ?? ""
+        XCTAssertTrue(route.hasPrefix("now: today"), "the route names the tab and the input: \(route)")
+        XCTAssertTrue(route.contains("list built by") && route.contains("TasksPage"), "the route names the call that built the list: \(route)")
+        XCTAssertTrue(TasksCellBodyCounts.cellStates[row].map { TasksRowStateValue.sameRow($0.row, listed) } == true,
+                      "the next frame is right")
         TasksRowStateCounts.reset()
     }
 

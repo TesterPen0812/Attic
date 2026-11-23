@@ -467,8 +467,8 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     private var rowStatesBuild: [TasksTab: UInt64] = [:]
     /// A row-state sync is queued (`queueRowStateSync`).
     private var rowStateSyncQueued = false
-    /// Done log loads running (one calls another): the sync waits for the
-    /// outermost to end.
+    /// Done log loads running (one calls another): the sync and the
+    /// announcement wait for the outermost to end (`doneLogLoadEnded`).
     private var doneLogLoadDepth = 0
     /// `syncRowStates` is running: the lists it builds queue nothing.
     private var rowStateSyncing = false
@@ -478,6 +478,11 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     private var rowStatesDrawnBehind: [TasksTab: String] = [:]
     /// The inputs the last build of each list was for.
     private var rowListBuildReason: [TasksTab: String] = [:]
+    /// The call that last built each tab's list outside a sync (return
+    /// addresses, cheap to take). Named only in a late catch-up's route, so
+    /// a late frame says which pass or read built the list before its rows
+    /// were brought up (PR 48 takeover: CI's ten named only "revision").
+    private var rowListBuiltOutsideASyncBy: [TasksTab: [NSNumber]] = [:]
     #endif
     #if DEBUG
     /// The state each mounted cell holds (the oracle's second check).
@@ -636,6 +641,10 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     var doneSearch = "" {
         didSet {
             doneSearchTask?.cancel()
+            // Done's list is built from the query: its drawn rows catch up
+            // before either send below, as a list input's do (a send can
+            // run the Done page, which reads the list).
+            if doneSearch != oldValue { listInputWillBeSent() }
             doneSearchInput.replace(doneSearch)
             doneResults.objectWillChange.send()
         }
@@ -698,17 +707,20 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     /// Loaded pages of the Done log (lazily, a page at a time). Published
     /// through `doneResults`, as `doneSearch` is.
     private(set) var doneLogTasks: [TaskItem] = [] {
-        didSet { doneResults.objectWillChange.send() }
+        didSet { doneResultsChanged() }
     }
     private(set) var doneLogHasMore = false {
-        didSet { doneResults.objectWillChange.send() }
+        didSet { doneResultsChanged() }
     }
     /// A Done log read failed (Astra 18): what was loaded stays, and the
     /// page offers "Couldn't load more · Retry" instead of claiming there
     /// is nothing more.
     private(set) var doneLogFailure: String? {
-        didSet { doneResults.objectWillChange.send() }
+        didSet { doneResultsChanged() }
     }
+    /// The loaded pages changed inside a load and `doneResults` has not
+    /// said so yet (`doneResultsChanged`).
+    private var doneResultsUnsent = false
     /// The loaded Done log tasks' subtasks, read with their page (Astra 19):
     /// an archived row shows its checklist from its archived family.
     private var doneLogChildren: [UUID: [TaskItem]] = [:]
@@ -777,14 +789,28 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         }.store(in: &cancellables)
         // A task that left the list (deleted, cleaned up) leaves the
         // selection and the quick look too.
-        library.tasks.$revision.dropFirst()
-            .sink { [weak self] _ in
+        //
+        // The store's change reaches the drawn rows before anything can draw
+        // it (PR 48 takeover). Not from `$revision`: that sends in willSet,
+        // after the store's own `objectWillChange`, and SwiftUI runs bodies
+        // inside a send or as soon as the store's call returns (another
+        // transaction's send, a window laid out on demand), before a block
+        // queued on the run loop. The store names two moments instead:
+        // `.willSend`, its tasks and data revision final and nothing sent
+        // yet, when the lists built from them catch up; and `.stored`, when
+        // the lists built from `revision` itself do (Done's, a searched
+        // tab's). Between a value the lists are built from moving and its
+        // catch-up the store sends nothing and calls nobody else.
+        library.tasks.revisionMoments
+            .sink { [weak self] moment in
                 guard let self else { return }
-                self.noteRowsChanged(self.store.revisionChangedTaskIDs)
-                self.noteDoneLogChanged(self.store.revisionChangedTaskIDs)
-                self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
-                self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
-                self.queueRowStateSync()
+                if moment == .willSend {
+                    self.noteRowsChanged(self.store.revisionChangedTaskIDs)
+                    self.noteDoneLogChanged(self.store.revisionChangedTaskIDs)
+                    self.invalidateRowProjections(changedIDs: self.store.revisionChangedTaskIDs)
+                    self.queuePruneMissing(changedIDs: self.store.revisionChangedTaskIDs)
+                }
+                self.syncRowStates()
             }
             .store(in: &cancellables)
         // Row states follow their lists (PR 48 round 3): whatever a list is
@@ -1693,6 +1719,30 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
 
     private var doneCountCache: (key: DoneCountKey, count: (matches: Int, total: Int)?)?
 
+    /// The loaded Done log pages changed (`doneLogTasks`, whether there is
+    /// more, a failed read). Done's list is built from the loaded tasks, and
+    /// a load sets them before their families: `doneResults` says nothing
+    /// until the outermost load has ended and Done's drawn rows are up to
+    /// the list (PR 48 takeover; a send can run the Done page, which reads
+    /// the list, and each of these sent as it was set).
+    private func doneResultsChanged() {
+        doneResultsUnsent = true
+        guard doneLogLoadDepth == 0 else { return }
+        doneLogLoadDepth += 1
+        doneLogLoadEnded()
+    }
+
+    /// A Done log load ended; the outermost brings Done's rows up to what
+    /// it loaded, then announces it.
+    private func doneLogLoadEnded() {
+        doneLogLoadDepth -= 1
+        guard doneLogLoadDepth == 0 else { return }
+        guard doneResultsUnsent else { syncQueuedRowStates(); return }
+        doneResultsUnsent = false
+        syncRowStates()
+        doneResults.objectWillChange.send()
+    }
+
     /// Loads the Done log's first page for the current search, if the store
     /// or the search changed since.
     func loadDoneLogIfNeeded() {
@@ -1700,7 +1750,7 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         // inside a commit that lays Done out again before a queued sync:
         // Done's rows catch up as the outermost load ends, its families set.
         doneLogLoadDepth += 1
-        defer { doneLogLoadDepth -= 1; if doneLogLoadDepth == 0 { syncQueuedRowStates() } }
+        defer { doneLogLoadEnded() }
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let tag = tagPicks
         let same = doneLogQuery == query && doneLogTag == tag
@@ -1902,7 +1952,7 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     func loadMoreDoneLog(limit: Int = doneLogPageSize) {
         // As `loadDoneLogIfNeeded`.
         doneLogLoadDepth += 1
-        defer { doneLogLoadDepth -= 1; if doneLogLoadDepth == 0 { syncQueuedRowStates() } }
+        defer { doneLogLoadEnded() }
         guard doneLogHasMore, doneLogFailure == nil else { return }
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         if doneLogQuery != query || doneLogTag != tagPicks { loadDoneLogIfNeeded(); return }
@@ -3873,8 +3923,31 @@ extension TasksPageModel {
     private func rowListBuilt(_ tab: TasksTab) {
         rowListBuilds[tab, default: 0] &+= 1
         guard !rowStateSyncing, rowStates[tab]?.isEmpty == false else { return }
+        #if DEBUG
+        rowListBuiltOutsideASyncBy[tab] = Thread.callStackReturnAddresses
+        #endif
         queueRowStateSync()
     }
+
+    #if DEBUG
+    /// The frames of ours in `addresses`, and the run loop's and SwiftUI's
+    /// that tell a pass in the run loop from one inside a send or a layout.
+    private static func lateRouteFrames(_ addresses: [NSNumber]?) -> String {
+        guard let addresses else { return "" }
+        let marks = ["Attic", "CFRunLoopDo", "CFRUNLOOP_IS", "flushTransactions", "layoutSubtree", "displayIfNeeded",
+                     "ObservableObjectPublisher", "withAnimation", "XCTestCase"]
+        var names: [String] = []
+        for address in addresses.dropFirst(2) {
+            var info = Dl_info()
+            guard dladdr(UnsafeRawPointer(bitPattern: address.uintValue), &info) != 0, let symbol = info.dli_sname else { continue }
+            let name = String(cString: symbol)
+            guard marks.contains(where: { name.contains($0) }), names.last != String(name.prefix(72)) else { continue }
+            names.append(String(name.prefix(72)))
+            if names.count == 14 { break }
+        }
+        return "; list built by " + names.joined(separator: " < ")
+    }
+    #endif
 
     /// Something a list is built from may have changed (every send of this
     /// model, a store revision, Done's results, the pager's drawn pages, a
@@ -3956,7 +4029,8 @@ extension TasksPageModel {
     func noteRowStateRead(tab: TasksTab, drawn: Bool) {
         guard drawn, let applied = rowStatesBuild[tab], applied != rowListBuilds[tab, default: 0],
               rowStatesDrawnBehind[tab] == nil else { return }
-        rowStatesDrawnBehind[tab] = rowListBuildReason[tab] ?? "unknown"
+        rowStatesDrawnBehind[tab] = (rowListBuildReason[tab] ?? "unknown")
+            + Self.lateRouteFrames(rowListBuiltOutsideASyncBy[tab])
     }
     #endif
 
