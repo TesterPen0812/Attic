@@ -3352,6 +3352,10 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     /// come here: it keeps the hold.)
     func releaseQuickLookOrder(of id: UUID) {
         quickLookOrder[id] = nil
+        // The family's row may already be projected with the held order (a
+        // store change syncs the drawn rows in its own call, before this
+        // send): drop it on every tab, or the rebuilt list reuses it.
+        for tab in Array(rowProjections.keys) { removeRowProjection(id, from: tab) }
         rowsCache = [:]
         queueRowStateSync()
     }
