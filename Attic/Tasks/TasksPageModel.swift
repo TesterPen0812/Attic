@@ -2532,16 +2532,21 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     // MARK: - Selection
 
     /// A click: ⌘ toggles, ⇧ extends from the last clicked row, otherwise
-    /// the row alone is selected.
+    /// the row alone is selected. A click that leaves the selection as it
+    /// is (the row is already the whole selection, or a ⇧-click draws the
+    /// range already selected) stores nothing: every store of `selection`
+    /// sends, and a send runs the page's body and re-checks every drawn
+    /// cell for no change (STAY-CLICK). The anchor still moves.
     func click(_ id: UUID, modifiers: NSEvent.ModifierFlags, visible: [UUID]) {
         if modifiers.contains(.command) {
             if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
             selectionAnchor = id
         } else if modifiers.contains(.shift), let anchor = selectionAnchor,
                   let from = visible.firstIndex(of: anchor), let to = visible.firstIndex(of: id) {
-            selection = Set(visible[min(from, to)...max(from, to)])
+            let range = Set(visible[min(from, to)...max(from, to)])
+            if range != selection { selection = range }
         } else {
-            selection = [id]
+            if selection != [id] { selection = [id] }
             selectionAnchor = id
         }
     }
