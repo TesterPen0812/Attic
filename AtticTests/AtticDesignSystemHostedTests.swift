@@ -1153,3 +1153,91 @@ extension AtticDesignSystemHostedTests {
     }
 }
 
+
+// MARK: FKA66 probe (throwaway branch for PR 66 narrowing; never merged)
+
+extension AtticDesignSystemHostedTests {
+    /// PR 66 probe, no census: host one Notes library row (••• not shown,
+    /// no highlight), Tab up to four times with Space after each, and stop
+    /// once the ••• has shown its actions. Passes when they showed exactly
+    /// once. The ••• is a SwiftUI button with no NSView of its own, so
+    /// "anchor" below is the AtticNoteRowAnchor view behind it.
+    @objc func testFKAProbeNotesRowActionsTabThenSpace() throws {
+        try requireKeyWindowTests()
+        let run = String(UUID().uuidString.prefix(8))
+        var trace: [String] = []
+        func log(_ line: String) {
+            let text = "FKAPROBE run=\(run) \(line)"
+            trace.append(text)
+            FileHandle.standardOutput.write(Data((text + "\n").utf8))
+        }
+        log("start fka=\(NSApp.isFullKeyboardAccessEnabled)")
+        guard NSApp.isFullKeyboardAccessEnabled else {
+            return XCTFail("needs Full Keyboard Access: CI's fka job turns it on")
+        }
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Launch plan"), .text("Agenda")]),
+                                                       tags: nil) else { throw NSError(domain: "create", code: 1) }
+        let model = NotesLibraryModel(search: { _ in [] }, store: store)
+        let row = try XCTUnwrap(model.groups(store: store, drafts: []).flatMap(\.rows).first { $0.id == id })
+        let anchors = AtticNoteRowAnchors()
+        var shown = 0
+        var opened = 0
+        let rowView = NotesLibraryRow(details: model.libraryRow(row, store: store), thumbnails: model.thumbnails,
+                                      isHighlighted: false, commands: { [] }, anchors: anchors,
+                                      onShowActions: { shown += 1 }, onOpen: { opened += 1 })
+            .frame(width: 300)
+        let (window, hosting) = host(rowView, size: CGSize(width: 300, height: 42), key: true)
+        func name(_ object: AnyObject?) -> String {
+            guard let object else { return "nil" }
+            return String(describing: type(of: object))
+        }
+        func r(_ value: Double) -> String { String(format: "%.2f", value) }
+        func keyLoop() -> [NSView] {
+            var views: [NSView] = []
+            var current: NSView? = window.contentView
+            while let view = current, !views.contains(where: { $0 === view }), views.count < 30 {
+                views.append(view)
+                current = view.nextKeyView
+            }
+            return views
+        }
+        func state(_ label: String) {
+            let anchor = anchors.view(for: id)
+            var effective = 1.0
+            var current: NSView? = anchor
+            while let view = current {
+                effective *= Double(view.alphaValue) * Double(view.layer?.opacity ?? 1)
+                if view === hosting { break }
+                current = view.superview
+            }
+            let loop = keyLoop()
+            let inLoop = anchor.map { a in loop.contains { $0 === a } } ?? false
+            let keyable = descendants(of: hosting).filter { $0.canBecomeKeyView }.map { name($0) }
+            let anchorText = anchor.map { a in
+                "anchor=yes anchorInLoop=\(inLoop) anchorKeyable=\(a.canBecomeKeyView) anchorAlpha=\(r(Double(a.alphaValue)))"
+                    + " anchorLayerOpacity=\(r(Double(a.layer?.opacity ?? -1))) anchorEffAlpha=\(r(effective))"
+                    + " anchorHidden=\(a.isHiddenOrHasHiddenAncestor)"
+            } ?? "anchor=none"
+            log("\(label) fr=\(name(window.firstResponder)) key=\(window.isKeyWindow) \(anchorText)"
+                + " loop=[\(loop.map { name($0) }.joined(separator: ">"))] keyable=[\(keyable.joined(separator: ","))]"
+                + " shown=\(shown) opened=\(opened)")
+        }
+        state("tab=0")
+        for tab in 1...4 where shown == 0 {
+            window.selectNextKeyView(nil)
+            spin()
+            state("tab=\(tab)")
+            key(window, " ", code: 49)
+            spin()
+            state("tab=\(tab) space")
+        }
+        log("result shown=\(shown) opened=\(opened) pass=\(shown == 1)")
+        let attachment = XCTAttachment(string: trace.joined(separator: "\n"))
+        attachment.name = "FKAPROBE-\(run)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertEqual(shown, 1, "Tab then Space shows the •••'s actions exactly once")
+    }
+}
