@@ -18,7 +18,7 @@ struct PanelShellSurface: ViewModifier {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         content
             #if ATTIC_GLOSS_LAB
-            // Gloss lab (experimental preview only): ideas 5 and 6 over the
+            // Gloss lab (experimental preview only): idea 6 (grain) over the
             // surface and under the content.
             .background { GlossLabPanelSurfaceLayer(cornerSize: cornerSize) }
             .background { AtticPanelStageSurface(cornerSize: cornerSize, glossLabPanel: true) }

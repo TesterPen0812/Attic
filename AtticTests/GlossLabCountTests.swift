@@ -83,18 +83,22 @@ final class GlossLabCountTests: XCTestCase {
             ("1 rim fade", { $0.rimFade = true }),
             ("3 edge light", { $0.edgeLight = true }),
             ("4 inner edge", { $0.innerEdge = true }),
-            ("5 top light", { $0.topLight = true }),
-            ("5 top light, not keeping out", { $0.topLight = true; $0.topLightKeepsOut = false }),
+            ("3 edge light, all the way round", { $0.edgeLight = true; $0.edgeLightAround = true }),
             ("6 grain", { $0.grain = true }),
             ("10 one rim", { $0.oneRim = true }),
-            ("0 3D (5 and 3)", { $0.apply3D() }),
             ("11 neutral glass", { $0.neutralGlass = true }),
             ("11 neutral glass, controls too", { $0.neutralGlass = true; $0.neutralControls = true }),
             ("11 neutral glass with 1", { $0.neutralGlass = true; $0.rimFade = true }),
             ("12 clear body", { $0.clearBody = true }),
             ("12 clear body with 1 and 11", { $0.clearBody = true; $0.rimFade = true; $0.neutralGlass = true }),
+            ("13 clear controls", { $0.clearControls = true }),
         ]
-        for (name, configure) in switches {
+        // The presets without 9 or 10 (9 has its own tests; 10 reads the
+        // control's size by design).
+        let presets: [(String, (GlossLab) -> Void)] = GlossLab.presets.filter { $0.id != "livingLight" }.map { preset in
+            ("preset \(preset.id)", { $0.apply(preset) })
+        }
+        for (name, configure) in switches + presets {
             let count = oneResize(configure)
             lines.append("\(name): \(count)")
             // The static switches add no body run of their own on a resize:
@@ -142,7 +146,6 @@ final class GlossLabCountTests: XCTestCase {
             ("1 rim fade", \.rimFade, { GlossLabCounters.stageSurface }),
             ("3 edge light", \.edgeLight, { GlossLabCounters.rimLayer }),
             ("4 inner edge", \.innerEdge, { GlossLabCounters.rimLayer }),
-            ("5 top light", \.topLight, { GlossLabCounters.surfaceLayer }),
             ("6 grain", \.grain, { GlossLabCounters.surfaceLayer }),
             ("10 one rim", \.oneRim, { GlossLabCounters.controlEdgeLight }),
             ("2 clear band", \.clearBand, { GlossLabCounters.stageSurface }),
@@ -152,6 +155,7 @@ final class GlossLabCountTests: XCTestCase {
             ("11 neutral glass", \.neutralGlass, { GlossLabCounters.stageSurface }),
             ("11 controls too", \.neutralControls, { GlossLabCounters.controlEdgeLight }),
             ("12 clear body", \.clearBody, { GlossLabCounters.stageSurface }),
+            ("13 clear controls", \.clearControls, { GlossLabCounters.controlEdgeLight }),
         ]
         var lines: [String] = []
         for (name, key, read) in cases {
@@ -398,7 +402,7 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(lab.clearBandMethod, .stacked); XCTAssertTrue(lab.clearBandContainer)
         XCTAssertEqual(lab.clearBandWidth, 10); XCTAssertEqual(lab.shadowSoftRadius, 9); XCTAssertEqual(lab.spillStrength, 0.3)
         let text = lab.valuesText(app: Self.app(mode: "Dark"))
-        XCTAssertTrue(text.contains("2 A band of Clear glass: on, width 10.00 pt, Stacked, one container: on"), text)
+        XCTAssertTrue(text.contains("2 Refracting rim (a band of Clear glass): on, width 10.00 pt, Stacked, one container: on"), text)
         XCTAssertTrue(text.contains("7 A shadow that fits glass: on"), text)
         XCTAssertTrue(text.contains("radius 9.00 pt"), text)
         XCTAssertTrue(text.contains("7 Spill of light under the bottom edge: on, 0.30"), text)
@@ -416,14 +420,101 @@ final class GlossLabValuesTests: XCTestCase {
         GlossLab.AppValues(mode: mode, surface: "Glass", palette: "Original", tint: "Subtle", tintLength: 0.6, brightenGlass: false)
     }
 
-    /// Fix round 1: Apply 3D turns 5's "Keeps out" off, so the light is
-    /// brightest at the top.
-    func testApply3DTurnsKeepsOutOff() {
+    /// 23 Nov round: 5 (Light from the top) is gone from the values and
+    /// from Copy values, and an old stored key of it changes nothing.
+    func testLightFromTheTopIsGone() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(CountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "GlossLab.topLight")
+        defaults.set(0.6, forKey: "GlossLab.topLightLight")
+        defaults.writes = []
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertEqual(lab.labLines, GlossLab(defaults: nil).labLines, "a stored switch 5 still changes the lab")
+        XCTAssertEqual(defaults.writes, [])
+        XCTAssertFalse(lab.valuesText(app: Self.app(mode: "Light")).contains("Light from the top"))
+    }
+
+    /// 23 Nov round: the rim's width starts at 14 pt; 3's "All the way
+    /// round" and 13 (Clear glass controls) load, are written down by Copy
+    /// values, and All off reaches them.
+    func testRoundOf23NovValuesLoadCopyAndReset() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(GlossLab(defaults: nil).clearBandWidth, 14)
+        defaults.set(true, forKey: "GlossLab.edgeLight")
+        defaults.set(true, forKey: "GlossLab.edgeLightAround")
+        defaults.set(true, forKey: "GlossLab.clearControls")
+        defaults.set(32.0, forKey: "GlossLab.clearBandWidth")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.edgeLightAround); XCTAssertTrue(lab.clearControls); XCTAssertEqual(lab.clearBandWidth, 32)
+        let text = lab.valuesText(app: Self.app(mode: "Dark"))
+        XCTAssertTrue(text.contains("all the way round: on"), text)
+        XCTAssertTrue(text.contains("13 Clear glass controls: on"), text)
+        XCTAssertTrue(text.contains("width 32.00 pt"), text)
+        XCTAssertTrue(text.contains("Preset: none (own values)"), text)
+        lab.allOff()
+        XCTAssertFalse(lab.edgeLightAround); XCTAssertFalse(lab.clearControls)
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertFalse(fresh.edgeLightAround || fresh.clearControls, "the round's switches start off")
+        // The second run's stops: none at the top, rising to the bottom.
+        let stops = GlossLabPanelRimLayer.aroundStops(strength: 1)
+        XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted())
+        XCTAssertEqual(stops.last?.location, 1)
+    }
+
+    /// Presets: distinct ids, each one the same look whatever was set
+    /// before it, recognised as the current one, and lost on a change.
+    func testPresetsAreDistinctRepeatableAndRecognised() {
+        let presets = GlossLab.presets
+        XCTAssertEqual(Set(presets.map(\.id)).count, presets.count)
+        XCTAssertEqual(presets.first?.id, "today")
+        var looks: [String] = []
+        for preset in presets {
+            let clean = GlossLab(defaults: nil)
+            clean.apply(preset)
+            let dirty = GlossLab(defaults: nil)
+            for other in presets { dirty.apply(other) }
+            dirty.grainPercent = 4; dirty.clearBandMethod = .stacked; dirty.neutralControls = true
+            dirty.apply(preset)
+            XCTAssertEqual(dirty.labLines, clean.labLines, "\(preset.id) depends on what was set before it")
+            XCTAssertEqual(clean.currentPreset?.id, preset.id)
+            looks.append(clean.labLines)
+        }
+        XCTAssertEqual(Set(looks).count, presets.count, "two presets are the same look")
+        XCTAssertEqual(looks.first, GlossLab(defaults: nil).labLines, "Today's panel is everything off at the starting values")
         let lab = GlossLab(defaults: nil)
-        XCTAssertTrue(lab.topLightKeepsOut, "starts on")
-        lab.apply3D()
-        XCTAssertTrue(lab.topLight); XCTAssertTrue(lab.edgeLight)
-        XCTAssertFalse(lab.topLightKeepsOut, "Apply 3D left Keeps out on: the light is cut from the top band")
+        lab.apply(presets[1])
+        lab.clearBodyFillLight += 5
+        XCTAssertNil(lab.currentPreset, "a changed slider still reads as the preset")
+        // No preset turns 2 on under 12 (the rim would draw nothing).
+        for preset in presets {
+            let lab = GlossLab(defaults: nil)
+            lab.apply(preset)
+            XCTAssertFalse(lab.clearBand && lab.clearBody, "\(preset.id) sets the rim under a Clear body")
+        }
+    }
+
+    /// A preset applied by a button is saved; one shown by launch argument
+    /// is not.
+    func testPresetIsSavedByApplyAndNotByLaunchArgument() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(CountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("banner", forKey: "GlossLab.preset")
+        defaults.writes = []
+        let shown = GlossLab(defaults: defaults)
+        XCTAssertTrue(shown.clearBody); XCTAssertTrue(shown.neutralGlass)
+        XCTAssertEqual(shown.currentPreset?.id, "banner")
+        XCTAssertEqual(defaults.writes, [], "a preset shown by launch argument was saved")
+        defaults.removeObject(forKey: "GlossLab.preset")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertNil(lab.currentPreset.flatMap { $0.id == "today" ? nil : $0 })
+        lab.apply(try XCTUnwrap(GlossLab.presets.first { $0.id == "refractingRim" }))
+        let again = GlossLab(defaults: defaults)
+        XCTAssertEqual(again.currentPreset?.id, "refractingRim", "an applied preset is kept")
+        XCTAssertTrue(again.clearBand); XCTAssertEqual(again.clearBandWidth, 16)
     }
 
     /// Fix round 2: the backdrop follows the panel's visibility, not only

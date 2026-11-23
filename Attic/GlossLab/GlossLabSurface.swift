@@ -45,8 +45,9 @@ struct GlossRimFadeMask: View {
     }
 }
 
-/// 5 and 6, drawn over the panel's surface and under its content: the
-/// light from the top with its bottom shade, and the fine grain.
+/// 6, drawn over the panel's surface and under its content: the fine
+/// grain. (5, Light from the top, drew here too; the owner had it removed
+/// on 23 Nov.)
 struct GlossLabPanelSurfaceLayer: View {
     let cornerSize: CGFloat
     @Environment(\.atticDesign) private var design
@@ -58,12 +59,6 @@ struct GlossLabPanelSurfaceLayer: View {
         let lab = GlossLab.shared
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         ZStack {
-            if lab.topLight {
-                GlossTopLight(shape: shape, dark: design.mode == .dark, keepsOut: lab.topLightKeepsOut,
-                              light: design.mode == .dark ? lab.topLightDark : lab.topLightLight,
-                              shade: design.mode == .dark ? lab.bottomShadeDark : lab.bottomShadeLight,
-                              rimFade: rimFade(lab))
-            }
             if lab.grain {
                 GlossGrain(percent: lab.grainPercent)
                     .clipShape(shape)
@@ -76,10 +71,9 @@ struct GlossLabPanelSurfaceLayer: View {
 }
 
 extension GlossLabPanelSurfaceLayer {
-    /// With 1 on, 5 and 6 leave the rim bare too, as the foundation, the
-    /// Tint and the lift do (glass surfaces only, as for those). Read only
-    /// inside 5's and 6's branches, so flipping 1 with both off re-runs
-    /// nothing here.
+    /// With 1 on, 6 leaves the rim bare too, as the foundation, the Tint
+    /// and the lift do (glass surfaces only, as for those). Read only
+    /// inside 6's branch, so flipping 1 with 6 off re-runs nothing here.
     private func rimFade(_ lab: GlossLab) -> GlossRimFadeMask? {
         guard lab.rimFade, design.tokens.panel.kind != .solid else { return nil }
         return GlossRimFadeMask(cornerSize: cornerSize, exponent: AtticStyle.panelSquircleExponent, width: lab.rimFadeWidth)
@@ -137,55 +131,6 @@ enum GlossClearBody {
     static func fill(_ lab: GlossLab, dark: Bool) -> Double? {
         guard lab.clearBody else { return nil }
         return (dark ? lab.clearBodyFillDark : lab.clearBodyFillLight) / 100
-    }
-}
-
-/// 5. An additive white strongest at the top and gone by two thirds of the
-/// height, and a soft shade over the bottom third. With `keepsOut`, both
-/// leave the top and bottom control bands, as the lift does (Accepted
-/// 2026-11-13), measured in points by a stack, not a geometry reader.
-struct GlossTopLight: View {
-    let shape: Squircle
-    let dark: Bool
-    let keepsOut: Bool
-    let light: Double
-    let shade: Double
-    /// Idea 1's rim fade, or nil. It goes inside the blend, so the faded
-    /// white still adds to the glass.
-    var rimFade: GlossRimFadeMask?
-
-    var body: some View {
-        ZStack {
-            shape.fill(LinearGradient(stops: [.init(color: .white.opacity(light), location: 0),
-                                              .init(color: .white.opacity(light * 0.45), location: 0.3),
-                                              .init(color: .white.opacity(0), location: 1)],
-                                      startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 2.0 / 3)))
-                .mask { bands }
-                .glossLabRimFade(rimFade)
-                .blendMode(.plusLighter)
-            shape.fill(LinearGradient(stops: [.init(color: .black.opacity(0), location: 0),
-                                              .init(color: .black.opacity(shade), location: 1)],
-                                      startPoint: UnitPoint(x: 0.5, y: 2.0 / 3), endPoint: .bottom))
-                .mask { bands }
-                .glossLabRimFade(rimFade)
-        }
-    }
-
-    @ViewBuilder
-    private var bands: some View {
-        if keepsOut {
-            let clear = AtticSurfaceModel.LiftControlBands.clear
-            let fade = AtticSurfaceModel.LiftControlBands.fade
-            VStack(spacing: 0) {
-                Color.clear.frame(height: clear)
-                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: fade)
-                Color.black
-                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: fade)
-                Color.clear.frame(height: clear)
-            }
-        } else {
-            Color.black
-        }
     }
 }
 
@@ -254,12 +199,22 @@ struct GlossLabPanelRimLayer: View {
                                                       startPoint: .top, endPoint: .bottom),
                                        lineWidth: lab.edgeLightWidth)
                 }
-                // A thin darker line along the bottom.
-                shape.inset(by: 0.25)
-                    .stroke(LinearGradient(stops: [.init(color: .black.opacity(0), location: 0.7),
-                                                   .init(color: .black.opacity(lab.edgeLightShade), location: 1)],
-                                           startPoint: .top, endPoint: .bottom),
-                            lineWidth: 0.5)
+                if lab.edgeLightAround {
+                    // All the way round: a second run that carries the
+                    // light down the sides and is brightest at the bottom,
+                    // in place of the darker bottom line. Static, also
+                    // under 9.
+                    shape.strokeBorder(LinearGradient(stops: Self.aroundStops(strength: strength),
+                                                      startPoint: .top, endPoint: .bottom),
+                                       lineWidth: lab.edgeLightWidth)
+                } else {
+                    // A thin darker line along the bottom.
+                    shape.inset(by: 0.25)
+                        .stroke(LinearGradient(stops: [.init(color: .black.opacity(0), location: 0.7),
+                                                       .init(color: .black.opacity(lab.edgeLightShade), location: 1)],
+                                               startPoint: .top, endPoint: .bottom),
+                                lineWidth: 0.5)
+                }
             }
             if lab.innerEdge {
                 shape.inset(by: lab.innerEdgeInset)
@@ -268,6 +223,17 @@ struct GlossLabPanelRimLayer: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+extension GlossLabPanelRimLayer {
+    /// 3, "All the way round": nothing where the top light is strong, 0.3
+    /// of the strength down the sides, 0.75 at the bottom edge.
+    static func aroundStops(strength: Double) -> [Gradient.Stop] {
+        [.init(color: .white.opacity(0), location: 0.2),
+         .init(color: .white.opacity(strength * 0.3), location: 0.5),
+         .init(color: .white.opacity(strength * 0.3), location: 0.72),
+         .init(color: .white.opacity(strength * 0.75), location: 1)]
     }
 }
 
@@ -546,8 +512,11 @@ struct GlossRing: Shape {
     }
 }
 
-/// 2. A band of Apple's Clear glass around the edge, regular glass inside
-/// it, in place of the panel's one regular glass. Two honest ways to lay
+/// 2. Refracting rim: a band of Apple's Clear glass around the edge,
+/// regular glass inside it, in place of the panel's one regular glass. The
+/// Clear glass is what bends the backdrop at the edge; `width` is how far in
+/// it reaches. Apple's glass has no setting for how strongly it bends, and
+/// nothing here imitates one. Two honest ways to lay
 /// it, both Apple's own glass with nothing drawn to imitate it:
 /// - ring: Clear on the ring only, Regular on the inset squircle; the two
 ///   glasses sit side by side and neither is over the other;

@@ -242,7 +242,13 @@ struct AtticRaisedMaterialModifier: ViewModifier {
 
     private func glass<Content: View, S: InsettableShape>(_ content: Content, in shape: S) -> some View {
         let tokens = design.tokens
+        #if ATTIC_GLOSS_LAB
+        // Gloss lab idea 13: the glass controls wear Apple's Clear glass.
+        let base: Glass = GlossLab.shared.clearControls ? .clear : .regular
+        let glass: Glass = away ? .identity : (interactive ? base.interactive() : base)
+        #else
         let glass: Glass = away ? .identity : (interactive ? .regular.interactive() : .regular)
+        #endif
         return content
             .background {
                 #if ATTIC_GLOSS_LAB
@@ -1187,7 +1193,7 @@ struct AtticPanelStageSurface: View {
             : nil
         let neutral = glossLabPanel ? GlossNeutralGlass<Squircle>.amount(lab) : nil
         let clearBody = glossLabPanel ? GlossClearBody.fill(lab, dark: design.tokens.panel.appearance == .dark) : nil
-        let clearBand = glossLabPanel && lab.clearBand
+        let clearBand = glossLabPanel && lab.clearBand && lab.clearBandWidth >= 0.5
             ? GlossClearBandGlass(cornerSize: cornerSize, width: CGFloat(lab.clearBandWidth), method: lab.clearBandMethod,
                                   sharesContainer: lab.clearBandContainer)
             : nil

@@ -153,11 +153,16 @@ final class GlossLabWindows: NSObject, NSWindowDelegate {
     }
 }
 
-/// The lab window's content: one switch per idea, numbered and named as in
-/// the brief, with its sliders; mode, backdrop, Copy values and All off.
+/// The lab window's content, simplified on 23 Nov (owner: "all the controls
+/// are too confusing"): mode and backdrop, the presets, then the switches in
+/// three plain groups. A switch shows its sliders only while it is on, a
+/// slider that differs by mode shows the current mode's value only, and the
+/// rarely used ones sit under "More". The idea numbers of the brief are kept
+/// in Copy values, not in the window.
 struct GlossLabView: View {
     @Bindable var lab: GlossLab
     @ObservedObject var settings: AppSettings
+    @Environment(\.colorScheme) private var colorScheme
     @State private var copied = false
 
     /// The app's own glass settings, for Copy values.
@@ -167,14 +172,20 @@ struct GlossLabView: View {
                            tintLength: settings.panelTintLength, brightenGlass: settings.brightenGlass)
     }
 
+    /// The mode the panel draws in now: the app's setting, or the system's.
+    private var dark: Bool {
+        switch settings.appearance {
+        case .dark: true
+        case .light: false
+        case .system: colorScheme == .dark
+        }
+    }
+
+    private var modeName: String { dark ? "Dark" : "Light" }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Pin the panel first if it hides when the pointer leaves it. Every switch changes the live panel at once. Values are kept in this preview.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
                 Picker("Mode", selection: $settings.appearance) {
                     ForEach(AppearancePreference.allCases) { Text($0.title).tag($0) }
                 }
@@ -184,6 +195,77 @@ struct GlossLabView: View {
                     ForEach(GlossLab.Backdrop.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
+
+                section("Presets")
+                presets
+                Text("A preset sets every switch and slider below. Pin the panel first if it hides when the pointer leaves it.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                section("Glass")
+                row("Clear glass body", $lab.clearBody,
+                    note: "Apple's Clear glass in place of the regular one: more of what is behind comes through, and it bends at the edge.") {
+                    slider("Fill · \(modeName)", dark ? $lab.clearBodyFillDark : $lab.clearBodyFillLight, 0...80, unit: " %")
+                }
+                row("Refracting rim", $lab.clearBand,
+                    note: "Today's glass with a rim of Clear glass, which bends what is behind it. Width is how far in the bend reaches; Apple's glass has no strength setting. Under a Clear glass body the whole edge already bends, so this draws nothing.") {
+                    slider("Width", $lab.clearBandWidth, 2...40, unit: " pt")
+                    more {
+                        Picker("Laid", selection: $lab.clearBandMethod) {
+                            ForEach(GlossLab.ClearBandMethod.allCases) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        Toggle("One glass container", isOn: $lab.clearBandContainer)
+                    }
+                }
+                row("No colour from behind", $lab.neutralGlass,
+                    note: "What shows through keeps its light and shade and loses its colour.") {
+                    slider("Amount", $lab.neutralGlassAmount, 0...100, unit: " %")
+                    Toggle("The controls too", isOn: $lab.neutralControls)
+                }
+                row("Clear glass controls", $lab.clearControls,
+                    note: "The buttons and fields wear Clear glass too.") { EmptyView() }
+
+                section("Edge")
+                row("Bare glass at the rim", $lab.rimFade,
+                    note: "Our own fill fades out towards the edge, so the rim is glass alone.") {
+                    slider("Width", $lab.rimFadeWidth, 0...16, unit: " pt")
+                }
+                row("Edge light", edgeLightOn, note: "A bright line on the panel's edge, strongest at the top.") {
+                    slider("Strength · \(modeName)", dark ? $lab.edgeLightDark : $lab.edgeLightLight, 0...1)
+                    slider("Width", $lab.edgeLightWidth, 1...4, unit: " pt")
+                    Toggle("All the way round", isOn: $lab.edgeLightAround)
+                    Toggle("Leans towards the pointer", isOn: $lab.movingLight)
+                    more {
+                        slider("Bottom line", $lab.edgeLightShade, 0...0.5)
+                        slider("Lean: tilt", $lab.movingLightTilt, 0...30, unit: "°")
+                        slider("Lean: reach", $lab.movingLightReach, 0...0.2)
+                    }
+                }
+                row("Second inner edge", $lab.innerEdge, note: "A fine line just inside the rim.") {
+                    slider("Inset", $lab.innerEdgeInset, 1.5...4, unit: " pt")
+                    slider("Strength", $lab.innerEdgeStrength, 0...1)
+                }
+                row("Same edge light on every control", $lab.oneRim,
+                    note: "Wide and square controls are lit over the same length.") { EmptyView() }
+
+                section("Depth")
+                row("Glass shadow", $lab.glassShadow, note: "A tight contact shadow and a wide soft one, in place of today's.") {
+                    slider("Contact · \(modeName)", dark ? $lab.shadowContactDark : $lab.shadowContactLight, 0...0.8)
+                    slider("Soft · \(modeName)", dark ? $lab.shadowSoftDark : $lab.shadowSoftLight, 0...0.6)
+                    more {
+                        slider("Soft: radius", $lab.shadowSoftRadius, 4...18, unit: " pt")
+                        slider("Soft: drop", $lab.shadowSoftDrop, 0...10, unit: " pt")
+                    }
+                }
+                row("Light under the bottom edge", $lab.glassSpill, note: "A faint glow below the panel. Shows over a dark desktop.") {
+                    slider("Strength", $lab.spillStrength, 0...0.5)
+                }
+                row("Fine grain", $lab.grain, note: "A very fine still texture over the glass.") {
+                    slider("Strength", $lab.grainPercent, 0...4, unit: " %")
+                }
+
+                Divider()
 
                 HStack {
                     Button("Copy values") {
@@ -195,134 +277,104 @@ struct GlossLabView: View {
                     Button("Reset sliders") { lab.resetSliders() }
                     if copied { Text("Copied").font(.caption).foregroundStyle(.secondary) }
                 }
-
-                Divider()
-
-                idea("0 · 3D, dark glass lit from the top") {
-                    HStack {
-                        Button("Apply 3D") {
-                            settings.appearance = .dark
-                            lab.apply3D()
-                        }
-                        Text("Dark, plus 5 (Keeps out off) and 3").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-
-                toggle("1 · Bare glass at the rim", $lab.rimFade) {
-                    slider("Width", $lab.rimFadeWidth, 0...16, unit: " pt")
-                }
-
-                toggle("2 · A band of Clear glass", $lab.clearBand) {
-                    slider("Width", $lab.clearBandWidth, 4...12, unit: " pt")
-                    Picker("Laid", selection: $lab.clearBandMethod) {
-                        ForEach(GlossLab.ClearBandMethod.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    Toggle("One glass container", isOn: $lab.clearBandContainer)
-                    Text("Apple's Clear and Regular glass only. Glass on Glass surfaces; the panel's own fill still lies over both (use 1 to bare the rim). With 12 on, the whole body is Clear and this band draws nothing.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                toggle("3 · Edge light on the panel", $lab.edgeLight) {
-                    slider("Width", $lab.edgeLightWidth, 1...4, unit: " pt")
-                    slider("Light", $lab.edgeLightLight, 0...1)
-                    slider("Dark", $lab.edgeLightDark, 0...1)
-                    slider("Bottom line", $lab.edgeLightShade, 0...0.5)
-                }
-
-                toggle("4 · A second inner edge", $lab.innerEdge) {
-                    slider("Inset", $lab.innerEdgeInset, 1.5...4, unit: " pt")
-                    slider("Strength", $lab.innerEdgeStrength, 0...1)
-                }
-
-                toggle("5 · Light from the top", $lab.topLight) {
-                    Toggle("Keeps out from under the controls", isOn: $lab.topLightKeepsOut)
-                    Text("With Keeps out on, the light leaves the top and bottom control bands, so it can't be brightest at the top.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    slider("Light: top", $lab.topLightLight, 0...0.6)
-                    slider("Light: shade", $lab.bottomShadeLight, 0...0.4)
-                    slider("Dark: top", $lab.topLightDark, 0...0.6)
-                    slider("Dark: shade", $lab.bottomShadeDark, 0...0.4)
-                }
-
-                toggle("6 · Fine grain", $lab.grain) {
-                    slider("Strength", $lab.grainPercent, 0...4, unit: " %")
-                }
-
-                toggle("7 · A shadow that fits glass", $lab.glassShadow) {
-                    slider("Contact: Light", $lab.shadowContactLight, 0...0.6)
-                    slider("Contact: Dark", $lab.shadowContactDark, 0...0.8)
-                    slider("Soft: Light", $lab.shadowSoftLight, 0...0.4)
-                    slider("Soft: Dark", $lab.shadowSoftDark, 0...0.6)
-                    slider("Soft: radius", $lab.shadowSoftRadius, 4...18, unit: " pt")
-                    slider("Soft: drop", $lab.shadowSoftDrop, 0...10, unit: " pt")
-                    Text("The soft shadow stays inside the window's margin: radius × 2 + drop is held to 40 pt docked, 28 pt for a pulled-out page.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                toggle("7 · Spill of light under the bottom edge", $lab.glassSpill) {
-                    slider("Strength", $lab.spillStrength, 0...0.5)
-                    Text("Shows over a dark desktop.").font(.caption).foregroundStyle(.secondary)
-                }
-                idea("8 · The island as a droplet") {
-                    Text("Not built: the island is its own window, and glass merges only inside one window's view. See ops/design/gloss-lab-idea8-note.md.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                toggle("9 · Highlights that move", $lab.movingLight) {
-                    slider("Tilt", $lab.movingLightTilt, 0...30, unit: "°")
-                    slider("Reach", $lab.movingLightReach, 0...0.2)
-                    Text("Draws 3's Edge light with 3's width and strengths, tilted towards the pointer. It rests under Reduce Motion.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                toggle("10 · One rim recipe for every control", $lab.oneRim) {
-                    Text("Every glass control's Edge light is lit over the same length from its corners, whatever its width.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                toggle("11 · Neutral glass", $lab.neutralGlass) {
-                    slider("Amount", $lab.neutralGlassAmount, 0...100, unit: " %")
-                    Toggle("Controls too", isOn: $lab.neutralControls)
-                    Text("What shows through the glass keeps its light and shade and loses its colour. Panel and island, Glass surface only; the Tint and our own colours stay.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                toggle("12 · Clear glass body", $lab.clearBody) {
-                    slider("Light: white fill", $lab.clearBodyFillLight, 0...80, unit: " %")
-                    slider("Dark: black fill", $lab.clearBodyFillDark, 0...80, unit: " %")
-                    Text("Apple's Clear glass over the whole body, with one plain fill for the text. More see-through: darker than today over dark backdrops, brighter over light ones. Try it with 11. Panel and island, Glass surface only.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
             .padding(16)
         }
         .frame(minWidth: 340, minHeight: 360)
     }
 
-    private func idea(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.headline)
-            content()
+    /// 3 and 9 as one switch: 9 draws 3's light, so "Edge light" is on
+    /// while either is, and off turns both off.
+    private var edgeLightOn: Binding<Bool> {
+        Binding(get: { lab.edgeLight || lab.movingLight },
+                set: { on in
+                    lab.edgeLight = on
+                    if !on { lab.movingLight = false }
+                })
+    }
+
+    // MARK: Presets
+
+    private var presets: some View {
+        let current = lab.currentPreset?.id
+        let all = GlossLab.presets
+        return Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            ForEach(Array(stride(from: 0, to: all.count, by: 2)), id: \.self) { index in
+                GridRow {
+                    presetButton(all[index], selected: all[index].id == current)
+                    if index + 1 < all.count {
+                        presetButton(all[index + 1], selected: all[index + 1].id == current)
+                    } else {
+                        Color.clear
+                    }
+                }
+            }
         }
     }
 
-    private func toggle(_ title: String, _ isOn: Binding<Bool>, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: isOn) { Text(title).font(.headline) }
-            VStack(alignment: .leading, spacing: 4) { content() }
-                .padding(.leading, 20)
-                .disabled(!isOn.wrappedValue)
-                .opacity(isOn.wrappedValue ? 1 : 0.5)
+    private func presetButton(_ preset: GlossLab.Preset, selected: Bool) -> some View {
+        Button {
+            if let dark = preset.dark { settings.appearance = dark ? .dark : .light }
+            lab.apply(preset)
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 4) {
+                    Text(preset.title).font(.callout.weight(.semibold))
+                    Spacer(minLength: 0)
+                    if selected { Image(systemName: "checkmark").font(.caption.weight(.bold)) }
+                }
+                Text(preset.note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(selected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(selected ? Color.accentColor : Color.clear, lineWidth: 1.5))
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(preset.title)
+        .accessibilityHint(preset.note)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    // MARK: Rows
+
+    private func section(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.top, 4)
+    }
+
+    /// One switch. Its note and sliders show only while it is on.
+    private func row(_ title: String, _ isOn: Binding<Bool>, note: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: isOn) { Text(title) }
+            if isOn.wrappedValue {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(note)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    content()
+                }
+                .padding(.leading, 20)
+            }
+        }
+    }
+
+    private func more(@ViewBuilder content: () -> some View) -> some View {
+        let inner = content()
+        return DisclosureGroup("More") {
+            VStack(alignment: .leading, spacing: 4) { inner }
+                .padding(.top, 2)
+        }
+        .font(.callout)
     }
 
     private func slider(_ label: String, _ value: Binding<Double>, _ range: ClosedRange<Double>, unit: String = "") -> some View {

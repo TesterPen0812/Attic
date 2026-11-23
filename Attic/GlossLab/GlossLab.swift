@@ -31,15 +31,16 @@ final class GlossLab {
     var edgeLight = false { didSet { save(edgeLight, "edgeLight") } }
     /// 4. A second inner edge.
     var innerEdge = false { didSet { save(innerEdge, "innerEdge") } }
-    /// 5. Light from the top.
-    var topLight = false { didSet { save(topLight, "topLight") } }
-    /// 5, second switch: the light keeps out from under the controls (on by default).
-    var topLightKeepsOut = true { didSet { save(topLightKeepsOut, "topLightKeepsOut") } }
+    /// 3, its own switch: the light runs all the way round the edge
+    /// (a second run, brightest at the bottom), not only over the top.
+    var edgeLightAround = false { didSet { save(edgeLightAround, "edgeLightAround") } }
     /// 6. Fine grain.
     var grain = false { didSet { save(grain, "grain") } }
     /// 10. One rim recipe for every control.
     var oneRim = false { didSet { save(oneRim, "oneRim") } }
-    /// 2. A band of Apple's Clear glass around the edge, regular glass inside.
+    /// 2. Refracting rim: a band of Apple's Clear glass around the edge,
+    /// regular glass inside. The Clear glass bends what lies behind it at
+    /// the panel's edge, as the Clear body (12) does.
     var clearBand = false { didSet { save(clearBand, "clearBand") } }
     /// 7. A shadow that fits glass (in place of the trunk's elevation).
     var glassShadow = false { didSet { save(glassShadow, "glassShadow") } }
@@ -59,6 +60,9 @@ final class GlossLab {
     /// backdrop's light and dark comes through. The panel and the island,
     /// native Glass only.
     var clearBody = false { didSet { save(clearBody, "clearBody") } }
+    /// 13. Clear glass controls: the panel's glass controls wear Apple's
+    /// Clear variant in place of Regular.
+    var clearControls = false { didSet { save(clearControls, "clearControls") } }
 
     // MARK: Sliders
 
@@ -73,16 +77,13 @@ final class GlossLab {
     /// 4: how far inside the rim, pt (1.5 to 4), and its strength.
     var innerEdgeInset: Double = 2.5 { didSet { save(innerEdgeInset, "innerEdgeInset") } }
     var innerEdgeStrength: Double = 0.25 { didSet { save(innerEdgeStrength, "innerEdgeStrength") } }
-    /// 5: the top light and the bottom shade, per mode.
-    var topLightLight: Double = 0.26 { didSet { save(topLightLight, "topLightLight") } }
-    var bottomShadeLight: Double = 0.10 { didSet { save(bottomShadeLight, "bottomShadeLight") } }
-    var topLightDark: Double = 0.13 { didSet { save(topLightDark, "topLightDark") } }
-    var bottomShadeDark: Double = 0.14 { didSet { save(bottomShadeDark, "bottomShadeDark") } }
     /// 6: grain strength, percent (0 to 4).
     var grainPercent: Double = 1.5 { didSet { save(grainPercent, "grainPercent") } }
-    /// 2: the band's width, pt (4 to 12), how the two glasses are laid, and
-    /// whether they share one glass container.
-    var clearBandWidth: Double = 7 { didSet { save(clearBandWidth, "clearBandWidth") } }
+    /// 2: the band's width, pt (2 to 40): how far in from the edge the
+    /// Clear glass, and so the bend, reaches. Apple's glass has no setting
+    /// for how strongly it bends; the width is the one honest lever. Then
+    /// how the two glasses are laid, and whether they share one container.
+    var clearBandWidth: Double = 14 { didSet { save(clearBandWidth, "clearBandWidth") } }
     var clearBandMethod: ClearBandMethod = .ring { didSet { save(clearBandMethod.rawValue, "clearBandMethod") } }
     var clearBandContainer = false { didSet { save(clearBandContainer, "clearBandContainer") } }
     /// 7: the tight contact shadow (Light, Dark) and the wide soft one
@@ -151,14 +152,12 @@ final class GlossLab {
             if defaults.object(forKey: Self.prefix + key) != nil { value = defaults.double(forKey: Self.prefix + key) }
         }
         bool("rimFade", &rimFade); bool("edgeLight", &edgeLight); bool("innerEdge", &innerEdge)
-        bool("topLight", &topLight); bool("topLightKeepsOut", &topLightKeepsOut); bool("grain", &grain)
+        bool("edgeLightAround", &edgeLightAround); bool("grain", &grain)
         bool("oneRim", &oneRim)
         double("rimFadeWidth", &rimFadeWidth); double("edgeLightWidth", &edgeLightWidth)
         double("edgeLightLight", &edgeLightLight); double("edgeLightDark", &edgeLightDark)
         double("edgeLightShade", &edgeLightShade)
         double("innerEdgeInset", &innerEdgeInset); double("innerEdgeStrength", &innerEdgeStrength)
-        double("topLightLight", &topLightLight); double("bottomShadeLight", &bottomShadeLight)
-        double("topLightDark", &topLightDark); double("bottomShadeDark", &bottomShadeDark)
         double("grainPercent", &grainPercent)
         bool("clearBand", &clearBand); bool("glassShadow", &glassShadow); bool("glassSpill", &glassSpill)
         bool("clearBandContainer", &clearBandContainer)
@@ -171,12 +170,17 @@ final class GlossLab {
         double("movingLightTilt", &movingLightTilt); double("movingLightReach", &movingLightReach)
         bool("neutralGlass", &neutralGlass); bool("neutralControls", &neutralControls)
         double("neutralGlassAmount", &neutralGlassAmount)
-        bool("clearBody", &clearBody)
+        bool("clearBody", &clearBody); bool("clearControls", &clearControls)
         double("clearBodyFillLight", &clearBodyFillLight); double("clearBodyFillDark", &clearBodyFillDark)
         if let raw = defaults.string(forKey: Self.prefix + "clearBandMethod"), let value = ClearBandMethod(rawValue: raw) {
             clearBandMethod = value
         }
         if let raw = defaults.string(forKey: Self.prefix + "backdrop"), let value = Backdrop(rawValue: raw) { backdrop = value }
+        // A launch argument (`-GlossLab.preset <id>`) shows a preset for
+        // one run. Still loading, so nothing of it is saved.
+        if let id = defaults.string(forKey: Self.prefix + "preset"), let preset = Self.presets.first(where: { $0.id == id }) {
+            apply(preset)
+        }
     }
 
     static let prefix = "GlossLab."
@@ -190,10 +194,10 @@ final class GlossLab {
 
     /// Every switch off: the trunk's look. Slider values are kept.
     func allOff() {
-        rimFade = false; edgeLight = false; innerEdge = false; topLight = false; grain = false; oneRim = false
+        rimFade = false; edgeLight = false; edgeLightAround = false; innerEdge = false; grain = false; oneRim = false
         clearBand = false; glassShadow = false; glassSpill = false; movingLight = false
         neutralGlass = false; neutralControls = false
-        clearBody = false
+        clearBody = false; clearControls = false
     }
 
     /// The sliders back to the lead's starting values.
@@ -203,10 +207,7 @@ final class GlossLab {
         edgeLightWidth = fresh.edgeLightWidth; edgeLightLight = fresh.edgeLightLight
         edgeLightDark = fresh.edgeLightDark; edgeLightShade = fresh.edgeLightShade
         innerEdgeInset = fresh.innerEdgeInset; innerEdgeStrength = fresh.innerEdgeStrength
-        topLightLight = fresh.topLightLight; bottomShadeLight = fresh.bottomShadeLight
-        topLightDark = fresh.topLightDark; bottomShadeDark = fresh.bottomShadeDark
         grainPercent = fresh.grainPercent
-        topLightKeepsOut = true
         clearBandWidth = fresh.clearBandWidth; clearBandMethod = fresh.clearBandMethod
         clearBandContainer = fresh.clearBandContainer
         shadowContactLight = fresh.shadowContactLight; shadowContactDark = fresh.shadowContactDark
@@ -218,14 +219,93 @@ final class GlossLab {
         clearBodyFillLight = fresh.clearBodyFillLight; clearBodyFillDark = fresh.clearBodyFillDark
     }
 
-    /// 0. 3D: dark glass lit from the top is Dark mode plus ideas 5 and 3.
-    /// The mode is the app's own setting; the caller sets it. 5's light
-    /// must not keep out of the control bands here: kept out, it leaves the
-    /// top band, so it cannot be brightest at the top (recheck, 22 Nov).
-    func apply3D() {
-        topLight = true
-        topLightKeepsOut = false
-        edgeLight = true
+    /// A named combination of switches and values. `dark` is the mode it is
+    /// made for (the lab window sets it), or nil for either mode.
+    struct Preset: Identifiable {
+        let id: String
+        let title: String
+        let note: String
+        var dark: Bool?
+        let apply: @MainActor (GlossLab) -> Void
+    }
+
+    /// The lead's combinations, for a first look; none is a pick.
+    static let presets: [Preset] = [
+        Preset(id: "today", title: "Today's panel", note: "Everything off.") { _ in },
+        Preset(id: "banner", title: "Banner",
+               note: "Clear glass, a light fill, no colour from behind. Near the notification banners.") { lab in
+            lab.clearBody = true; lab.clearBodyFillLight = 15; lab.clearBodyFillDark = 15
+            lab.neutralGlass = true; lab.neutralGlassAmount = 60
+        },
+        Preset(id: "controlCentre", title: "Control Centre",
+               note: "Clear grey glass, a bright rim all the way round, clear controls. Sets Dark.", dark: true) { lab in
+            lab.clearBody = true; lab.clearBodyFillLight = 10; lab.clearBodyFillDark = 0
+            lab.clearControls = true
+            lab.rimFade = true; lab.rimFadeWidth = 10
+            lab.edgeLight = true; lab.edgeLightAround = true
+            lab.edgeLightWidth = 1.5; lab.edgeLightLight = 0.8; lab.edgeLightDark = 0.55
+            lab.innerEdge = true; lab.innerEdgeInset = 3; lab.innerEdgeStrength = 0.18
+            lab.glassShadow = true
+        },
+        Preset(id: "clearBareEdge", title: "Clear, bare edge",
+               note: "Clear glass with more fill under the text, bare at the rim where it bends.") { lab in
+            lab.clearBody = true; lab.clearBodyFillLight = 30; lab.clearBodyFillDark = 30
+            lab.rimFade = true; lab.rimFadeWidth = 12
+            lab.neutralGlass = true; lab.neutralGlassAmount = 40
+            lab.glassShadow = true
+        },
+        Preset(id: "refractingRim", title: "Refracting rim",
+               note: "Today's glass with a clear rim that bends what is behind it.") { lab in
+            lab.clearBand = true; lab.clearBandWidth = 16
+            lab.rimFade = true; lab.rimFadeWidth = 16
+            lab.edgeLight = true
+        },
+        Preset(id: "thickGlass", title: "Thick glass",
+               note: "A clear rim, light all round the edge, a second inner line, a glass shadow.") { lab in
+            lab.clearBand = true; lab.clearBandWidth = 10
+            lab.rimFade = true; lab.rimFadeWidth = 10
+            lab.edgeLight = true; lab.edgeLightAround = true
+            lab.innerEdge = true; lab.innerEdgeInset = 3.5
+            lab.glassShadow = true; lab.glassSpill = true
+        },
+        Preset(id: "neutralGrain", title: "Neutral, fine grain",
+               note: "Today's glass without the colour from behind, fine grain, a glass shadow.") { lab in
+            lab.neutralGlass = true; lab.neutralGlassAmount = 80
+            lab.grain = true; lab.grainPercent = 1.5
+            lab.glassShadow = true
+        },
+        Preset(id: "livingLight", title: "Living light",
+               note: "The edge light leans towards the pointer; every control is lit the same way.") { lab in
+            lab.edgeLight = true; lab.movingLight = true
+            lab.oneRim = true
+            lab.glassShadow = true
+        },
+    ]
+
+    /// A preset sets every switch and every slider: all off, the sliders
+    /// back to their starts, then its own. The mode is the app's own
+    /// setting; the caller sets it.
+    func apply(_ preset: Preset) {
+        allOff()
+        resetSliders()
+        preset.apply(self)
+    }
+
+    /// The preset the lab's switches and sliders match now, or nil.
+    var currentPreset: Preset? {
+        let now = labLines
+        return Self.presets.first { Self.lines(of: $0) == now }
+    }
+
+    private static var presetLines: [String: String] = [:]
+
+    private static func lines(of preset: Preset) -> String {
+        if let known = presetLines[preset.id] { return known }
+        let lab = GlossLab(defaults: nil)
+        lab.apply(preset)
+        let lines = lab.labLines
+        presetLines[preset.id] = lines
+        return lines
     }
 
     /// The app's own glass settings, as the lab writes them down: with
@@ -242,7 +322,6 @@ final class GlossLab {
 
     /// The current switches and values as text, for "Copy values".
     func valuesText(app: AppValues) -> String {
-        func f(_ value: Double) -> String { String(format: "%.2f", value) }
         func on(_ value: Bool) -> String { value ? "on" : "off" }
         return """
         Attic Gloss lab values
@@ -252,17 +331,28 @@ final class GlossLab {
         Tint: \(app.tint), length \(Int((app.tintLength * 100).rounded())) %
         Brighten glass: \(on(app.brightenGlass))
         Backdrop: \(backdrop.title)
+        Preset: \(currentPreset?.title ?? "none (own values)")
+        \(labLines)
+        """
+    }
+
+    /// The lab's own switches and sliders as text, numbered as in the
+    /// brief (5, Light from the top, was removed on 23 Nov; 8 was not built).
+    var labLines: String {
+        func f(_ value: Double) -> String { String(format: "%.2f", value) }
+        func on(_ value: Bool) -> String { value ? "on" : "off" }
+        return """
         1 Bare glass at the rim: \(on(rimFade)), width \(f(rimFadeWidth)) pt
-        2 A band of Clear glass: \(on(clearBand)), width \(f(clearBandWidth)) pt, \(clearBandMethod.title), one container: \(on(clearBandContainer))
-        3 Edge light on the panel: \(on(edgeLight)), width \(f(edgeLightWidth)) pt, Light \(f(edgeLightLight)), Dark \(f(edgeLightDark)), bottom line \(f(edgeLightShade))
+        2 Refracting rim (a band of Clear glass): \(on(clearBand)), width \(f(clearBandWidth)) pt, \(clearBandMethod.title), one container: \(on(clearBandContainer))
+        3 Edge light on the panel: \(on(edgeLight)), width \(f(edgeLightWidth)) pt, Light \(f(edgeLightLight)), Dark \(f(edgeLightDark)), bottom line \(f(edgeLightShade)), all the way round: \(on(edgeLightAround))
         4 A second inner edge: \(on(innerEdge)), inset \(f(innerEdgeInset)) pt, strength \(f(innerEdgeStrength))
-        5 Light from the top: \(on(topLight)), Light top \(f(topLightLight)) shade \(f(bottomShadeLight)), Dark top \(f(topLightDark)) shade \(f(bottomShadeDark)), keeps out from under the controls: \(on(topLightKeepsOut))
         6 Fine grain: \(on(grain)), \(f(grainPercent)) %
         7 A shadow that fits glass: \(on(glassShadow)), contact Light \(f(shadowContactLight)) Dark \(f(shadowContactDark)), soft Light \(f(shadowSoftLight)) Dark \(f(shadowSoftDark)), radius \(f(shadowSoftRadius)) pt, drop \(f(shadowSoftDrop)) pt
         7 Spill of light under the bottom edge: \(on(glassSpill)), \(f(spillStrength))
         9 Highlights that move: \(on(movingLight)), tilt \(f(movingLightTilt)) deg, reach \(f(movingLightReach)) (draws 3's light with 3's values)
         11 Neutral glass: \(on(neutralGlass)), amount \(f(neutralGlassAmount)) %, controls too: \(on(neutralControls))
         12 Clear glass body: \(on(clearBody)), Light white fill \(f(clearBodyFillLight)) %, Dark black fill \(f(clearBodyFillDark)) %
+        13 Clear glass controls: \(on(clearControls))
         10 One rim recipe for every control: \(on(oneRim))
         """
     }
