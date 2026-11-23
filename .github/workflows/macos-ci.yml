@@ -129,43 +129,12 @@ jobs:
           ATTIC_CI_KEYBOARD_MODE: fka
           TEST_RUNNER_ATTIC_FULL_KEYBOARD_ACCESS_TESTS: "1"
         run: |
-          run_tests() { # name, expected passes, tests...
-            name=$1; expected=$2; shift 2
-            only=(); for t in "$@"; do only+=(-only-testing:"AtticTests/AtticDropdownTests/$t"); done
-            Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
-              -configuration Local -destination 'platform=macOS' \
-              -derivedDataPath "$RUNNER_TEMP/AtticFKA" -resultBundlePath "$RUNNER_TEMP/AtticFKA-$name.xcresult" \
-              CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO "${only[@]}" || true
-            xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-$name.xcresult" --format json > "$RUNNER_TEMP/fka-$name-summary.json" || echo '{}' > "$RUNNER_TEMP/fka-$name-summary.json"
-            if python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==int(sys.argv[2]) and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-$name-summary.json" "$expected"; then
-              echo "FKA_RESULT $name: pass"; return 0
-            fi
-            echo "FKA_RESULT $name: FAIL"; cat "$RUNNER_TEMP/fka-$name-summary.json"; return 1
-          }
-          status=0
-          # The native key-window interaction runs alone in its own process first.
-          run_tests native 1 testTheTagPickerWorksFromTheKeyboardWithFullKeyboardAccess || status=1
-          run_tests unit 4 \
-            testH5_04OpeningGivesTheHostTheKeyboardAndOnlySwiftUIFocusesTheField \
-            testH5_04ATabBeforeTheOpeningHandoffIsNotUndoneByIt \
-            testH5_04AReusedPresenterOpensItsNextCardAsItOpenedTheFirst \
-            testH5_04TabHandsTheKeyboardBetweenFieldAndRowsOnAReusedPresenter || status=1
+          # FKA66 probe only (throwaway branch for PR 66 narrowing; never merged).
           Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
             -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
-            -resultBundlePath "$RUNNER_TEMP/AtticFKA-task-focus.xcresult" CODE_SIGNING_ALLOWED=NO \
-            -parallel-testing-enabled NO \
-            -only-testing:AtticTests/TasksRound13Tests/testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask \
-            -only-testing:AtticTests/DeepReviewFixTests/testEveryTabStopIsAVisibleRowOrAField \
-            -only-testing:AtticTests/TasksRound13Tests/testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus || status=1
-          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-task-focus.xcresult" --format json > "$RUNNER_TEMP/fka-task-focus-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==3 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-task-focus-summary.json" || status=1
-          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
-            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
-            -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" CODE_SIGNING_ALLOWED=NO \
-            -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests || status=1
-          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" --format json > "$RUNNER_TEMP/fka-notes-undo-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==8 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
-          exit $status
+            -resultBundlePath "$RUNNER_TEMP/AtticFKA-probe.xcresult" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO -test-iterations 3 \
+            -only-testing:AtticTests/AtticDesignSystemHostedTests/testFKAProbeNotesRowActionsTabThenSpace
       - name: Upload focused keyboard evidence
         if: always()
         uses: actions/upload-artifact@v4
