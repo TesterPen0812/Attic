@@ -817,12 +817,17 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
             }
             .store(in: &cancellables)
         // Slice 2: a family's files moved into its note (or back).
+        // `@Published` sends in its willSet, before the new statuses are
+        // stored: the key moves, the rows catch up and the page is told only
+        // once they are (PR 48 round 3 review P1-1), as the date sink does.
         library.tasks.fileMigration.$statuses.dropFirst()
             .sink { [weak self] _ in
-                guard let self else { return }
-                self.noteOwnersRevision &+= 1
-                self.syncRowStates()
-                self.objectWillChange.send()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.noteOwnersRevision &+= 1
+                    self.syncRowStates()
+                    self.objectWillChange.send()
+                }
             }
             .store(in: &cancellables)
         // A subtask moved, or a move undone or redone (from here or the
