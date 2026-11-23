@@ -45,12 +45,25 @@ import SwiftUI
 /// after it was shown). Observed only by the pages' container: it changes
 /// when a gesture or a slide starts and ends, never while it moves.
 @MainActor
-final class TasksPagerSpan: ObservableObject {
+final class TasksPagerSpan: ObservableObject, StoredListInputOwner {
     /// The pages drawn: the one shown, and those a move passes.
-    @Published var pages: ClosedRange<Int> = 0...0
+    ///
+    /// Stored, then `pagesWillBeDrawn`, then sent (PR 48 takeover): a tab
+    /// this draws (a swipe's neighbour, a page a move passes) has its row
+    /// states brought up to its list before the pager can draw it. With
+    /// `@Published` the model heard of it in willSet and queued the sync,
+    /// and a frame drawn before the run loop reached it drew the tab's
+    /// list ahead of its rows.
+    @StoredThenSent(listInput: true) var pages: ClosedRange<Int> = 0...0
     /// A page a move skips over (Accepted 2026-11-04): Done → Now slides
     /// Done straight in beside Now, so Later's list never shows on the way.
-    @Published var skipped: Int?
+    /// Sent as `pages` is: letting a skipped page go draws it.
+    @StoredThenSent(listInput: true) var skipped: Int? = nil
+    /// The pages drawn changed (stored, not yet sent). Set by the Tasks
+    /// model, which brings the rows of the tabs now drawn up to their lists.
+    var pagesWillBeDrawn: (() -> Void)?
+
+    func listInputWillBeSent() { pagesWillBeDrawn?() }
     /// The pages kept built but not drawn (round 11): built once the page
     /// is shown and idle, so a tab click or a swipe never builds a page as
     /// it starts to move (each build took 50–100 ms on screen, the lag the

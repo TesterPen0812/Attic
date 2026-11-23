@@ -797,7 +797,9 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         // transaction's send, a window laid out on demand), before a block
         // queued on the run loop. The store names two moments instead:
         // `.willSend`, its tasks and data revision final and nothing sent
-        // yet, when the lists built from them catch up; and `.stored`, when
+        // for the revision yet (`tasks`' own send has gone out, the lists'
+        // key not moved), when the lists built from them catch up; and
+        // `.stored`, when
         // the lists built from `revision` itself do (Done's, a searched
         // tab's). Between a value the lists are built from moving and its
         // catch-up the store sends nothing and calls nobody else.
@@ -817,16 +819,17 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         // built from reaches the rows through one sync per change, made
         // outside any view update (`queueRowStateSync`). The model's sends
         // (every published value, the date sink's, a dropped list's), the
-        // store's revision above, Done's results and the pager's drawn pages.
+        // store's revision above and Done's results.
         objectWillChange
             .sink { [weak self] _ in self?.queueRowStateSync() }
             .store(in: &cancellables)
         doneResults.objectWillChange
             .sink { [weak self] _ in self?.queueRowStateSync() }
             .store(in: &cancellables)
-        pagerSwipe.span.objectWillChange
-            .sink { [weak self] _ in self?.queueRowStateSync() }
-            .store(in: &cancellables)
+        // The pager's drawn pages are not queued (PR 48 takeover): a tab the
+        // span is about to draw has its rows brought up as the span is
+        // stored, before its send, as a list input's are (`TasksPagerSpan`).
+        pagerSwipe.span.pagesWillBeDrawn = { [weak self] in self?.syncRowStates() }
         library.tags.inventoryChanges
             .sink { [weak self] in
                 self?.tagInventoryRevision &+= 1
