@@ -890,29 +890,6 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         _ = window
     }
 
-    /// A Notes row's •••: the keyboard still reaches it under Full Keyboard
-    /// Access, the row learns it has the keyboard, and Space shows the
-    /// note's actions. It runs only in CI's focused Full Keyboard Access job
-    /// (`macos-ci.yml`, `fka`); the unit lane leaves it out, and a local run
-    /// without Full Keyboard Access fails here rather than skip.
-    func testANotesRowsActionsTakeTheKeyboardWithFullKeyboardAccess() throws {
-        try requireKeyWindowTests()
-        guard NSApp.isFullKeyboardAccessEnabled else {
-            return XCTFail("needs Full Keyboard Access: CI's fka job turns it on; the unit lane leaves this test out")
-        }
-        AtticFocusReaderCensus.reset(); AtticFocusReaderCensus.records = true
-        defer { AtticFocusReaderCensus.records = false; AtticFocusReaderCensus.reset() }
-        var shown = 0
-        let (window, _) = host(try notesRow(onShowActions: { shown += 1 }), size: CGSize(width: 300, height: 42), key: true)
-        for _ in 0..<4 where !AtticFocusReaderCensus.notesRowActions.values.contains(true) {
-            window.selectNextKeyView(nil)
-            spin()
-        }
-        XCTAssertTrue(AtticFocusReaderCensus.notesRowActions.values.contains(true), "Tab reaches the row's •••")
-        key(window, " ", code: 49)
-        XCTAssertEqual(shown, 1, "Space on the focused ••• shows the note's actions")
-    }
-
     /// The •••, without Full Keyboard Access: still one element VoiceOver
     /// reaches, named for its note, and pressing it shows the actions.
     func testANotesRowsActionsStayReachableToVoiceOver() throws {

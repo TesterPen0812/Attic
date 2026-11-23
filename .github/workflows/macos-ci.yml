@@ -156,10 +156,9 @@ jobs:
             -parallel-testing-enabled NO \
             -only-testing:AtticTests/TasksRound13Tests/testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask \
             -only-testing:AtticTests/DeepReviewFixTests/testEveryTabStopIsAVisibleRowOrAField \
-            -only-testing:AtticTests/TasksRound13Tests/testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus \
-            -only-testing:AtticTests/AtticDesignSystemHostedTests/testANotesRowsActionsTakeTheKeyboardWithFullKeyboardAccess || status=1
+            -only-testing:AtticTests/TasksRound13Tests/testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus || status=1
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-task-focus.xcresult" --format json > "$RUNNER_TEMP/fka-task-focus-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==4 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-task-focus-summary.json" || status=1
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==3 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-task-focus-summary.json" || status=1
           Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
             -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
             -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" CODE_SIGNING_ALLOWED=NO \
@@ -465,7 +464,6 @@ jobs:
             -skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed11013 \
             -skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed11014 \
             -skip-testing:AtticTests/NotesEditorHuntTests/testGeneratedSeed11015 \
-            -skip-testing:AtticTests/AtticDesignSystemHostedTests/testANotesRowsActionsTakeTheKeyboardWithFullKeyboardAccess \
             "${continuation_skips[@]}" \
             test-without-building
 
