@@ -904,5 +904,86 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(lab.labLines, fresh.labLines)
         XCTAssertEqual(GlossLab(defaults: defaults).labLines, fresh.labLines, "All off and Reset sliders were not saved")
     }
+
+    /// Material samples (23 Nov): the switch and the veil load and are
+    /// written down by Copy values. They are the lab window's own state:
+    /// All off, Reset sliders and a preset leave them alone, and a preset
+    /// still matches whatever they are.
+    func testMaterialSamplesValuesLoadCopyAndStayOutOfPresets() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertFalse(fresh.samplesShown, "the sample cards start hidden")
+        XCTAssertEqual(fresh.samplesSmoke, 25)
+        XCTAssertTrue(fresh.valuesText(app: Self.app(mode: "Light")).contains("Material samples: off, veil 25 %"))
+        defaults.set(true, forKey: "GlossLab.samplesShown")
+        defaults.set(40.0, forKey: "GlossLab.samplesSmoke")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.samplesShown); XCTAssertEqual(lab.samplesSmoke, 40)
+        let text = lab.valuesText(app: Self.app(mode: "Light"))
+        XCTAssertTrue(text.contains("Material samples: on, veil 40 %"), text)
+        XCTAssertFalse(lab.labLines.lowercased().contains("sample"), "the samples are not a numbered idea")
+        lab.allOff(); lab.resetSliders()
+        XCTAssertTrue(lab.samplesShown, "All off hid the sample cards")
+        XCTAssertEqual(lab.samplesSmoke, 40, "Reset sliders moved the samples' veil")
+        let preset = try XCTUnwrap(GlossLab.presets.first { $0.id == "thickGlass" })
+        lab.apply(preset)
+        XCTAssertTrue(lab.samplesShown); XCTAssertEqual(lab.samplesSmoke, 40)
+        lab.samplesSmoke = 55
+        XCTAssertEqual(lab.currentPreset?.id, "thickGlass", "the samples' veil broke the preset's match")
+        let again = GlossLab(defaults: defaults)
+        XCTAssertTrue(again.samplesShown); XCTAssertEqual(again.samplesSmoke, 55, "a change is kept")
+    }
+
+    /// The sample cards: six, lettered A to F in order, each named once,
+    /// and the veil reaches exactly the four that take one.
+    func testMaterialSamplesAreSixDistinctCards() {
+        let all = GlossSample.allCases
+        XCTAssertEqual(all.map(\.letter), ["A", "B", "C", "D", "E", "F"])
+        XCTAssertEqual(Set(all.map(\.title)).count, 6)
+        XCTAssertEqual(all.filter(\.usesSmoke), [.regularSmoke, .regularTint, .clearSmoke, .lightSmoke])
+        let size = GlossSamples.windowSize
+        // Margins 20 + 20, six cards of 150, six gaps of 14, the close button 28.
+        XCTAssertEqual(size.width, 1052)
+        XCTAssertEqual(size.height, 190)
+    }
+
+    /// The sample cards' window is clear and borderless (so the glass has
+    /// only what is behind the window under it), floats over other apps'
+    /// windows, stays up while another app is in front, is on every
+    /// desktop, and is not shown by being made.
+    func testSamplesWindowIsClearFloatsAndStays() {
+        let window = GlossSamplesWindows.makeWindow()
+        XCTAssertFalse(window.isVisible, "making the window showed it")
+        XCTAssertFalse(window.isOpaque)
+        XCTAssertEqual(window.backgroundColor?.alphaComponent, 0)
+        XCTAssertFalse(window.hasShadow)
+        XCTAssertFalse(window.hidesOnDeactivate, "the cards would vanish when another app is clicked")
+        XCTAssertEqual(window.level, .floating)
+        XCTAssertTrue(window.collectionBehavior.contains(.canJoinAllSpaces))
+        XCTAssertTrue(window.styleMask.contains(.nonactivatingPanel))
+        XCTAssertFalse(window.styleMask.contains(.titled))
+        XCTAssertTrue(window.isMovableByWindowBackground)
+        XCTAssertEqual(window.title, "Gloss samples")
+        XCTAssertEqual(window.appearance?.name, .darkAqua)
+        XCTAssertEqual(window.frame.size, GlossSamples.windowSize)
+    }
+
+    /// Where the sample cards' window goes: where it was left while at
+    /// least half of it is on the screen, else the top centre.
+    func testSamplesWindowComesBackOnScreen() {
+        let visible = CGRect(x: 0, y: 0, width: 1800, height: 1100)
+        let size = GlossSamples.windowSize
+        let top = CGRect(x: ((1800 - size.width) / 2).rounded(), y: 1100 - 60 - size.height, width: size.width, height: size.height)
+        XCTAssertEqual(GlossSamples.frame(savedOrigin: nil, size: size, visible: visible), top, "first time: top centre")
+        let kept = CGPoint(x: 300, y: 400)
+        XCTAssertEqual(GlossSamples.frame(savedOrigin: kept, size: size, visible: visible), CGRect(origin: kept, size: size))
+        XCTAssertEqual(GlossSamples.frame(savedOrigin: CGPoint(x: 5000, y: 400), size: size, visible: visible), top, "left on a screen that is gone")
+        XCTAssertEqual(GlossSamples.frame(savedOrigin: CGPoint(x: 1800 - size.width / 4, y: 400), size: size, visible: visible), top,
+                       "three quarters off the screen")
+        let half = CGPoint(x: 1800 - size.width / 2, y: 400)
+        XCTAssertEqual(GlossSamples.frame(savedOrigin: half, size: size, visible: visible), CGRect(origin: half, size: size), "half on: kept")
+    }
 }
 #endif

@@ -28,6 +28,7 @@ final class GlossLabWindows: NSObject, NSWindowDelegate {
         self.settings = settings
         self.dockedPanel = dockedPanel
         observeBackdrop()
+        GlossSamplesWindows.shared.configure()
         if UserDefaults.standard.object(forKey: GlossLab.prefix + "openAtLaunch") == nil
             || UserDefaults.standard.bool(forKey: GlossLab.prefix + "openAtLaunch") {
             show()
@@ -195,6 +196,12 @@ struct GlossLabView: View {
                     ForEach(GlossLab.Backdrop.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
+
+                section("Material samples")
+                row("Sample cards", $lab.samplesShown,
+                    note: "Six cards of Apple's glass in a window of their own, over whatever is behind it. Drag them next to the real Control Centre. A Regular glass, as in Dark. B the same with a black veil. C the same with the veil as the glass's own tint. D Clear glass. E Clear with the veil (the lab's tiles now). F Regular glass as in Light, with the veil. White text on all.") {
+                    slider("Veil", $lab.samplesSmoke, 0...60, unit: " %")
+                }
 
                 section("Presets")
                 presets
@@ -488,6 +495,307 @@ struct GlossPicture: View {
                             .foregroundStyle(Color(red: 0.15, green: 0.12, blue: 0.10)),
                          at: CGPoint(x: sign.midX, y: sign.midY))
         }
+    }
+}
+// MARK: Material samples
+
+/// One sample card's material (23 Nov, owner: "do the sample cards side by
+/// side"). Each differs from its neighbour in one thing: the glass variant,
+/// or what of ours lies over it.
+enum GlossSample: String, CaseIterable, Identifiable {
+    /// Apple's Regular glass (it blurs what is behind), nothing over it.
+    case regular
+    /// Regular glass with a black veil over it.
+    case regularSmoke
+    /// Regular glass with the veil given to the glass as its own tint.
+    case regularTint
+    /// Apple's Clear glass, nothing over it.
+    case clear
+    /// Clear glass with the black veil: what the lab's tiles use.
+    case clearSmoke
+    /// Regular glass drawn as in Light (pale), with the black veil over it
+    /// and white text: over a white window at a 25 % veil it comes near
+    /// the grey of the real Control Centre's pieces in Light (184 to 187
+    /// in the owner's screenshot; the lead's arithmetic, to be seen).
+    case lightSmoke
+
+    var id: String { rawValue }
+
+    var letter: String {
+        switch self {
+        case .regular: "A"
+        case .regularSmoke: "B"
+        case .regularTint: "C"
+        case .clear: "D"
+        case .clearSmoke: "E"
+        case .lightSmoke: "F"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .regular: "Regular"
+        case .regularSmoke: "Regular + veil"
+        case .regularTint: "Regular, tinted"
+        case .clear: "Clear"
+        case .clearSmoke: "Clear + veil"
+        case .lightSmoke: "Light + veil"
+        }
+    }
+
+    /// Whether the Veil slider changes this card.
+    var usesSmoke: Bool {
+        switch self {
+        case .regular, .clear: false
+        case .regularSmoke, .regularTint, .clearSmoke, .lightSmoke: true
+        }
+    }
+}
+
+/// The sample cards' sizes, pt, and where their window goes.
+enum GlossSamples {
+    static let card: CGFloat = 150
+    static let corner: CGFloat = 28
+    static let gap: CGFloat = 14
+    static let margin: CGFloat = 20
+    static let closeButton: CGFloat = 28
+
+    /// The window's size: the cards in one row, the close button after
+    /// them, a margin all round.
+    static var windowSize: CGSize {
+        let count = CGFloat(GlossSample.allCases.count)
+        return CGSize(width: margin * 2 + card * count + gap * count + closeButton,
+                      height: margin * 2 + card)
+    }
+
+    /// Where the window goes: its saved origin while at least half of it
+    /// is on `visible` (a screen's visible frame), else the top centre.
+    /// Its size is always `size`.
+    static func frame(savedOrigin: CGPoint?, size: CGSize, visible: CGRect) -> CGRect {
+        if let savedOrigin {
+            let saved = CGRect(origin: savedOrigin, size: size)
+            let shown = saved.intersection(visible)
+            if !shown.isNull, shown.width * shown.height >= size.width * size.height / 2 { return saved }
+        }
+        return CGRect(x: (visible.midX - size.width / 2).rounded(), y: (visible.maxY - 60 - size.height).rounded(),
+                      width: size.width, height: size.height)
+    }
+}
+
+/// One card: white text, as on a Control Centre card, over its material.
+struct GlossSampleCard: View {
+    let sample: GlossSample
+    /// The black veil, 0 to 1.
+    let smoke: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(sample.letter).font(.system(size: 22, weight: .bold))
+                Text(sample.title).font(.system(size: 12, weight: .semibold)).opacity(0.8)
+            }
+            Spacer(minLength: 6)
+            Text("Book dentist").font(.system(size: 15, weight: .semibold))
+            Text("Tomorrow · #health").font(.system(size: 12)).opacity(0.6)
+            HStack(spacing: 18) {
+                Image(systemName: "backward.fill")
+                Image(systemName: "play.fill")
+                Image(systemName: "forward.fill")
+            }
+            .font(.system(size: 17))
+            .padding(.top, 10)
+        }
+        .lineLimit(1)
+        .foregroundStyle(.white)
+        .padding(14)
+        .frame(width: GlossSamples.card, height: GlossSamples.card, alignment: .topLeading)
+        .background { material }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Sample \(sample.letter), \(sample.title)")
+    }
+
+    @ViewBuilder private var material: some View {
+        let shape = RoundedRectangle(cornerRadius: GlossSamples.corner, style: .continuous)
+        let veil = Color.black.opacity(smoke)
+        switch sample {
+        case .regular:
+            shape.fill(Color.clear).glassEffect(.regular, in: shape)
+        case .regularSmoke:
+            shape.fill(Color.clear).glassEffect(.regular, in: shape).overlay { shape.fill(veil) }
+        case .regularTint:
+            shape.fill(Color.clear).glassEffect(.regular.tint(veil), in: shape)
+        case .clear:
+            shape.fill(Color.clear).glassEffect(.clear, in: shape)
+        case .clearSmoke:
+            shape.fill(Color.clear).glassEffect(.clear, in: shape).overlay { shape.fill(veil) }
+        case .lightSmoke:
+            shape.fill(Color.clear).glassEffect(.regular, in: shape)
+                .environment(\.colorScheme, .light)
+                .overlay { shape.fill(veil) }
+        }
+    }
+}
+
+/// The sample cards in one row, drawn as in Dark (F's glass alone as in
+/// Light), with a close button after them. The window is dragged by any card.
+struct GlossSamplesView: View {
+    @Bindable var lab: GlossLab
+
+    var body: some View {
+        HStack(alignment: .top, spacing: GlossSamples.gap) {
+            ForEach(GlossSample.allCases) { sample in
+                GlossSampleCard(sample: sample, smoke: lab.samplesSmoke / 100)
+            }
+            Button {
+                lab.samplesShown = false
+            } label: {
+                let circle = Circle()
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: GlossSamples.closeButton, height: GlossSamples.closeButton)
+                    .background { circle.fill(Color.clear).glassEffect(.regular, in: circle) }
+                    .contentShape(circle)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close the sample cards")
+        }
+        .padding(GlossSamples.margin)
+        .frame(width: GlossSamples.windowSize.width, height: GlossSamples.windowSize.height, alignment: .topLeading)
+        .environment(\.colorScheme, .dark)
+        .gesture(WindowDragGesture())
+    }
+}
+
+/// The sample cards' window: borderless and clear, so the cards' glass
+/// has only what is behind the window under it, floating over other apps'
+/// windows and staying up while another app is in front. It is this app's
+/// own window, like the lab's two; it changes nothing about the panel.
+@MainActor
+final class GlossSamplesWindows {
+    static let shared = GlossSamplesWindows()
+
+    static let title = "Gloss samples"
+    static let backdropTitle = "Gloss samples backdrop"
+    private static let originKey = GlossLab.prefix + "samplesOrigin"
+
+    private var window: NSPanel?
+    private var backdropWindow: NSWindow?
+    private var moveObserver: NSObjectProtocol?
+
+    /// Shows or hides the window with the lab's switch, from now on.
+    func configure() {
+        withObservationTracking {
+            _ = GlossLab.shared.samplesShown
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.configure() }
+        }
+        apply()
+    }
+
+    /// The window, made and not yet shown.
+    static func makeWindow() -> NSPanel {
+        let panel = NSPanel(contentRect: CGRect(origin: .zero, size: GlossSamples.windowSize),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.title = title
+        panel.isReleasedWhenClosed = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.isMovableByWindowBackground = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.contentView = NSHostingView(rootView: GlossSamplesView(lab: .shared))
+        return panel
+    }
+
+    private func apply() {
+        guard GlossLab.shared.samplesShown else {
+            window?.orderOut(nil)
+            backdropWindow?.orderOut(nil)
+            return
+        }
+        if window == nil {
+            let panel = Self.makeWindow()
+            // Where it was last left, kept as a plain origin in this
+            // preview's defaults (a borderless window has no frame autosave
+            // of its own worth trusting across screens).
+            moveObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didMoveNotification, object: panel, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.saveOrigin() }
+            }
+            window = panel
+        }
+        guard let window else { return }
+        let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let saved = UserDefaults.standard.string(forKey: Self.originKey).map(NSPointFromString)
+        if !window.isVisible {
+            window.setFrame(GlossSamples.frame(savedOrigin: saved, size: GlossSamples.windowSize, visible: visible), display: true)
+        }
+        applyTestBackdrop(under: window)
+        window.orderFrontRegardless()
+    }
+
+    private func saveOrigin() {
+        guard let window, window.isVisible else { return }
+        UserDefaults.standard.set(NSStringFromPoint(window.frame.origin), forKey: Self.originKey)
+    }
+
+    /// A check's seam, never in the lab window: `-GlossLab.samplesBackdrop
+    /// <picture|white|black|text>` puts one of our own backdrops in a
+    /// window of its own right under the cards, so a still of our own
+    /// windows shows the glass over something. It does not follow a drag.
+    private func applyTestBackdrop(under window: NSWindow) {
+        guard let name = UserDefaults.standard.string(forKey: GlossLab.prefix + "samplesBackdrop") else { return }
+        if backdropWindow == nil {
+            let backdrop = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+            backdrop.isReleasedWhenClosed = false
+            backdrop.title = Self.backdropTitle
+            backdrop.level = .floating
+            backdrop.isOpaque = true
+            backdrop.hasShadow = false
+            backdrop.ignoresMouseEvents = true
+            backdrop.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            if name == "text" {
+                backdrop.contentView = NSHostingView(rootView: GlossSamplesTextBackdrop())
+            } else {
+                backdrop.contentView = NSHostingView(rootView: GlossBackdropView(backdrop: GlossLab.Backdrop(rawValue: name) ?? .black))
+            }
+            backdropWindow = backdrop
+        }
+        backdropWindow?.setFrame(window.frame.insetBy(dx: -30, dy: -30), display: true)
+        backdropWindow?.orderFrontRegardless()
+    }
+}
+
+/// The check's "text" backdrop: black lines of text on white with a few
+/// strong colours, like a busy window behind the cards.
+struct GlossSamplesTextBackdrop: View {
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.white
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(0..<10, id: \.self) { index in
+                    Text(index.isMultiple(of: 2)
+                         ? "Write path: measure and design the quick brown fox 0123456789 jumps over the lazy dog and keeps on running"
+                         : "Thu 26 Nov  Table with while into  #focus #preview  When move link sidebar date with launch settings")
+                        .font(.system(size: 15, weight: index.isMultiple(of: 4) ? .semibold : .regular))
+                        .foregroundStyle(.black)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            }
+            .padding(.top, 8)
+            Circle().fill(Color(red: 0.55, green: 0.15, blue: 0.85)).frame(width: 90, height: 90).offset(x: 250, y: 70)
+            Capsule().fill(Color(red: 0.1, green: 0.45, blue: 0.95)).frame(width: 220, height: 22).offset(x: 480, y: 120)
+            Rectangle().fill(Color(red: 0.12, green: 0.12, blue: 0.14)).frame(width: 150, height: 250).offset(x: 790, y: 0)
+        }
+        .clipped()
     }
 }
 #endif

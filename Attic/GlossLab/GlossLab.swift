@@ -181,6 +181,14 @@ final class GlossLab {
 
     var backdrop: Backdrop = .none { didSet { save(backdrop.rawValue, "backdrop") } }
 
+    /// Material samples (23 Nov, owner: "do the sample cards side by side"):
+    /// whether the sample cards' own window is shown, and the black veil on
+    /// the cards that take one, % (0 to 60). The lab window's own state,
+    /// like the backdrop: no preset, All off or Reset sliders touches them,
+    /// and they are not part of `labLines`, so a preset still matches.
+    var samplesShown = false { didSet { save(samplesShown, "samplesShown") } }
+    var samplesSmoke: Double = 25 { didSet { save(samplesSmoke, "samplesSmoke") } }
+
     init(defaults: UserDefaults?) {
         self.defaults = defaults
         defer { loading = false }
@@ -223,6 +231,7 @@ final class GlossLab {
             clearBandMethod = value
         }
         if let raw = defaults.string(forKey: Self.prefix + "backdrop"), let value = Backdrop(rawValue: raw) { backdrop = value }
+        bool("samplesShown", &samplesShown); double("samplesSmoke", &samplesSmoke)
         // A launch argument (`-GlossLab.preset <id>`) shows a preset for
         // one run. Still loading, so nothing of it is saved.
         if let id = defaults.string(forKey: Self.prefix + "preset"), let preset = Self.presets.first(where: { $0.id == id }) {
@@ -394,6 +403,7 @@ final class GlossLab {
         Tint: \(app.tint), length \(Int((app.tintLength * 100).rounded())) %
         Brighten glass: \(on(app.brightenGlass))
         Backdrop: \(backdrop.title)
+        Material samples: \(on(samplesShown)), veil \(Int(samplesSmoke.rounded())) %
         Preset: \(currentPreset?.title ?? "none (own values)")
         \(labLines)
         """
