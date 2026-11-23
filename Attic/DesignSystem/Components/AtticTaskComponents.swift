@@ -1023,24 +1023,43 @@ struct AtticOwnFocusRing: ViewModifier {
 private struct AtticLiveOwnFocusRing: ViewModifier {
     let outline: AtticOwnFocusRing.Outline
     let pinned: Bool
-    @FocusState private var focused: Bool
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
 
     @ViewBuilder
     func body(content: Content) -> some View {
         // A focus binding also installs a SwiftUI focus proxy. Register it
         // only for keyboard navigation, so mouse-driven buttons cannot
-        // compete with a live AppKit text editor (R11B-01).
+        // compete with a live AppKit text editor (R11B-01). The focus state
+        // itself lives in the keyboard branch too: a `@FocusState` is a focus
+        // reader, re-checked on every focus change in its graph (hidden pages
+        // included), so with the mouse no ring holds one.
         if keyboardFocusVisible {
-            content
-                .focused($focused)
-                .overlay { if AtticOwnFocusRing.shows(pinned: pinned, focused: focused, keyboardFocusVisible: true) {
-                    AtticOwnFocusRing.ring(outline)
-                } }
+            content.modifier(AtticKeyboardOwnFocusRing(outline: outline, pinned: pinned))
         } else {
             content
                 .overlay { if pinned { AtticOwnFocusRing.ring(outline) } }
         }
+    }
+}
+
+/// The ring while the keyboard drives: built fresh each time the keyboard
+/// takes over, with the button's own focus state.
+private struct AtticKeyboardOwnFocusRing: ViewModifier {
+    let outline: AtticOwnFocusRing.Outline
+    let pinned: Bool
+    @FocusState private var focused: Bool
+    #if DEBUG
+    @State private var censusID = UUID()
+    #endif
+
+    func body(content: Content) -> some View {
+        let shows = AtticOwnFocusRing.shows(pinned: pinned, focused: focused, keyboardFocusVisible: true)
+        #if DEBUG
+        let _ = AtticFocusReaderCensus.noteRing(censusID, keyboardFocusVisible: true, shown: shows, outline: outline)
+        #endif
+        content
+            .focused($focused)
+            .overlay { if shows { AtticOwnFocusRing.ring(outline) } }
     }
 }
 

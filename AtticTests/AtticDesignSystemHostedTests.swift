@@ -804,6 +804,128 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         perform(try XCTUnwrap(item.actions.first { actionName($0) == "Expand" }), on: item.element)
         XCTAssertEqual(fired, ["expand"])
     }
+
+    // MARK: Own focus ring: a focus state only while the keyboard drives
+
+    /// The rings' latest record (`AtticFocusReaderCensus`) whose outline has
+    /// this radius, while the keyboard drives.
+    private func ringShown(radius: Int) -> Bool? {
+        AtticFocusReaderCensus.rings.values
+            .filter { $0.keyboardFocusVisible && $0.outline.contains("radius: \(radius).0,") }
+            .map(\.shown).first
+    }
+
+    private func ownRingProbe() -> (NSWindow, OwnRingProbeDriver, AtticKeyboardFocusTracker) {
+        let driver = OwnRingProbeDriver()
+        let tracker = AtticKeyboardFocusTracker()
+        let (window, _) = host(OwnRingProbe(driver: driver).atticKeyboardFocusTracking(tracker),
+                               size: CGSize(width: 160, height: 48), key: true)
+        return (window, driver, tracker)
+    }
+
+    /// While the keyboard drives, the control that takes the focus draws
+    /// its ring: an arrow turns the rings on, then focus arrives (a page's
+    /// own focus request, as the Tasks and Notes keys move it).
+    func testAnOwnRingShowsOnTheControlThatTakesTheFocusWhileTheKeyboardDrives() throws {
+        try requireKeyWindowTests()
+        AtticFocusReaderCensus.reset(); AtticFocusReaderCensus.records = true
+        defer { AtticFocusReaderCensus.records = false; AtticFocusReaderCensus.reset() }
+        let (window, driver, tracker) = ownRingProbe()
+        XCTAssertTrue(window.isKeyWindow, "keyboard focus needs a key window")
+        tracker.observe(.keyDown, keyCode: 125) // ↓
+        spin(0.3)
+        driver.target = 1
+        spin(0.3)
+        XCTAssertEqual(driver.focused, 1, "harness: the first control has the focus")
+        XCTAssertEqual(ringShown(radius: 1), true, "the focused control draws its ring")
+        XCTAssertEqual(ringShown(radius: 2), false, "the other control draws none")
+    }
+
+    /// While the keyboard drives, the ring moves with the focus (a Tab as
+    /// the pages order it themselves: the page's own focus move; native
+    /// Tab between buttons needs Full Keyboard Access, not set here).
+    func testAnOwnRingFollowsTabWhileTheKeyboardDrives() throws {
+        try requireKeyWindowTests()
+        AtticFocusReaderCensus.reset(); AtticFocusReaderCensus.records = true
+        defer { AtticFocusReaderCensus.records = false; AtticFocusReaderCensus.reset() }
+        let (_, driver, tracker) = ownRingProbe()
+        tracker.observe(.keyDown, keyCode: 48) // Tab
+        spin(0.3)
+        driver.target = 1
+        spin(0.3)
+        XCTAssertEqual(ringShown(radius: 1), true, "harness: the first control shows its ring")
+        tracker.observe(.keyDown, keyCode: 48)
+        driver.target = 2
+        spin(0.3)
+        XCTAssertEqual(driver.focused, 2, "harness: Tab moved focus to the second control")
+        XCTAssertEqual(ringShown(radius: 2), true, "the control Tab reached draws its ring")
+        XCTAssertEqual(ringShown(radius: 1), false, "the control Tab left draws none")
+    }
+
+    /// RINGS-FLIP-DROPS-FOCUS, a trunk defect pinned here (found on
+    /// 2eb2269f, unchanged by this branch): the ring's modifier builds its
+    /// content in one branch while the mouse drives and another while the
+    /// keyboard does, so the first navigation key after a click re-creates
+    /// the control that holds the focus and the focus is lost (a narrowing
+    /// probe with only that branch and no focus state drops it too). The
+    /// ring cannot show on the control the click left focused. When the
+    /// branch keeps the control's identity, this test passes unexpectedly
+    /// and the expectation comes out.
+    func testTheFirstKeyAfterAClickKeepsTheFocusAndShowsItsRing() throws {
+        try requireKeyWindowTests()
+        AtticFocusReaderCensus.reset(); AtticFocusReaderCensus.records = true
+        defer { AtticFocusReaderCensus.records = false; AtticFocusReaderCensus.reset() }
+        let (window, driver, tracker) = ownRingProbe()
+        tracker.observe(.leftMouseDown, keyCode: nil)
+        driver.target = 1 // the click's focus
+        spin(0.3)
+        XCTAssertEqual(driver.focused, 1, "harness: the first control has the focus")
+        AtticFocusReaderCensus.reset()
+        tracker.observe(.keyDown, keyCode: 125) // ↓, which moves no focus on a plain control
+        spin(0.3)
+        XCTExpectFailure("RINGS-FLIP-DROPS-FOCUS: the branch flip re-creates the focused control") {
+            XCTAssertEqual(driver.focused, 1, "the first key after a click keeps the focus")
+            XCTAssertEqual(ringShown(radius: 1), true, "and the focused control draws its ring")
+        }
+        _ = window
+    }
+
+    /// The •••, without Full Keyboard Access: still one element VoiceOver
+    /// reaches, named for its note, and pressing it shows the actions.
+    func testANotesRowsActionsStayReachableToVoiceOver() throws {
+        var shown = 0
+        // The keyboard's row (↑ ↓) shows its •••, as a hover does.
+        let (_, hosting) = host(try notesRow(highlighted: true, onShowActions: { shown += 1 }), size: CGSize(width: 300, height: 42))
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        spin(0.3)
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        let actions = elements(hosting).filter { ($0.accessibilityIdentifier?() ?? "") == "notes-row-actions" }
+        XCTAssertEqual(actions.count, 1, "one ••• element per row")
+        let element = try XCTUnwrap(actions.first)
+        XCTAssertEqual(element.accessibilityLabel?() ?? "", "Actions for Launch plan")
+        XCTAssertTrue(element.accessibilityPerformPress?() ?? false, "the ••• answers a press")
+        spin()
+        XCTAssertEqual(shown, 1, "pressing the ••• shows the note's actions")
+    }
+
+    private func notesRow(highlighted: Bool = false, onShowActions: @escaping () -> Void) throws -> some View {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Launch plan"), .text("Agenda")]),
+                                                       tags: nil) else { throw NSError(domain: "create", code: 1) }
+        let model = NotesLibraryModel(search: { _ in [] }, store: store)
+        let row = try XCTUnwrap(model.groups(store: store, drafts: []).flatMap(\.rows).first { $0.id == id })
+        return NotesLibraryRow(details: model.libraryRow(row, store: store), thumbnails: model.thumbnails,
+                               isHighlighted: highlighted, commands: { [] }, anchors: AtticNoteRowAnchors(),
+                               onShowActions: onShowActions, onOpen: {})
+            .frame(width: 300)
+    }
+
 }
 
 /// A window that behaves as the key window although the test host is never
@@ -811,6 +933,33 @@ final class AtticDesignSystemHostedTests: XCTestCase {
 private final class KeyTestWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var isKeyWindow: Bool { true }
+}
+
+/// Two plain focusable controls, each with Attic's own ring (radius 1 and
+/// 2, so the census tells them apart). The driver moves focus as a click
+/// or a page's own focus request would, and reports where it is.
+@MainActor
+private final class OwnRingProbeDriver: ObservableObject {
+    @Published var target: Int?
+    var focused: Int?
+}
+
+private struct OwnRingProbe: View {
+    @ObservedObject var driver: OwnRingProbeDriver
+    @FocusState private var focus: Int?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ForEach(1...2, id: \.self) { index in
+                Color.gray.frame(width: 40, height: 24)
+                    .focusable()
+                    .focused($focus, equals: index)
+                    .atticOwnFocusRing(.rounded(radius: CGFloat(index)))
+            }
+        }
+        .onChange(of: driver.target) { _, target in focus = target }
+        .onChange(of: focus) { _, now in driver.focused = now }
+    }
 }
 
 /// The page button over the page tabs, each with its own selection.
@@ -980,3 +1129,4 @@ extension AtticDesignSystemHostedTests {
         XCTAssertLessThan(try ink(shut), 1.3, "one row high, the rows below are cut away")
     }
 }
+

@@ -1048,4 +1048,63 @@ final class HiddenPagesCountersTests: XCTestCase {
             pump(rig.content, rig.panel)
         }
     }
+
+    // MARK: - Focus readers at a click (speed/rings-focusstate-on-keyboard)
+
+    /// The trace (Air, opt=1, 413c02c4): a click that moves focus between
+    /// Tasks rows re-checks every focus reader in the panel, the hidden
+    /// pages' included. 84-86 of them were Attic's own focus rings, which
+    /// hold a `@FocusState` with the mouse too, where no ring can show, and
+    /// 9 were `NotesLibraryRow`s, whose body held the •••'s focus state.
+    /// With the mouse driving, after building every page and a MOVE click
+    /// (the click's selection, then the page's focus route), no ring holds a
+    /// focus state and no Notes row's body does. The control: once the
+    /// keyboard drives, the rings hold one again.
+    func testFocusReadersAtAMoveClickWithTheMouse() throws {
+        AtticFocusReaderCensus.reset()
+        AtticFocusReaderCensus.records = true
+        defer { AtticFocusReaderCensus.records = false; AtticFocusReaderCensus.reset() }
+        try withRig { rig in
+            let tracker = rig.state.keyboardFocus
+            tracker.observe(.leftMouseDown, keyCode: nil)
+            pump(rig.content, rig.panel)
+            XCTAssertFalse(tracker.isKeyboardDriving, "harness: the mouse drives")
+
+            let ids = rig.page.rows(for: .now).map(\.id)
+            XCTAssertGreaterThan(ids.count, 4, "harness: Now has rows to click")
+            @MainActor func focus(_ id: UUID) { // TasksPage.rowFocusChanged's two calls, for a click
+                rig.page.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: id), keyboardDriving: false)
+                rig.page.cellUpdates.objectWillChange.send()
+            }
+            let c = ids[2], d = ids[4]
+            rig.page.selectOnly(c)
+            focus(c)
+            pump(rig.content, rig.panel)
+            rig.page.click(d, modifiers: [], visible: ids)
+            focus(d)
+            pump(rig.content, rig.panel)
+            XCTAssertEqual(rig.page.selection, [d], "harness: the click selected D")
+            XCTAssertEqual(rig.page.keyboardFocus?.id, d, "harness: the focus route reached D")
+
+            let rings = AtticFocusReaderCensus.rings.values
+            let notesRows = AtticFocusReaderCensus.notesRows.count
+            let actions = AtticFocusReaderCensus.notesRowActions.count
+            print("FOCUS_READERS move-click mouse rings=\(rings.count) "
+                  + "rings_kv_off=\(rings.filter { !$0.keyboardFocusVisible }.count) "
+                  + "rings_kv_on=\(rings.filter(\.keyboardFocusVisible).count) "
+                  + "notes_row_bodies=\(notesRows) notes_row_actions=\(actions)")
+            XCTAssertEqual(rings.count, 0, "with the mouse, a focus ring holds a focus state (a reader re-checked per click)")
+            XCTAssertGreaterThan(actions, 0, "harness: the hidden Notes library built its rows' •••")
+            XCTAssertEqual(notesRows, 0, "a Notes row's body holds the •••'s focus state (a reader re-checked per click)")
+
+            // The control: the keyboard drives, and the rings hold their focus state again.
+            tracker.noteKeyboardNavigation()
+            pump(rig.content, rig.panel)
+            let keyboardRings = AtticFocusReaderCensus.rings.values.filter(\.keyboardFocusVisible).count
+            print("FOCUS_READERS keyboard rings=\(keyboardRings)")
+            XCTAssertGreaterThan(keyboardRings, 0, "harness: with the keyboard driving, the rings hold a focus state")
+            tracker.observe(.leftMouseDown, keyCode: nil)
+            pump(rig.content, rig.panel)
+        }
+    }
 }
