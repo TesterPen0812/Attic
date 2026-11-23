@@ -483,6 +483,24 @@ final class TasksTabHostTests: XCTestCase {
     // neighbour) after a store change made while it was not drawn. The
     // trunk draws that first frame right: its rows read the model.
 
+    /// The rows `tabs` drew since `drawnRuns` was emptied are their listed
+    /// rows, and the row states agree with the model.
+    private func assertTheRowsDrawnAreTheRowsListed(_ step: String, _ hosted: Hosted, tabs: [TasksTab]) {
+        for tab in tabs {
+            let listed = tab == .done ? hosted.model.doneDays().flatMap(\.rows) : hosted.model.rows(for: tab)
+            let rows = Dictionary(listed.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let drawn = Set(TasksCellBodyCounts.drawnRuns.filter { $0.drawn && $0.row.tab == tab }.map(\.row))
+            let checked = drawn.filter { rows[$0.id] != nil }
+            XCTAssertTrue(!checked.isEmpty || listed.isEmpty, "\(step): \(tab) drew its rows in that frame, so the check means something")
+            for row in checked {
+                guard let listedRow = rows[row.id] else { continue }
+                XCTAssertTrue(TasksCellBodyCounts.cellStates[row].map { TasksRowStateValue.sameRow($0.row, listedRow) } == true,
+                              "\(step): \(tab)'s \(listedRow.model.title) draws its row as listed in that frame")
+            }
+        }
+        XCTAssertEqual(hosted.model.rowStateMismatches(), [], "\(step): the states agree with the model in that frame")
+    }
+
     /// Makes `change` while only the tab shown is drawn, starts a swipe and
     /// draws a frame. Each of `neighbours` is then in the span: its drawn
     /// rows must be its listed rows, no row state written during a list
@@ -526,19 +544,7 @@ final class TasksTabHostTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(TasksPagerPassCount.passes, passes, "\(step): the pager ran, so a frame was drawn")
-        for tab in neighbours {
-            let listed = tab == .done ? hosted.model.doneDays().flatMap(\.rows) : hosted.model.rows(for: tab)
-            let rows = Dictionary(listed.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            let drawn = Set(TasksCellBodyCounts.drawnRuns.filter { $0.drawn && $0.row.tab == tab }.map(\.row))
-            let checked = drawn.filter { rows[$0.id] != nil }
-            XCTAssertTrue(!checked.isEmpty || listed.isEmpty, "\(step): \(tab) drew its rows in that frame, so the check means something")
-            for row in checked {
-                guard let listedRow = rows[row.id] else { continue }
-                XCTAssertTrue(TasksCellBodyCounts.cellStates[row].map { TasksRowStateValue.sameRow($0.row, listedRow) } == true,
-                              "\(step): \(tab)'s \(listedRow.model.title) draws its row as listed in that frame")
-            }
-        }
-        XCTAssertEqual(hosted.model.rowStateMismatches(), [], "\(step): the states agree with the model in that frame")
+        assertTheRowsDrawnAreTheRowsListed(step, hosted, tabs: neighbours)
         // The fingers go back and lift: the page stays where it was.
         send(.changed, dx: 14)
         send(.ended)
@@ -585,6 +591,47 @@ final class TasksTabHostTests: XCTestCase {
                 let row = try XCTUnwrap(hosted.model.rows(for: .now).last { $0.status != .done })
                 XCTAssertTrue(hosted.model.setStatus(.done, for: [row.id]).isApplied)
             }
+        }
+    }
+
+    /// The pager's span is also set when Tasks is shown again from another
+    /// page (`isPageShown`, TasksPageHost's calls), where the rows are now
+    /// brought up too. Store changes made while Tasks was away: the first
+    /// frame back draws the listed rows, with nothing written during a
+    /// list read and nothing catching up after it.
+    func testTheFirstFrameBackOnTasksAfterStoreChangesMadeWhileAwayDrawsItsRowsOnTime() throws {
+        let hosted = try warmed(laterRows: 5)
+        defer { hosted.close() }
+        TasksCellBodyCounts.records = true
+        defer { TasksCellBodyCounts.records = false }
+        for laidOut in [true, false] {
+            let step = "back on Tasks, \(laidOut ? "laid_out" : "own_frame")"
+            hosted.spin(0.6)
+            hosted.model.isPageShown = false
+            hosted.spin(0.3)
+            XCTAssertNotNil(hosted.store.create(title: "Added while Tasks is away, \(step)"))
+            let row = try XCTUnwrap(hosted.model.rows(for: .now).last { $0.status != .done })
+            XCTAssertTrue(hosted.store.rename(try XCTUnwrap(hosted.store.task(withID: row.id)), to: "Renamed while Tasks is away, \(step)"))
+            hosted.spin(0.6)
+            XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0, "\(step): nothing is late while away: \(TasksRowStateCounts.lateRoutes)")
+            TasksRowStateCounts.reset()
+            TasksCellBodyCounts.drawnRuns = []
+            hosted.model.isPageShown = true
+            hosted.model.pageDidReturn()
+            if laidOut {
+                hosted.window.contentView?.layoutSubtreeIfNeeded()
+                hosted.window.displayIfNeeded()
+            } else {
+                waitForTestOperation("\(step): the app's own frame draws Now's rows") {
+                    TasksCellBodyCounts.drawnRuns.contains { $0.drawn && $0.row.tab == .now }
+                }
+            }
+            assertTheRowsDrawnAreTheRowsListed(step, hosted, tabs: [.now])
+            hosted.spin(0.8)
+            print("SPAN_FRAME_back_on_tasks_\(laidOut ? "laid_out" : "own_frame") writes=\(TasksRowStateCounts.writesDuringListRead) late=\(TasksRowStateCounts.lateCatchUps) routes=\(TasksRowStateCounts.lateRoutes.map { $0.prefix(60) })")
+            XCTAssertEqual(TasksRowStateCounts.writesDuringListRead, 0, "\(step): a row state was written during a list read")
+            XCTAssertEqual(TasksRowStateCounts.lateCatchUps, 0, "\(step): Now's rows caught up after that frame: \(TasksRowStateCounts.lateRoutes)")
+            TasksRowStateCounts.reset()
         }
     }
 
