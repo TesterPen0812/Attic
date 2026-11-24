@@ -1029,10 +1029,12 @@ private struct PanelIslandSurface: View {
     @State private var sentSize: CGSize?
 
     var body: some View {
+        let panelSize = sentSize ?? source?.panelSize ?? AtticLayout.panelSize
         #if ATTIC_LOCAL_ONLY
         let _ = PanelInvalidationProbe.islandSurface?()
+        let _ = PanelInvalidationProbe.islandGlassSize?(panelSize)
         #endif
-        surface(panelSize: sentSize ?? source?.panelSize ?? AtticLayout.panelSize)
+        surface(panelSize: panelSize)
             .onReceive(source?.panelSizeChanges.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) {
                 if sentSize != $0 { sentSize = $0 }
             }

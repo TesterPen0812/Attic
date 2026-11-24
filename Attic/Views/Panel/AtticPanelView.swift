@@ -16,6 +16,8 @@ import SwiftData
     /// The island's per-window root wrapper and its glass view ran.
     static var islandRoot: (() -> Void)?
     static var islandSurface: (() -> Void)?
+    /// The panel size the island's glass drew with, on each of its runs.
+    static var islandGlassSize: ((CGSize) -> Void)?
 }
 #endif
 

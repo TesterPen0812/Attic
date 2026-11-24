@@ -206,6 +206,89 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    /// PR 69, Opus review F1 (the lead's 16:05 condition b): the glass is
+    /// sent sizes and replays none, so nothing else says it has the panel's
+    /// size when the island shows. (i) On the first show, at a size that is
+    /// not the default. (ii) On a show after the panel was resized while
+    /// hidden, to a size the reveal keeps (so the reveal writes none).
+    /// Every glass run since the last size write drew with that size, and
+    /// there was one; and no run, from the island's first, drew with a size
+    /// the panel did not have then.
+    func testTheIslandsGlassHasThePanelsSizeWhenItShows() throws {
+        #if ATTIC_LOCAL_ONLY
+        enum Entry { case write(CGSize), glass(CGSize) }
+        var log: [Entry] = []
+        PanelInvalidationProbe.islandGlassSize = { log.append(.glass($0)) }
+        defer { PanelInvalidationProbe.islandGlassSize = nil }
+        let panel = try makePanel()
+        let initial = panel.uiState.panelSize
+        let writes = panel.uiState.panelSizeChanges.sink { log.append(.write($0)) }
+        defer { writes.cancel() }
+        XCTAssertNotEqual(initial, AtticLayout.panelSize, "harness: a glass drawn at its fallback size would show as one")
+        func glassSinceTheLastWrite() -> [CGSize] {
+            var sizes: [CGSize] = []
+            for entry in log.reversed() {
+                guard case .glass(let size) = entry else { break }
+                sizes.append(size)
+            }
+            return sizes
+        }
+        func assertTheGlassIsCurrent(_ what: String) {
+            let glass = glassSinceTheLastWrite()
+            let size = panel.uiState.panelSize
+            print("ISLAND_GLASS_ON_SHOW \(what) panel=\(size) glass_runs=\(glass.count) stale=\(glass.filter { $0 != size }.count)")
+            XCTAssertFalse(glass.isEmpty, "\(what): the island's glass never drew with the last size written (\(size))")
+            for stale in glass where stale != size {
+                XCTAssertEqual(stale, size, "\(what): the island's glass drew with a size the panel no longer has")
+            }
+            var current = initial
+            for entry in log {
+                switch entry {
+                case .write(let written): current = written
+                case .glass(let drawn):
+                    XCTAssertEqual(drawn, current, "\(what): a glass run drew with a size the panel did not have then")
+                }
+            }
+        }
+
+        // (i) The first show.
+        let first = CGSize(width: AtticLayout.panelSize.width + 64, height: AtticLayout.panelSize.height + 32)
+        panel.settings.persistPanelSize(first)
+        panel.uiState.updatePanelSize(first)
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        XCTAssertNotEqual(panel.uiState.panelSize, AtticLayout.panelSize, "harness: the first show is not at the default size")
+        assertTheGlassIsCurrent("first show")
+
+        // (ii) A show after a resize while hidden.
+        XCTAssertTrue(panel.controller.requestHide { _ in }.isAccepted)
+        spin(until: { !panel.controller.isPanelVisible })
+        XCTAssertFalse(panel.controller.isPanelVisible, "harness: the panel hid")
+        spin(0.2)
+        let window = panel.controller.panelForTesting
+        let shown = panel.uiState.panelSize
+        for width in [shown.width + 96, shown.width + 48] {
+            // An accessibility client's request: the window's delegate
+            // writes the size, and the size is kept for the next reveal.
+            var frame = window.visibleContentFrame
+            frame.size.width = width
+            window.setAccessibilityFrame(frame)
+            spin(0.05)
+        }
+        let hidden = panel.uiState.panelSize
+        XCTAssertEqual(hidden.width, shown.width + 48, accuracy: 0.5, "harness: the hidden panel took the last size")
+        XCTAssertFalse(panel.controller.isPanelVisible, "harness: the resize did not show the panel")
+        let entriesBeforeTheShow = log.count
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        for entry in log[entriesBeforeTheShow...] {
+            if case .write(let size) = entry { XCTFail("harness: the reveal wrote a size (\(size)), which would hide a missed one") }
+        }
+        XCTAssertEqual(panel.uiState.panelSize, hidden, "harness: the reveal kept the hidden size")
+        assertTheGlassIsCurrent("show after a hidden resize")
+        #endif
+    }
+
     /// Deliver an edge drag to the real AppKit hosting responder; the window
     /// frame, controller callback and retained SwiftUI pages all participate.
     /// The hidden page should keep its layout until the drag is released.
