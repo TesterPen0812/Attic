@@ -77,16 +77,16 @@ final class NotesChromeTests: XCTestCase {
     func testTheTopRowPutsSearchFarRightThenMoreThenTheSwitch() {
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
         let chrome = layout.chromeInsets
-        let button = PanelTopRowLayout.searchButtonFrame(layout)
+        let button = PanelTopRowLayout.searchButtonFrame(layout, panelWidth: 340)
         XCTAssertEqual(button.size, CGSize(width: 27, height: 27))
         XCTAssertEqual(button.minY, chrome.top)
         XCTAssertEqual(button.maxX, 340 - chrome.trailing, accuracy: 0.001)
-        let more = PanelTopRowLayout.moreButtonFrame(layout)
+        let more = PanelTopRowLayout.moreButtonFrame(layout, panelWidth: 340)
         XCTAssertEqual(more.maxX, button.minX - PanelTopRowLayout.gap, accuracy: 0.001)
-        let pageSwitch = PanelTopRowLayout.switchFrame(layout, width: 60)
+        let pageSwitch = PanelTopRowLayout.switchFrame(layout, panelWidth: 340, width: 60)
         XCTAssertEqual(pageSwitch.maxX, more.minX - PanelTopRowLayout.switchGap, accuracy: 0.001)
         XCTAssertEqual(PanelTopRowLayout.leading(layout), chrome.leading + 27 + PanelTopRowLayout.leadingGap, accuracy: 0.001)
-        let field = PanelTopRowLayout.fieldFrame(layout)
+        let field = PanelTopRowLayout.fieldFrame(layout, panelWidth: 340)
         XCTAssertEqual(field.minX, chrome.leading, accuracy: 0.001)
         XCTAssertEqual(340 - field.maxX, chrome.trailing, accuracy: 0.001, "the open field: equal room both sides")
     }
@@ -226,7 +226,7 @@ final class NotesChromeTests: XCTestCase {
             state.selectSection(.tasks)
             spin(1.0)
             let layout = PanelPageLayout(cornerSize: 52, panelSize: host.bounds.size)
-            let expected = PanelTopRowLayout.searchButtonFrame(layout)
+            let expected = PanelTopRowLayout.searchButtonFrame(layout, panelWidth: host.bounds.width)
             let tasksSearch = try XCTUnwrap(frame(of: "tasks-find-button", in: host), "Tasks' search button")
             let model = tasksState.model(for: store, toasts: nil)
             model.tab = .backlog

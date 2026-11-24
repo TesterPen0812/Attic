@@ -40,26 +40,26 @@ enum PanelTopRowLayout {
     }
 
     /// The search button's frame: the row's far right.
-    static func searchButtonFrame(_ layout: PanelPageLayout) -> CGRect {
-        CGRect(x: layout.panelSize.width - layout.chromeInsets.trailing - control, y: layout.chromeInsets.top,
+    static func searchButtonFrame(_ layout: PanelPageLayout, panelWidth: CGFloat) -> CGRect {
+        CGRect(x: panelWidth - layout.chromeInsets.trailing - control, y: layout.chromeInsets.top,
                width: control, height: control)
     }
 
     /// •••'s frame: one gap before Search.
-    static func moreButtonFrame(_ layout: PanelPageLayout) -> CGRect {
-        searchButtonFrame(layout).offsetBy(dx: -(control + gap), dy: 0)
+    static func moreButtonFrame(_ layout: PanelPageLayout, panelWidth: CGFloat) -> CGRect {
+        searchButtonFrame(layout, panelWidth: panelWidth).offsetBy(dx: -(control + gap), dy: 0)
     }
 
     /// The page switch's frame for a switch `width` wide: `switchGap` before •••.
-    static func switchFrame(_ layout: PanelPageLayout, width: CGFloat) -> CGRect {
-        let more = moreButtonFrame(layout)
+    static func switchFrame(_ layout: PanelPageLayout, panelWidth: CGFloat, width: CGFloat) -> CGRect {
+        let more = moreButtonFrame(layout, panelWidth: panelWidth)
         return CGRect(x: more.minX - switchGap - width, y: more.minY, width: width, height: control)
     }
 
     /// The open field: the whole row, the chrome inset on both sides.
-    static func fieldFrame(_ layout: PanelPageLayout) -> CGRect {
+    static func fieldFrame(_ layout: PanelPageLayout, panelWidth: CGFloat) -> CGRect {
         CGRect(x: layout.chromeInsets.leading, y: layout.chromeInsets.top,
-               width: max(0, layout.panelSize.width - layout.chromeInsets.leading - layout.chromeInsets.trailing),
+               width: max(0, panelWidth - layout.chromeInsets.leading - layout.chromeInsets.trailing),
                height: control)
     }
 
@@ -411,12 +411,14 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
                         PanelTopRowMoreButton(page: page, commands: moreCommands)
                     }
                     // From the controls' start to the panel's right edge,
-                    // both read here: a page whose body does not re-run for
-                    // a size write (Tasks) passes a layout with the size it
-                    // last drew at.
-                    .onGeometryChange(for: CGFloat.self) { [fallbackWidth = layout.panelSize.width] proxy in
-                        let width = proxy.bounds(of: PanelPageLayout.coordinateSpace)?.width ?? fallbackWidth
-                        return width - proxy.frame(in: PanelPageLayout.coordinateSpace).minX
+                    // both read here, where the row is laid out: the layout
+                    // carries no size. A row hosted bare (no panel space
+                    // around it) ends its own trailing padding past these
+                    // controls.
+                    .onGeometryChange(for: CGFloat.self) { [bareTrailing = control + gap + layout.chromeInsets.trailing] proxy in
+                        let frame = proxy.frame(in: PanelPageLayout.coordinateSpace)
+                        let width = proxy.bounds(of: PanelPageLayout.coordinateSpace)?.width ?? frame.maxX + bareTrailing
+                        return width - frame.minX
                     } action: {
                         report(trailing: $0)
                     }

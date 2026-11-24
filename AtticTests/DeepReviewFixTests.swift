@@ -191,7 +191,7 @@ final class DeepReviewFixTests: XCTestCase {
             // header fails wherever idle shows a row), and they must move
             // there at some phase (the positive control).
             let band = TasksViewport.plainLine(tabsTop: tabsTop).upperBound
-            let field = PanelTopRowLayout.fieldFrame(layout)
+            let field = PanelTopRowLayout.fieldFrame(layout, panelWidth: AtticLayout.panelSize.width)
             let fieldEdge: CGFloat = 9
             let open = [(top: CGFloat(0), bottom: field.minY - fieldEdge), (top: field.maxY + fieldEdge, bottom: band)]
             var openMoved = 0.0

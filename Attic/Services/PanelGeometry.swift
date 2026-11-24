@@ -40,11 +40,19 @@ enum PanelGeometry {
     /// content never intersects the corner curve. Derived from the maximum
     /// inward deviation of the corner superellipse plus a safety margin.
     static func contentInsets(cornerSize: CGFloat, panelSize: CGSize) -> EdgeInsets {
+        contentInsets(cornerSize: cornerSize, cornerRoom: cornerRoom(for: panelSize))
+    }
+
+    /// What the insets take from the panel's size: half its shorter side,
+    /// capped at the largest corner (so it is one value on every size that
+    /// fits the largest corner).
+    static func cornerRoom(for panelSize: CGSize) -> CGFloat {
+        min(panelSize.width / 2, panelSize.height / 2, CGFloat(PanelCornerSize.max))
+    }
+
+    static func contentInsets(cornerSize: CGFloat, cornerRoom: CGFloat) -> EdgeInsets {
         let insetFactor = Squircle.cornerInsetFactor(exponent: squircleExponent)
-        let effectiveRadius = max(
-            0,
-            min(cornerSize, panelSize.width / 2, panelSize.height / 2)
-        )
+        let effectiveRadius = max(0, min(cornerSize, cornerRoom))
         let cornerInset = effectiveRadius * insetFactor
         let horizontal = max(AtticStyle.horizontalPadding, cornerInset + 6)
         let top = max(8, cornerInset + 4)
@@ -58,10 +66,11 @@ enum PanelGeometry {
     /// to that value keeps the outer corner of every hit region inside the
     /// visible squircle as the user changes radius or panel size.
     static func chromeInsets(cornerSize: CGFloat, panelSize: CGSize) -> EdgeInsets {
-        let effectiveRadius = max(
-            0,
-            min(cornerSize, panelSize.width / 2, panelSize.height / 2)
-        )
+        chromeInsets(cornerSize: cornerSize, cornerRoom: cornerRoom(for: panelSize))
+    }
+
+    static func chromeInsets(cornerSize: CGFloat, cornerRoom: CGFloat) -> EdgeInsets {
+        let effectiveRadius = max(0, min(cornerSize, cornerRoom))
         let curveInset = effectiveRadius * Squircle.cornerInsetFactor(exponent: squircleExponent)
         let edgeInset = max(
             AtticStyle.chromeMinimumInset,

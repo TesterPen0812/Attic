@@ -254,8 +254,8 @@ final class IslandTopRowRefineTests: XCTestCase {
 
     func testTheTopRowKeepsTheSwitchApartFromItsIcons() {
         let layout = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 340, height: 600))
-        let search = PanelTopRowLayout.searchButtonFrame(layout), more = PanelTopRowLayout.moreButtonFrame(layout)
-        let tabs = PanelTopRowLayout.switchFrame(layout, width: 100)
+        let search = PanelTopRowLayout.searchButtonFrame(layout, panelWidth: 340), more = PanelTopRowLayout.moreButtonFrame(layout, panelWidth: 340)
+        let tabs = PanelTopRowLayout.switchFrame(layout, panelWidth: 340, width: 100)
         XCTAssertEqual(search.minX - more.maxX, TasksDesignMetrics.footerGap, "the bottom bar's gap")
         XCTAssertEqual(more.minX - tabs.maxX, 2 * TasksDesignMetrics.footerGap)
         XCTAssertEqual(tabs.height, more.height, "one line")

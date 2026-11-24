@@ -985,9 +985,7 @@ struct TasksPage: View {
     /// Whether `x` is on the open search field's stretch of the top row
     /// (the whole row, inset to the chrome on both sides).
     private func searchLineContains(x: CGFloat) -> Bool {
-        var live = layout
-        live.panelSize = pageSize
-        let field = PanelTopRowLayout.fieldFrame(live)
+        let field = PanelTopRowLayout.fieldFrame(layout, panelWidth: pageSize.width)
         return x >= field.minX && x <= field.maxX
     }
 
@@ -1591,10 +1589,10 @@ struct TasksPage: View {
     }
 
     private var bottomInset: CGFloat { max(AtticSpacing.panelMargin, layout.chromeInsets.bottom) }
-    /// The page's size now, for event handlers: its own view's bounds.
-    /// `layout.panelSize` is the size when the body last ran, which a size
-    /// write no longer updates (`==`).
-    private var pageSize: CGSize { pointer.view?.bounds.size ?? layout.panelSize }
+    /// The page's size now, for event handlers: its own view's bounds (the
+    /// layout carries no size). Before the page has a view, nothing is
+    /// under the pointer.
+    private var pageSize: CGSize { pointer.view?.bounds.size ?? .zero }
 
     private var bottomMargin: CGFloat { TasksViewport.bottomMargin(bottomInset: bottomInset) }
 

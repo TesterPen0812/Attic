@@ -61,7 +61,13 @@ final class TaskNoteComposedHostTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.titled],
             backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        // The window keeps its stated size, as the panel's own host does
+        // (`sizingOptions = []`): sized from its content it was 110 pt wide,
+        // a state the product never has (lead, 24 Nov 16:56).
+        hosting.sizingOptions = []
         window.contentViewController = hosting
+        window.setContentSize(panel)
+        XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, panel, "harness: the rig's window is the stated size")
         windows.append(window)
         return hosting
     }

@@ -104,6 +104,7 @@ final class CornerHoverMonitor {
     /// `scheduleFollowUp`.
     private var followUpWork: DispatchWorkItem?
     private var lockObservation: AnyCancellable?
+    private var sizeObservation: AnyCancellable?
     private var hideObservation: AnyCancellable?
     private var lockSampleScheduled = false
     /// The watched hotspot the pointer has rested in since the latest hide
@@ -200,6 +201,14 @@ final class CornerHoverMonitor {
         // the next turn (coalesced across a burst of publications).
         lockObservation = uiState.objectWillChange
             .sink { [weak self] _ in self?.scheduleLockSample() }
+        // The panel's size is an input as well: a shrink that is no pointer
+        // drag (an accessibility client, a display change) can leave a
+        // resting pointer outside the panel, and a resting pointer sends no
+        // event. The size is not published state, so the same coalesced
+        // sample wakes from the settled size: every size write outside a
+        // drag, and a drag's end.
+        sizeObservation = uiState.settledPanelSize.$value.dropFirst()
+            .sink { [weak self] _ in self?.scheduleLockSample() }
 
         // A controller-owned hide can complete before the deferred Space
         // observer (notably with Reduced Motion). Native hide completion is
@@ -233,6 +242,7 @@ final class CornerHoverMonitor {
         cornerObservation = nil
         dismissModeObservation = nil
         lockObservation = nil
+        sizeObservation = nil
         hideObservation = nil
         trailingSampleWork?.cancel()
         trailingSampleWork = nil

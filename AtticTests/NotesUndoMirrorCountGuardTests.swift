@@ -35,6 +35,7 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
         let library: AtticLibrary
         let draft: NoteDraftController
         let state: PanelUIState
+        let settings: AppSettings
         let toasts: PanelToastCenter
         let content: NSView
         let panel: NSWindow
@@ -136,10 +137,11 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
             pageBox.library = model
         }
         defer { NotesEditorPage.lifetimeProbe = previousProbe }
+        let settings = AppSettings(defaults: defaults)
         let host = AtticPanelHostingView(
             rootView: AtticPanelView(store: tasks, noteStore: notes, canvasSession: canvasSession,
                                      noteDraft: draft, chromeInteractionState: chrome, uiState: state,
-                                     settings: AppSettings(defaults: defaults), toasts: toasts,
+                                     settings: settings, toasts: toasts,
                                      tasksPageState: tasksState, calendarPageState: CalendarPageState(),
                                      composerState: PanelComposerState()),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
@@ -181,7 +183,7 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
         XCTAssertTrue(page.library === library, "harness: the Tasks page runs on the shared library")
         page.services.acknowledgementDelay = .seconds(600)
 
-        try body(Rig(tasks: tasks, notes: notes, library: library, draft: draft, state: state, toasts: toasts,
+        try body(Rig(tasks: tasks, notes: notes, library: library, draft: draft, state: state, settings: settings, toasts: toasts,
                      content: content, panel: panel, page: page, pageBox: pageBox, plain: plain, freeNotes: freeNotes))
     }
 
@@ -296,18 +298,21 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
         }
     }
 
-    /// A panel size change gives every page a new layout, which the hidden
-    /// Calendar host, page and route host read: the counters are live.
+    /// A corner change gives every page a new layout, which the hidden
+    /// Calendar host, page and route host read: the counters are live. (A
+    /// panel size change was the control until the layout stopped carrying
+    /// the size: ops/design/resize-cause.md, cause 1. A size change now
+    /// hands no page a new value, so it can no longer show a live counter.)
     private func assertCalendarColumnsAreLive(_ rig: Rig, file: StaticString = #filePath, line: UInt = #line) {
-        let original = rig.state.panelSize
-        let resized = CGSize(width: original.width, height: original.height - 20)
-        let control = measure(rig, "panel resized", { rig.state.updatePanelSize(resized) },
-                              saved: { rig.state.panelSize == resized })
+        let original = rig.settings.panelCornerSize
+        let changed = original == PanelCornerSize.large.rawValue ? PanelCornerSize.extraLarge.rawValue : PanelCornerSize.large.rawValue
+        let control = measure(rig, "panel corner changed", { rig.settings.panelCornerSize = changed },
+                              saved: { rig.settings.panelCornerSize == changed })
         for key in ["CalendarPageHost", "CalendarPage", "route.calendar"] {
             XCTAssertGreaterThan(control[key, default: 0], 0, "harness: the settle sees the hidden \(key) run",
                                  file: file, line: line)
         }
-        rig.state.updatePanelSize(original)
+        rig.settings.panelCornerSize = original
         settle(rig)
     }
 
@@ -416,16 +421,17 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
                 // The positive control: the notices' padding was applied.
                 XCTAssertGreaterThan(padded, 0, "\(label): the notices took the new clearance")
             }
-            // Liveness (PR52 B3): a panel size change gives the hidden Canvas
-            // host a new layout, so its counter and the shell's probe run.
+            // Liveness (PR52 B3): a new layout (a corner change; a size
+            // change no longer makes one) reaches the hidden Canvas host, so
+            // its counter and the shell's probe run.
             let canvasBefore = PanelCanvasNoticeAwareHost.bodyEvaluations
             let shellBefore = shellRuns
             assertCalendarColumnsAreLive(rig)
             let canvasLive = PanelCanvasNoticeAwareHost.bodyEvaluations - canvasBefore
-            print("CLEARANCE_SHELL_COUNTS panel resized shell=\(shellRuns - shellBefore) canvasHost=\(canvasLive)")
-            XCTAssertGreaterThan(canvasLive, 0, "harness: a panel size change runs the hidden Canvas host")
+            print("CLEARANCE_SHELL_COUNTS panel corner changed shell=\(shellRuns - shellBefore) canvasHost=\(canvasLive)")
+            XCTAssertGreaterThan(canvasLive, 0, "harness: a new layout runs the hidden Canvas host")
             #if ATTIC_LOCAL_ONLY
-            XCTAssertGreaterThan(shellRuns - shellBefore, 0, "harness: a panel size change runs the shell")
+            XCTAssertGreaterThan(shellRuns - shellBefore, 0, "harness: a new layout runs the shell")
             #endif
         }
     }
