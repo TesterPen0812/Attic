@@ -6142,7 +6142,11 @@ private struct TasksSubtaskDraftView<Content: View>: View {
     #endif
 
     func press(_ press: KeyPress) -> KeyPress.Result {
-        handle?(press) ?? .ignored
+        let result = handle?(press) ?? .ignored
+        #if DEBUG
+        TasksPageRenderProbe.lastKeyResult = result
+        #endif
+        return result
     }
 }
 
@@ -6157,6 +6161,8 @@ private struct TasksSubtaskDraftView<Content: View>: View {
     /// Keys that reached `pageKey`, and the page's `onDisappear` runs.
     static var pageKeys = 0
     static var disappearances = 0
+    /// What the page's handler answered the last key.
+    static var lastKeyResult: KeyPress.Result?
     /// The tab being set, from its `willSet` until the set is over: a body
     /// that runs then runs inside the tab's announcement.
     static var settingTab: TasksTab?

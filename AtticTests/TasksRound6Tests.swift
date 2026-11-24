@@ -1002,7 +1002,6 @@ final class TasksPageKeyHandlerTests: XCTestCase {
         waitForTestOperation("the page ready for keys") {
             TasksPageRenderProbe.bodyRuns > runs && window.isKeyWindow && !AtticTextInput.hasKeyboard && !addBar
         }
-        print("TASKS_KEYS ready add_bar=\(addBar) has_keyboard=\(AtticTextInput.hasKeyboard) tab=\(model.tab) shown=\(model.isPageShown)")
         // ↓, waited on until the page's handler has taken it.
         func down() {
             let reached = TasksPageRenderProbe.pageKeys
@@ -1022,20 +1021,18 @@ final class TasksPageKeyHandlerTests: XCTestCase {
             composer.route = route
             waitForTestOperation("the page runs with the new route") { TasksPageRenderProbe.bodyRuns > before }
         }
-        let rows = model.rows(for: .now).map(\.id)
-        XCTAssertGreaterThanOrEqual(rows.count, 3, "harness: the demo seed has rows")
-
+        // The answer the handler gives, not the selection: the page's first
+        // moments may still move the selection on their own.
         down()
-        print("TASKS_KEYS first add_bar=\(addBar) has_keyboard=\(AtticTextInput.hasKeyboard) editing=\(String(describing: model.editingTitleID)) selection=\(model.selection.count)")
-        XCTAssertEqual(model.selection, [rows[0]], "harness: ↓ with nothing selected selects the first row")
+        XCTAssertEqual(TasksPageRenderProbe.lastKeyResult, .handled, "harness: ↓ moves the keyboard on the list")
 
         swap(to: PanelComposerRoute(open: { _, _ in }, isOpen: { true }))
         down()
-        XCTAssertEqual(model.selection, [rows[0]], "with the card open, the page's keys stand down")
+        XCTAssertEqual(TasksPageRenderProbe.lastKeyResult, .ignored, "with the card open, the page's keys stand down")
 
         swap(to: nil)
         down()
-        XCTAssertEqual(model.selection, [rows[1]], "with the card gone, ↓ moves again")
+        XCTAssertEqual(TasksPageRenderProbe.lastKeyResult, .handled, "with the card gone, ↓ is the page's again")
     }
 
     /// The box holds the page's handler, and the handler a copy of the page,
