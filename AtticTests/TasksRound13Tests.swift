@@ -632,3 +632,185 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(dark, 0, "the backdrop shows through \(dark) of \(total) sampled pixels")
     }
 }
+
+// MARK: - Keys on a row outside the lazy list's built range (list-owned-focus.md §2.3; lead, LOG 24 Nov 17:01)
+
+/// The trunk's behaviour, pinned on 5fe27e46 before the list-owned focus
+/// change and kept by it: when the list scrolls the cursor row out of the
+/// lazy list's built range, Space, Delete and ⌘B still act, on the rows
+/// the trunk acts on. Each case starts from a fresh page; before the key
+/// the test checks, apart from the key's effect, that the row's cell is
+/// gone (it reports no frame), what is selected, and that the keyboard is
+/// in the Now list.
+@MainActor
+extension TasksRound13Tests {
+    private func longHosted() throws -> Hosted {
+        var services = TasksPageServices()
+        services.acknowledgementDelay = .milliseconds(50)
+        services.doneHold = .milliseconds(300)
+        let hosted = try Hosted(height: 520, services: services)
+        let context = ModelContext(hosted.store.container)
+        let now = Date()
+        for index in 0..<80 {
+            let item = TaskItem(title: "Long list task \(index + 1)", status: .todo, priority: .none,
+                                createdAt: now.addingTimeInterval(Double(-(20 + index) * 60)),
+                                manualOrder: -2_000_000 - Int64(index) * 1_024, parentID: nil)
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(item)
+        }
+        try context.save()
+        hosted.store.refresh()
+        hosted.spin(0.8)
+        return hosted
+    }
+
+    /// The Now list on the page: the shown, tallest list.
+    private func nowList(_ hosted: Hosted) -> NSScrollView? {
+        guard let content = hosted.window.contentView else { return nil }
+        content.layoutSubtreeIfNeeded()
+        return hosted.lists(in: content).filter { list in
+            let frame = list.convert(list.bounds, to: nil)
+            return !list.isHiddenOrHasHiddenAncestor && frame.minX > -1 && frame.minX < content.bounds.width / 2
+        }.max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+    }
+
+    private func scrollNow(_ hosted: Hosted, toEnd: Bool) throws {
+        let list = try XCTUnwrap(nowList(hosted), "harness: the Now list")
+        let document = list.documentView?.frame.height ?? 0, visible = list.contentView.bounds.height
+        list.contentView.scroll(to: NSPoint(x: 0, y: toEnd ? max(0, document - visible) : 0))
+        list.reflectScrolledClipView(list.contentView)
+        hosted.spin(0.6)
+    }
+
+    private func isBuilt(_ hosted: Hosted, _ id: UUID) -> Bool {
+        hosted.pointer.frame(for: TasksRowID(tab: .now, id: id)) != nil
+    }
+
+    /// The keyboard is in the Now list: its first responder is the view
+    /// that holds the list (the tab's host), not a field.
+    private func keyboardIsInNowList(_ hosted: Hosted) -> Bool {
+        guard let view = hosted.window.firstResponder as? NSView, !(view is NSTextView), let list = nowList(hosted) else { return false }
+        return list.isDescendant(of: view)
+    }
+
+    private func clickRow(_ hosted: Hosted, _ id: UUID, modifiers: NSEvent.ModifierFlags = []) throws {
+        let frame = try XCTUnwrap(hosted.pointer.frame(for: TasksRowID(tab: .now, id: id)), "harness: the row is built")
+        let view = try XCTUnwrap(hosted.pointer.view)
+        let inWindow = view.convert(frame, to: nil)
+        hosted.click(y: hosted.height - inWindow.midY, x: inWindow.minX + min(110, inWindow.width / 2), modifiers: modifiers)
+        hosted.spin(0.3)
+    }
+
+    /// What each Now row is: its status, or gone.
+    private func states(_ hosted: Hosted, _ ids: [UUID]) -> [UUID: String] {
+        Dictionary(uniqueKeysWithValues: ids.map { id in (id, hosted.store.task(withID: id).map { "\($0.status)" } ?? "gone") })
+    }
+
+    private enum Selected { case one, several, cursorOutside }
+
+    private static let rowKeys: [(name: String, characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags, after: String)] = [
+        ("Space", " ", 49, [], "done"), ("Delete", "\u{7F}", 51, [], "gone"), ("⌘B", "b", 11, .command, "backlog"),
+    ]
+
+    /// Sets up `selected` near the top of the long list, scrolls the list to
+    /// its end, checks the state before the key, presses it, and returns the
+    /// rows whose state changed, with what they became.
+    private func keyOutOfRange(_ selected: Selected, key: (name: String, characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags, after: String),
+                               _ hosted: Hosted) throws -> (acted: [Int: String], selection: [Int], cursorBefore: Int?) {
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        func index(_ id: UUID) -> Int { ids.firstIndex(of: id) ?? -1 }
+        try clickRow(hosted, ids[0])
+        switch selected {
+        case .one:
+            hosted.press("\u{F701}", keyCode: 125)  // cursor and selection on row 1
+        case .several:
+            hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)
+            hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)  // rows 0-2, cursor on 2
+        case .cursorOutside:
+            try clickRow(hosted, ids[2], modifiers: .command)  // rows 0 and 2, cursor on 2
+            try clickRow(hosted, ids[2], modifiers: .command)  // row 2 leaves the selection
+        }
+        let cursorBefore = hosted.model.keyboardFocus.map { index($0.id) }
+        let selection = hosted.model.selection.map(index).sorted()
+        try scrollNow(hosted, toEnd: true)
+        for row in 0...2 { XCTAssertFalse(isBuilt(hosted, ids[row]), "harness: row \(row) is still built after the scroll") }
+        XCTAssertTrue(keyboardIsInNowList(hosted), "harness: the keyboard is not in the Now list before \(key.name)")
+        XCTAssertEqual(hosted.model.selection.map(index).sorted(), selection, "harness: the scroll changed the selection")
+        let before = states(hosted, ids)
+        hosted.press(key.characters, keyCode: key.code, modifiers: key.modifiers)
+        var waited = 0.0
+        while waited < 3, states(hosted, ids) == before { hosted.spin(0.1); waited += 0.1 }
+        hosted.spin(0.5)
+        let after = states(hosted, ids)
+        let acted = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { offset, id in
+            after[id] != before[id] ? (offset, after[id] ?? "?") : nil
+        })
+        print("OUT_OF_RANGE \(selected) \(key.name) cursor_before=\(cursorBefore.map(String.init) ?? "nil") selection=\(selection) acted=\(acted.sorted { $0.key < $1.key })")
+        return (acted, selection, cursorBefore)
+    }
+
+    /// Condition 1, one selected row: the key acts on that row only.
+    func testKeysOnAnOutOfRangeCursorRowActOnTheOneSelectedRow() throws {
+        try requireKeyWindowTests()
+        for key in Self.rowKeys {
+            let hosted = try longHosted()
+            defer { hosted.close() }
+            let result = try keyOutOfRange(.one, key: key, hosted)
+            XCTAssertEqual(result.selection, [1], "harness: ↓ selected row 1")
+            XCTAssertEqual(result.acted, [1: key.after], "\(key.name) out of the built range")
+        }
+    }
+
+    /// Condition 1, several selected rows with the cursor row among them:
+    /// the key acts on every selected row.
+    func testKeysOnAnOutOfRangeCursorRowActOnEverySelectedRow() throws {
+        try requireKeyWindowTests()
+        for key in Self.rowKeys {
+            let hosted = try longHosted()
+            defer { hosted.close() }
+            let result = try keyOutOfRange(.several, key: key, hosted)
+            XCTAssertEqual(result.selection, [0, 1, 2], "harness: ⇧↓ twice selected rows 0-2")
+            XCTAssertEqual(result.cursorBefore, 2, "harness: the cursor was on row 2")
+            XCTAssertEqual(result.acted, [0: key.after, 1: key.after, 2: key.after], "\(key.name) out of the built range")
+        }
+    }
+
+    /// Condition 1, the cursor on a row that is not selected (⌘-click on a
+    /// selected row takes it out of the selection and leaves the cursor on
+    /// it): the key acts where the trunk acts.
+    func testKeysOnAnOutOfRangeCursorRowOutsideTheSelection() throws {
+        try requireKeyWindowTests()
+        for key in Self.rowKeys {
+            let hosted = try longHosted()
+            defer { hosted.close() }
+            let result = try keyOutOfRange(.cursorOutside, key: key, hosted)
+            XCTAssertEqual(result.selection, [0], "harness: row 0 stays selected")
+            XCTAssertEqual(result.cursorBefore, 2, "harness: the cursor stayed on row 2")
+            XCTAssertEqual(result.acted, [2: key.after], "\(key.name) out of the built range")
+        }
+    }
+
+    /// Condition 4: the same state, scrolled back. Whether the row draws
+    /// the keyboard's ring, and where the first ↓ after it goes.
+    func testAnOutOfRangeCursorRowScrolledBackAndTheFirstDownAfter() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[0])
+        hosted.press("\u{F701}", keyCode: 125)
+        try scrollNow(hosted, toEnd: true)
+        XCTAssertFalse(isBuilt(hosted, ids[1]), "harness: row 1 is still built after the scroll")
+        try scrollNow(hosted, toEnd: false)
+        XCTAssertTrue(isBuilt(hosted, ids[1]), "harness: row 1 is built again")
+        let ring = hosted.pointer.drawnFocus.contains(TasksRowID(tab: .now, id: ids[1]))
+        let cursor = hosted.model.keyboardFocus.map { ids.firstIndex(of: $0.id) ?? -1 }
+        hosted.press("\u{F701}", keyCode: 125)
+        let next = hosted.model.keyboardFocus.map { ids.firstIndex(of: $0.id) ?? -1 }
+        print("OUT_OF_RANGE back ring=\(ring) cursor=\(cursor.map(String.init) ?? "nil") first_down=\(next.map(String.init) ?? "nil") selection=\(hosted.model.selection.map { ids.firstIndex(of: $0) ?? -1 }.sorted())")
+        XCTAssertFalse(ring, "the trunk draws no ring on the row when it scrolls back")
+        XCTAssertNil(cursor, "the trunk's cursor stays nil once its row was torn down")
+        XCTAssertEqual(next, 2, "the first ↓ after goes on from the selected row")
+        XCTAssertEqual(hosted.model.selection, [ids[2]], "the first ↓ selects the row it reaches")
+    }
+}

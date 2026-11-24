@@ -1107,4 +1107,127 @@ final class HiddenPagesCountersTests: XCTestCase {
             pump(rig.content, rig.panel)
         }
     }
+
+    // MARK: - A row move is not a focus move (list-owned-focus.md §5)
+
+    /// Posts events through the app's queue one at a time, each pumped, so
+    /// a mouse-down's pass and the mouse-up's stay apart.
+    @MainActor private func post(_ rig: Rig, _ events: [NSEvent]) {
+        for event in events {
+            NSApp.postEvent(event, atStart: false)
+            Hosted.pumpEvents()
+            pump(rig.content, rig.panel)
+        }
+    }
+
+    @MainActor private func rowClick(_ rig: Rig, _ id: UUID, modifiers: NSEvent.ModifierFlags = []) throws {
+        let frame = try XCTUnwrap(rig.page.agentRowFrames([id]).first?.frame, "harness: the row \(id) is on the page")
+        let point = CGPoint(x: frame.minX + min(120, frame.width / 2), y: frame.midY)
+        post(rig, try [NSEvent.EventType.leftMouseDown, .leftMouseUp].map { type in
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: rig.panel.windowNumber, context: nil, eventNumber: 1, clickCount: 1,
+                pressure: type == .leftMouseDown ? 1 : 0))
+        })
+    }
+
+    @MainActor private func rowKey(_ rig: Rig, _ code: UInt16, _ characters: String, _ modifiers: NSEvent.ModifierFlags = []) throws {
+        var flags = modifiers
+        if [123, 124, 125, 126].contains(code) { flags.formUnion([.numericPad, .function]) }
+        post(rig, try [NSEvent.EventType.keyDown, .keyUp].map { type in
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: rig.panel.windowNumber, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+        })
+    }
+
+    /// The sentinel checks since the last call, by "region@phase"; resets.
+    @MainActor private func takePhaseChecks() -> [String: Int] {
+        let checks = AtticFocusReaderCensus.phaseChecks
+        AtticFocusReaderCensus.reset()
+        return checks
+    }
+
+    private static let regions = ["tasks", "calendar", "notes", "canvas"]
+
+    /// list-owned-focus.md §5, "Red, then green": the Tasks list owns the
+    /// keyboard, so a move from row to row writes the selection and the
+    /// cursor but no SwiftUI focus.
+    /// - A MOVE click checks no focus reader in any region, in the
+    ///   mouse-down's pass or the one after it. Red on the trunk 5fe27e46:
+    ///   `after-md` 1/1/1/1 (Air, stage 1, s1-base.log).
+    /// - ↓, ↑, ⇧↓ and Tab from row to row write no focus state through the
+    ///   link (the trunk writes one per move), and check no more readers than
+    ///   the trunk's 2 per region and step (stage 1: ↓ 2 then 2 on the trunk;
+    ///   a key the panel's monitor takes is counted under the phase before
+    ///   it, so each step's phases are summed).
+    /// - Observed apart from the new code: the first responder is the same
+    ///   object before and after each move, and the selection, the cursor
+    ///   and (for a key) the drawn ring land on the row.
+    /// - The control: a click on the row that has the keyboard (STAY)
+    ///   checks nothing.
+    func testARowMoveIsNotAFocusMove() throws {
+        try requireKeyWindowTests()
+        try withRig { rig in
+            rig.panel.makeKey()
+            pump(rig.content, rig.panel)
+            XCTAssertTrue(rig.panel.isKeyWindow, "harness: the panel is the key window")
+            let ids = rig.page.rows(for: .now).map(\.id)
+            XCTAssertGreaterThan(ids.count, 6, "harness: Now has rows to move between")
+            let link = try XCTUnwrap(TasksRowFocusLink.current, "harness: the page's focus link")
+
+            try rowClick(rig, ids[2])  // the list takes the keyboard once
+            pump(rig.content, rig.panel)
+            XCTAssertEqual(rig.page.keyboardFocus?.id, ids[2], "harness: the first click gave row 2 the keyboard")
+            _ = takePhaseChecks()
+            let responder = try XCTUnwrap(rig.panel.firstResponder, "harness: something holds the keyboard")
+
+            // MOVE click.
+            var writes = link.focusWrites
+            try rowClick(rig, ids[4])
+            let move = takePhaseChecks()
+            XCTAssertEqual(rig.page.selection, [ids[4]], "the click selected row 4")
+            XCTAssertEqual(rig.page.keyboardFocus?.id, ids[4], "the click gave row 4 the cursor")
+            XCTAssertTrue(rig.panel.firstResponder === responder, "the first responder changed on a row click")
+            XCTAssertEqual(link.focusWrites - writes, 0, "a row click wrote a focus state")
+            for region in Self.regions {
+                for phase in ["md", "after-md"] {
+                    XCTAssertEqual(move["\(region)@\(phase)", default: 0], 0,
+                                   "a MOVE click checked a focus reader in \(region) at \(phase) (\(move))")
+                }
+            }
+
+            // STAY: the row that has the keyboard, clicked again.
+            try rowClick(rig, ids[4])
+            let stay = takePhaseChecks()
+            XCTAssertEqual(stay.values.reduce(0, +), 0, "control: a click that moves nothing checked a focus reader (\(stay))")
+
+            // Keys from row to row.
+            let keys: [(name: String, code: UInt16, characters: String, modifiers: NSEvent.ModifierFlags, row: Int, selection: [Int])] = [
+                ("↓", 125, "\u{F701}", [], 5, [5]),
+                ("↓ again", 125, "\u{F701}", [], 6, [6]),
+                ("↑", 126, "\u{F700}", [], 5, [5]),
+                ("⇧↓", 125, "\u{F701}", .shift, 6, [5, 6]),
+                ("Tab", 48, "\t", [], 7, [5, 6]),
+            ]
+            for key in keys {
+                writes = link.focusWrites
+                try rowKey(rig, key.code, key.characters, key.modifiers)
+                pump(rig.content, rig.panel)
+                let checks = takePhaseChecks()
+                let row = ids[key.row]
+                XCTAssertEqual(rig.page.keyboardFocus?.id, row, "\(key.name): the cursor is not on row \(key.row)")
+                XCTAssertEqual(rig.page.selection, Set(key.selection.map { ids[$0] }), "\(key.name): the selection")
+                XCTAssertTrue(rig.page.rowPointer?.drawnFocus.contains(TasksRowID(tab: .now, id: row)) ?? false,
+                              "\(key.name): no ring was drawn on row \(key.row)")
+                XCTAssertTrue(rig.panel.firstResponder === responder, "\(key.name): the first responder changed")
+                XCTAssertEqual(link.focusWrites - writes, 0, "\(key.name) wrote a focus state")
+                for region in Self.regions {
+                    let total = checks.filter { $0.key.hasPrefix(region + "@") }.values.reduce(0, +)
+                    XCTAssertLessThanOrEqual(total, 2, "\(key.name) checked \(total) focus readers in \(region), more than the trunk (\(checks))")
+                }
+            }
+        }
+    }
 }

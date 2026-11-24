@@ -4023,12 +4023,17 @@ final class TasksRowFocusLink {
             #endif
             return
         }
+        #if DEBUG
+        focusWrites += 1
+        #endif
         binding.wrappedValue = value
     }
 
     #if DEBUG
     /// Nils not written because a view outside the tab's host held the keyboard.
     private(set) var skippedLetGos = 0
+    /// Focus state writes the link made (row to row moves are counted here).
+    var focusWrites = 0
     #endif
 
     /// Whether a tab's owner reports the focus change it saw. A tab letting
