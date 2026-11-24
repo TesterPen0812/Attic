@@ -39,9 +39,9 @@ final class TasksRound13Tests: XCTestCase {
 
     /// host-boundary.md §5.1 row, as the user's sequence: a rename on Now,
     /// a switch to Later (which saves it), then ↓. Wanted: a Later row takes
-    /// the keyboard. Today no row does, on step 1 as on the trunk
-    /// (`4b55a9e8`, the same test): pinned, KB-DOWN-AFTER-RENAME-SWITCH. Its
-    /// fix flips this assertion.
+    /// the keyboard. On the trunk no row did (KB-DOWN-AFTER-RENAME-SWITCH,
+    /// pinned so); with the list owning the keyboard (list-owned-focus,
+    /// lead 08:00 ruling 4) ↓ reaches a Later row, the wanted result.
     func testDownAfterASwitchThatSavedARenameIsPinned() throws {
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
@@ -55,7 +55,10 @@ final class TasksRound13Tests: XCTestCase {
         hosted.go(to: .backlog)
         XCTAssertNil(hosted.model.editingTitleID, "the switch saved the rename")
         hosted.press("\u{F701}", keyCode: 125)
-        XCTAssertNil(hosted.model.keyboardFocus?.page, "KB-DOWN-AFTER-RENAME-SWITCH: today ↓ reaches no row (pinned; the fix makes it a Later row)")
+        let reached = try XCTUnwrap(hosted.model.keyboardFocus, "KB-DOWN-AFTER-RENAME-SWITCH: ↓ reaches a row")
+        XCTAssertEqual(reached.page, TasksTab.backlog.rawValue, "the row ↓ reaches is a Later row")
+        XCTAssertTrue(hosted.model.rows(for: .backlog).contains { $0.id == reached.id }, "a row of the Later list shown")
+        XCTAssertEqual(hosted.model.selection, [reached.id], "↓ selects the row it reaches")
     }
 
     /// host-boundary.md §5.1 row: a responder in the panel outside the tabs
@@ -831,6 +834,34 @@ extension TasksRound13Tests {
 
     private func selected(_ hosted: Hosted, _ ids: [UUID]) -> [Int] {
         hosted.model.selection.map { ids.firstIndex(of: $0) ?? -1 }.sorted()
+    }
+
+    /// One click, then ↓: the first ↓ moves the cursor and the selection to
+    /// the next row (the trunk does; the list's claim on the keyboard from
+    /// that one click must not cost the first key). Prints what took the
+    /// key, for the diagnostics.
+    func testTheFirstDownAfterOneClickMovesTheCursor() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        func line(_ label: String) {
+            let link = TasksRowFocusLink.current
+            print("LIST_FOCUS first-down \(label) responder=\(hosted.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil") "
+                  + "holds=\(link?.holds(.now) ?? false) cursor=\(index(hosted, ids, hosted.model.keyboardFocus?.id).map(String.init) ?? "nil") "
+                  + "selection=\(selected(hosted, ids)) pageKeys=\(TasksPageRenderProbe.pageKeys) last=\(TasksPageRenderProbe.lastKeyResult.map { "\($0)" } ?? "nil") "
+                  + "reports=\(TasksPageRenderProbe.listFocusReports) inList=\(keyboardIsInNowList(hosted))")
+        }
+        TasksPageRenderProbe.listFocusReports = []
+        line("before")
+        try clickRow(hosted, ids[0])
+        line("click")
+        hosted.press("\u{F701}", keyCode: 125)
+        line("down1")
+        hosted.press("\u{F701}", keyCode: 125)
+        line("down2")
+        XCTAssertEqual(selected(hosted, ids), [2], "two ↓ after one click reach row 2")
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 2, "the cursor on row 2")
     }
 
     /// Range selection: ⇧-click grows from the clicked row, and ⇧↓ then

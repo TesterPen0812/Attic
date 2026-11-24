@@ -336,6 +336,9 @@ struct TasksPage: View {
     /// A tab's list target gained or lost the keyboard (each tab's owner
     /// reports it).
     private func listFocusChanged(_ tab: TasksTab, holds: Bool) {
+        #if DEBUG
+        TasksPageRenderProbe.listFocusReports.append("\(tab.rawValue):\(holds)")
+        #endif
         // Tab reached the list of a page kept built beside the one shown
         // (hidden, so nothing showed where the keyboard was): the
         // keyboard goes on to the shown page's rows or the add bar.
@@ -365,7 +368,11 @@ struct TasksPage: View {
         }
         // A keyboard move brings its row into view (the list's own reveal
         // read the row's focus before; the cursor is no focus state).
-        if let focus, keyboardDriving, focus.page == model.tab.rawValue, model.tab != .done,
+        var reveals = true
+        #if DEBUG
+        reveals = !TasksPageRenderProbe.skipsCursorReveal
+        #endif
+        if reveals, let focus, keyboardDriving, focus.page == model.tab.rawValue, model.tab != .done,
            let proxy = listProxies.lists[model.tab] {
             let travel = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false)
             revealRow(focus.id, in: model.tab, proxy: proxy, glides: travel != nil)
@@ -6246,6 +6253,11 @@ private struct TasksSubtaskDraftView<Content: View>: View {
     static var environmentsBelowTabKeys = 0
     /// Keys that reached `pageKey`, and the page's `onDisappear` runs.
     static var pageKeys = 0
+    /// Each list target's reported gain or loss of the keyboard, in order
+    /// ("now:true"), for the list-owned focus diagnostics.
+    static var listFocusReports: [String] = []
+    /// Diagnostics only: the cursor move skips its reveal.
+    static var skipsCursorReveal = false
     static var disappearances = 0
     /// What the page's handler answered the last key.
     static var lastKeyResult: KeyPress.Result?

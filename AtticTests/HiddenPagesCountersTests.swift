@@ -1167,6 +1167,42 @@ final class HiddenPagesCountersTests: XCTestCase {
     ///   and (for a key) the drawn ring land on the row.
     /// - The control: a click on the row that has the keyboard (STAY)
     ///   checks nothing.
+    /// Diagnostics (list-owned focus): the environments written below the
+    /// page's and the tab's key handlers per row move, with the cursor's
+    /// reveal on and then off, and the list target's reports. Prints only.
+    func testDiagnosticEnvironmentsPerRowMove() throws {
+        try requireKeyWindowTests()
+        defer { TasksPageRenderProbe.skipsCursorReveal = false }
+        for skips in [false, true] {
+            TasksPageRenderProbe.skipsCursorReveal = skips
+            try withRig { rig in
+                rig.panel.makeKey()
+                pump(rig.content, rig.panel)
+                let ids = rig.page.rows(for: .now).map(\.id)
+                try rowClick(rig, ids[2])
+                pump(rig.content, rig.panel)
+                let steps: [(name: String, act: () throws -> Void)] = [
+                    ("move-click", { try self.rowClick(rig, ids[4]) }),
+                    ("↓", { try self.rowKey(rig, 125, "\u{F701}") }),
+                    ("↓ again", { try self.rowKey(rig, 125, "\u{F701}") }),
+                    ("↑", { try self.rowKey(rig, 126, "\u{F700}") }),
+                    ("⇧↓", { try self.rowKey(rig, 125, "\u{F701}", .shift) }),
+                    ("Tab", { try self.rowKey(rig, 48, "\t") }),
+                ]
+                for step in steps {
+                    let page = TasksPageRenderProbe.environmentsBelowKeys, tab = TasksPageRenderProbe.environmentsBelowTabKeys
+                    let runs = TasksPageRenderProbe.bodyRuns
+                    TasksPageRenderProbe.listFocusReports = []
+                    try step.act()
+                    pump(rig.content, rig.panel)
+                    print("LIST_FOCUS envdiag reveal=\(skips ? "off" : "on") \(step.name) page=\(TasksPageRenderProbe.environmentsBelowKeys - page) "
+                          + "tab=\(TasksPageRenderProbe.environmentsBelowTabKeys - tab) bodies=\(TasksPageRenderProbe.bodyRuns - runs) "
+                          + "reports=\(TasksPageRenderProbe.listFocusReports)")
+                }
+            }
+        }
+    }
+
     func testARowMoveIsNotAFocusMove() throws {
         try requireKeyWindowTests()
         try withRig { rig in
