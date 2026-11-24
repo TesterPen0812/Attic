@@ -61,6 +61,8 @@ struct TasksPage: View {
     /// a focus state does not reach views in another hosting view. The page
     /// reaches them through this link, and hears their changes from it.
     @State private var rowFocus = TasksRowFocusLink()
+    /// The page's key handler, in a box the page keeps (`TasksPageKeyHandler`).
+    @State private var keyHandler = TasksPageKeyHandler()
     /// The row that has the keyboard: the tab shown's first, then any
     /// other's (one value, as when one focus state served every tab).
     /// Setting a row gives it the keyboard on its own tab and takes it from
@@ -202,6 +204,9 @@ struct TasksPage: View {
         #endif
         // The link writes only the tab in use (§5.1, KB-CLAIM-RACE).
         let _ = rowFocus.tabInUse = { [model] in model.tab }
+        // Every pass hands the box this pass's page, so a key never acts on
+        // an older one.
+        let _ = keyHandler.handle = { press in pageKey(press) }
         // In three parts (round 10: one chain was too long for the
         // compiler to type-check in time on CI).
         observingModel(observingEdits(frame))
@@ -283,11 +288,28 @@ struct TasksPage: View {
         .coordinateSpace(Self.space)
         .atticKeyboardFocusTracking(focusTracker)
         .environment(\.atticFocusRequests, focusRequests)
-        .onKeyPress(phases: .down) { press in pageKey(press) }
+        #if DEBUG
+        // Counts each environment below the key handler that is new storage
+        // (`TasksPageRenderProbe.environmentsBelowKeys`). It captures nothing,
+        // so it runs only when the environment it is given changes.
+        .transformEnvironment(\.self) { _ in TasksPageRenderProbe.environmentsBelowKeys += 1 }
+        #endif
+        // The box, not the page: a closure that captures only the box is the
+        // same value on every pass, so the modifier writes no new environment
+        // below it and every view down to the tabs' hosts keeps its own.
+        // Capture exactly one reference: a second capture makes the closure
+        // a new value again (TasksPageKeyHandlerTests counts it).
+        .onKeyPress(phases: .down) { [keyHandler] press in keyHandler.press(press) }
         .onAppear { pageAppeared() }
         .onDisappear {
+            #if DEBUG
+            TasksPageRenderProbe.disappearances += 1
+            #endif
             cancelTransientState()
             eventMonitors.stop()
+            // The handler holds a copy of the page, which holds the box's
+            // state: let it go, as the monitors do (TasksPageEventMonitors).
+            keyHandler.handle = nil
         }
         // The page's own view, so a press is placed from its event (its
         // window, its location), never from a remembered hover point.
@@ -339,6 +361,8 @@ struct TasksPage: View {
     }
 
     private func pageAppeared() {
+        // Back after leaving: the box takes this page again before any key.
+        keyHandler.handle = { press in pageKey(press) }
         // Row frames are measured relative to the moving page. Convert to
         // TasksPage.space only when an interaction needs a frame.
         pointer.pageOffset = { [weak motion = swipe.motion, weak swipe] tab in
@@ -3051,6 +3075,9 @@ struct TasksPage: View {
     /// ⌘Z and ⇧⌘Z undo and redo. Space, ⇧Space, ⌘B, Delete and ⌘Return are
     /// the row's own (`AtticTaskKeys`).
     private func pageKey(_ press: KeyPress) -> KeyPress.Result {
+        #if DEBUG
+        TasksPageRenderProbe.pageKeys += 1
+        #endif
         // The shared card owns the keyboard even if its editor temporarily
         // loses first responder. In particular, Done must not turn its
         // draft's next letter into a new search.
@@ -6097,12 +6124,45 @@ private struct TasksSubtaskDraftView<Content: View>: View {
     var body: some View { content() }
 }
 
+/// The Tasks page's key handler, held in a box the page keeps. A handler
+/// closure that captured the page itself was a new value on every body
+/// pass, and `.onKeyPress` then wrote a new environment below it each time:
+/// same contents, new storage, so every view down to the tabs' kept hosts
+/// took it as a change (board SPEED-KEPTHOST-ENV-REROOT; the lead, LOG
+/// 24 Nov 06:36). The page hands the box its current handler on every pass.
+@MainActor final class TasksPageKeyHandler {
+    var handle: ((KeyPress) -> KeyPress.Result)?
+
+    #if DEBUG
+    /// Every box alive, held weakly (tests read what each still holds).
+    static let live = NSHashTable<TasksPageKeyHandler>.weakObjects()
+    init() { Self.live.add(self) }
+    #else
+    init() {}
+    #endif
+
+    func press(_ press: KeyPress) -> KeyPress.Result {
+        let result = handle?(press) ?? .ignored
+        #if DEBUG
+        TasksPageRenderProbe.lastKeyResult = result
+        #endif
+        return result
+    }
+}
+
 #if DEBUG
 /// What the page's body last read, and how often it ran (the tab-stall
 /// guard, host-boundary.md §5.1, TAB-STALL).
 @MainActor enum TasksPageRenderProbe {
     static var lastTab: TasksTab?
     static var bodyRuns = 0
+    /// New environments below the page's key handler.
+    static var environmentsBelowKeys = 0
+    /// Keys that reached `pageKey`, and the page's `onDisappear` runs.
+    static var pageKeys = 0
+    static var disappearances = 0
+    /// What the page's handler answered the last key.
+    static var lastKeyResult: KeyPress.Result?
     /// The tab being set, from its `willSet` until the set is over: a body
     /// that runs then runs inside the tab's announcement.
     static var settingTab: TasksTab?
