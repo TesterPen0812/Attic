@@ -1123,7 +1123,7 @@ final class HiddenPagesCountersTests: XCTestCase {
 /// write. `layoutSubtreeIfNeeded` and `displayIfNeeded` are one frame, with
 /// no run-loop turn between the write and the reading.
 extension HiddenPagesCountersTests {
-    private func frame(_ rig: Rig) {
+    private func oneFrame(_ rig: Rig) {
         rig.content.layoutSubtreeIfNeeded()
         rig.panel.displayIfNeeded()
     }
@@ -1162,7 +1162,7 @@ extension HiddenPagesCountersTests {
                 for step in 1...Self.dragSteps {
                     let size = dragSize(start, step: step)
                     resize(rig, to: size)
-                    frame(rig)
+                    oneFrame(rig)
                     XCTAssertEqual(PanelRootLayout.lastPlacedSize, size,
                                    "\(page) step \(step): the root is laid out at the window's content size in the step's frame")
                     for (view, width) in widths(of: page, rig) {
@@ -1205,10 +1205,10 @@ extension HiddenPagesCountersTests {
             XCTAssertFalse(before.isEmpty, "harness: the hidden pages have page-wide native views")
             let start = rig.state.panelSize
             rig.state.setInteractionLock(.windowResize, isActive: true)
-            frame(rig)
+            oneFrame(rig)
             for step in 1...Self.dragSteps {
                 resize(rig, to: dragSize(start, step: step))
-                frame(rig)
+                oneFrame(rig)
                 XCTAssertEqual(rig.state.retainedPageSizeDuringLiveResize, start, "step \(step): the hidden pages hold the start size")
                 for page in hidden {
                     for (view, width) in widths(of: page, rig) {
@@ -1219,7 +1219,7 @@ extension HiddenPagesCountersTests {
             release(rig)
             let grown = dragSize(start, step: Self.dragSteps).width - start.width
             waitForTestOperation("the hidden pages take the final size") {
-                frame(rig)
+                oneFrame(rig)
                 return hidden.allSatisfy { page in
                     widths(of: page, rig).allSatisfy { abs($0.value - (before[$0.key] ?? -1) - grown) < 0.5 }
                 }
@@ -1239,7 +1239,7 @@ extension HiddenPagesCountersTests {
             let start = rig.state.panelSize
             resize(rig, to: CGSize(width: start.width + 24, height: start.height + 12))
             waitForTestOperation("the hidden pages take a size written outside a drag") {
-                frame(rig)
+                oneFrame(rig)
                 return hidden.allSatisfy { page in
                     widths(of: page, rig).allSatisfy { abs($0.value - (before[$0.key] ?? -1) - 24) < 0.5 }
                 }
