@@ -283,6 +283,12 @@ struct TasksPage: View {
         .coordinateSpace(Self.space)
         .atticKeyboardFocusTracking(focusTracker)
         .environment(\.atticFocusRequests, focusRequests)
+        #if DEBUG
+        // Counts each environment below the key handler that is new storage
+        // (`TasksPageRenderProbe.environmentsBelowKeys`). It captures nothing,
+        // so it runs only when the environment it is given changes.
+        .transformEnvironment(\.self) { _ in TasksPageRenderProbe.environmentsBelowKeys += 1 }
+        #endif
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear { pageAppeared() }
         .onDisappear {
@@ -6103,6 +6109,8 @@ private struct TasksSubtaskDraftView<Content: View>: View {
 @MainActor enum TasksPageRenderProbe {
     static var lastTab: TasksTab?
     static var bodyRuns = 0
+    /// New environments below the page's key handler.
+    static var environmentsBelowKeys = 0
     /// The tab being set, from its `willSet` until the set is over: a body
     /// that runs then runs inside the tab's announcement.
     static var settingTab: TasksTab?
