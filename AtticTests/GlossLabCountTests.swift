@@ -1051,5 +1051,87 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(host.sizingOptions, [])
         XCTAssertEqual(window.frame.size, GlossSamples.windowSize)
     }
+
+    /// The system's variants (owner, 24 Nov: "Yes, try them"): off to start
+    /// with, loaded with their two settings, written by Copy values, and
+    /// no preset, All off or Reset sliders touches them.
+    func testSystemVariantsLoadCopyAndStayOutOfPresets() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertFalse(fresh.samplesSystem, "the system's variants start off")
+        XCTAssertEqual(fresh.samplesLensing, 0); XCTAssertEqual(fresh.samplesScrim, 0)
+        XCTAssertTrue(fresh.valuesText(app: Self.app(mode: "Light")).contains("system variants off (lensing 0, scrim 0)"))
+        defaults.set(true, forKey: "GlossLab.samplesSystem")
+        defaults.set(2.0, forKey: "GlossLab.samplesLensing")
+        defaults.set(1.0, forKey: "GlossLab.samplesScrim")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.samplesSystem); XCTAssertEqual(lab.samplesLensing, 2); XCTAssertEqual(lab.samplesScrim, 1)
+        let text = lab.valuesText(app: Self.app(mode: "Light"))
+        XCTAssertTrue(text.contains("system variants on (lensing 2, scrim 1)"), text)
+        lab.allOff(); lab.resetSliders()
+        XCTAssertTrue(lab.samplesSystem, "All off took the system's variants away")
+        XCTAssertEqual(lab.samplesLensing, 2, "Reset sliders moved the lensing")
+        let preset = try XCTUnwrap(GlossLab.presets.first { $0.id == "thickGlass" })
+        lab.apply(preset)
+        XCTAssertTrue(lab.samplesSystem); XCTAssertEqual(lab.samplesScrim, 1)
+        lab.samplesLensing = 3
+        XCTAssertEqual(lab.currentPreset?.id, "thickGlass", "the samples' lensing broke the preset's match")
+        XCTAssertEqual(GlossLab(defaults: defaults).samplesLensing, 3, "a change is kept")
+    }
+
+    /// The system's variants are numbers 0 to 23, six to a row like A to
+    /// F, so the window keeps its width and is four rows tall; the light
+    /// row does not count while they are shown.
+    func testSystemVariantsFillFourRowsOfSix() {
+        XCTAssertEqual(GlossSystemGlass.variants, Array(0...23))
+        XCTAssertEqual(GlossSamples.systemColumns, 6)
+        let size = GlossSamples.windowSize(lightRow: true, systemVariants: true)
+        XCTAssertEqual(size.width, 1052)
+        // Margins 20 + 20, four rows of 150, three gaps of 14.
+        XCTAssertEqual(size.height, 682)
+        XCTAssertEqual(GlossSamples.windowSize(lightRow: false, systemVariants: true), size)
+        XCTAssertEqual(GlossSamples.windowSize(lightRow: true, systemVariants: false), GlossSamples.windowSize(lightRow: true))
+        XCTAssertEqual(GlossSamples.windowSize(lightRow: false, systemVariants: false), GlossSamples.windowSize)
+    }
+
+    /// The hidden settings go on AppKit's glass view where this system has
+    /// them, and read back; a view without them is left alone.
+    func testSystemGlassSettingsReachTheGlassView() {
+        let glass = NSGlassEffectView()
+        // Both Macs' systems have them (26.4.1 and 27.0); a system that
+        // drops one fails here, which is the news the lab needs.
+        for key in [GlossSystemGlass.variantKey, GlossSystemGlass.lensingKey, GlossSystemGlass.scrimKey] {
+            XCTAssertTrue(GlossSystemGlass.answers(glass, key), "this system's glass view has no \(key)")
+        }
+        guard GlossSystemGlass.answers(glass, GlossSystemGlass.variantKey) else { return }
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.variantKey, of: glass), 0, "the public glass is variant 0")
+        GlossSystemGlass.apply(variant: 8, lensing: 1, scrim: 1, to: glass)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.variantKey, of: glass), 8)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.lensingKey, of: glass), 1)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.scrimKey, of: glass), 1)
+        GlossSystemGlass.apply(variant: 0, lensing: 0, scrim: 0, to: glass)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.variantKey, of: glass), 0)
+        let plain = NSView()
+        XCTAssertFalse(GlossSystemGlass.answers(plain, GlossSystemGlass.variantKey))
+        XCTAssertNil(GlossSystemGlass.value(GlossSystemGlass.variantKey, of: plain))
+        GlossSystemGlass.apply(variant: 8, lensing: 1, scrim: 1, to: plain) // no such setting: nothing happens
+    }
+
+    /// When rows come, a window that would hang off the screen is moved up
+    /// by the least that fits it; one that fits, or is taller than the
+    /// screen, is left where it is.
+    func testSamplesWindowIsRaisedIntoViewWhenItGrows() {
+        let visible = CGRect(x: 0, y: 51, width: 1800, height: 1079)
+        let fits = CGRect(x: 522, y: 300, width: 1052, height: 682)
+        XCTAssertEqual(GlossSamples.raised(fits, into: visible), fits)
+        let low = CGRect(x: 522, y: -40, width: 1052, height: 682)
+        XCTAssertEqual(GlossSamples.raised(low, into: visible), CGRect(x: 522, y: 51, width: 1052, height: 682))
+        let high = CGRect(x: 522, y: 600, width: 1052, height: 682)
+        XCTAssertEqual(GlossSamples.raised(high, into: visible), CGRect(x: 522, y: 448, width: 1052, height: 682))
+        let tall = CGRect(x: 0, y: -100, width: 1052, height: 2000)
+        XCTAssertEqual(GlossSamples.raised(tall, into: visible), tall)
+    }
 }
 #endif

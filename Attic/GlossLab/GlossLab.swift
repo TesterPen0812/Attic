@@ -192,6 +192,16 @@ final class GlossLab {
     /// dark with white text: "add a light option as well"): the same six
     /// materials drawn as in Light, with dark text and a white veil.
     var samplesLight = true { didSet { save(samplesLight, "samplesLight") } }
+    /// The system's own variants in place of A to L (24 Nov, owner on the
+    /// twelve cards beside the real Control Centre: "none of these loook
+    /// even close"; then "Yes, try them"). Apple gives apps two glasses;
+    /// AppKit's glass view also answers to a hidden variant number, which
+    /// is what these cards set, with two more hidden settings on all of
+    /// them: content lensing and scrim (0 to 3; 0 is the view's default).
+    /// Unsupported: for looking in the lab, never for the panel.
+    var samplesSystem = false { didSet { save(samplesSystem, "samplesSystem") } }
+    var samplesLensing: Double = 0 { didSet { save(samplesLensing, "samplesLensing") } }
+    var samplesScrim: Double = 0 { didSet { save(samplesScrim, "samplesScrim") } }
 
     init(defaults: UserDefaults?) {
         self.defaults = defaults
@@ -236,7 +246,8 @@ final class GlossLab {
         }
         if let raw = defaults.string(forKey: Self.prefix + "backdrop"), let value = Backdrop(rawValue: raw) { backdrop = value }
         bool("samplesShown", &samplesShown); double("samplesSmoke", &samplesSmoke)
-        bool("samplesLight", &samplesLight)
+        bool("samplesLight", &samplesLight); bool("samplesSystem", &samplesSystem)
+        double("samplesLensing", &samplesLensing); double("samplesScrim", &samplesScrim)
         // A launch argument (`-GlossLab.preset <id>`) shows a preset for
         // one run. Still loading, so nothing of it is saved.
         if let id = defaults.string(forKey: Self.prefix + "preset"), let preset = Self.presets.first(where: { $0.id == id }) {
@@ -408,7 +419,7 @@ final class GlossLab {
         Tint: \(app.tint), length \(Int((app.tintLength * 100).rounded())) %
         Brighten glass: \(on(app.brightenGlass))
         Backdrop: \(backdrop.title)
-        Material samples: \(on(samplesShown)), veil \(Int(samplesSmoke.rounded())) %, light row \(on(samplesLight))
+        Material samples: \(on(samplesShown)), veil \(Int(samplesSmoke.rounded())) %, light row \(on(samplesLight)), system variants \(on(samplesSystem)) (lensing \(Int(samplesLensing.rounded())), scrim \(Int(samplesScrim.rounded())))
         Preset: \(currentPreset?.title ?? "none (own values)")
         \(labLines)
         """

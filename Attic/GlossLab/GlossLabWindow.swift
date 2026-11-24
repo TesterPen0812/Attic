@@ -202,6 +202,18 @@ struct GlossLabView: View {
                     note: "Six cards of Apple's glass in a window of their own, over whatever is behind it. Drag them next to the real Control Centre. A Regular glass, as in Dark. B the same with a black veil. C the same with the veil as the glass's own tint. D Clear glass. E Clear with the veil (the lab's tiles now). F Regular glass as in Light, with the veil. White text on all. The light row, G to L, is the same six drawn as in Light, with dark text and a white veil (L is glass as in Dark under it).") {
                     slider("Veil", $lab.samplesSmoke, 0...60, unit: " %")
                     Toggle("Light row (G to L: the same six as in Light, dark text)", isOn: $lab.samplesLight)
+                    Toggle("System variants (0 to 23) in place of A to L", isOn: $lab.samplesSystem)
+                    if lab.samplesSystem {
+                        Text("The glass the system keeps to itself: AppKit's glass view with its hidden variant number set, one number per card. Unsupported, for looking only. Lensing and Scrim are two more hidden settings, put on every card; 0 is what the system starts with.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Stepper(value: $lab.samplesLensing, in: 0...3, step: 1) {
+                            Text("Lensing \(Int(lab.samplesLensing.rounded()))")
+                        }
+                        Stepper(value: $lab.samplesScrim, in: 0...3, step: 1) {
+                            Text("Scrim \(Int(lab.samplesScrim.rounded()))")
+                        }
+                    }
                 }
 
                 section("Presets")
@@ -594,6 +606,31 @@ enum GlossSamples {
         return lightRow ? CGSize(width: one.width, height: one.height + gap + card) : one
     }
 
+    /// How many of the system's variants go in one row: as many as the
+    /// first row has cards, so the window keeps its width.
+    static var systemColumns: Int { GlossSample.allCases.count }
+
+    /// The window's size for what it shows: the system's variants in rows
+    /// of `systemColumns` when they are on (the light row does not apply
+    /// then), else A to F with or without the light row.
+    static func windowSize(lightRow: Bool, systemVariants: Bool) -> CGSize {
+        guard systemVariants else { return windowSize(lightRow: lightRow) }
+        let rows = CGFloat((GlossSystemGlass.variants.count + systemColumns - 1) / systemColumns)
+        return CGSize(width: windowSize.width, height: margin * 2 + card * rows + gap * (rows - 1))
+    }
+
+    /// `frame` moved up or down by the least that brings it wholly inside
+    /// `visible`, when it is no taller than `visible`; left alone if it is.
+    /// For the moment the window grows or shrinks: a set that is taller
+    /// than the last must not hang off the bottom of the screen.
+    static func raised(_ frame: CGRect, into visible: CGRect) -> CGRect {
+        guard frame.height <= visible.height else { return frame }
+        var moved = frame
+        if moved.minY < visible.minY { moved.origin.y = visible.minY }
+        if moved.maxY > visible.maxY { moved.origin.y = visible.maxY - moved.height }
+        return moved
+    }
+
     /// The saved place as an origin for a window of `size`. What is kept
     /// is the window's top left corner, so the light row coming or going
     /// leaves the top edge where it was. An origin saved before there was
@@ -617,17 +654,12 @@ enum GlossSamples {
     }
 }
 
-/// One card: white text, as on a Control Centre card, over its material;
-/// in the light row, dark text over the material drawn as in Light.
-struct GlossSampleCard: View {
-    let sample: GlossSample
-    /// The veil, 0 to 1: black, and white in the light row.
-    let smoke: Double
-    /// Whether this is the light row's card.
+/// What every card carries, whatever its material: its letter or number,
+/// its name, and a task's two lines and three symbols.
+struct GlossSampleCardFace: View {
+    let letter: String
+    let title: String
     var light = false
-
-    private var letter: String { light ? sample.lightLetter : sample.letter }
-    private var title: String { light ? sample.lightTitle : sample.title }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -650,9 +682,98 @@ struct GlossSampleCard: View {
         .foregroundStyle(light ? Color.black : Color.white)
         .padding(14)
         .frame(width: GlossSamples.card, height: GlossSamples.card, alignment: .topLeading)
-        .background { material }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Sample \(letter), \(title)")
+    }
+}
+
+/// The system's hidden glass settings (24 Nov). Apple's kit gives apps two
+/// glasses, Regular and Clear. AppKit's `NSGlassEffectView` also answers
+/// to settings its header does not list (seen on macOS 27.0, 26A5425a:
+/// `set_variant:`, `set_contentLensing:`, `set_scrimState:`). These are
+/// unsupported and can change with any macOS update: they are here so the
+/// owner can see, beside the real Control Centre, whether one of them is
+/// its glass. Nothing outside the sample cards uses them.
+enum GlossSystemGlass {
+    /// The variant numbers shown, one card each. Which is which is not
+    /// documented anywhere; the cards carry the number only.
+    static let variants = Array(0...23)
+
+    static let variantKey = "_variant"
+    static let lensingKey = "_contentLensing"
+    static let scrimKey = "_scrimState"
+
+    /// Whether the glass view on this system has the hidden setting `key`
+    /// (asked of the view, so a system without it is left alone).
+    static func answers(_ view: NSView, _ key: String) -> Bool {
+        view.responds(to: NSSelectorFromString("set" + key + ":")) && view.responds(to: NSSelectorFromString(key))
+    }
+
+    /// The setting's value now, nil where the system has no such setting.
+    static func value(_ key: String, of view: NSView) -> Int? {
+        guard answers(view, key) else { return nil }
+        return (view.value(forKey: key) as? NSNumber)?.intValue
+    }
+
+    /// Puts the three settings on `view`, each only where the system has
+    /// it and only when it differs.
+    static func apply(variant: Int, lensing: Int, scrim: Int, to view: NSView) {
+        for (key, wanted) in [(variantKey, variant), (lensingKey, lensing), (scrimKey, scrim)] {
+            guard let now = value(key, of: view), now != wanted else { continue }
+            view.setValue(NSNumber(value: wanted), forKey: key)
+        }
+    }
+}
+
+/// AppKit's glass view with one hidden variant set on it, as a card's
+/// material.
+struct GlossSystemGlassView: NSViewRepresentable {
+    let variant: Int
+    let lensing: Int
+    let scrim: Int
+
+    func makeNSView(context: Context) -> NSGlassEffectView {
+        let view = NSGlassEffectView()
+        view.cornerRadius = GlossSamples.corner
+        view.contentView = NSView()
+        GlossSystemGlass.apply(variant: variant, lensing: lensing, scrim: scrim, to: view)
+        return view
+    }
+
+    func updateNSView(_ view: NSGlassEffectView, context: Context) {
+        GlossSystemGlass.apply(variant: variant, lensing: lensing, scrim: scrim, to: view)
+    }
+}
+
+/// One of the system's variants as a card: its number, white text.
+struct GlossSystemCard: View {
+    let variant: Int
+    let lensing: Int
+    let scrim: Int
+
+    var body: some View {
+        GlossSampleCardFace(letter: "\(variant)", title: "variant")
+            .background { GlossSystemGlassView(variant: variant, lensing: lensing, scrim: scrim) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("System variant \(variant)")
+    }
+}
+
+/// One card: white text, as on a Control Centre card, over its material;
+/// in the light row, dark text over the material drawn as in Light.
+struct GlossSampleCard: View {
+    let sample: GlossSample
+    /// The veil, 0 to 1: black, and white in the light row.
+    let smoke: Double
+    /// Whether this is the light row's card.
+    var light = false
+
+    private var letter: String { light ? sample.lightLetter : sample.letter }
+    private var title: String { light ? sample.lightTitle : sample.title }
+
+    var body: some View {
+        GlossSampleCardFace(letter: letter, title: title, light: light)
+            .background { material }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Sample \(letter), \(title)")
     }
 
     private var shape: RoundedRectangle {
@@ -695,13 +816,17 @@ struct GlossSamplesView: View {
     @Bindable var lab: GlossLab
 
     var body: some View {
-        let size = GlossSamples.windowSize(lightRow: lab.samplesLight)
+        let size = GlossSamples.windowSize(lightRow: lab.samplesLight, systemVariants: lab.samplesSystem)
         VStack(alignment: .leading, spacing: GlossSamples.gap) {
-            firstRow
-            if lab.samplesLight {
-                HStack(alignment: .top, spacing: GlossSamples.gap) {
-                    ForEach(GlossSample.allCases) { sample in
-                        GlossSampleCard(sample: sample, smoke: lab.samplesSmoke / 100, light: true)
+            if lab.samplesSystem {
+                systemRows
+            } else {
+                firstRow
+                if lab.samplesLight {
+                    HStack(alignment: .top, spacing: GlossSamples.gap) {
+                        ForEach(GlossSample.allCases) { sample in
+                            GlossSampleCard(sample: sample, smoke: lab.samplesSmoke / 100, light: true)
+                        }
                     }
                 }
             }
@@ -712,25 +837,45 @@ struct GlossSamplesView: View {
         .gesture(WindowDragGesture())
     }
 
+    /// The system's variants in rows, the close button after the first.
+    @ViewBuilder private var systemRows: some View {
+        let columns = GlossSamples.systemColumns
+        let all = GlossSystemGlass.variants
+        let lensing = Int(lab.samplesLensing.rounded())
+        let scrim = Int(lab.samplesScrim.rounded())
+        ForEach(Array(stride(from: 0, to: all.count, by: columns)), id: \.self) { start in
+            HStack(alignment: .top, spacing: GlossSamples.gap) {
+                ForEach(all[start..<min(start + columns, all.count)], id: \.self) { variant in
+                    GlossSystemCard(variant: variant, lensing: lensing, scrim: scrim)
+                }
+                if start == 0 { closeButton }
+            }
+        }
+    }
+
     private var firstRow: some View {
         HStack(alignment: .top, spacing: GlossSamples.gap) {
             ForEach(GlossSample.allCases) { sample in
                 GlossSampleCard(sample: sample, smoke: lab.samplesSmoke / 100)
             }
-            Button {
-                lab.samplesShown = false
-            } label: {
-                let circle = Circle()
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: GlossSamples.closeButton, height: GlossSamples.closeButton)
-                    .background { circle.fill(Color.clear).glassEffect(.regular, in: circle) }
-                    .contentShape(circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close the sample cards")
+            closeButton
         }
+    }
+
+    private var closeButton: some View {
+        Button {
+            lab.samplesShown = false
+        } label: {
+            let circle = Circle()
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: GlossSamples.closeButton, height: GlossSamples.closeButton)
+                .background { circle.fill(Color.clear).glassEffect(.regular, in: circle) }
+                .contentShape(circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close the sample cards")
     }
 }
 
@@ -758,6 +903,7 @@ final class GlossSamplesWindows {
         withObservationTracking {
             _ = GlossLab.shared.samplesShown
             _ = GlossLab.shared.samplesLight
+            _ = GlossLab.shared.samplesSystem
         } onChange: { [weak self] in
             Task { @MainActor in self?.configure() }
         }
@@ -808,7 +954,7 @@ final class GlossSamplesWindows {
         }
         guard let window else { return }
         let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        let size = GlossSamples.windowSize(lightRow: GlossLab.shared.samplesLight)
+        let size = GlossSamples.windowSize(lightRow: GlossLab.shared.samplesLight, systemVariants: GlossLab.shared.samplesSystem)
         if !window.isVisible {
             let saved = GlossSamples.origin(
                 savedTopLeft: UserDefaults.standard.string(forKey: Self.topLeftKey).map(NSPointFromString),
@@ -816,9 +962,11 @@ final class GlossSamplesWindows {
                 size: size)
             window.setFrame(GlossSamples.frame(savedOrigin: saved, size: size, visible: visible), display: true)
         } else if window.frame.size != size {
-            // The light row came or went: the top edge stays where it is.
+            // Rows came or went: the top edge stays where it is, unless
+            // the taller window would then hang off the screen.
             let frame = window.frame
-            window.setFrame(CGRect(x: frame.minX, y: frame.maxY - size.height, width: size.width, height: size.height), display: true)
+            let grown = CGRect(x: frame.minX, y: frame.maxY - size.height, width: size.width, height: size.height)
+            window.setFrame(GlossSamples.raised(grown, into: window.screen?.visibleFrame ?? visible), display: true)
         }
         applyTestBackdrop(under: window)
         window.orderFrontRegardless()
@@ -846,7 +994,7 @@ final class GlossSamplesWindows {
             backdrop.ignoresMouseEvents = true
             backdrop.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             if name == "text" {
-                backdrop.contentView = NSHostingView(rootView: GlossSamplesTextBackdrop(lines: GlossLab.shared.samplesLight ? 17 : 10))
+                backdrop.contentView = NSHostingView(rootView: GlossSamplesTextBackdrop(lines: GlossLab.shared.samplesSystem ? 30 : GlossLab.shared.samplesLight ? 17 : 10))
             } else {
                 backdrop.contentView = NSHostingView(rootView: GlossBackdropView(backdrop: GlossLab.Backdrop(rawValue: name) ?? .black))
             }
