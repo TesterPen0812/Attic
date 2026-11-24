@@ -838,32 +838,107 @@ extension TasksRound13Tests {
         hosted.model.selection.map { ids.firstIndex(of: $0) ?? -1 }.sorted()
     }
 
-    /// One click, then ↓: the first ↓ moves the cursor and the selection to
-    /// the next row (the trunk does; the list's claim on the keyboard from
-    /// that one click must not cost the first key). Prints what took the
-    /// key, for the diagnostics.
+    /// A press on a control inside a row, then ↓ (the trunk, Air tk-trunk.log
+    /// 24 Nov 22:0x, `TK_CLICK first row=0`): row 0's subtask count is under
+    /// the point `clickRow` presses, so the press opens its quick look and
+    /// never reaches the row's own tap. The trunk's focusable row took the
+    /// keyboard from that press: the cursor on row 0, nothing selected, and
+    /// the next ↓ moves from it. The list keeps that: a press inside a row
+    /// puts the cursor there. A click on a row's own part selects it.
     func testTheFirstDownAfterOneClickMovesTheCursor() throws {
         try requireKeyWindowTests()
         let hosted = try longHosted()
         defer { hosted.close() }
         let ids = hosted.model.rows(for: .now).map(\.id)
-        func line(_ label: String) {
-            let link = TasksRowFocusLink.current
-            print("LIST_FOCUS first-down \(label) responder=\(hosted.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil") "
-                  + "holds=\(link?.holds(.now) ?? false) cursor=\(index(hosted, ids, hosted.model.keyboardFocus?.id).map(String.init) ?? "nil") "
-                  + "selection=\(selected(hosted, ids)) pageKeys=\(TasksPageRenderProbe.pageKeys) last=\(TasksPageRenderProbe.lastKeyResult.map { "\($0)" } ?? "nil") "
-                  + "reports=\(TasksPageRenderProbe.listFocusReports) inList=\(keyboardIsInNowList(hosted))")
-        }
-        TasksPageRenderProbe.listFocusReports = []
-        line("before")
+        XCTAssertFalse(hosted.model.expanded.contains(ids[0]), "harness: row 0's quick look is shut")
         try clickRow(hosted, ids[0])
-        line("click")
+        XCTAssertTrue(hosted.model.expanded.contains(ids[0]), "harness: the press landed on row 0's subtask count and opened its quick look")
+        XCTAssertEqual(selected(hosted, ids), [], "a press on a control inside a row selects nothing")
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 0, "the cursor is on the row the press was in")
+        XCTAssertTrue(keyboardIsInNowList(hosted), "the keyboard is in the Now list")
         hosted.press("\u{F701}", keyCode: 125)
-        line("down1")
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 1, "the first ↓ moves from that row")
         hosted.press("\u{F701}", keyCode: 125)
-        line("down2")
-        XCTAssertEqual(selected(hosted, ids), [2], "two ↓ after one click reach row 2")
+        XCTAssertEqual(selected(hosted, ids), [2], "two ↓ after the press reach row 2")
         XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 2, "the cursor on row 2")
+        // From a selected row, on a fresh page (row 0's quick look shut):
+        // a click on a row's own part selects it and takes the cursor; the
+        // press on row 0's control then moves the cursor and leaves the
+        // selection (the trunk: `third-other row=0`).
+        let second = try longHosted()
+        defer { second.close() }
+        let others = second.model.rows(for: .now).map(\.id)
+        try clickRow(second, others[5])
+        XCTAssertEqual(selected(second, others), [5], "a click on a row selects it")
+        XCTAssertEqual(index(second, others, second.model.keyboardFocus?.id), 5, "and takes the cursor")
+        try clickRow(second, others[0])
+        XCTAssertEqual(selected(second, others), [5], "the press leaves the selection")
+        XCTAssertEqual(index(second, others, second.model.keyboardFocus?.id), 0, "and moves the cursor to its row")
+    }
+
+    /// The lead's ruling (LOG 24 Nov 21:28): after a tab switch a row has
+    /// the cursor exactly where the trunk has one. Four switches, each from
+    /// ↓ on Now: one that saved a rename, one made while the panel was not
+    /// key, a plain one, and one back to the tab that had the cursor. The
+    /// trunk (Air tk-trunk.log 24 Nov 22:0x, `TK_SWITCH … after-switch`):
+    /// no row has the cursor after any of them; the ↓ that follows reaches
+    /// a row after the plain switch and the switch back, and none after
+    /// the other two (the two §5.1 pins).
+    func testNoRowHasTheCursorAfterATabSwitchAsOnTheTrunk() throws {
+        try requireKeyWindowTests()
+        func start() throws -> Hosted {
+            let hosted = try Hosted(height: 520)
+            hosted.spin(1.5)
+            hosted.press("\u{F701}", keyCode: 125)
+            XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.now.rawValue, "harness: ↓ on Now reaches a Now row")
+            return hosted
+        }
+        func check(_ name: String, _ hosted: Hosted, tab: TasksTab, downReachesARow: Bool) {
+            XCTAssertEqual(hosted.model.tab, tab, "harness: \(name): the switch landed")
+            XCTAssertNil(hosted.model.keyboardFocus, "\(name): no row has the cursor after the switch")
+            hosted.press("\u{F701}", keyCode: 125)
+            XCTAssertEqual(hosted.model.keyboardFocus?.page, downReachesARow ? tab.rawValue : nil,
+                           "\(name): the ↓ after the switch")
+        }
+        do {
+            let hosted = try start()
+            defer { hosted.close() }
+            let row = try XCTUnwrap(hosted.model.keyboardFocus?.id)
+            hosted.model.beginEditingTitle(row)
+            hosted.spin(0.4)
+            XCTAssertEqual(hosted.model.editingTitleID, row, "harness: the rename is open")
+            hosted.go(to: .backlog)
+            XCTAssertNil(hosted.model.editingTitleID, "harness: the switch saved the rename")
+            check("a switch that saved a rename", hosted, tab: .backlog, downReachesARow: false)
+        }
+        do {
+            let hosted = try start()
+            defer { hosted.close() }
+            let other = NSWindow(contentRect: CGRect(x: -3_000, y: -3_000, width: 80, height: 80),
+                                 styleMask: [.titled], backing: .buffered, defer: false)
+            other.isReleasedWhenClosed = false
+            defer { other.close() }
+            other.makeKeyAndOrderFront(nil)
+            hosted.spin(0.2)
+            XCTAssertFalse(hosted.window.isKeyWindow, "harness: another window is key")
+            hosted.go(to: .backlog)
+            hosted.window.makeKey()
+            hosted.spin(0.3)
+            check("a switch while the panel was not key", hosted, tab: .backlog, downReachesARow: false)
+        }
+        do {
+            let hosted = try start()
+            defer { hosted.close() }
+            hosted.go(to: .backlog)
+            check("a plain switch", hosted, tab: .backlog, downReachesARow: true)
+        }
+        do {
+            let hosted = try start()
+            defer { hosted.close() }
+            hosted.go(to: .backlog)
+            hosted.go(to: .now)
+            check("a switch back to the tab that had the cursor", hosted, tab: .now, downReachesARow: true)
+        }
     }
 
     /// Diagnostics (list-owned focus): the first click on a row while the
