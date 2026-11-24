@@ -3041,10 +3041,15 @@ struct TasksPage: View {
         // before. A row that took focus took the keyboard from any press
         // inside it; the list keeps that. No focus state is written: the
         // press itself gives the list target the keyboard.
-        if let row = pointer.pressedRow(event, tab: model.tab, top: viewportTop, bottomInset: bandTop,
-                                        ownHeight: { id in rowOwnHeight(id, in: model.tab) }),
-           row != model.editingTitleID, row != focusedID {
-            cursorMoved(AtticRowFocusID(page: model.tab.rawValue, id: row), byMouse: true)
+        // A press in the quick look open under a row is not in the row: the
+        // cursor leaves, as a row's focus left when the press landed there.
+        if let press = pointer.pressedRow(event, tab: model.tab, top: viewportTop, bottomInset: bandTop,
+                                          ownHeight: { id in rowOwnHeight(id, in: model.tab) }) {
+            if !press.inOwnPart {
+                if focusedRow != nil { cursorMoved(nil, byMouse: true) }
+            } else if press.id != model.editingTitleID, press.id != focusedID {
+                cursorMoved(AtticRowFocusID(page: model.tab.rawValue, id: press.id), byMouse: true)
+            }
         }
         // Only the rows' visible part: between the tabs' band and the
         // bottom stack's band (round 7, R4).
@@ -5414,12 +5419,12 @@ final class TasksPointer {
     /// the list's space, inside a row's own part: that row. `ownHeight` is
     /// the row's height without its quick look, whose lines take the
     /// keyboard themselves.
-    func pressedRow(_ event: NSEvent, tab: TasksTab, top: CGFloat, bottomInset: CGFloat, ownHeight: (UUID) -> CGFloat?) -> UUID? {
+    func pressedRow(_ event: NSEvent, tab: TasksTab, top: CGFloat, bottomInset: CGFloat, ownHeight: (UUID) -> CGFloat?) -> (id: UUID, inOwnPart: Bool)? {
         guard event.type == .leftMouseDown, MenuPress(type: event.type, modifiers: event.modifierFlags) == .none,
               let view, let point = location(of: event), point.y >= top, point.y <= view.bounds.height - bottomInset,
               let id = row(at: point, in: tab), let frame = frame(for: TasksRowID(tab: tab, id: id)),
-              let height = ownHeight(id), point.y - frame.minY <= height else { return nil }
-        return id
+              let height = ownHeight(id) else { return nil }
+        return (id, point.y - frame.minY <= height)
     }
 
     /// The row under `point` on page `tab`: the one whose frame holds it
