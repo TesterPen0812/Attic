@@ -854,5 +854,20 @@ extension PanelShellTests {
         XCTAssertEqual(column.contentInsets.top, wide.contentInsets.top)
         XCTAssertEqual(column.contentInsets.bottom, wide.contentInsets.bottom)
         XCTAssertEqual(column.chromeInsets.bottom, wide.chromeInsets.bottom)
+        // The page itself still fills the window; only its insets make the
+        // column (the layout's own size said so until it stopped carrying one).
+        final class Seen { var sizes: [CGSize] = []; var layouts: [PanelPageLayout] = [] }
+        let seen = Seen()
+        let host = NSHostingView(rootView: PanelReadingColumn(layout: wide) { handed in
+            GeometryReader { proxy -> Color in
+                seen.sizes.append(proxy.size)
+                seen.layouts.append(handed)
+                return Color.clear
+            }
+        })
+        host.frame = CGRect(x: 0, y: 0, width: 1700, height: 520)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(seen.sizes.last, CGSize(width: 1700, height: 520), "a wide page is laid out at the window's size")
+        XCTAssertEqual(seen.layouts.last, column, "and is handed the column")
     }
 }
