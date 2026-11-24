@@ -1466,18 +1466,22 @@ final class GlossSamplesWindows {
     /// A check's seam, never in the lab window, only with a test backdrop
     /// (`-GlossLab.samplesBackdrop`): once, 2 s after the window is shown,
     /// writes the window order, the frames and the key state to standard
-    /// output; with `-GlossLab.samplesMoveBy "{dx, dy}"` it then moves the
-    /// cards window by that much, as a drag would, and writes them again.
+    /// output; with `-GlossLab.samplesMoveX <pt> -GlossLab.samplesMoveY <pt>`
+    /// it then moves the cards window by that much, as a drag would, and
+    /// writes them again. (Two numbers, because a launch value in braces
+    /// is read as a dictionary, not a string.)
     private func reportForCheck(_ window: Panel) {
-        guard !checkReported, UserDefaults.standard.string(forKey: GlossLab.prefix + "samplesBackdrop") != nil else { return }
+        let defaults = UserDefaults.standard
+        guard !checkReported, defaults.string(forKey: GlossLab.prefix + "samplesBackdrop") != nil else { return }
         checkReported = true
         Task { @MainActor [weak self, weak window] in
             try? await Task.sleep(for: .seconds(2))
             guard let window else { return }
             self?.writeCheckLine("shown", window)
-            guard let move = UserDefaults.standard.string(forKey: GlossLab.prefix + "samplesMoveBy") else { return }
-            let by = NSPointFromString(move)
-            window.setFrameOrigin(CGPoint(x: window.frame.minX + by.x, y: window.frame.minY + by.y))
+            let dx = UserDefaults.standard.double(forKey: GlossLab.prefix + "samplesMoveX")
+            let dy = UserDefaults.standard.double(forKey: GlossLab.prefix + "samplesMoveY")
+            guard dx != 0 || dy != 0 else { return }
+            window.setFrameOrigin(CGPoint(x: window.frame.minX + dx, y: window.frame.minY + dy))
             try? await Task.sleep(for: .seconds(1))
             self?.writeCheckLine("moved", window)
         }
@@ -1487,7 +1491,9 @@ final class GlossSamplesWindows {
         let order = NSWindow.windowNumbers(options: [])?.compactMap { NSApp.window(withWindowNumber: $0.intValue)?.title } ?? []
         let ground = groundWindow.flatMap { $0.isVisible ? NSStringFromRect($0.frame) : nil } ?? "none"
         let expected = NSStringFromRect(GlossSamples.stackGroundFrame(under: window.frame))
+        let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         print("GLOSS_STACK \(when) key=\(window.isKeyWindow) canBecomeKey=\(window.canBecomeKey) appActive=\(NSApp.isActive) "
+              + "reduceTransparency=\(reduceTransparency) "
               + "cards=\(NSStringFromRect(window.frame)) ground=\(ground) groundExpected=\(expected) "
               + "groundIsChild=\(groundWindow?.parent === window) frontToBack=\(order)")
         fflush(stdout)
