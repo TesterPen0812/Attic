@@ -814,3 +814,101 @@ extension TasksRound13Tests {
         XCTAssertEqual(hosted.model.selection, [ids[2]], "the first ↓ selects the row it reaches")
     }
 }
+
+// MARK: - List-owned focus guards (list-owned-focus.md §5, Guards)
+
+@MainActor
+extension TasksRound13Tests {
+    private func index(_ hosted: Hosted, _ ids: [UUID], _ id: UUID?) -> Int? {
+        id.map { ids.firstIndex(of: $0) ?? -1 }
+    }
+
+    private func selected(_ hosted: Hosted, _ ids: [UUID]) -> [Int] {
+        hosted.model.selection.map { ids.firstIndex(of: $0) ?? -1 }.sorted()
+    }
+
+    /// Range selection: ⇧-click grows from the clicked row, and ⇧↓ then
+    /// grows the same range from that anchor, the cursor on its far end.
+    func testShiftClickAndShiftDownGrowFromAClickAnchor() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[1])
+        try clickRow(hosted, ids[3], modifiers: .shift)
+        XCTAssertEqual(selected(hosted, ids), [1, 2, 3], "⇧-click grows from the clicked row")
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 3, "the cursor on the ⇧-clicked row")
+        hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)
+        XCTAssertEqual(selected(hosted, ids), [1, 2, 3, 4], "⇧↓ grows the range from the click anchor")
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 4, "the cursor on the range's far end")
+        XCTAssertTrue(hosted.pointer.drawnFocus.contains(TasksRowID(tab: .now, id: ids[4])), "the ring on the cursor row")
+        XCTAssertTrue(keyboardIsInNowList(hosted), "the keyboard stays in the Now list")
+    }
+
+    /// Lazy-row reveal: ↓ onto a row the lazy list has not built yet brings
+    /// it into view, with the cursor and the selection on it.
+    func testDownOntoARowTheLazyListHasNotBuiltRevealsIt() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[0])
+        var unbuiltReached = 0
+        for step in 1...30 {
+            let wasBuilt = isBuilt(hosted, ids[step])
+            hosted.press("\u{F701}", keyCode: 125)
+            hosted.spin(0.2)
+            XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), step, "↓ \(step): the cursor")
+            XCTAssertEqual(selected(hosted, ids), [step], "↓ \(step): the selection")
+            XCTAssertTrue(isBuilt(hosted, ids[step]), "↓ \(step): the row is built")
+            if let frame = hosted.pointer.frame(for: TasksRowID(tab: .now, id: ids[step])), let view = hosted.pointer.view {
+                let inWindow = view.convert(frame, to: nil)
+                XCTAssertTrue(inWindow.minY >= 0 && inWindow.maxY <= hosted.height, "↓ \(step): the row is in view (\(inWindow))")
+            }
+            if !wasBuilt { unbuiltReached += 1 }
+        }
+        print("LIST_FOCUS lazy_reveal unbuilt_reached=\(unbuiltReached)")
+        XCTAssertGreaterThan(unbuiltReached, 0, "harness: ↓ reached at least one row the list had not built")
+    }
+
+    /// Deletion succession: Delete on the cursor row moves the cursor and
+    /// the selection to the row that took its place, once the row is gone
+    /// from the store.
+    func testDeleteMovesTheCursorToTheRowThatTookItsPlaceAfterTheSave() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[0])
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 1, "harness: the cursor on row 1")
+        hosted.press("\u{7F}", keyCode: 51)
+        var waited = 0.0
+        while waited < 3, hosted.store.task(withID: ids[1]) != nil { hosted.spin(0.1); waited += 0.1 }
+        hosted.spin(0.4)
+        XCTAssertNil(hosted.store.task(withID: ids[1]), "Delete deleted row 1")
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, ids[2], "the cursor went to the row that took its place")
+        XCTAssertEqual(hosted.model.selection, [ids[2]], "the selection went with it")
+        XCTAssertTrue(keyboardIsInNowList(hosted), "the keyboard stays in the Now list")
+        XCTAssertNotNil(hosted.store.task(withID: ids[2]), "the survivor is kept")
+    }
+
+    /// Dispatch isolation: while a row's title is edited, Space and Delete
+    /// are the editor's, never the row's (the list answers row keys only
+    /// when its own target holds the keyboard).
+    func testTheTitleEditorKeepsSpaceAndDelete() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[1])
+        hosted.press("\r", keyCode: 36)
+        XCTAssertEqual(hosted.model.editingTitleID, ids[1], "harness: Return edits row 1's title")
+        let before = states(hosted, ids)
+        hosted.press(" ", keyCode: 49)
+        hosted.press("\u{7F}", keyCode: 51)
+        hosted.spin(0.5)
+        XCTAssertEqual(states(hosted, ids), before, "Space and Delete in the title editor act on no row")
+        XCTAssertEqual(hosted.model.editingTitleID, ids[1], "the editor stays open")
+    }
+}

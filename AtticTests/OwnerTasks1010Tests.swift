@@ -11,7 +11,7 @@ final class OwnerTasks1010Tests: XCTestCase {
     /// SwiftUI may call Equatable views during async display-link rendering.
     func testFocusableTasksViewsCompareFromDisplayLinkThread() throws {
         struct ThreadSafeInput<T>: @unchecked Sendable { let value: T }
-        let focused = ThreadSafeInput(value: TasksPageFocusedContent(generation: 12, focusedRow: nil) { EmptyView() })
+        let focused = ThreadSafeInput(value: TasksPageFocusedContent(generation: 12, listFocused: false) { EmptyView() })
         let kept = ThreadSafeInput(value: TasksKeptPage(frozen: false) { EmptyView() })
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)

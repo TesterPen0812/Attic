@@ -56,20 +56,28 @@ struct TasksPage: View {
     @State private var focusRequests = AtticFocusRequests()
     /// The stop Tab last sent the keyboard to, while it settles (not observed).
     @State private var tabTarget = TasksTabTarget()
-    /// The rows' keyboard focus. Each tab owns its own `FocusState`
-    /// (`TasksRowFocusOwner`), inside the tab's host (host-boundary.md §5):
-    /// a focus state does not reach views in another hosting view. The page
-    /// reaches them through this link, and hears their changes from it.
+    /// The lists' keyboard. Each tab owns its own list target, a
+    /// `FocusState<Bool>` (`TasksRowFocusOwner`), inside the tab's host
+    /// (host-boundary.md §5): a focus state does not reach views in another
+    /// hosting view. The page reaches them through this link, and hears
+    /// their changes from it.
     @State private var rowFocus = TasksRowFocusLink()
     /// The page's key handler, in a box the page keeps (`TasksPageKeyHandler`).
     @State private var keyHandler = TasksPageKeyHandler()
-    /// The row that has the keyboard: the tab shown's first, then any
-    /// other's (one value, as when one focus state served every tab).
-    /// Setting a row gives it the keyboard on its own tab and takes it from
-    /// the others; nil takes it from every tab.
+    /// Each tab's key handler, one box per tab (`TasksTabKeyHandlers`).
+    @State private var tabKeyHandlers = TasksTabKeyHandlers()
+    /// The row that has the keyboard: the cursor (list-owned-focus.md
+    /// §2.2). Setting a row of the tab shown moves the cursor there and
+    /// gives that tab's list the keyboard if it lacks it (a move from row
+    /// to row writes no focus state); nil clears the cursor and takes the
+    /// keyboard from the list. A row of another tab is refused.
     private var focusedRow: AtticRowFocusID? {
-        get { rowFocus.value(preferring: model.tab) }
-        nonmutating set { rowFocus.setValue(newValue) }
+        get { model.keyboardFocus }
+        nonmutating set {
+            if let newValue, newValue.page != model.tab.rawValue { return }
+            cursorMoved(newValue)
+            rowFocus.setValue(newValue)
+        }
     }
     @State private var drag: TasksDrag?
     @State private var fileDropRow: TasksRowID?
@@ -204,9 +212,11 @@ struct TasksPage: View {
         #endif
         // The link writes only the tab in use (§5.1, KB-CLAIM-RACE).
         let _ = rowFocus.tabInUse = { [model] in model.tab }
+        let _ = rowFocus.cursor = { [model] in model.keyboardFocus }
         // Every pass hands the box this pass's page, so a key never acts on
         // an older one.
         let _ = keyHandler.handle = { press in pageKey(press) }
+        let _ = tabKeyHandlers.hand { tab in tabKey(tab) }
         // In three parts (round 10: one chain was too long for the
         // compiler to type-check in time on CI).
         observingModel(observingEdits(frame))
@@ -310,6 +320,7 @@ struct TasksPage: View {
             // The handler holds a copy of the page, which holds the box's
             // state: let it go, as the monitors do (TasksPageEventMonitors).
             keyHandler.handle = nil
+            tabKeyHandlers.hand { _ in nil }
         }
         // The page's own view, so a press is placed from its event (its
         // window, its location), never from a remembered hover point.
@@ -322,37 +333,54 @@ struct TasksPage: View {
         #endif
     }
 
-    /// A row's focus changed on any tab (each tab's owner reports it).
-    private func rowFocusChanged(_ focus: AtticRowFocusID?) {
-        // Tab reached a row of a page kept built beside the one shown
+    /// A tab's list target gained or lost the keyboard (each tab's owner
+    /// reports it).
+    private func listFocusChanged(_ tab: TasksTab, holds: Bool) {
+        // Tab reached the list of a page kept built beside the one shown
         // (hidden, so nothing showed where the keyboard was): the
         // keyboard goes on to the shown page's rows or the add bar.
-        if let focus, model.isPageShown, focus.page != model.tab.rawValue,
-           let page = TasksTab(rawValue: focus.page) {
-            keepKeyboardOnShownPage(arrivedOn: page)
+        if holds, model.isPageShown, tab != model.tab {
+            keepKeyboardOnShownPage(arrivedOn: tab)
             return
         }
-        // The rows draw the keyboard's ring from the model's copy of
-        // the focus (deep review P2-04): a lazy list's cell reading the
-        // page's focus state read it as it was when the list was built
-        // (nil; measured in the hosted page), so the row that had the
-        // keyboard drew no ring, by Tab or by an arrow. The model's copy
-        // writes the old and the new row's state (slice 1b), so those two
-        // cells redraw. The send below now reaches only Done's page
-        // (kept until the P2-04 key-window tests pass on this slice).
-        // H12-06: Tab moves the visible ring before a row key arrives.
-        // An existing selection follows a new keyboard row. Tab from no
-        // selection stays focus-only; an extended selection is preserved.
-        // Later menu/restore selections still win.
-        model.receiveKeyboardFocus(focus, keyboardDriving: focusTracker.isKeyboardDriving)
+        // The list let go (a click on a field, a control, the panel): the
+        // cursor goes with it, as a row's focus went with the row before.
+        if !holds, model.keyboardFocus?.page == tab.rawValue {
+            cursorMoved(nil)
+        }
+    }
+
+    /// The cursor moved (list-owned-focus.md §2.2): the model's copy,
+    /// which the rows draw their ring from (deep review P2-04: a lazy
+    /// list's cell reading the page's focus read it as it was when the
+    /// list was built), with trunk's selection rule (H12-06: an existing
+    /// single selection follows a keyboard move, none stays none, a range
+    /// stays; later menu or restore selections still win).
+    private func cursorMoved(_ focus: AtticRowFocusID?) {
+        let keyboardDriving = focusTracker.isKeyboardDriving
+        model.receiveKeyboardFocus(focus, keyboardDriving: keyboardDriving)
         model.cellUpdates.objectWillChange.send()
         pointer.keyboardRow = focus.flatMap { focus in
             TasksTab(rawValue: focus.page).map { TasksRowID(tab: $0, id: focus.id) }
         }
+        // A keyboard move brings its row into view (the list's own reveal
+        // read the row's focus before; the cursor is no focus state).
+        if let focus, keyboardDriving, focus.page == model.tab.rawValue, model.tab != .done,
+           let proxy = listProxies.lists[model.tab] {
+            let travel = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false)
+            revealRow(focus.id, in: model.tab, proxy: proxy, glides: travel != nil)
+        }
         // Done's rows come into view as the keyboard reaches them too.
         guard let id = focus?.id, focus?.page == TasksTab.done.rawValue, model.tab == .done,
-              focusTracker.isKeyboardDriving else { return }
+              keyboardDriving else { return }
         doneReveal = TasksPageModel.ScrollRequest(id: id, tab: .done)
+    }
+
+    /// The keys of `tab`'s list, reached in the tab's host (a key does not
+    /// cross to the page's handler in the panel's host): only the tab in
+    /// use answers.
+    private func tabKey(_ tab: TasksTab) -> (KeyPress) -> KeyPress.Result {
+        { press in tab == model.tab && model.isPageShown ? pageKey(press) : .ignored }
     }
 
     private func syncFilterDot() {
@@ -363,6 +391,7 @@ struct TasksPage: View {
     private func pageAppeared() {
         // Back after leaving: the box takes this page again before any key.
         keyHandler.handle = { press in pageKey(press) }
+        tabKeyHandlers.hand { tab in tabKey(tab) }
         // Row frames are measured relative to the moving page. Convert to
         // TasksPage.space only when an interaction needs a frame.
         pointer.pageOffset = { [weak motion = swipe.motion, weak swipe] tab in
@@ -1667,18 +1696,22 @@ struct TasksPage: View {
         // HB-02). The handler is the owner's, never stored in the link: the
         // link is the page's state, so a handler of the page kept there
         // would keep the page, its model and its pointer for good (HB-10).
-        return TasksRowFocusOwner(tab: tab, link: rowFocus, changed: { focus in rowFocusChanged(focus) }) { focus in
-            TasksPageFocusedContent(generation: generation, focusedRow: focus.wrappedValue) {
+        return TasksRowFocusOwner(tab: tab, link: rowFocus, changed: { holds in listFocusChanged(tab, holds: holds) }) { holds in
+            TasksPageFocusedContent(generation: generation, listFocused: holds) {
                 pageContent(tab, drawn: drawn)
             }
             .equatable()
         }
-        // The page's keys reach a tab whose row has the keyboard here, in
+        #if DEBUG
+        // Counts each new environment written below the tab's key handler
+        // (`TasksPageRenderProbe.environmentsBelowTabKeys`), as the page's.
+        .transformEnvironment(\.self) { _ in TasksPageRenderProbe.environmentsBelowTabKeys += 1 }
+        #endif
+        // The page's keys reach a tab whose list has the keyboard here, in
         // the tab's host (a key does not cross to the page's handler in the
-        // panel's host); only the tab in use answers.
-        .onKeyPress(phases: .down) { press in
-            tab == model.tab && model.isPageShown ? pageKey(press) : .ignored
-        }
+        // panel's host). The tab's box, not the page: one captured
+        // reference keeps the closure the same value on every pass (PR 68).
+        .onKeyPress(phases: .down) { [box = tabKeyHandlers[tab]] press in box.press(press) }
     }
 
     private func pageContent(_ tab: TasksTab, drawn: Bool) -> some View {
@@ -1872,12 +1905,6 @@ struct TasksPage: View {
             .modifier(PanelTransitScrollIndicators())
             .tasksListEdges(top: viewportTop, listTop: listTop, bottomInset: bottomInset,
                             bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: bottomStack)
-            .onChange(of: focusedRow) { _, focus in
-                guard let focus, focus.page == tab.rawValue, rows.contains(where: { $0.id == focus.id }),
-                      focusTracker.isKeyboardDriving else { return }
-                let id = focus.id
-                revealRow(id, in: tab, proxy: proxy, glides: travel != nil)
-            }
             .onChange(of: model.expanded) { previous, current in
                 // A quick look can grow below the floating bottom bar. The
                 // action still exists in accessibility there, but a mouse
@@ -1928,7 +1955,11 @@ struct TasksPage: View {
             // did not reach (round 5).
             .onChange(of: ids) { old, new in
                 if tab == model.tab { PerformanceSignposts.watchFrames("RowsMotion", seconds: 0.35) }
-                guard tab == model.tab, let focused = focusedID, !new.contains(focused),
+                // The cursor, or the one a prune cleared as its row left
+                // (`departingCursor`): the prune runs before this change.
+                let departing = model.departingCursor.flatMap { $0.page == tab.rawValue ? $0.id : nil }
+                if tab == model.tab { model.departingCursor = nil }
+                guard tab == model.tab, let focused = focusedID ?? departing, !new.contains(focused),
                       let index = old.firstIndex(of: focused), !new.isEmpty else { return }
                 guard focusTracker.isKeyboardDriving else {
                     focusedRow = nil
@@ -1971,7 +2002,7 @@ struct TasksPage: View {
                               isLive: editing || metaPopover?.id == id || (tab == .done && model.doneDetailID == id),
                               references: [ObjectIdentifier(model), ObjectIdentifier(store), ObjectIdentifier(dragSession),
                                            ObjectIdentifier(pointer), ObjectIdentifier(state)]),
-            model: model, state: state, focus: rowFocus.binding(for: tab),
+            model: model, state: state,
             id: id, tab: tab, group: { dragGroup(of: id, in: tab) },
             drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow, dragOutRow: $dragOutRow,
             enabled: !editing,
@@ -3074,6 +3105,24 @@ struct TasksPage: View {
     /// the quick look, Esc closes it or clears a selection, ⌘A selects all,
     /// ⌘Z and ⇧⌘Z undo and redo. Space, ⇧Space, ⌘B, Delete and ⌘Return are
     /// the row's own (`AtticTaskKeys`).
+    /// The cursor row's key (Space, ⇧Space, ⌘Return, Delete, ⌘B, ⌘C, ⌘D,
+    /// ⇧⌘I), when the list holds the keyboard and the cursor is a row of
+    /// the list shown, as the row's own handler answered it while the row
+    /// held the keyboard. Return is the page's (it edits the title).
+    private func rowKeyCommand(_ press: KeyPress, visible: [UUID]) -> (() -> KeyPress.Result)? {
+        guard rowFocus.holds(model.tab), model.isPageShown,
+              let cursor = model.keyboardFocus, cursor.page == model.tab.rawValue, visible.contains(cursor.id),
+              let command = AtticTaskKeys.command(key: press.key, characters: press.characters,
+                                                  modifiers: press.modifiers, listCommands: true),
+              command != .editTitle else { return nil }
+        let actions = actions(for: cursor.id, in: model.tab)
+        guard AtticTaskKeys.offers(command, actions) else { return nil }
+        return {
+            AtticTaskKeys.perform(command, actions)
+            return .handled
+        }
+    }
+
     private func pageKey(_ press: KeyPress) -> KeyPress.Result {
         #if DEBUG
         TasksPageRenderProbe.pageKeys += 1
@@ -3129,14 +3178,20 @@ struct TasksPage: View {
             if AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
                                                   modifiers: press.modifiers, in: owner.commands) == .handled { return .handled }
             current = owner.parent
+        } else if let command = rowKeyCommand(press, visible: visible) {
+            // The cursor row's own keys (list-owned-focus.md §2.3): the
+            // row takes no focus, so the list answers them for it, on the
+            // rows the row's own handler acted on (`actions(for:in:)`).
+            return command()
         }
         switch press.key {
         case .downArrow, .upArrow:
             let step = press.key == .downArrow ? 1 : -1
             guard let current, let index = visible.firstIndex(of: current) else {
                 let first = step > 0 ? visible.first : visible.last
-                setFocus(first)
+                // The selection first, then the cursor (§2.2).
                 if let first { model.selectOnly(first) }
+                setFocus(first)
                 focusTracker.noteKeyboardNavigation()
                 return .handled
             }
@@ -3148,12 +3203,14 @@ struct TasksPage: View {
                 return .handled
             }
             let next = visible[min(max(index + step, 0), visible.count - 1)]
-            setFocus(next)
+            // The selection first, then the cursor (§2.2): the cursor's
+            // stamp is the selection's revision after the move.
             if modifiers == .shift {
                 model.extendSelection(to: next, visible: visible, from: current)
             } else {
                 model.selectOnly(next)
             }
+            setFocus(next)
             return .handled
         case .return where modifiers.isEmpty:
             // Done's rows too (round 10).
@@ -3956,29 +4013,34 @@ struct TasksCellKey: Equatable {
     }
 }
 
-/// Where the page reaches its rows' focus states: one per tab, each held
-/// by that tab's `TasksRowFocusOwner` inside the tab's host
-/// (host-boundary.md §5). Set as each owner draws; read by the page's
-/// handlers, and written only on the tab in use; a change on any tab goes
-/// to the page through its owner when `reports` says it stands. The link
-/// keeps no closure of the page: it is the page's state (HB-10).
+/// Where the page reaches each tab's list target: one `FocusState<Bool>`
+/// per tab, held by that tab's `TasksRowFocusOwner` inside the tab's host
+/// (host-boundary.md §5). The Tasks list owns the keyboard
+/// (list-owned-focus.md §2.1): the target holds it, and the row it acts
+/// on is the cursor, `TasksPageModel.keyboardFocus`, so a move from row to
+/// row writes no focus state. Set as each owner draws; written only on the
+/// tab in use; a change on any tab goes to the page through its owner when
+/// `reports` says it stands. The link keeps no closure of the page: it is
+/// the page's state (HB-10).
 ///
 /// A tab not in use is never written (§5.1, KB-CLAIM-RACE): SwiftUI applies
 /// a focus-state write at a later update and then resigns the window's
 /// first responder, whoever holds it, so a write to the tab being left took
-/// the keyboard back from the arriving tab's host after its claim. A row
-/// focus still set on a tab not in use is a failure the tests name
-/// (`tabsHoldingFocus(besides:)`), never cleared here.
+/// the keyboard back from the arriving tab's host after its claim. A list
+/// target still holding the keyboard on a tab not in use is a failure the
+/// tests name (`tabsHoldingFocus(besides:)`), never cleared here.
 @MainActor
 final class TasksRowFocusLink {
-    private var bindings: [TasksTab: FocusState<AtticRowFocusID?>.Binding] = [:]
+    private var lists: [TasksTab: FocusState<Bool>.Binding] = [:]
     /// Each tab's host, as its owner found it (nil outside a kept host).
     private var hosts: [TasksTab: KeptHostReference] = [:]
     /// The tab in use, the only one the link writes (the page sets this).
     var tabInUse: (() -> TasksTab)?
+    /// The cursor (the page sets this; it reads the model only).
+    var cursor: (() -> AtticRowFocusID?)?
 
-    func set(_ binding: FocusState<AtticRowFocusID?>.Binding, host: KeptHostReference?, for tab: TasksTab) {
-        bindings[tab] = binding
+    func set(_ binding: FocusState<Bool>.Binding, host: KeptHostReference?, for tab: TasksTab) {
+        lists[tab] = binding
         hosts[tab] = host
         #if DEBUG
         Self.current = self
@@ -3990,34 +4052,35 @@ final class TasksRowFocusLink {
     static weak var current: TasksRowFocusLink?
     #endif
 
-    /// The tabs other than `tab` whose rows still hold a focus state.
+    /// Whether `tab`'s list target holds the keyboard.
+    func holds(_ tab: TasksTab) -> Bool {
+        lists[tab]?.wrappedValue == true
+    }
+
+    /// The tabs other than `tab` whose list target still holds the keyboard.
     func tabsHoldingFocus(besides tab: TasksTab) -> [TasksTab] {
-        TasksTab.allCases.filter { $0 != tab && bindings[$0]?.wrappedValue != nil }
+        TasksTab.allCases.filter { $0 != tab && holds($0) }
     }
 
-    /// A tab's binding, once its owner has drawn (every row is built under
-    /// its tab's owner, so a row always finds one).
-    func binding(for tab: TasksTab) -> FocusState<AtticRowFocusID?>.Binding! {
-        bindings[tab]
-    }
-
-    /// The row with the keyboard: on `tab` first, then on any other.
+    /// The row with the keyboard: the cursor. (`tab` is kept for the
+    /// callers: one cursor serves every tab, as one focus state did.)
     func value(preferring tab: TasksTab) -> AtticRowFocusID? {
-        if let value = bindings[tab]?.wrappedValue { return value }
-        return TasksTab.allCases.lazy.compactMap { self.bindings[$0]?.wrappedValue }.first
+        cursor?()
     }
 
-    /// The one place the page writes a row's focus state. Gives the
-    /// keyboard to `value`, a row of the tab in use; nil takes it from the
-    /// tab in use. A row of another tab is refused. A nil is not written
-    /// while a view outside that tab's host holds the keyboard (HB-09,
-    /// `KeptContentHostingView.mayLetGo`): the row lost it already, and its
-    /// focus state goes nil by itself.
+    /// The one place the page writes a list target. A row of the tab in use
+    /// gives that tab's list the keyboard, unless it holds it already (so a
+    /// move from row to row writes nothing); nil takes it from the tab in
+    /// use. A row of another tab is refused. A nil is not written while a
+    /// view outside that tab's host holds the keyboard (HB-09,
+    /// `KeptContentHostingView.mayLetGo`): the list lost it already, and
+    /// its focus state goes false by itself.
     func setValue(_ value: AtticRowFocusID?) {
-        guard let tab = tabInUse?(), let binding = bindings[tab] else { return }
+        guard let tab = tabInUse?(), let binding = lists[tab] else { return }
         if let value, value.page != tab.rawValue { return }
-        guard binding.wrappedValue != value else { return }
-        if value == nil, !KeptContentHostingView.mayLetGo(in: hosts[tab]?.host) {
+        let holds = value != nil
+        guard binding.wrappedValue != holds else { return }
+        if !holds, !KeptContentHostingView.mayLetGo(in: hosts[tab]?.host) {
             #if DEBUG
             skippedLetGos += 1
             #endif
@@ -4026,21 +4089,21 @@ final class TasksRowFocusLink {
         #if DEBUG
         focusWrites += 1
         #endif
-        binding.wrappedValue = value
+        binding.wrappedValue = holds
     }
 
     #if DEBUG
     /// Nils not written because a view outside the tab's host held the keyboard.
     private(set) var skippedLetGos = 0
-    /// Focus state writes the link made (row to row moves are counted here).
+    /// Focus state writes the link made (a move from row to row makes none).
     var focusWrites = 0
     #endif
 
-    /// Whether a tab's owner reports the focus change it saw. A tab letting
-    /// go while another tab's row holds the keyboard says nothing: that
-    /// tab's own report stands, whichever host updated first.
-    func reports(_ focus: AtticRowFocusID?, from tab: TasksTab) -> Bool {
-        focus != nil || !TasksTab.allCases.contains(where: { $0 != tab && bindings[$0]?.wrappedValue != nil })
+    /// Whether a tab's owner reports the change it saw. A tab letting go
+    /// while another tab's list holds the keyboard says nothing: that tab's
+    /// own report stands, whichever host updated first.
+    func reports(_ holds: Bool, from tab: TasksTab) -> Bool {
+        holds || tabsHoldingFocus(besides: tab).isEmpty
     }
 
     private static var generation: UInt64 = 0
@@ -4051,41 +4114,44 @@ final class TasksRowFocusLink {
     }
 }
 
-/// Owns one tab's rows' `FocusState`, inside the tab's host. SwiftUI redraws
-/// a focus state's owner when the focus system's views change (a list
-/// building or letting go of focusable rows), so the owner is this small
-/// view: it hands the tab's content the binding, and the content is redrawn
-/// only when it was built again or its focused row changed. A change the
-/// link says stands goes to the page's handler, held here and not in the
-/// link (HB-10).
+/// Owns one tab's list target: a `FocusState<Bool>` on the tab's content,
+/// inside the tab's host. SwiftUI redraws a focus state's owner when the
+/// focus system's views change, so the owner is this small view: the
+/// content is redrawn only when it was built again or the target gained or
+/// lost the keyboard. A change the link says stands goes to the page's
+/// handler, held here and not in the link (HB-10).
 struct TasksRowFocusOwner<Content: View>: View {
-    @FocusState private var focusedRow: AtticRowFocusID?
+    @FocusState private var listFocused: Bool
     @Environment(\.keptHost) private var host
     let tab: TasksTab
     let link: TasksRowFocusLink
-    let changed: (AtticRowFocusID?) -> Void
-    @ViewBuilder let content: (FocusState<AtticRowFocusID?>.Binding) -> Content
+    let changed: (Bool) -> Void
+    @ViewBuilder let content: (Bool) -> Content
 
     var body: some View {
-        let _ = link.set($focusedRow, host: host, for: tab)
-        content($focusedRow)
-            .onChange(of: focusedRow) { _, focus in
-                if link.reports(focus, from: tab) { changed(focus) }
+        let _ = link.set($listFocused, host: host, for: tab)
+        content(listFocused)
+            .focusable()
+            .focusEffectDisabled()
+            .focused($listFocused)
+            .onChange(of: listFocused) { _, holds in
+                if link.reports(holds, from: tab) { changed(holds) }
             }
     }
 }
 
 /// The Tasks page's content under its focus owner: equal (not redrawn)
-/// while the page's body has not run again and the focused row is the same.
+/// while the page's body has not run again and the list target's hold is
+/// the same. The rows draw the cursor from their row states.
 struct TasksPageFocusedContent<Content: View>: View, Equatable {
     let generation: UInt64
-    let focusedRow: AtticRowFocusID?
+    let listFocused: Bool
     @ViewBuilder let content: () -> Content
 
     var body: some View { content() }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.generation == rhs.generation && lhs.focusedRow == rhs.focusedRow
+        lhs.generation == rhs.generation && lhs.listFocused == rhs.listFocused
     }
 }
 
@@ -4849,7 +4915,6 @@ struct TasksReorderCell<Row: View, Below: View>: View, Equatable {
     /// its page is kept built but not drawn (round 11).
     let model: TasksPageModel
     let state: TasksRowState
-    var focus: FocusState<AtticRowFocusID?>.Binding
     let id: UUID
     let tab: TasksTab
     /// The rows a drag moves among, read when the drag starts.
@@ -4916,8 +4981,9 @@ struct TasksReorderCell<Row: View, Below: View>: View, Equatable {
             metaPopover: active && metaPopover?.id == id && metaPopover?.tab == tab ? metaPopover : nil,
             // Whether it has the keyboard: the model's copy of the page's
             // focus (`TasksPageModel.keyboardFocus`), through the row state.
-            focus: AtticRowFocus(binding: focus, id: focusID, isFocused: active && value.isFocused,
-                                 isActive: { [model, tab] in model.tab == tab && model.isPageShown }),
+            // The list holds the keyboard (list-owned-focus.md §2.1): the
+            // row takes no focus and answers no key itself (`pageKey`).
+            focus: AtticRowFocus(listOwned: focusID, isFocused: active && value.isFocused),
             isDropTarget: active && fileDropRow == TasksRowID(tab: tab, id: id),
             isActive: active
         )
@@ -6135,6 +6201,19 @@ private struct TasksSubtaskDraftView<Content: View>: View {
 /// same contents, new storage, so every view down to the tabs' kept hosts
 /// took it as a change (board SPEED-KEPTHOST-ENV-REROOT; the lead, LOG
 /// 24 Nov 06:36). The page hands the box its current handler on every pass.
+/// One key box per tab (`TasksPageKeyHandler`), which the page hands each
+/// pass's handler, so each tab's `.onKeyPress` captures one reference.
+@MainActor final class TasksTabKeyHandlers {
+    private let boxes: [TasksTab: TasksPageKeyHandler] =
+        Dictionary(uniqueKeysWithValues: TasksTab.allCases.map { ($0, TasksPageKeyHandler()) })
+
+    subscript(tab: TasksTab) -> TasksPageKeyHandler { boxes[tab]! }
+
+    func hand(_ handler: (TasksTab) -> ((KeyPress) -> KeyPress.Result)?) {
+        for (tab, box) in boxes { box.handle = handler(tab) }
+    }
+}
+
 @MainActor final class TasksPageKeyHandler {
     var handle: ((KeyPress) -> KeyPress.Result)?
 
@@ -6163,6 +6242,8 @@ private struct TasksSubtaskDraftView<Content: View>: View {
     static var bodyRuns = 0
     /// New environments below the page's key handler.
     static var environmentsBelowKeys = 0
+    /// The same count below the tabs' key handlers.
+    static var environmentsBelowTabKeys = 0
     /// Keys that reached `pageKey`, and the page's `onDisappear` runs.
     static var pageKeys = 0
     static var disappearances = 0

@@ -503,6 +503,10 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         keyboardFocusSelectionRevision = focus?.page == tab.rawValue && keyboardDriving ? selectionRevision : nil
     }
 
+    /// The cursor a prune cleared because its row left the list (a held
+    /// completion's release): the list's succession reads it once.
+    var departingCursor: AtticRowFocusID?
+
     func keyboardRow(focused: UUID?, visible: [UUID]) -> UUID? {
         let live = Set(visible)
         let selected = selection.intersection(live)
@@ -615,6 +619,7 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
             }
         }
         if let focus = keyboardFocus, focus.page == tab.rawValue, !visible.contains(focus.id) {
+            departingCursor = focus
             receiveKeyboardFocus(nil, keyboardDriving: false)
         }
     }
