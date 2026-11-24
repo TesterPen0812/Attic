@@ -347,10 +347,16 @@ struct GlossLabView: View {
             ForEach(GlossLab.StackGround.allCases) { Text($0.title).tag($0) }
         }
         .pickerStyle(.segmented)
-        Picker("Ground material", selection: $lab.samplesGroundMaterial) {
-            ForEach(GlossLab.StackGroundMaterial.allCases) { Text($0.title).tag($0) }
+        // Four materials do not fit beside their label in the lab window's
+        // width (Air still lab-ground-row, 24 Nov), so the label is above.
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Ground material")
+            Picker("Ground material", selection: $lab.samplesGroundMaterial) {
+                ForEach(GlossLab.StackGroundMaterial.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
         }
-        .pickerStyle(.segmented)
         if lab.samplesGroundMaterial == .variable {
             if let line = GlossBackdropGround.line(for: lab.samplesGroundMaterial) {
                 Text(line).font(.caption).foregroundStyle(.secondary)
@@ -1493,7 +1499,8 @@ struct GlossSamplesView: View {
     @Bindable var lab: GlossLab
 
     var body: some View {
-        let size = GlossSamples.windowSize(lightRow: lab.samplesLight, systemVariants: lab.samplesSystem, stack: lab.samplesStack)
+        // The window's own size, which grows with Apple's blur's reach.
+        let size = GlossSamples.windowSize(for: lab)
         Group {
             if lab.samplesStack {
                 GlossStackTest(lab: lab, closeButton: AnyView(closeButton))

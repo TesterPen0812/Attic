@@ -1404,6 +1404,22 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(GlossSamples.windowSize(for: lab), GlossSamples.windowSize(lightRow: lab.samplesLight, systemVariants: lab.samplesSystem))
     }
 
+    /// The cards' view is as large as the window at every reach, so the
+    /// pieces lie `room` in from its sides and the ground is not cut off
+    /// (Air still ab-white-same-reach80, 24 Nov: the view kept 410 x 258
+    /// in a 450 x 298 window).
+    func testAppleBlurCardsViewFillsTheGrownWindow() {
+        let lab = GlossLab(defaults: nil)
+        lab.samplesStack = true; lab.samplesGround = .same; lab.samplesGroundMaterial = .variable
+        for reach in [20.0, 60.0, 80.0] {
+            lab.samplesGroundReach = reach
+            let host = NSHostingView(rootView: GlossSamplesView(lab: lab))
+            XCTAssertEqual(host.fittingSize, GlossSamples.windowSize(for: lab), "reach \(reach)")
+        }
+        lab.samplesStack = false
+        XCTAssertEqual(NSHostingView(rootView: GlossSamplesView(lab: lab)).fittingSize, GlossSamples.windowSize(for: lab), "the card sets as before")
+    }
+
     /// Apple's blur's mask: full over the pieces and for the first 25/60 of
     /// the reach, then a smooth fall to nothing at the rim, by the distance
     /// from the pieces' round rectangle, so a corner falls as a side does.
