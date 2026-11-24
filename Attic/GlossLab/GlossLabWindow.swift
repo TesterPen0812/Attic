@@ -223,7 +223,7 @@ struct GlossLabView: View {
 
                 section("Match")
                 row("Calibration backdrop", $lab.calibration,
-                    note: "A test pattern of our own over the whole screen under the menu bar: flat fields, hard edges, checkers and text, the same everywhere, so a screenshot with the real Control Centre open over it can be measured. It covers this window too: its Close button is in its bottom left corner.") {
+                    note: "A test pattern of our own over the whole screen under the menu bar: flat fields, hard edges, checkers and text, the same everywhere, so a screenshot with the real Control Centre open over it can be measured. It covers this window too. To take it down: Escape, or \"Close test pattern\" in its bottom left corner; it also takes itself down 3 minutes after the last click on it, and it never comes back at the next launch.") {
                     Picker("Pattern", selection: $lab.calibrationPattern) {
                         ForEach(GlossLab.CalibrationPattern.allCases) { Text($0.title).tag($0) }
                     }
@@ -399,7 +399,7 @@ struct GlossLabView: View {
         Stepper(value: $lab.samplesSubdued, in: 0...3, step: 1) {
             Text("Subdued \(Int(lab.samplesSubdued.rounded()))")
         }
-        Stepper(value: $lab.samplesAdaptive, in: 0...3, step: 1) {
+        Stepper(value: $lab.samplesAdaptive, in: GlossSystemGlass.adaptiveRange, step: 1) {
             Text("Adaptive \(Int(lab.samplesAdaptive.rounded()))")
         }
         Toggle("Reduced tint opacity", isOn: $lab.samplesTintReduced)
@@ -443,7 +443,7 @@ struct GlossLabView: View {
             Stepper(value: $lab.samplesSubdued, in: 0...3, step: 1) {
                 Text("Subdued \(Int(lab.samplesSubdued.rounded()))")
             }
-            Stepper(value: $lab.samplesAdaptive, in: 0...3, step: 1) {
+            Stepper(value: $lab.samplesAdaptive, in: GlossSystemGlass.adaptiveRange, step: 1) {
                 Text("Adaptive \(Int(lab.samplesAdaptive.rounded()))")
             }
             Toggle("Reduced tint opacity", isOn: $lab.samplesTintReduced)
@@ -1058,6 +1058,13 @@ enum GlossSystemGlass {
     // one leaves the pieces as they are.
     static let subduedKey = "_subduedState"
     static let adaptiveKey = "_adaptiveAppearance"
+    /// The adaptive values the lab puts on a glass view. 3 ends the process
+    /// inside the system's glass view on 26.4.1 (seen 24 Nov, off-app), so the
+    /// stepper, a copy's text and `apply` all stop at 2.
+    static let adaptiveRange: ClosedRange<Double> = 0...2
+    static func heldAdaptive(_ value: Int) -> Int {
+        min(max(value, Int(adaptiveRange.lowerBound)), Int(adaptiveRange.upperBound))
+    }
     static let tintReducedKey = "_tintOpacityReduced"
     static let subvariantKey = "_subvariant"
 
@@ -1089,7 +1096,7 @@ enum GlossSystemGlass {
     /// it and only when it differs.
     static func apply(_ settings: PieceSettings, to view: NSView) {
         apply(variant: settings.variant, lensing: settings.lensing, scrim: settings.scrim, to: view)
-        for (key, wanted) in [(subduedKey, settings.subdued), (adaptiveKey, settings.adaptive)] {
+        for (key, wanted) in [(subduedKey, settings.subdued), (adaptiveKey, heldAdaptive(settings.adaptive))] {
             guard let now = value(key, of: view), now != wanted else { continue }
             view.setValue(NSNumber(value: wanted), forKey: key)
         }
@@ -2305,63 +2312,216 @@ enum GlossCalibration {
     }
 }
 
-/// The calibration backdrop's view: the tile repeated from its top left
-/// corner, pixel for pixel (or one flat colour), and in its bottom left
-/// corner a Close button and the pattern's picker (the backdrop covers the
-/// lab window, so what is switched between two screenshots is here). It
-/// takes clicks and does nothing with them (it is not click-through, so
-/// nothing hidden under it is clicked by mistake).
-final class GlossCalibrationView: NSView {
-    var onClose: (() -> Void)?
-    var onPattern: ((GlossLab.CalibrationPattern) -> Void)?
-    var pattern: GlossLab.CalibrationPattern = .tile {
-        didSet {
-            guard pattern != oldValue else { return }
-            needsDisplay = true
-            patternPicker.selectedSegment = GlossLab.CalibrationPattern.allCases.firstIndex(of: pattern) ?? 0
+/// How long the calibration backdrop may still stand: a deadline against
+/// the clock, pushed on by every click on the backdrop.
+struct GlossCalibrationWatch: Equatable {
+    let timeout: TimeInterval
+    private(set) var lastClick: Date
+
+    init(timeout: TimeInterval, now: Date) {
+        self.timeout = timeout
+        lastClick = now
+    }
+
+    mutating func clicked(_ now: Date) { lastClick = now }
+    func remaining(_ now: Date) -> TimeInterval { max(0, timeout - now.timeIntervalSince(lastClick)) }
+    func expired(_ now: Date) -> Bool { remaining(now) <= 0 }
+}
+
+/// The backdrop's own controls, drawn by hand on an opaque black plate with
+/// a white rim, in fixed colours: "Close test pattern (Esc)", the four
+/// patterns, and the time left before the backdrop takes itself down. On
+/// 24 Nov the stock button and picker stood here; their plates are
+/// see-through and their text one colour, so over white (or, in a light
+/// system, over black) they could not be read and the owner could not close
+/// the backdrop. Nothing here depends on the system's look or on what the
+/// backdrop shows. It takes no clicks itself: the backdrop's view hands
+/// them over (`click(at:)`).
+final class GlossCalibrationBar: NSView {
+    enum Cell: Equatable {
+        case close
+        case pattern(GlossLab.CalibrationPattern)
+        case countdown
+    }
+
+    static let closeTitle = "Close test pattern (Esc)"
+    static let height: CGFloat = 32
+    static let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+    private static let padding: CGFloat = 12
+    private static let rim: CGFloat = 2
+
+    /// "closes itself in 2:59"; nothing while no time is set.
+    static func countdownText(_ seconds: Int?) -> String {
+        guard let seconds else { return "" }
+        let left = max(seconds, 0)
+        return "closes itself in \(left / 60):" + String(format: "%02d", left % 60)
+    }
+
+    static func title(_ cell: Cell, remaining: Int? = nil) -> String {
+        switch cell {
+        case .close: closeTitle
+        case .pattern(let pattern): pattern.title
+        case .countdown: countdownText(remaining)
         }
     }
-    let closeButton = NSButton(title: "Close calibration", target: nil, action: nil)
-    let patternPicker = NSSegmentedControl(labels: GlossLab.CalibrationPattern.allCases.map(\.title), trackingMode: .selectOne,
-                                           target: nil, action: nil)
+
+    private static func width(_ text: String) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width) + padding * 2
+    }
+
+    /// Every cell with its frame in the bar (top left origin), left to
+    /// right. The widths are fixed, so the bar does not change size as the
+    /// time runs down.
+    static let cells: [(cell: Cell, frame: CGRect)] = {
+        var x = rim
+        var out: [(cell: Cell, frame: CGRect)] = []
+        let all: [Cell] = [.close] + GlossLab.CalibrationPattern.allCases.map { .pattern($0) } + [.countdown]
+        for cell in all {
+            let wide = cell == .countdown ? width("closes itself in 00:00") : width(title(cell))
+            out.append((cell, CGRect(x: x, y: rim, width: wide, height: height - rim * 2)))
+            x += wide
+        }
+        return out
+    }()
+
+    static let size = CGSize(width: (cells.last?.frame.maxX ?? 0) + rim, height: height)
+
+    var pattern: GlossLab.CalibrationPattern = .tile {
+        didSet { if pattern != oldValue { needsDisplay = true } }
+    }
+    /// Whole seconds until the backdrop takes itself down.
+    var remaining: Int? {
+        didSet { if remaining != oldValue { needsDisplay = true } }
+    }
+    var onClose: (() -> Void)?
+    var onPattern: ((GlossLab.CalibrationPattern) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
-        closeButton.bezelStyle = .rounded
-        closeButton.target = self
-        closeButton.action = #selector(closeClicked)
-        closeButton.setAccessibilityLabel("Close calibration backdrop")
-        addSubview(closeButton)
-        patternPicker.selectedSegment = 0
-        patternPicker.target = self
-        patternPicker.action = #selector(patternPicked)
-        patternPicker.setAccessibilityLabel("Calibration pattern")
-        addSubview(patternPicker)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Test pattern controls: \(Self.closeTitle), and the pattern")
     }
 
     required init?(coder: NSCoder) { nil }
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) {}
+    /// Clicks go to the backdrop's view, which counts every one of them.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    @objc private func closeClicked() { onClose?() }
-
-    @objc private func patternPicked() {
-        let all = GlossLab.CalibrationPattern.allCases
-        guard all.indices.contains(patternPicker.selectedSegment) else { return }
-        onPattern?(all[patternPicker.selectedSegment])
+    func cell(at point: CGPoint) -> Cell? {
+        Self.cells.first { $0.frame.contains(point) }?.cell
     }
+
+    /// A click at a point of the bar: Close calls back, a pattern calls
+    /// back with it. True when a control was hit.
+    @discardableResult
+    func click(at point: CGPoint) -> Bool {
+        switch cell(at: point) {
+        case .close:
+            onClose?()
+            return true
+        case .pattern(let picked):
+            onPattern?(picked)
+            return true
+        case .countdown, nil:
+            return false
+        }
+    }
+
+    private static func grey(_ level: CGFloat) -> NSColor { NSColor(srgbRed: level, green: level, blue: level, alpha: 1) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        Self.grey(1).setFill()
+        bounds.fill()
+        Self.grey(0).setFill()
+        bounds.insetBy(dx: Self.rim, dy: Self.rim).fill()
+        for (cell, frame) in Self.cells {
+            var ink = Self.grey(1)
+            switch cell {
+            case .close:
+                // The one white plate: black on white, the strongest there is.
+                Self.grey(1).setFill()
+                NSBezierPath(roundedRect: frame.insetBy(dx: 3, dy: 3), xRadius: 5, yRadius: 5).fill()
+                ink = Self.grey(0)
+            case .pattern(let one) where one == pattern:
+                Self.grey(0.38).setFill()
+                NSBezierPath(roundedRect: frame.insetBy(dx: 3, dy: 3), xRadius: 5, yRadius: 5).fill()
+            case .pattern:
+                break
+            case .countdown:
+                ink = Self.grey(0.8)
+            }
+            let text = Self.title(cell, remaining: remaining) as NSString
+            let attributes: [NSAttributedString.Key: Any] = [.font: Self.font, .foregroundColor: ink]
+            let size = text.size(withAttributes: attributes)
+            text.draw(at: CGPoint(x: frame.minX + Self.padding, y: frame.midY - size.height / 2), withAttributes: attributes)
+        }
+    }
+}
+
+/// The calibration backdrop's view: the tile repeated from its top left
+/// corner, pixel for pixel (or one flat colour), and in its bottom left
+/// corner its own controls (`GlossCalibrationBar`; the backdrop covers the
+/// lab window, so what closes it and what is switched between two
+/// screenshots is here). It takes every click inside it and does nothing
+/// with one outside the bar (it is not click-through, so nothing hidden
+/// under it is clicked by mistake); every click pushes its closing time on.
+/// Escape closes it while its window has the keyboard.
+final class GlossCalibrationView: NSView {
+    /// "Close test pattern" was clicked.
+    var onClose: (() -> Void)?
+    /// Escape was pressed while the window had the keyboard.
+    var onEscape: (() -> Void)?
+    var onPattern: ((GlossLab.CalibrationPattern) -> Void)?
+    /// Any click on the backdrop, the bar included.
+    var onClick: (() -> Void)?
+    var pattern: GlossLab.CalibrationPattern = .tile {
+        didSet {
+            guard pattern != oldValue else { return }
+            needsDisplay = true
+            bar.pattern = pattern
+        }
+    }
+    let bar = GlossCalibrationBar(frame: CGRect(origin: .zero, size: GlossCalibrationBar.size))
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        bar.onClose = { [weak self] in self?.onClose?() }
+        bar.onPattern = { [weak self] in self?.onPattern?($0) }
+        addSubview(bar)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { clicked(at: convert(event.locationInWindow, from: nil)) }
+
+    /// A click at a point of the view.
+    func clicked(at point: CGPoint) {
+        onClick?()
+        guard bar.frame.contains(point) else { return }
+        bar.click(at: CGPoint(x: point.x - bar.frame.minX, y: point.y - bar.frame.minY))
+    }
+
+    /// Escape closes; every other key is taken and does nothing (the
+    /// windows under the backdrop cannot be seen, so nothing is typed into
+    /// them through it).
+    override func keyDown(with event: NSEvent) {
+        if GlossMatchWindows.isEscape(event) { (onEscape ?? onClose)?() }
+    }
+
+    override func cancelOperation(_ sender: Any?) { (onEscape ?? onClose)?() }
 
     override func layout() {
         super.layout()
-        closeButton.sizeToFit()
-        closeButton.frame.origin = CGPoint(x: 12, y: bounds.height - closeButton.frame.height - 12)
-        patternPicker.sizeToFit()
-        patternPicker.frame.origin = CGPoint(x: closeButton.frame.maxX + 12, y: bounds.height - patternPicker.frame.height - 12)
+        bar.frame = CGRect(origin: CGPoint(x: 12, y: bounds.height - GlossCalibrationBar.size.height - 12), size: GlossCalibrationBar.size)
     }
 
     override func viewDidChangeBackingProperties() {
@@ -2520,7 +2680,7 @@ enum GlossMatch {
     /// The settings a copy's text may name, each with the range it is held in.
     static let keys: [String: ClosedRange<Double>] = [
         "ground": 0...1, "radius": 0...40, "dim": 0...30, "hold": 0...60, "curve": 1...4, "smoke": 0...60, "tint": 0...1,
-        "variant": 0...23, "lensing": 0...3, "scrim": 0...3, "subdued": 0...3, "adaptive": 0...3, "reduced": 0...1,
+        "variant": 0...23, "lensing": 0...3, "scrim": 0...3, "subdued": 0...3, "adaptive": GlossSystemGlass.adaptiveRange, "reduced": 0...1,
     ]
 
     /// Sets one named setting on a copy; false for a name that is not one.
@@ -2801,6 +2961,107 @@ struct GlossMatchView: View {
     }
 }
 
+/// The backdrop's window: a borderless panel that can take the keyboard
+/// without bringing the app forward, so Escape reaches it after a click on
+/// it (a plain borderless window never becomes key).
+final class GlossCalibrationPanel: NSPanel {
+    /// It takes the keyboard everywhere but in the invisible unit test
+    /// host, where no window of the app's may (as the app's own panels).
+    static func takesKeyboard(invisibleTestHost: Bool) -> Bool { !invisibleTestHost }
+    override var canBecomeKey: Bool { Self.takesKeyboard(invisibleTestHost: TestPresentationPolicy.isInvisible) }
+    override var canBecomeMain: Bool { false }
+}
+
+/// One showing of the backdrop, from up to down: its closing time, the
+/// claim on the Escape key, and why it went. It holds no window, so every
+/// way down is tried in tests; whatever way it ends, the Escape key is
+/// given back exactly once and `close` is called at most once.
+@MainActor
+final class GlossCalibrationSession {
+    enum Reason: String {
+        /// "Close test pattern" was clicked.
+        case button
+        /// Escape, with the backdrop's window or another of ours holding the keyboard.
+        case escape
+        /// Escape through the system-wide claim, from any app.
+        case hotKey
+        /// Nobody clicked on it for the set time.
+        case timeout
+        /// The lab's switch, or the app's own state, turned it off.
+        case switchedOff
+    }
+
+    /// How Escape is claimed from every app while the backdrop is up.
+    /// `claim` is given what to do on a press and says how it went
+    /// ("registered", or the refusal); `release` gives the key back.
+    struct EscapeKey {
+        var claim: @MainActor (@escaping @MainActor () -> Void) -> String
+        var release: @MainActor () -> Void
+
+        /// The app's own Carbon hot key (`GlobalHotKey`), on Escape alone.
+        /// No permission is asked for; the system may refuse a key without
+        /// modifiers, which the claim's text then says.
+        @MainActor static let system: EscapeKey = {
+            final class Holder { var key: GlobalHotKey? }
+            let holder = Holder()
+            return EscapeKey(claim: { action in
+                let key = GlobalHotKey(combination: GlobalHotKeyCombination(keyCode: GlossMatchWindows.escapeKeyCode, modifiers: 0),
+                                       action: action)
+                holder.key = key
+                switch key.register() {
+                case .registered: return "registered"
+                case .failed(let failure): return "refused(status \(failure.status))"
+                case .notRegistered: return "notRegistered"
+                }
+            }, release: {
+                holder.key?.unregister()
+                holder.key = nil
+            })
+        }()
+    }
+
+    private(set) var watch: GlossCalibrationWatch
+    /// How the claim on Escape went.
+    private(set) var escapeClaim: String
+    private(set) var ended: Reason?
+    private let escapeKey: EscapeKey
+    private let close: @MainActor (Reason) -> Void
+
+    init(timeout: TimeInterval, now: Date, escapeKey: EscapeKey, close: @escaping @MainActor (Reason) -> Void) {
+        watch = GlossCalibrationWatch(timeout: timeout, now: now)
+        self.escapeKey = escapeKey
+        self.close = close
+        escapeClaim = ""
+        escapeClaim = escapeKey.claim { [weak self] in self?.end(.hotKey) }
+    }
+
+    /// A click on the backdrop: the closing time starts again.
+    func clicked(_ now: Date) {
+        guard ended == nil else { return }
+        watch.clicked(now)
+    }
+
+    /// The clock's tick: whole seconds left, and down when none is.
+    @discardableResult
+    func tick(_ now: Date) -> Int {
+        guard ended == nil else { return 0 }
+        if watch.expired(now) {
+            end(.timeout)
+            return 0
+        }
+        return Int(watch.remaining(now).rounded(.up))
+    }
+
+    /// Down, for a reason: Escape is given back, then `close` is told.
+    /// Only the first call counts.
+    func end(_ reason: Reason) {
+        guard ended == nil else { return }
+        ended = reason
+        escapeKey.release()
+        if reason != .switchedOff { close(reason) }
+    }
+}
+
 /// The calibration backdrop's window and the match sheet's: two windows of
 /// the lab's own, shown by their switches (launch arguments
 /// `-GlossLab.calibration YES`, `-GlossLab.calibrationPattern
@@ -2820,6 +3081,23 @@ final class GlossMatchWindows {
     /// What the sheet was last placed for: its size and the corner's text.
     private var placedFor: String?
     private var checkWritten: String?
+    /// The backdrop's showing now, its clock, and the key watch for Escape
+    /// while one of our windows has the keyboard.
+    private(set) var session: GlossCalibrationSession?
+    private var clock: Timer?
+    private var keyMonitor: Any?
+    /// Why the backdrop last went down, with the time: for the check file.
+    private(set) var lastClose: String?
+    /// How Escape is claimed from every app (tests put their own in).
+    lazy var escapeKey = GlossCalibrationSession.EscapeKey.system
+
+    /// Escape's key code, and what counts as Escape: the key alone, or
+    /// with Shift.
+    static let escapeKeyCode: UInt32 = 53
+    static func isEscape(_ event: NSEvent) -> Bool {
+        event.type == .keyDown && UInt32(event.keyCode) == escapeKeyCode
+            && event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+    }
 
     func configure() {
         withObservationTracking {
@@ -2838,21 +3116,27 @@ final class GlossMatchWindows {
     }
 
     /// The backdrop's window: opaque, right under the lab's floating
-    /// windows and over ordinary ones, never key, and not click-through.
+    /// windows and over ordinary ones (level 2: far under the Dock, the
+    /// menu bar and the system's own panels), and not click-through: it
+    /// takes every click inside its frame. It can take the keyboard, so
+    /// Escape reaches it.
     static func makeCalibrationWindow() -> NSPanel {
         let size = CGSize(width: GlossCalibration.tileSize.width * 2, height: GlossCalibration.tileSize.height * 2)
-        let panel = NSPanel(contentRect: CGRect(origin: .zero, size: size),
-                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panel = GlossCalibrationPanel(contentRect: CGRect(origin: .zero, size: size),
+                                          styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = calibrationTitle
         panel.isReleasedWhenClosed = false
         panel.isOpaque = true
         panel.backgroundColor = .white
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue - 1)
+        // Any click on it gives it the keyboard, so Escape works after one.
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.level = calibrationLevel
         panel.collectionBehavior = [.fullScreenAuxiliary]
-        panel.contentView = GlossCalibrationView(frame: CGRect(origin: .zero, size: size))
+        let view = GlossCalibrationView(frame: CGRect(origin: .zero, size: size))
+        panel.contentView = view
+        panel.initialFirstResponder = view
         return panel
     }
 
@@ -2878,6 +3162,9 @@ final class GlossMatchWindows {
         return panel
     }
 
+    /// The backdrop's level: one under the lab's floating windows.
+    static let calibrationLevel = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue - 1)
+
     /// The backdrop's "Close calibration": both windows go, since the
     /// sheet's other switch is in the lab's window, which lies under the
     /// backdrop.
@@ -2902,15 +3189,19 @@ final class GlossMatchWindows {
         let visible = screen?.visibleFrame ?? screenFrame
         if lab.calibration {
             let window = calibrationWindow ?? Self.makeCalibrationWindow()
-            if calibrationWindow == nil {
-                (window.contentView as? GlossCalibrationView)?.onClose = { GlossMatchWindows.closeBoth(.shared) }
-                (window.contentView as? GlossCalibrationView)?.onPattern = { GlossLab.shared.calibrationPattern = $0 }
+            let view = window.contentView as? GlossCalibrationView
+            let isNew = calibrationWindow == nil
+            if isNew {
                 calibrationWindow = window
+                startSession(lab, view: view)
             }
-            (window.contentView as? GlossCalibrationView)?.pattern = lab.calibrationPattern
+            view?.pattern = lab.calibrationPattern
             window.setFrame(Self.calibrationFrame(visible: visible), display: true)
             window.orderFrontRegardless()
+            // The keyboard at once, so Escape works before any click.
+            if isNew { window.makeKey() }
         } else {
+            endSession()
             calibrationWindow?.orderOut(nil)
             calibrationWindow = nil
         }
@@ -2945,17 +3236,79 @@ final class GlossMatchWindows {
         writeCheckFile(lab)
     }
 
+    /// The backdrop is up: its closing time starts, Escape is claimed
+    /// (from every app, and by a watch on our own windows' keys), and its
+    /// controls are wired. Every way down goes through the session, which
+    /// turns both switches off.
+    private func startSession(_ lab: GlossLab, view: GlossCalibrationView?) {
+        let session = GlossCalibrationSession(timeout: lab.calibrationTimeout, now: Date(), escapeKey: escapeKey) { [weak self] reason in
+            self?.lastClose = "\(reason.rawValue) \(GlossMatchWindows.clockText(Date()))"
+            GlossMatchWindows.closeBoth(.shared)
+        }
+        self.session = session
+        lastClose = nil
+        view?.onClose = { [weak session] in session?.end(.button) }
+        view?.onEscape = { [weak session] in session?.end(.escape) }
+        view?.onClick = { [weak session] in session?.clicked(Date()) }
+        view?.onPattern = { GlossLab.shared.calibrationPattern = $0 }
+        view?.bar.remaining = session.tick(Date())
+        let clock = Timer(timeInterval: 1, repeats: true) { [weak session, weak view] _ in
+            MainActor.assumeIsolated {
+                guard let session else { return }
+                view?.bar.remaining = session.tick(Date())
+            }
+        }
+        // In the common modes, so it also runs while a control is tracked.
+        RunLoop.main.add(clock, forMode: .common)
+        self.clock = clock
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak session] event in
+            let taken = MainActor.assumeIsolated {
+                guard GlossMatchWindows.isEscape(event), let session, session.ended == nil else { return false }
+                session.end(.escape)
+                return true
+            }
+            return taken ? nil : event
+        }
+    }
+
+    /// The backdrop is down: the clock and the key watch stop, and Escape
+    /// is given back if the session has not done so already.
+    private func endSession() {
+        clock?.invalidate()
+        clock = nil
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        session?.end(.switchedOff)
+        if let session, session.ended == .switchedOff, lastClose == nil {
+            lastClose = "\(GlossCalibrationSession.Reason.switchedOff.rawValue) \(GlossMatchWindows.clockText(Date()))"
+        }
+        session = nil
+    }
+
+    static func clockText(_ date: Date) -> String {
+        let parts = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
+        return String(format: "%02d:%02d:%02d", parts.hour ?? 0, parts.minute ?? 0, parts.second ?? 0)
+    }
+
+    /// The backdrop's line of the check file.
+    static func calibrationCheckLine(pattern: GlossLab.CalibrationPattern, frame: CGRect, scale: CGFloat, level: Int,
+                                     escapeClaim: String, timeout: Double) -> String {
+        "calibration=on pattern=\(pattern.rawValue) frame=\(NSStringFromRect(frame)) "
+            + "scale=\(scale) tile=\(NSStringFromSize(GlossCalibration.tileSize)) "
+            + "cell=\(Int(GlossCalibration.cell)) level=\(level) escapeKey=\(escapeClaim) closesAfter=\(Int(timeout.rounded()))s"
+    }
+
     /// The two windows' state as text: whether each is up, its frame and
     /// scale, where the first copy's pieces stand, and every copy as it
     /// was understood.
     func checkText(_ lab: GlossLab) -> String {
         var lines: [String] = []
         if let window = calibrationWindow {
-            lines.append("calibration=on pattern=\(lab.calibrationPattern.rawValue) frame=\(NSStringFromRect(window.frame)) "
-                         + "scale=\(window.backingScaleFactor) tile=\(NSStringFromSize(GlossCalibration.tileSize)) "
-                         + "cell=\(Int(GlossCalibration.cell)) level=\(window.level.rawValue)")
+            lines.append(Self.calibrationCheckLine(pattern: lab.calibrationPattern, frame: window.frame, scale: window.backingScaleFactor,
+                                                   level: window.level.rawValue, escapeClaim: session?.escapeClaim ?? "none",
+                                                   timeout: session?.watch.timeout ?? lab.calibrationTimeout))
         } else {
-            lines.append("calibration=off")
+            lines.append("calibration=off" + (lastClose.map { " closed=\($0)" } ?? ""))
         }
         if let window = sheetWindow {
             let sheet = GlossMatch.sheet(for: lab)

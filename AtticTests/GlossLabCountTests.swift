@@ -1446,6 +1446,16 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.adaptiveKey, of: glass), 2)
         XCTAssertNil(GlossSystemGlass.subvariant(of: glass), "an empty field clears the subvariant")
         XCTAssertEqual(GlossSystemGlass.flag(GlossSystemGlass.tintReducedKey, of: glass), tintAnswers ? false : nil)
+        // Adaptive 3 ends the process inside the system's glass view (26.4.1), so the lab
+        // never puts it on: a stored or typed 3 arrives as 2, and nothing offers more.
+        XCTAssertEqual(GlossSystemGlass.adaptiveRange, 0...2)
+        XCTAssertEqual(GlossSystemGlass.heldAdaptive(3), 2); XCTAssertEqual(GlossSystemGlass.heldAdaptive(-1), 0)
+        XCTAssertEqual(GlossSystemGlass.heldAdaptive(1), 1)
+        GlossSystemGlass.apply(GlossSystemGlass.PieceSettings(adaptive: 0), to: glass)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.adaptiveKey, of: glass), 0)
+        GlossSystemGlass.apply(GlossSystemGlass.PieceSettings(adaptive: 3), to: glass)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.adaptiveKey, of: glass), 2, "3 is held to 2")
+        XCTAssertEqual(GlossMatch.keys["adaptive"], GlossSystemGlass.adaptiveRange)
         let plain = NSView()
         for key in [GlossSystemGlass.subduedKey, GlossSystemGlass.adaptiveKey, GlossSystemGlass.tintReducedKey, GlossSystemGlass.subvariantKey] {
             XCTAssertFalse(GlossSystemGlass.answers(plain, key))
@@ -2076,7 +2086,10 @@ final class GlossLabValuesTests: XCTestCase {
 
     /// The calibration backdrop and the match sheet: off to start with,
     /// loaded with their values, written by Copy values on a line of their
-    /// own, and no preset, All off or Reset sliders touches them.
+    /// own, and no preset, All off or Reset sliders touches them. The
+    /// backdrop's switch is the exception since 24 Nov (it stood on the
+    /// owner's screen for two hours): it is on only when passed on this
+    /// launch, is never read from a stored value and is never saved.
     func testMatchValuesLoadCopyAndStayOutOfPresets() throws {
         let suite = "GlossLabValuesTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(CountingDefaults(suiteName: suite))
@@ -2086,7 +2099,8 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(fresh.calibrationPattern, .tile); XCTAssertEqual(fresh.matchOrigin, "")
         XCTAssertEqual(fresh.matchSpec, "radius=1 / radius=2 / radius=3"); XCTAssertEqual(GlossLab.matchSpecStart, fresh.matchSpec)
         XCTAssertEqual(fresh.matchLine,
-                       "Calibration backdrop: off (tile), match sheet: off, showing \"radius=1 / radius=2 / radius=3\", first corner by guess")
+                       "Calibration backdrop: off (tile), closes itself after 180 s, match sheet: off, "
+                       + "showing \"radius=1 / radius=2 / radius=3\", first corner by guess")
         XCTAssertTrue(fresh.valuesText(app: Self.app(mode: "Light")).contains("\n" + fresh.matchLine + "\n"), "not on a line of its own")
         defaults.set(true, forKey: "GlossLab.calibration")
         defaults.set("grey", forKey: "GlossLab.calibrationPattern")
@@ -2094,11 +2108,23 @@ final class GlossLabValuesTests: XCTestCase {
         defaults.set("walk variant / lensing=1", forKey: "GlossLab.matchSpec")
         defaults.set("1206,49", forKey: "GlossLab.matchOrigin")
         defaults.writes = []
-        let lab = GlossLab(defaults: defaults)
+        // A stored "on" never brings the backdrop back: an ordinary launch
+        // (no argument) has it off, whatever is stored.
+        let ordinary = GlossLab(defaults: defaults)
+        XCTAssertFalse(ordinary.calibration, "a stored value brought the backdrop back")
+        XCTAssertTrue(ordinary.match); XCTAssertEqual(ordinary.calibrationPattern, .grey)
+        XCTAssertFalse(GlossLab(defaults: defaults, launchArguments: [:]).calibration)
+        XCTAssertFalse(GlossLab(defaults: defaults, launchArguments: ["GlossLab.calibration": "NO"]).calibration)
+        // Passed on this launch, it is on (arguments arrive as text).
+        let lab = GlossLab(defaults: defaults, launchArguments: ["GlossLab.calibration": "YES"])
         XCTAssertTrue(lab.calibration); XCTAssertTrue(lab.match); XCTAssertEqual(lab.calibrationPattern, .grey)
         XCTAssertEqual(lab.matchSpec, "walk variant / lensing=1"); XCTAssertEqual(lab.matchOrigin, "1206,49")
         XCTAssertEqual(defaults.writes, [], "loading wrote values back")
-        let line = "Calibration backdrop: on (grey), match sheet: on, showing \"walk variant / lensing=1\", first corner \"1206,49\""
+        XCTAssertTrue(GlossLab(defaults: nil, launchArguments: ["GlossLab.calibration": true]).calibration)
+        XCTAssertTrue(GlossLab.launchSwitch("1")); XCTAssertTrue(GlossLab.launchSwitch("true")); XCTAssertFalse(GlossLab.launchSwitch("maybe"))
+        XCTAssertFalse(GlossLab.launchSwitch(nil))
+        let line = "Calibration backdrop: on (grey), closes itself after 180 s, match sheet: on, "
+            + "showing \"walk variant / lensing=1\", first corner \"1206,49\""
         XCTAssertTrue(lab.valuesText(app: Self.app(mode: "Dark")).contains(line))
         lab.allOff(); lab.resetSliders()
         XCTAssertTrue(lab.calibration && lab.match, "All off reached the match windows")
@@ -2108,8 +2134,10 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(lab.matchLine, line, "a preset moved the match values")
         defaults.writes = []
         lab.calibration = false; lab.calibrationPattern = .black; lab.match = false; lab.matchSpec = "radius=4"; lab.matchOrigin = ""
-        XCTAssertEqual(defaults.writes, ["GlossLab.calibration", "GlossLab.calibrationPattern", "GlossLab.match",
-                                         "GlossLab.matchSpec", "GlossLab.matchOrigin"])
+        lab.calibration = true; lab.calibrationTimeout = 60
+        XCTAssertEqual(defaults.writes, ["GlossLab.calibrationPattern", "GlossLab.match", "GlossLab.matchSpec", "GlossLab.matchOrigin"],
+                       "the backdrop's switch or its closing time was saved")
+        lab.calibration = false
         XCTAssertEqual(lab.currentPreset?.id, "controlCentre", "a match value broke the preset's match")
         let again = GlossLab(defaults: defaults)
         XCTAssertFalse(again.calibration); XCTAssertFalse(again.match); XCTAssertEqual(again.calibrationPattern, .black)
@@ -2119,9 +2147,33 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(GlossLab(defaults: defaults).calibrationPattern, .tile)
         // The launch arguments the hand-over uses, with a preset.
         defaults.set("controlCentre", forKey: "GlossLab.preset")
-        defaults.set(true, forKey: "GlossLab.calibration"); defaults.set(true, forKey: "GlossLab.match")
-        let shown = GlossLab(defaults: defaults)
+        defaults.set(true, forKey: "GlossLab.match")
+        let shown = GlossLab(defaults: defaults, launchArguments: ["GlossLab.calibration": "YES", "GlossLab.calibrationTimeout": "900"])
         XCTAssertTrue(shown.calibration && shown.match, "a preset shown by launch argument turned the match windows off")
+        XCTAssertEqual(shown.calibrationTimeout, 900)
+        XCTAssertTrue(shown.matchLine.contains("closes itself after 900 s"))
+    }
+
+    /// The backdrop's closing time: 3 minutes to start with, set only by
+    /// this launch's argument (never stored), held between 10 seconds and
+    /// half an hour; nothing usable leaves 3 minutes.
+    func testCalibrationTimeoutComesFromThisLaunchOnlyAndIsHeld() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(CountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(GlossLab.calibrationTimeoutStart, 180)
+        XCTAssertEqual(GlossLab.calibrationTimeoutRange, 10...1800)
+        XCTAssertEqual(GlossLab(defaults: nil).calibrationTimeout, 180)
+        defaults.set(1200.0, forKey: "GlossLab.calibrationTimeout")
+        XCTAssertEqual(GlossLab(defaults: defaults).calibrationTimeout, 180, "a stored closing time was used")
+        XCTAssertEqual(GlossLab(defaults: defaults, launchArguments: ["GlossLab.calibrationTimeout": "45"]).calibrationTimeout, 45)
+        XCTAssertEqual(GlossLab.heldCalibrationTimeout("900"), 900); XCTAssertEqual(GlossLab.heldCalibrationTimeout(12.5), 12.5)
+        XCTAssertEqual(GlossLab.heldCalibrationTimeout("3"), 10, "shorter than a look at it")
+        XCTAssertEqual(GlossLab.heldCalibrationTimeout("86400"), 1800, "it could be set to stay for a day")
+        let junk: [Any?] = ["0", "-5", "soon", "", "nan", "inf", -1.0, nil]
+        for value in junk {
+            XCTAssertEqual(GlossLab.heldCalibrationTimeout(value), 180, "\(String(describing: value))")
+        }
     }
 
     /// The tile's bytes, top row first, four to a pixel.
@@ -2213,51 +2265,313 @@ final class GlossLabValuesTests: XCTestCase {
     }
 
     /// The backdrop's window is opaque, sits right under the lab's floating
-    /// windows, is never key and is not click-through; its view takes
-    /// clicks, and its Close button stands in the bottom left corner and
-    /// calls back.
+    /// windows (far under the Dock, the menu bar and the system's panels),
+    /// is not click-through and can take the keyboard (so Escape reaches
+    /// it); its view takes every click, and its own controls stand in the
+    /// bottom left corner and call back.
     func testCalibrationWindowIsOpaqueAndTakesClicks() throws {
         let window = GlossMatchWindows.makeCalibrationWindow()
         XCTAssertFalse(window.isVisible, "making the window showed it")
+        XCTAssertFalse(window.isKeyWindow, "making the window gave it the keyboard")
         XCTAssertTrue(window.isOpaque); XCTAssertFalse(window.hasShadow)
         XCTAssertFalse(window.ignoresMouseEvents, "the backdrop is click-through")
         XCTAssertEqual(window.level.rawValue, NSWindow.Level.floating.rawValue - 1)
+        XCTAssertEqual(window.level, GlossMatchWindows.calibrationLevel)
+        // Never above what the owner needs to get out: the Dock, the menu
+        // bar, its items' panels (Control Centre), pop-ups.
+        for above in [NSWindow.Level.floating, .dock, .mainMenu, .statusBar, .popUpMenu, .modalPanel] {
+            XCTAssertLessThan(window.level.rawValue, above.rawValue, "the backdrop is level with or above level \(above.rawValue)")
+        }
+        XCTAssertGreaterThan(window.level.rawValue, NSWindow.Level.normal.rawValue)
         XCTAssertTrue(window.styleMask.contains(.nonactivatingPanel)); XCTAssertFalse(window.styleMask.contains(.titled))
-        XCTAssertFalse(window.canBecomeKey, "the backdrop could take the keyboard")
+        // Since 24 Nov it can take the keyboard (the lead's rule: Escape
+        // closes it), without bringing the app forward or becoming main.
+        // (Not in the invisible test host, where no window may take it.)
+        XCTAssertTrue(window is GlossCalibrationPanel)
+        XCTAssertTrue(GlossCalibrationPanel.takesKeyboard(invisibleTestHost: false), "Escape cannot reach the backdrop")
+        XCTAssertFalse(GlossCalibrationPanel.takesKeyboard(invisibleTestHost: true))
+        XCTAssertEqual(window.canBecomeKey, !TestPresentationPolicy.isInvisible)
+        XCTAssertFalse(window.canBecomeMain)
+        XCTAssertFalse(window.becomesKeyOnlyIfNeeded, "a click on the pattern does not give it the keyboard")
         XCTAssertFalse(window.hidesOnDeactivate)
         XCTAssertFalse(window.collectionBehavior.contains(.canJoinAllSpaces), "the backdrop would cover every Space")
         XCTAssertEqual(window.title, "Gloss calibration")
         let view = try XCTUnwrap(window.contentView as? GlossCalibrationView)
         XCTAssertTrue(view.isOpaque); XCTAssertTrue(view.isFlipped); XCTAssertEqual(view.pattern, .tile)
+        XCTAssertTrue(view.acceptsFirstResponder); XCTAssertTrue(window.initialFirstResponder === view)
         view.layout()
-        XCTAssertEqual(view.closeButton.frame.minX, 12)
-        XCTAssertEqual(view.closeButton.frame.maxY, view.bounds.height - 12, "the Close button is not in the bottom left corner")
-        XCTAssertTrue(view.closeButton.superview === view)
-        var closed = 0
-        view.onClose = { closed += 1 }
-        XCTAssertTrue(view.closeButton.sendAction(view.closeButton.action, to: view.closeButton.target))
-        XCTAssertEqual(closed, 1)
-        // The pattern's picker stands beside it, shows the pattern set, and
-        // calls back with the one picked.
-        XCTAssertTrue(view.patternPicker.superview === view)
-        XCTAssertEqual(view.patternPicker.segmentCount, 4)
-        XCTAssertEqual((0..<4).map { view.patternPicker.label(forSegment: $0) }, ["Tile", "White", "Grey", "Black"])
-        XCTAssertEqual(view.patternPicker.selectedSegment, 0)
-        XCTAssertEqual(view.patternPicker.frame.minX, view.closeButton.frame.maxX + 12)
-        XCTAssertEqual(view.patternPicker.frame.maxY, view.bounds.height - 12)
-        view.pattern = .grey
-        XCTAssertEqual(view.patternPicker.selectedSegment, 2, "the picker does not show the pattern set")
+        // The controls: one bar of our own in the bottom left corner,
+        // wholly inside the view.
+        let bar = view.bar
+        XCTAssertTrue(bar.superview === view)
+        XCTAssertEqual(bar.frame.minX, 12)
+        XCTAssertEqual(bar.frame.maxY, view.bounds.height - 12, "the controls are not in the bottom left corner")
+        XCTAssertEqual(bar.frame.size, GlossCalibrationBar.size)
+        XCTAssertTrue(view.bounds.contains(bar.frame), "the controls are not wholly on the backdrop")
+        XCTAssertLessThanOrEqual(GlossCalibrationBar.size.width, 700, "the controls would not fit a small screen")
+        // Left to right: Close (it says what it does and names Escape),
+        // the four patterns, the time left.
+        XCTAssertEqual(GlossCalibrationBar.closeTitle, "Close test pattern (Esc)")
+        XCTAssertEqual(GlossCalibrationBar.cells.map(\.cell),
+                       [.close, .pattern(.tile), .pattern(.white), .pattern(.grey), .pattern(.black), .countdown])
+        XCTAssertEqual(GlossCalibrationBar.cells.dropFirst().prefix(4).map { GlossCalibrationBar.title($0.cell) }, ["Tile", "White", "Grey", "Black"])
+        for (index, one) in GlossCalibrationBar.cells.enumerated() {
+            XCTAssertTrue(CGRect(origin: .zero, size: GlossCalibrationBar.size).contains(one.frame), "cell \(index) reaches out of the bar")
+            if index > 0 { XCTAssertEqual(one.frame.minX, GlossCalibrationBar.cells[index - 1].frame.maxX, "cells overlap or leave a gap") }
+        }
+        func middle(_ cell: GlossCalibrationBar.Cell) throws -> CGPoint {
+            let frame = try XCTUnwrap(GlossCalibrationBar.cells.first { $0.cell == cell }).frame
+            return CGPoint(x: bar.frame.minX + frame.midX, y: bar.frame.minY + frame.midY)
+        }
+        var closed = 0, clicks = 0
         var picked: [GlossLab.CalibrationPattern] = []
+        view.onClose = { closed += 1 }
+        view.onClick = { clicks += 1 }
         view.onPattern = { picked.append($0) }
-        view.patternPicker.selectedSegment = 3
-        XCTAssertTrue(view.patternPicker.sendAction(view.patternPicker.action, to: view.patternPicker.target))
-        XCTAssertEqual(picked, [.black])
-        let lone = GlossCalibrationView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        view.clicked(at: try middle(.close))
+        XCTAssertEqual(closed, 1); XCTAssertEqual(clicks, 1)
+        // The bar shows the pattern set, and a click on a pattern calls
+        // back with it.
+        XCTAssertEqual(bar.pattern, .tile)
+        view.pattern = .grey
+        XCTAssertEqual(bar.pattern, .grey, "the controls do not show the pattern set")
+        view.clicked(at: try middle(.pattern(.black)))
+        view.clicked(at: try middle(.pattern(.tile)))
+        XCTAssertEqual(picked, [.black, .tile]); XCTAssertEqual(clicks, 3)
+        // A click on the time, or anywhere on the pattern, counts as a
+        // click and does nothing else.
+        view.clicked(at: try middle(.countdown))
+        view.clicked(at: CGPoint(x: 300, y: 100))
+        XCTAssertEqual(clicks, 5); XCTAssertEqual(closed, 1); XCTAssertEqual(picked.count, 2)
+        // The time left, as it is written.
+        XCTAssertEqual(GlossCalibrationBar.countdownText(179), "closes itself in 2:59")
+        XCTAssertEqual(GlossCalibrationBar.countdownText(5), "closes itself in 0:05")
+        XCTAssertEqual(GlossCalibrationBar.countdownText(-3), "closes itself in 0:00")
+        XCTAssertEqual(GlossCalibrationBar.countdownText(nil), "")
+        // The view takes every click itself, also over its controls.
+        let lone = GlossCalibrationView(frame: CGRect(x: 0, y: 0, width: 800, height: 300))
+        lone.layout()
         XCTAssertTrue(lone.hitTest(CGPoint(x: 200, y: 100)) === lone, "the backdrop's view passes clicks on")
+        XCTAssertTrue(lone.hitTest(CGPoint(x: lone.bar.frame.midX, y: lone.bar.frame.midY)) === lone, "a click on the controls misses the view")
         XCTAssertTrue(lone.acceptsFirstMouse(for: nil))
         // Under the menu bar and clear of the Dock, on whole points.
         XCTAssertEqual(GlossMatchWindows.calibrationFrame(visible: CGRect(x: 0, y: 70.5, width: 1512, height: 874.5)),
                        CGRect(x: 0, y: 70, width: 1512, height: 875))
+        // On the owner's screen (1800 x 1169, menu bar 39): nothing of it
+        // reaches over the menu bar.
+        let owner = GlossMatchWindows.calibrationFrame(visible: CGRect(x: 0, y: 51, width: 1800, height: 1079))
+        XCTAssertEqual(owner, CGRect(x: 0, y: 51, width: 1800, height: 1079))
+        XCTAssertLessThanOrEqual(owner.maxY, 1169 - 39)
+    }
+
+    /// Escape closes the backdrop while its window has the keyboard: the
+    /// key alone or with Shift, not with Command, Control or Option, and no
+    /// other key does anything.
+    func testEscapeClosesTheCalibrationBackdrop() throws {
+        let view = GlossCalibrationView(frame: CGRect(x: 0, y: 0, width: 800, height: 300))
+        var escaped = 0, closed = 0
+        view.onEscape = { escaped += 1 }
+        view.onClose = { closed += 1 }
+        func key(_ code: UInt16, _ flags: NSEvent.ModifierFlags = [], _ text: String = "\u{1b}") throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                                           characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: code))
+        }
+        XCTAssertEqual(GlossMatchWindows.escapeKeyCode, 53)
+        XCTAssertTrue(GlossMatchWindows.isEscape(try key(53)))
+        XCTAssertTrue(GlossMatchWindows.isEscape(try key(53, .shift)))
+        XCTAssertFalse(GlossMatchWindows.isEscape(try key(53, .command)))
+        XCTAssertFalse(GlossMatchWindows.isEscape(try key(53, .option)))
+        XCTAssertFalse(GlossMatchWindows.isEscape(try key(53, .control)))
+        XCTAssertFalse(GlossMatchWindows.isEscape(try key(49, [], " ")))
+        view.keyDown(with: try key(53))
+        XCTAssertEqual(escaped, 1)
+        view.keyDown(with: try key(49, [], " "))
+        view.keyDown(with: try key(36, [], "\r"))
+        view.keyDown(with: try key(53, .command))
+        XCTAssertEqual(escaped, 1, "another key closed the backdrop")
+        view.cancelOperation(nil)
+        XCTAssertEqual(escaped, 2)
+        XCTAssertEqual(closed, 0, "Escape was told as the button")
+        // With nothing set for Escape, it closes as the button does.
+        view.onEscape = nil
+        view.keyDown(with: try key(53))
+        XCTAssertEqual(closed, 1)
+    }
+
+    /// The backdrop's closing time is a deadline against the clock that
+    /// every click pushes on.
+    func testCalibrationWatchCountsFromTheLastClick() {
+        let start = Date(timeIntervalSinceReferenceDate: 1000)
+        var watch = GlossCalibrationWatch(timeout: 180, now: start)
+        XCTAssertEqual(watch.remaining(start), 180); XCTAssertFalse(watch.expired(start))
+        XCTAssertEqual(watch.remaining(start.addingTimeInterval(179.5)), 0.5)
+        XCTAssertFalse(watch.expired(start.addingTimeInterval(179.9)))
+        XCTAssertTrue(watch.expired(start.addingTimeInterval(180)))
+        XCTAssertEqual(watch.remaining(start.addingTimeInterval(4000)), 0, "the time left went under nothing")
+        watch.clicked(start.addingTimeInterval(170))
+        XCTAssertFalse(watch.expired(start.addingTimeInterval(180)), "a click did not push the closing time on")
+        XCTAssertEqual(watch.remaining(start.addingTimeInterval(180)), 170)
+        XCTAssertTrue(watch.expired(start.addingTimeInterval(350)))
+        // The clock set back (a time change) never shortens it under nothing.
+        XCTAssertEqual(watch.remaining(start), 180 + 170)
+    }
+
+    /// One showing of the backdrop, by every way down: the button, Escape
+    /// in our own window, Escape from any app, the closing time, and the
+    /// lab's switch. Each time Escape is claimed once and given back once,
+    /// the closing is told once with its reason, and nothing after the end
+    /// counts. The claim here is a stand-in: the tests never take the
+    /// system's Escape key.
+    func testCalibrationSessionEndsOnceByEveryWayDown() {
+        final class Key {
+            var claims = 0, releases = 0
+            var press: (@MainActor () -> Void)?
+            var answer = "registered"
+        }
+        let start = Date(timeIntervalSinceReferenceDate: 5000)
+        func session(_ key: Key, timeout: TimeInterval = 180, told: @escaping @MainActor (GlossCalibrationSession.Reason) -> Void)
+            -> GlossCalibrationSession {
+            let escape = GlossCalibrationSession.EscapeKey(claim: { action in
+                key.claims += 1
+                key.press = action
+                return key.answer
+            }, release: { key.releases += 1 })
+            return GlossCalibrationSession(timeout: timeout, now: start, escapeKey: escape, close: told)
+        }
+        typealias Reason = GlossCalibrationSession.Reason
+        let ways: [(Reason, (GlossCalibrationSession, Key) -> Void)] = [
+            (.button, { one, _ in one.end(.button) }),
+            (.escape, { one, _ in one.end(.escape) }),
+            (.hotKey, { _, key in key.press?() }),
+            (.timeout, { one, _ in XCTAssertEqual(one.tick(start.addingTimeInterval(180)), 0) }),
+        ]
+        for (reason, way) in ways {
+            let key = Key()
+            var told: [Reason] = []
+            let one = session(key) { told.append($0) }
+            XCTAssertEqual(key.claims, 1); XCTAssertEqual(key.releases, 0); XCTAssertEqual(one.escapeClaim, "registered")
+            XCTAssertNil(one.ended)
+            XCTAssertEqual(one.tick(start.addingTimeInterval(0.2)), 180, "whole seconds left, rounded up")
+            XCTAssertEqual(one.tick(start.addingTimeInterval(179.5)), 1)
+            XCTAssertEqual(told, [], "\(reason): it went down early")
+            way(one, key)
+            XCTAssertEqual(told, [reason]); XCTAssertEqual(one.ended, reason)
+            XCTAssertEqual(key.releases, 1, "\(reason): Escape was not given back")
+            // Nothing after the end counts.
+            one.end(.button); one.end(.switchedOff); key.press?(); one.clicked(start.addingTimeInterval(200))
+            XCTAssertEqual(one.tick(start.addingTimeInterval(9999)), 0)
+            XCTAssertEqual(told, [reason], "\(reason): the closing was told twice")
+            XCTAssertEqual(key.releases, 1, "\(reason): Escape was given back twice")
+            XCTAssertEqual(key.claims, 1)
+        }
+        // The lab's switch turned it off: Escape is given back, and nobody
+        // is told to turn the switches off again.
+        let key = Key()
+        var told: [Reason] = []
+        let off = session(key) { told.append($0) }
+        off.end(.switchedOff)
+        XCTAssertEqual(told, []); XCTAssertEqual(key.releases, 1); XCTAssertEqual(off.ended, .switchedOff)
+        // A click pushes the closing time on; without one it goes down at
+        // its time, with the short time a launch argument may set too.
+        let clickedKey = Key()
+        var clickedTold: [Reason] = []
+        let clicked = session(clickedKey, timeout: 10) { clickedTold.append($0) }
+        clicked.clicked(start.addingTimeInterval(9))
+        XCTAssertEqual(clicked.tick(start.addingTimeInterval(10)), 9)
+        XCTAssertEqual(clickedTold, [])
+        XCTAssertEqual(clicked.tick(start.addingTimeInterval(19)), 0)
+        XCTAssertEqual(clickedTold, [.timeout]); XCTAssertEqual(clickedKey.releases, 1)
+        // A refused claim is said, and the other ways down still work.
+        let refusedKey = Key()
+        refusedKey.answer = "refused(status -9878)"
+        var refusedTold: [Reason] = []
+        let refused = session(refusedKey) { refusedTold.append($0) }
+        XCTAssertEqual(refused.escapeClaim, "refused(status -9878)")
+        refused.end(.escape)
+        XCTAssertEqual(refusedTold, [.escape])
+        // The check file's line says how the claim went and the closing time.
+        let line = GlossMatchWindows.calibrationCheckLine(pattern: .grey, frame: CGRect(x: 0, y: 51, width: 1800, height: 1079), scale: 2,
+                                                          level: 2, escapeClaim: "registered", timeout: 180)
+        XCTAssertEqual(line, "calibration=on pattern=grey frame={{0, 51}, {1800, 1079}} scale=2.0 tile={384, 256} cell=64 level=2 "
+                       + "escapeKey=registered closesAfter=180s")
+        XCTAssertEqual(GlossMatchWindows.clockText(Date(timeIntervalSince1970: 0)).count, 8)
+        // Both switches go off by the session's closing (what the windows
+        // wire it to).
+        let lab = GlossLab(defaults: nil, launchArguments: ["GlossLab.calibration": "YES"])
+        lab.match = true
+        let wiredKey = Key()
+        let wired = session(wiredKey) { _ in GlossMatchWindows.closeBoth(lab) }
+        XCTAssertTrue(lab.calibration && lab.match)
+        XCTAssertEqual(wired.tick(start.addingTimeInterval(181)), 0)
+        XCTAssertFalse(lab.calibration, "the closing time left the backdrop up")
+        XCTAssertFalse(lab.match, "the closing time left the sheet up")
+    }
+
+    /// The backdrop's controls can be read over every pattern: the bar is
+    /// drawn the same, pixel for pixel, whatever the backdrop shows (its
+    /// own opaque plate), "Close test pattern (Esc)" stands black on white,
+    /// the other cells white on black, and the bar's rim is white (so it
+    /// shows on the black pattern).
+    func testCalibrationControlsReadTheSameOverEveryPattern() throws {
+        let window = GlossMatchWindows.makeCalibrationWindow()
+        let view = try XCTUnwrap(window.contentView as? GlossCalibrationView)
+        view.layoutSubtreeIfNeeded()
+        view.layout()
+        let bar = view.bar
+        bar.remaining = 179
+        func shot(_ pattern: GlossLab.CalibrationPattern) throws -> (NSBitmapImageRep, Int) {
+            view.pattern = pattern
+            // The bar shows the pattern picked; held on one here, so only
+            // what is behind the bar differs between the shots.
+            bar.pattern = .tile
+            let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: rep)
+            return (rep, rep.pixelsWide / Int(view.bounds.width))
+        }
+        // The bitmap's own red bytes (white is 255 and black 0 in any
+        // colour space; the greys between are held loosely below).
+        func levels(_ rep: NSBitmapImageRep, _ scale: Int, _ frame: CGRect) throws -> [Int] {
+            var out: [Int] = []
+            let data = try XCTUnwrap(rep.bitmapData)
+            let perPixel = rep.bitsPerPixel / 8, perRow = rep.bytesPerRow
+            XCTAssertEqual(rep.bitsPerSample, 8); XCTAssertGreaterThanOrEqual(perPixel, 3)
+            let red = rep.bitmapFormat.contains(.alphaFirst) ? 1 : 0
+            let box = frame.offsetBy(dx: bar.frame.minX, dy: bar.frame.minY)
+            for y in Int(box.minY) * scale..<Int(box.maxY) * scale {
+                for x in Int(box.minX) * scale..<Int(box.maxX) * scale {
+                    out.append(Int(data[y * perRow + x * perPixel + red]))
+                }
+            }
+            return out
+        }
+        let whole = CGRect(origin: .zero, size: GlossCalibrationBar.size)
+        let (first, scale) = try shot(.tile)
+        XCTAssertTrue(scale == 1 || scale == 2, "an odd scale")
+        let wanted = try levels(first, scale, whole)
+        for pattern in [GlossLab.CalibrationPattern.white, .grey, .black] {
+            let (rep, _) = try shot(pattern)
+            XCTAssertEqual(try levels(rep, scale, whole), wanted, "over \(pattern.rawValue) the controls look different: something shows through")
+        }
+        func share(_ values: [Int], _ test: (Int) -> Bool) -> Double { Double(values.filter(test).count) / Double(max(values.count, 1)) }
+        let close = try levels(first, scale, try XCTUnwrap(GlossCalibrationBar.cells.first { $0.cell == .close }).frame.insetBy(dx: 6, dy: 6))
+        XCTAssertGreaterThan(share(close) { $0 >= 235 }, 0.5, "Close has no white plate")
+        XCTAssertGreaterThan(share(close) { $0 <= 40 }, 0.04, "Close has no black text on it")
+        for cell in [GlossCalibrationBar.Cell.pattern(.white), .pattern(.grey), .pattern(.black), .countdown] {
+            let values = try levels(first, scale, try XCTUnwrap(GlossCalibrationBar.cells.first { $0.cell == cell }).frame.insetBy(dx: 6, dy: 6))
+            XCTAssertGreaterThan(share(values) { $0 <= 20 }, 0.5, "\(cell): no black plate")
+            XCTAssertGreaterThan(share(values) { $0 >= 180 }, 0.02, "\(cell): no light text on it")
+        }
+        // The pattern picked stands on a grey plate with white text.
+        let selected = try levels(first, scale, try XCTUnwrap(GlossCalibrationBar.cells.first { $0.cell == .pattern(.tile) }).frame.insetBy(dx: 6, dy: 6))
+        XCTAssertGreaterThan(share(selected) { $0 > 50 && $0 < 160 }, 0.4, "the pattern picked is not marked")
+        XCTAssertGreaterThan(share(selected) { $0 >= 235 }, 0.02, "the pattern picked has no white text")
+        // The rim: white all round, one point in.
+        let top = try levels(first, scale, CGRect(x: 10, y: 0, width: GlossCalibrationBar.size.width - 20, height: 1))
+        XCTAssertEqual(share(top) { $0 >= 250 }, 1, "the bar's rim is not white")
+        // The time left is written on it, and changing it redraws the bar.
+        bar.remaining = 5
+        let (later, _) = try shot(.tile)
+        XCTAssertNotEqual(try levels(later, scale, whole), wanted, "the time left is not drawn")
     }
 
     /// The backdrop's view draws the tile from its top left corner, pixel
@@ -2267,11 +2581,11 @@ final class GlossLabValuesTests: XCTestCase {
         let window = GlossMatchWindows.makeCalibrationWindow()
         let view = try XCTUnwrap(window.contentView as? GlossCalibrationView)
         XCTAssertEqual(view.bounds.size, CGSize(width: 768, height: 512))
-        // Laid out first, so the Close button and the picker stand in the
-        // bottom left corner (y 468 pt and below), clear of every spot read.
+        // Laid out first, so the controls stand in the bottom left corner
+        // (y 468 pt and below), clear of every spot read.
         view.layoutSubtreeIfNeeded()
         view.layout()
-        XCTAssertGreaterThan(min(view.closeButton.frame.minY, view.patternPicker.frame.minY), 460)
+        XCTAssertGreaterThan(view.bar.frame.minY, 460)
         let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: rep)
         let scale = rep.pixelsWide / 768

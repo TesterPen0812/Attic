@@ -265,7 +265,33 @@ final class GlossLab {
     /// empty: a first guess). Both off to start with. The lab's own state:
     /// no preset, All off or Reset sliders touches them, and they are not
     /// part of `labLines`.
-    var calibration = false { didSet { save(calibration, "calibration") } }
+    ///
+    /// The backdrop covers the screen, so it is never brought back by a
+    /// stored value (on 24 Nov it stood on the owner's screen for two
+    /// hours): `calibration` is on only when `-GlossLab.calibration YES`
+    /// was passed on this launch or the lab's switch was set in this run,
+    /// and it is not saved. It takes itself down `calibrationTimeout`
+    /// seconds after the last click on it (`-GlossLab.calibrationTimeout`,
+    /// this launch only, not saved; 3 minutes to start with).
+    var calibration = false
+    var calibrationTimeout: Double = GlossLab.calibrationTimeoutStart
+    static let calibrationTimeoutStart: Double = 180
+    /// Never shorter than a look at it, never longer than half an hour.
+    static let calibrationTimeoutRange: ClosedRange<Double> = 10...1800
+    /// A launch argument's time in seconds, held in the range; nothing
+    /// usable (no number, zero, negative) leaves the start value.
+    static func heldCalibrationTimeout(_ value: Any?) -> Double {
+        let number = (value as? NSNumber)?.doubleValue
+            ?? (value as? String).flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard let number, number.isFinite, number > 0 else { return calibrationTimeoutStart }
+        return min(max(number, calibrationTimeoutRange.lowerBound), calibrationTimeoutRange.upperBound)
+    }
+    /// A launch argument's switch: YES, true, 1 are on; anything else off.
+    static func launchSwitch(_ value: Any?) -> Bool {
+        if let number = value as? NSNumber { return number.boolValue }
+        if let text = value as? String { return (text as NSString).boolValue }
+        return false
+    }
     var calibrationPattern: CalibrationPattern = .tile { didSet { save(calibrationPattern.rawValue, "calibrationPattern") } }
     var match = false { didSet { save(match, "match") } }
     var matchSpec = GlossLab.matchSpecStart { didSet { save(matchSpec, "matchSpec") } }
@@ -325,9 +351,15 @@ final class GlossLab {
         }
     }
 
-    init(defaults: UserDefaults?) {
+    /// `launchArguments`: this launch's arguments by name (left out: the
+    /// process's own, for the standard defaults; none for any other).
+    init(defaults: UserDefaults?, launchArguments: [String: Any]? = nil) {
         self.defaults = defaults
         defer { loading = false }
+        let launch = launchArguments
+            ?? (defaults === UserDefaults.standard ? UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain) : [:])
+        calibration = Self.launchSwitch(launch[Self.prefix + "calibration"])
+        if let value = launch[Self.prefix + "calibrationTimeout"] { calibrationTimeout = Self.heldCalibrationTimeout(value) }
         guard let defaults else { return }
         func bool(_ key: String, _ value: inout Bool) {
             if defaults.object(forKey: Self.prefix + key) != nil { value = defaults.bool(forKey: Self.prefix + key) }
@@ -385,7 +417,8 @@ final class GlossLab {
         if let value = defaults.string(forKey: Self.prefix + "samplesGroundExtras") { samplesGroundExtras = value }
         bool("panelBlur", &panelBlur); double("panelBlurRadius", &panelBlurRadius)
         double("panelBlurSeeThrough", &panelBlurSeeThrough)
-        bool("calibration", &calibration); bool("match", &match)
+        // `calibration` is never read from a stored value (see its note).
+        bool("match", &match)
         if let raw = defaults.string(forKey: Self.prefix + "calibrationPattern"), let value = CalibrationPattern(rawValue: raw) {
             calibrationPattern = value
         }
@@ -603,6 +636,7 @@ final class GlossLab {
     var matchLine: String {
         let corner = matchOrigin.trimmingCharacters(in: .whitespacesAndNewlines)
         return "Calibration backdrop: \(calibration ? "on" : "off") (\(calibrationPattern.title.lowercased())), "
+            + "closes itself after \(Int(calibrationTimeout.rounded())) s, "
             + "match sheet: \(match ? "on" : "off"), showing \"\(matchSpec)\", first corner \(corner.isEmpty ? "by guess" : "\"\(corner)\"")"
     }
 
