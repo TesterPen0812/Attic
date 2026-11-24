@@ -997,8 +997,10 @@ final class TasksPageKeyHandlerTests: XCTestCase {
         window.orderFront(nil)
         window.makeKey()
         defer { window.close() }
-        waitForTestOperation("the page's first pass in a key window") {
-            TasksPageRenderProbe.bodyRuns > runs && window.isKeyWindow
+        // Ready for keys: drawn once, in the key window, and no field holding
+        // the keyboard (a field that types keeps every key, `pageKey`).
+        waitForTestOperation("the page ready for keys") {
+            TasksPageRenderProbe.bodyRuns > runs && window.isKeyWindow && !AtticTextInput.hasKeyboard
         }
         // ↓, waited on until the page's handler has taken it.
         func down() {
