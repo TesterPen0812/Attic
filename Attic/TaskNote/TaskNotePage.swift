@@ -579,6 +579,9 @@ struct TaskNotePage: View {
     private var bottomRow: some View {
         AtticControlGroup {
             NoteFormatRowSwitch(state: chrome.formatRow, model: { [weak chrome] in chrome?.controls?.formatModel }) {
+            // The pill's room follows the panel's width, read here where
+            // the row is laid out (the layout carries no size).
+            PanelWidthReader(bareOutset: 2 * layout.chromeInsets.leading) { panelWidth in
             HStack(spacing: 0) {
                 AtticRaisedButton(systemName: placement == .window ? "rectangle.portrait.and.arrow.right" : "chevron.left",
                                   label: placement == .window ? "Move to Panel" : "Back",
@@ -590,7 +593,7 @@ struct TaskNotePage: View {
                 Spacer(minLength: AtticSpacing.s12)
                 if let session = presenter.session {
                     NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damaged,
-                                   maxWidth: AtticNoteMetrics.pillMaxWidth(panelWidth: layout.panelSize.width, chromeInset: layout.chromeInsets.leading, showsFormat: true), leadingItems: taskItems)
+                                   maxWidth: AtticNoteMetrics.pillMaxWidth(panelWidth: panelWidth, chromeInset: layout.chromeInsets.leading, showsFormat: true), leadingItems: taskItems)
                         .transition(.opacity)
                 } else if let item = taskItems.first {
                     // A task with no note: its command failures still show,
@@ -606,6 +609,7 @@ struct TaskNotePage: View {
                     .accessibilityIdentifier("task-note-format")
 
                 }
+            }
             }
             .frame(height: buttonHeight)
             }

@@ -368,8 +368,8 @@ struct NotesEditorPage: View {
     }
     /// The review bar's room: the row less Back and Aa ("+" folds away)
     /// and the pill's least gaps on each side.
-    private var reviewBarRoom: CGFloat {
-        max(0, layout.panelSize.width - 2 * layout.chromeInsets.leading
+    private func reviewBarRoom(panelWidth: CGFloat) -> CGFloat {
+        max(0, panelWidth - 2 * layout.chromeInsets.leading
             - 2 * AtticControlSize.panelButton.width - 2 * AtticNoteMetrics.pillMinGap)
     }
     private var hidesRowsForReview: Bool { controller.proposalReview != nil && !reviewsInPlace }
@@ -698,7 +698,10 @@ struct NotesEditorPage: View {
             if controller.isLibraryPresented {
                 libraryBar
             } else {
-                editorBar
+                // The pill's room follows the panel's width, read here
+                // where the row is laid out (the layout carries no size).
+                PanelWidthReader(bareOutset: 2 * layout.chromeInsets.leading) { editorBar(panelWidth: $0) }
+                    .transition(.opacity)
             }
         }
         .frame(height: buttonHeight)
@@ -732,7 +735,7 @@ struct NotesEditorPage: View {
         .transition(.opacity)
     }
 
-    private var editorBar: some View {
+    private func editorBar(panelWidth: CGFloat) -> some View {
         HStack(spacing: 0) {
             // Back to All notes, which sits to the note's left (the pages
             // slide that way). Owner, 13 Nov: it wears the gallery's icon,
@@ -753,9 +756,9 @@ struct NotesEditorPage: View {
             if let session = controller.active {
                 NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery,
                                maxWidth: AtticNoteMetrics.pillMaxWidth(
-                                   panelWidth: layout.panelSize.width, chromeInset: layout.chromeInsets.leading,
+                                   panelWidth: panelWidth, chromeInset: layout.chromeInsets.leading,
                                    showsFormat: showsFormatButton),
-                               reviewBarMaxWidth: reviewBarRoom)
+                               reviewBarMaxWidth: reviewBarRoom(panelWidth: panelWidth))
                     .noteFormatRowLeaving(.status)
                     .accessibilitySortPriority(2)
                     .transition(.opacity)

@@ -1179,7 +1179,10 @@ private struct PanelIslandKeyed<Content: View>: View {
     var body: some View {
         PanelIslandRoot(settings: settings, isPanelKey: false, content: content)
             .environment(\.atticPanelSurfaceSize, panelSize)
-            .onReceive(uiState.$panelSize.removeDuplicates()) { if panelSize != $0 { panelSize = $0 } }
+            // Another window: it cannot take the panel's size from its
+            // own layout, so it is sent each accepted size.
+            .onAppear { if panelSize != uiState.panelSize { panelSize = uiState.panelSize } }
+            .onReceive(uiState.panelSizeChanges) { if panelSize != $0 { panelSize = $0 } }
     }
 }
 

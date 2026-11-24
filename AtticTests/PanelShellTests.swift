@@ -840,14 +840,19 @@ extension PanelShellTests {
     /// that width; at and under it nothing changes.
     func testU42AWidePanelKeepsAReadingColumn() {
         let narrow = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 320, height: 520))
-        XCTAssertEqual(narrow.readingColumn(), narrow)
+        XCTAssertEqual(narrow.readingColumn(panelWidth: 320), narrow)
         let wide = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 1700, height: 520))
-        let column = wide.readingColumn()
+        let column = wide.readingColumn(panelWidth: 1700)
         let extra = (1700 - PanelPageLayout.readingWidth) / 2
         XCTAssertEqual(column.chromeInsets.leading, wide.chromeInsets.leading + extra, accuracy: 0.5)
         XCTAssertEqual(column.chromeInsets.trailing, wide.chromeInsets.trailing + extra, accuracy: 0.5)
         XCTAssertEqual(column.contentInsets.leading, wide.contentInsets.leading + extra, accuracy: 0.5)
         XCTAssertEqual(column.chromeInsets.top, wide.chromeInsets.top, "the header row keeps its place")
-        XCTAssertEqual(column.panelSize, wide.panelSize)
+        // The layout carries no size (the frame lays the page out): the
+        // column changes the side insets and nothing else.
+        XCTAssertEqual(column.cornerSize, wide.cornerSize)
+        XCTAssertEqual(column.contentInsets.top, wide.contentInsets.top)
+        XCTAssertEqual(column.contentInsets.bottom, wide.contentInsets.bottom)
+        XCTAssertEqual(column.chromeInsets.bottom, wide.chromeInsets.bottom)
     }
 }

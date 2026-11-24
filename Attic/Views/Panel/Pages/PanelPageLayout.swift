@@ -6,8 +6,6 @@ import SwiftUI
 struct PanelPageLayout: Equatable {
     /// The panel's corner size (its continuous corner radius).
     var cornerSize: CGFloat
-    /// The visible panel surface, without the elevation margin.
-    var panelSize: CGSize
     /// Corner-aware insets for page content.
     var contentInsets: EdgeInsets
     /// Corner-aware insets for floating controls (header, bottom bars).
@@ -35,9 +33,11 @@ struct PanelPageLayout: Equatable {
 
     /// This layout with its content and floating controls held to a
     /// centred column at most `maxWidth` wide (the panel's own insets
-    /// included).
-    func readingColumn(maxWidth: CGFloat = PanelPageLayout.readingWidth) -> PanelPageLayout {
-        let extra = max(0, (panelSize.width - maxWidth) / 2).rounded(.down)
+    /// included), in a panel `panelWidth` wide. The layout carries no size
+    /// (a size is a layout input, read where it is laid out:
+    /// `PanelReadingColumn`), so the caller passes the width.
+    func readingColumn(panelWidth: CGFloat, maxWidth: CGFloat = PanelPageLayout.readingWidth) -> PanelPageLayout {
+        let extra = max(0, (panelWidth - maxWidth) / 2).rounded(.down)
         guard extra > 0 else { return self }
         var column = self
         column.contentInsets.leading += extra
@@ -47,11 +47,47 @@ struct PanelPageLayout: Equatable {
         return column
     }
 
+    /// The layout of a panel `panelSize` big. The size itself is not kept:
+    /// only what the insets take from it (`PanelGeometry.cornerRoom`).
     init(cornerSize: CGFloat, panelSize: CGSize) {
+        self.init(cornerSize: cornerSize, cornerRoom: PanelGeometry.cornerRoom(for: panelSize))
+    }
+
+    init(cornerSize: CGFloat, cornerRoom: CGFloat) {
         self.cornerSize = cornerSize
-        self.panelSize = panelSize
-        contentInsets = PanelGeometry.contentInsets(cornerSize: cornerSize, panelSize: panelSize)
-        chromeInsets = PanelGeometry.chromeInsets(cornerSize: cornerSize, panelSize: panelSize)
+        contentInsets = PanelGeometry.contentInsets(cornerSize: cornerSize, cornerRoom: cornerRoom)
+        chromeInsets = PanelGeometry.chromeInsets(cornerSize: cornerSize, cornerRoom: cornerRoom)
+    }
+}
+
+/// Reads the panel's width where a view is laid out, in the same pass as
+/// the window's frame: the bounds of the panel's coordinate space, or, for
+/// a page hosted bare (no shell around it), the reader's own width plus
+/// `bareOutset`. The content is centred in the reader, as a frame would.
+struct PanelWidthReader<Content: View>: View {
+    var bareOutset: CGFloat = 0
+    @ViewBuilder var content: (CGFloat) -> Content
+
+    var body: some View {
+        GeometryReader { proxy in
+            content(proxy.bounds(of: PanelPageLayout.coordinateSpace)?.width ?? proxy.size.width + bareOutset)
+                .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+}
+
+/// A page held to the reading column (U-42). The column is worked out
+/// where the page is laid out, so a narrower panel hands the page one
+/// unchanging layout while it is resized.
+struct PanelReadingColumn<Content: View>: View {
+    let layout: PanelPageLayout
+    @ViewBuilder var content: (PanelPageLayout) -> Content
+
+    var body: some View {
+        GeometryReader { proxy in
+            content(layout.readingColumn(panelWidth: proxy.size.width))
+                .frame(width: proxy.size.width, height: proxy.size.height)
+        }
     }
 }
 

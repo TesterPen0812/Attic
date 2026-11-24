@@ -141,7 +141,7 @@ final class AdaptiveFindTests: XCTestCase {
             XCTAssertTrue(engine.find.isShown)
             XCTAssertTrue(engine.find.shownInTopRow, "on the Notes page Find takes the top row")
             let field = try XCTUnwrap(frame(of: "note-find-bar", in: host), "Find's field")
-            let expected = PanelTopRowLayout.fieldFrame(layout)
+            let expected = PanelTopRowLayout.fieldFrame(layout, panelWidth: host.bounds.width)
             XCTAssertEqual(field.minX, expected.minX, accuracy: 1, "the field fills the row")
             XCTAssertEqual(field.maxX, expected.maxX, accuracy: 1)
             XCTAssertEqual(field.minY, expected.minY, accuracy: 1)

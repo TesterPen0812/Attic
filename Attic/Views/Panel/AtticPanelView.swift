@@ -8,6 +8,8 @@ import SwiftData
     static var shell: (() -> Void)?
     static var tasksHost: (() -> Void)?
     static var notesHost: (() -> Void)?
+    /// A size-derived value was published (the corner room, the settled size).
+    static var publishedSize: (() -> Void)?
     static var relevantSettings: (() -> Void)?
 }
 #endif
@@ -69,8 +71,9 @@ private final class PanelRelevantUIStateObserver: ObservableObject {
         }
         Publishers.MergeMany([
             changed(uiState.$selectedSection),
-            changed(uiState.$panelSize),
-            changed(uiState.$retainedPageSizeDuringLiveResize),
+            // The size itself is not shell state: the window's frame lays
+            // the pages out. Only what the insets take from it is.
+            changed(uiState.$panelCornerRoom),
             changed(uiState.$isPageContentLoaded),
             changed(uiState.$builtPages),
             changed(uiState.$pagesElsewhere),
@@ -162,9 +165,8 @@ struct AtticPanelView: View {
     }
 
     private var cornerRadius: CGFloat { settings.panelCornerSize }
-    private var panelSize: CGSize { uiState.panelSize }
     private var pageLayout: PanelPageLayout {
-        PanelPageLayout(cornerSize: cornerRadius, panelSize: panelSize)
+        PanelPageLayout(cornerSize: cornerRadius, cornerRoom: uiState.panelCornerRoom)
     }
     private var chromeInsets: EdgeInsets { pageLayout.chromeInsets }
     private var currentPage: PanelPage { PanelPage(uiState.selectedSection) }
@@ -213,21 +215,12 @@ struct AtticPanelView: View {
                 ForEach(PanelPage.allCases) { page in
                     if page == currentPage
                         || (uiState.builtPages.contains(page) && !uiState.pagesElsewhere.contains(page)) {
-                        let frozenSize = page == currentPage ? nil : uiState.retainedPageSizeDuringLiveResize
-                        let layout = frozenSize.map { PanelPageLayout(cornerSize: cornerRadius, panelSize: $0) }
-                            ?? pageLayout
+                        // Every page takes the same layout: it carries
+                        // no size, so a resize hands no page a new value.
+                        let layout = pageLayout
                         pageHost(page, layout: layout)
-                            // A fully invisible page has no reason to measure
-                            // again at each intermediate window size. Its
-                            // retained native editors and state stay mounted.
-                            .frame(width: frozenSize?.width, height: frozenSize?.height,
-                                   alignment: .topLeading)
-                            // A shrinking panel must not inherit the larger
-                            // retained page's ideal size: that would shift
-                            // the current page inside the ZStack.
-                            .frame(width: frozenSize == nil ? nil : panelSize.width,
-                                   height: frozenSize == nil ? nil : panelSize.height,
-                                   alignment: .topLeading)
+                            // A hidden page keeps the size outside the drag.
+                            .modifier(PanelKeptPageFrame(isCurrent: page == currentPage, settled: uiState.settledPanelSize))
                             .onAppear {
                                 PerformanceSignposts.noteInput("page-mounted \(page.rawValue)")
                             }
@@ -235,12 +228,12 @@ struct AtticPanelView: View {
                                 if shown { PerformanceSignposts.noteInput("page-current \(page.rawValue)") }
                             }
                             .modifier(PanelSearchDismissOnEmptyClick(state: topRowState, page: page))
-                            .modifier(PanelPageVisibility(
+                            .modifier(PanelKeptPageVisibility(
                                 isCurrent: page == currentPage,
                                 // A page kept built rests on its side of the
                                 // current one, so it moves in from there.
-                                restingOffset: pageMotion.restingOffset(side: page.side(from: currentPage),
-                                                                        width: layout.panelSize.width),
+                                side: page.side(from: currentPage),
+                                settled: uiState.settledPanelSize,
                                 motion: pageMotion,
                                 // Canvas and Notes have page-local shortcuts;
                                 // hidden, they must not fire. Tasks has none
@@ -854,8 +847,8 @@ struct AtticPanelView: View {
     /// scale: they hold AppKit scroll views, which a SwiftUI scale would
     /// not carry (`AtticMotionPreset.scaleWeight`); an offset moves them.
     private func pageTransition(_ page: PanelPage) -> AnyTransition {
-        .modifier(active: PanelPageTravel(page: page, uiState: uiState, width: panelSize.width, isAway: true),
-                  identity: PanelPageTravel(page: page, uiState: uiState, width: panelSize.width, isAway: false))
+        .modifier(active: PanelPageTravel(page: page, uiState: uiState, isAway: true),
+                  identity: PanelPageTravel(page: page, uiState: uiState, isAway: false))
     }
 
     /// Pages with their own bottom controls (the Tasks add bar) report their
@@ -1088,6 +1081,43 @@ struct PanelPageVisibility: ViewModifier {
     }
 }
 
+/// The frame of a page the shell keeps built. Shown, it takes what layout
+/// proposes: the window's size, in the pass that lays the window out.
+/// Hidden, it keeps the settled size (the size outside a resize drag), so
+/// an invisible page does not measure again at each step of a drag; its
+/// native editors and state stay mounted, and it catches up on release.
+/// It observes the settled size itself, so a settle never runs the shell.
+struct PanelKeptPageFrame: ViewModifier {
+    let isCurrent: Bool
+    @ObservedObject var settled: PanelSettledSize
+
+    func body(content: Content) -> some View {
+        content
+            .frame(width: isCurrent ? nil : settled.value.width, height: isCurrent ? nil : settled.value.height,
+                   alignment: .topLeading)
+            // Takes its proposal whatever the page inside asks for: a
+            // shrinking panel must not inherit a larger kept page's size,
+            // which would shift the current page inside the ZStack.
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// `PanelPageVisibility` for a page the shell keeps built: hidden, it rests
+/// a whole settled panel width to its side.
+struct PanelKeptPageVisibility: ViewModifier {
+    let isCurrent: Bool
+    let side: CGFloat
+    @ObservedObject var settled: PanelSettledSize
+    let motion: PanelPageMotion
+    let disablesWhenHidden: Bool
+
+    func body(content: Content) -> some View {
+        content.modifier(PanelPageVisibility(isCurrent: isCurrent,
+                                             restingOffset: motion.restingOffset(side: side, width: settled.value.width),
+                                             motion: motion, disablesWhenHidden: disablesWhenHidden))
+    }
+}
+
 /// A page coming in or going out with a switch: away, it rests on its side
 /// of the switch's other page (`PanelPageSwitch.restingSide`), transparent.
 /// It holds the shell's state without observing it and reads the switch
@@ -1096,12 +1126,13 @@ struct PanelPageVisibility: ViewModifier {
 private struct PanelPageTravel: ViewModifier {
     let page: PanelPage
     let uiState: PanelUIState
-    let width: CGFloat
     let isAway: Bool
 
     func body(content: Content) -> some View {
         let motion = uiState.lastPageSwitch?.motion ?? .instant
-        let travel = isAway ? motion.restingOffset(side: uiState.lastPageSwitch?.restingSide(of: page) ?? 0, width: width) : 0
+        // The panel's width when the switch is applied, as the switch is.
+        let travel = isAway ? motion.restingOffset(side: uiState.lastPageSwitch?.restingSide(of: page) ?? 0,
+                                                   width: uiState.panelSize.width) : 0
         // Away is outside the glass (a whole width over): the page is drawn
         // whole all the way, as a kept page is.
         content
