@@ -875,19 +875,20 @@ extension TasksRound13Tests {
     func testDiagnosticTheFirstClickOnAListWithoutTheKeyboard() throws {
         try requireKeyWindowTests()
         defer { TasksListTargetDiagnostics.behindRows = false; TasksListTargetDiagnostics.contentIgnoresHold = false }
-        for (behind, ignores) in [(false, false), (false, true), (true, false), (true, true)] {
+        for row in [0, 3] { for (behind, ignores) in [(false, false), (false, true), (true, false), (true, true)] {
             TasksListTargetDiagnostics.behindRows = behind
             TasksListTargetDiagnostics.contentIgnoresHold = ignores
             let hosted = try longHosted()
             defer { hosted.close() }
             let ids = hosted.model.rows(for: .now).map(\.id)
             TasksPageRenderProbe.listFocusReports = []
-            try clickRow(hosted, ids[3])
+            let frame = hosted.pointer.frame(for: TasksRowID(tab: .now, id: ids[row])).flatMap { frame in hosted.pointer.view.map { $0.convert(frame, to: nil) } }
+            try clickRow(hosted, ids[row])
             let click = "cursor=\(index(hosted, ids, hosted.model.keyboardFocus?.id).map(String.init) ?? "nil") selection=\(selected(hosted, ids)) reports=\(TasksPageRenderProbe.listFocusReports) inList=\(keyboardIsInNowList(hosted))"
             hosted.press("\u{F701}", keyCode: 125)
-            print("LIST_FOCUS firstclick behind=\(behind) ignoresHold=\(ignores) click: \(click) down: cursor=\(index(hosted, ids, hosted.model.keyboardFocus?.id).map(String.init) ?? "nil") "
+            print("LIST_FOCUS firstclick row=\(row) frame=\(frame.map { "\($0)" } ?? "nil") behind=\(behind) ignoresHold=\(ignores) click: \(click) down: cursor=\(index(hosted, ids, hosted.model.keyboardFocus?.id).map(String.init) ?? "nil") "
                   + "selection=\(selected(hosted, ids)) reports=\(TasksPageRenderProbe.listFocusReports) inList=\(keyboardIsInNowList(hosted))")
-        }
+        } }
     }
 
     /// Range selection: ⇧-click grows from the clicked row, and ⇧↓ then
