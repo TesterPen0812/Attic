@@ -297,6 +297,8 @@ struct TasksPage: View {
         // The box, not the page: a closure that captures only the box is the
         // same value on every pass, so the modifier writes no new environment
         // below it and every view down to the tabs' hosts keeps its own.
+        // Capture exactly one reference: a second capture makes the closure
+        // a new value again (TasksPageKeyHandlerTests counts it).
         .onKeyPress(phases: .down) { [keyHandler] press in keyHandler.press(press) }
         .onAppear { pageAppeared() }
         .onDisappear {
@@ -305,6 +307,9 @@ struct TasksPage: View {
             #endif
             cancelTransientState()
             eventMonitors.stop()
+            // The handler holds a copy of the page, which holds the box's
+            // state: let it go, as the monitors do (TasksPageEventMonitors).
+            keyHandler.handle = nil
         }
         // The page's own view, so a press is placed from its event (its
         // window, its location), never from a remembered hover point.
@@ -356,6 +361,8 @@ struct TasksPage: View {
     }
 
     private func pageAppeared() {
+        // Back after leaving: the box takes this page again before any key.
+        keyHandler.handle = { press in pageKey(press) }
         // Row frames are measured relative to the moving page. Convert to
         // TasksPage.space only when an interaction needs a frame.
         pointer.pageOffset = { [weak motion = swipe.motion, weak swipe] tab in
