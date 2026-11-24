@@ -61,6 +61,8 @@ struct TasksPage: View {
     /// a focus state does not reach views in another hosting view. The page
     /// reaches them through this link, and hears their changes from it.
     @State private var rowFocus = TasksRowFocusLink()
+    /// The page's key handler, in a box the page keeps (`TasksPageKeyHandler`).
+    @State private var keyHandler = TasksPageKeyHandler()
     /// The row that has the keyboard: the tab shown's first, then any
     /// other's (one value, as when one focus state served every tab).
     /// Setting a row gives it the keyboard on its own tab and takes it from
@@ -202,6 +204,9 @@ struct TasksPage: View {
         #endif
         // The link writes only the tab in use (§5.1, KB-CLAIM-RACE).
         let _ = rowFocus.tabInUse = { [model] in model.tab }
+        // Every pass hands the box this pass's page, so a key never acts on
+        // an older one.
+        let _ = keyHandler.handle = { press in pageKey(press) }
         // In three parts (round 10: one chain was too long for the
         // compiler to type-check in time on CI).
         observingModel(observingEdits(frame))
@@ -289,7 +294,10 @@ struct TasksPage: View {
         // so it runs only when the environment it is given changes.
         .transformEnvironment(\.self) { _ in TasksPageRenderProbe.environmentsBelowKeys += 1 }
         #endif
-        .onKeyPress(phases: .down) { press in pageKey(press) }
+        // The box, not the page: a closure that captures only the box is the
+        // same value on every pass, so the modifier writes no new environment
+        // below it and every view down to the tabs' hosts keeps its own.
+        .onKeyPress(phases: .down) { [keyHandler] press in keyHandler.press(press) }
         .onAppear { pageAppeared() }
         .onDisappear {
             cancelTransientState()
@@ -6101,6 +6109,20 @@ private struct TasksSubtaskDraftView<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View { content() }
+}
+
+/// The Tasks page's key handler, held in a box the page keeps. A handler
+/// closure that captured the page itself was a new value on every body
+/// pass, and `.onKeyPress` then wrote a new environment below it each time:
+/// same contents, new storage, so every view down to the tabs' kept hosts
+/// took it as a change (board SPEED-KEPTHOST-ENV-REROOT; the lead, LOG
+/// 24 Nov 06:36). The page hands the box its current handler on every pass.
+@MainActor final class TasksPageKeyHandler {
+    var handle: ((KeyPress) -> KeyPress.Result)?
+
+    func press(_ press: KeyPress) -> KeyPress.Result {
+        handle?(press) ?? .ignored
+    }
 }
 
 #if DEBUG
