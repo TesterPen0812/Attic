@@ -1186,9 +1186,10 @@ final class HiddenPagesCountersTests: XCTestCase {
             // MOVE click.
             var writes = link.focusWrites
             var environments = TasksPageRenderProbe.environmentsBelowKeys
+            var tabEnvironments = TasksPageRenderProbe.environmentsBelowTabKeys
             try rowClick(rig, ids[4])
             let move = takePhaseChecks()
-            print("LIST_FOCUS env move-click page=\(TasksPageRenderProbe.environmentsBelowKeys - environments)")
+            print("LIST_FOCUS env move-click page=\(TasksPageRenderProbe.environmentsBelowKeys - environments) tab=\(TasksPageRenderProbe.environmentsBelowTabKeys - tabEnvironments)")
             XCTAssertEqual(rig.page.selection, [ids[4]], "the click selected row 4")
             XCTAssertEqual(rig.page.keyboardFocus?.id, ids[4], "the click gave row 4 the cursor")
             XCTAssertTrue(rig.panel.firstResponder === responder, "the first responder changed on a row click")
@@ -1216,9 +1217,10 @@ final class HiddenPagesCountersTests: XCTestCase {
             for key in keys {
                 writes = link.focusWrites
                 environments = TasksPageRenderProbe.environmentsBelowKeys
+                tabEnvironments = TasksPageRenderProbe.environmentsBelowTabKeys
                 try rowKey(rig, key.code, key.characters, key.modifiers)
                 pump(rig.content, rig.panel)
-                print("LIST_FOCUS env \(key.name) page=\(TasksPageRenderProbe.environmentsBelowKeys - environments)")
+                print("LIST_FOCUS env \(key.name) page=\(TasksPageRenderProbe.environmentsBelowKeys - environments) tab=\(TasksPageRenderProbe.environmentsBelowTabKeys - tabEnvironments)")
                 let checks = takePhaseChecks()
                 let row = ids[key.row]
                 XCTAssertEqual(rig.page.keyboardFocus?.id, row, "\(key.name): the cursor is not on row \(key.row)")
