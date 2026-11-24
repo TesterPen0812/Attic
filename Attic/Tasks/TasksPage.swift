@@ -336,9 +336,6 @@ struct TasksPage: View {
     /// A tab's list target gained or lost the keyboard (each tab's owner
     /// reports it).
     private func listFocusChanged(_ tab: TasksTab, holds: Bool) {
-        #if DEBUG
-        TasksPageRenderProbe.listFocusReports.append("\(tab.rawValue):\(holds)")
-        #endif
         // A list target gaining the keyboard writes no cursor: the input
         // that moves the cursor writes it (a press, a key, Tab). Least of
         // all on a tab that is not shown: a title editor that resigns
@@ -368,11 +365,7 @@ struct TasksPage: View {
         }
         // A keyboard move brings its row into view (the list's own reveal
         // read the row's focus before; the cursor is no focus state).
-        var reveals = true
-        #if DEBUG
-        reveals = !TasksPageRenderProbe.skipsCursorReveal
-        #endif
-        if reveals, let focus, keyboardDriving, focus.page == model.tab.rawValue, model.tab != .done,
+        if let focus, keyboardDriving, focus.page == model.tab.rawValue, model.tab != .done,
            let proxy = listProxies.lists[model.tab] {
             let travel = design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.settle.animation(reduceMotion: false)
             revealRow(focus.id, in: model.tab, proxy: proxy, glides: travel != nil)
@@ -4124,25 +4117,7 @@ struct TasksRowFocusOwner<Content: View>: View {
 
     var body: some View {
         let _ = link.set($listFocused, host: host, for: tab)
-        #if DEBUG
-        if TasksListTargetDiagnostics.behindRows {
-            content(listFocused)
-                .background {
-                    Color.clear
-                        .allowsHitTesting(false)
-                        .focusable()
-                        .focusEffectDisabled()
-                        .focused($listFocused)
-                }
-                .onChange(of: listFocused) { _, holds in
-                    if link.reports(holds, from: tab) { changed(holds) }
-                }
-        } else {
-            onContent
-        }
-        #else
         onContent
-        #endif
     }
 
     private var onContent: some View {
@@ -4156,16 +4131,6 @@ struct TasksRowFocusOwner<Content: View>: View {
     }
 }
 
-#if DEBUG
-/// Diagnostics only (list-owned focus, the first click on a list that does
-/// not hold the keyboard): where the list target sits, and whether the
-/// content redraws when the target gains or loses the keyboard.
-enum TasksListTargetDiagnostics {
-    nonisolated(unsafe) static var behindRows = false
-    nonisolated(unsafe) static var contentIgnoresHold = false
-}
-#endif
-
 /// The Tasks page's content under its focus owner: equal (not redrawn)
 /// while the page's body has not run again and the list target's hold is
 /// the same. The rows draw the cursor from their row states.
@@ -4177,10 +4142,7 @@ struct TasksPageFocusedContent<Content: View>: View, Equatable {
     var body: some View { content() }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        #if DEBUG
-        if TasksListTargetDiagnostics.contentIgnoresHold { return lhs.generation == rhs.generation }
-        #endif
-        return lhs.generation == rhs.generation && lhs.listFocused == rhs.listFocused
+        lhs.generation == rhs.generation && lhs.listFocused == rhs.listFocused
     }
 }
 
@@ -6287,11 +6249,6 @@ private struct TasksSubtaskDraftView<Content: View>: View {
     static var environmentsBelowTabKeys = 0
     /// Keys that reached `pageKey`, and the page's `onDisappear` runs.
     static var pageKeys = 0
-    /// Each list target's reported gain or loss of the keyboard, in order
-    /// ("now:true"), for the list-owned focus diagnostics.
-    static var listFocusReports: [String] = []
-    /// Diagnostics only: the cursor move skips its reveal.
-    static var skipsCursorReveal = false
     static var disappearances = 0
     /// What the page's handler answered the last key.
     static var lastKeyResult: KeyPress.Result?
