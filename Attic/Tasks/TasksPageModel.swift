@@ -339,7 +339,12 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
             #endif
         }
     }
-    @StoredThenSent private(set) var selection: Set<UUID> = [] {
+    /// Stored only when it changes (`skipsEqual`): ↓ held at the last row,
+    /// ⇧↓ at the edge, a click on the selected row or on empty space with
+    /// nothing selected store the selection it already is, and a send would
+    /// run the page's body and re-check every drawn cell for no change
+    /// (SPEED-SELECTION-SETTER-SENDS-UNCHANGED).
+    @StoredThenSent(skipsEqual: true) private(set) var selection: Set<UUID> = [] {
         // Before the store: a body run inside the send reads the revision
         // that goes with the selection it reads.
         willSet { if newValue != selection { selectionRevision += 1 } }
@@ -2533,10 +2538,8 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
 
     /// A click: ⌘ toggles, ⇧ extends from the last clicked row, otherwise
     /// the row alone is selected. A click that leaves the selection as it
-    /// is (the row is already the whole selection, or a ⇧-click draws the
-    /// range already selected) stores nothing: every store of `selection`
-    /// sends, and a send runs the page's body and re-checks every drawn
-    /// cell for no change (STAY-CLICK). The anchor still moves.
+    /// is sends nothing (`selection` skips an equal store); the anchor
+    /// still moves.
     func click(_ id: UUID, modifiers: NSEvent.ModifierFlags, visible: [UUID]) {
         if modifiers.contains(.command) {
             if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
@@ -2544,9 +2547,9 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         } else if modifiers.contains(.shift), let anchor = selectionAnchor,
                   let from = visible.firstIndex(of: anchor), let to = visible.firstIndex(of: id) {
             let range = Set(visible[min(from, to)...max(from, to)])
-            if range != selection { selection = range }
+            selection = range
         } else {
-            if selection != [id] { selection = [id] }
+            selection = [id]
             selectionAnchor = id
         }
     }
@@ -4205,7 +4208,10 @@ extension TasksPageModel {
 /// (the page's, a tab's list) read the old value and was marked clean, and
 /// nothing sent again (a released row stayed held: item 4). Here the value
 /// is stored, then `objectWillChange` is sent, then the projected
-/// publisher. Every set is sent, as `@Published` does. Observers run after
+/// publisher. Every set is sent, as `@Published` does, unless the value was
+/// declared `skipsEqual: true`: then a set equal to the stored value stores
+/// and sends nothing (only for a value no reader needs re-sent; a request
+/// stored again may be a deliberate re-fire). Observers run after
 /// the send: whatever a body reads that a `didSet` would change belongs in
 /// `willSet` (as `selection`'s revision). A class that declares its own
 /// `objectWillChange` (as `TasksPageModel` does) gets nothing from
@@ -4231,15 +4237,25 @@ struct StoredThenSent<Value> {
     /// A value the owner's row lists are built from (`listInput: true`):
     /// stored, then the owner's dependents catch up, then sent.
     private let listInput: Bool
+    /// `skipsEqual: true`: a set equal to the stored value is dropped.
+    private let isUnchanged: ((Value, Value) -> Bool)?
 
     init(wrappedValue: Value) {
         box = Box(wrappedValue)
         listInput = false
+        isUnchanged = nil
     }
 
     init(wrappedValue: Value, listInput: Bool) {
         box = Box(wrappedValue)
         self.listInput = listInput
+        isUnchanged = nil
+    }
+
+    init(wrappedValue: Value, skipsEqual: Bool) where Value: Equatable {
+        box = Box(wrappedValue)
+        listInput = false
+        isUnchanged = skipsEqual ? { $0 == $1 } : nil
     }
 
     @available(*, unavailable, message: "@StoredThenSent is for ObservableObject classes only")
@@ -4264,6 +4280,7 @@ struct StoredThenSent<Value> {
         set {
             let wrapper = owner[keyPath: storage]
             let box = wrapper.box
+            if let isUnchanged = wrapper.isUnchanged, isUnchanged(box.value, newValue) { return }
             box.value = newValue
             // A send can flush a graph whose bodies read the new value's
             // lists (TAB-STALL): they are brought up before it.

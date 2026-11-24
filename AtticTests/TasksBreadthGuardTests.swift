@@ -299,6 +299,86 @@ final class TasksBreadthGuardTests: XCTestCase {
         XCTAssertEqual(sameRange.page, 0, "⇧-click again: an unchanged range ran TasksPage.body")
     }
 
+    // MARK: - An unchanged selection stores nothing (SPEED-SELECTION-SETTER-SENDS-UNCHANGED, 23 Nov)
+
+    /// Every writer of `selection` that stores the value it already holds
+    /// sends nothing: ↓ or ↑ held at the last or first row (`selectOnly`
+    /// again), ⇧↓ or ⇧↑ at the edge (`extendSelection` to the same range),
+    /// a click on empty space with nothing selected (`clearSelection`). The
+    /// trunk sent on each, which ran `TasksPage.body` and re-checked every
+    /// drawn cell for no change. A real change still sends once and runs
+    /// the page. Only `selection` skips: an equal store to another published
+    /// value (a request) still sends.
+    func testAnUnchangedSelectionStoreSendsNothingWhileARealChangeSendsOnce() throws {
+        let store = try makeStore(open: 12)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let pointer = TasksPointer()
+        let hosting = page(model, store, pointer: pointer)
+        let ids = model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(drawnRows(pointer, ids).count, 6, "the hosted page drew too few rows for the count to mean anything")
+        var sends = 0
+        let sink = model.objectWillChange.sink { _ in sends += 1 }
+        defer { sink.cancel() }
+        func turn(_ name: String, _ action: () -> Void) -> (sends: Int, page: Int, cells: Int) {
+            let sent = sends, pageRuns = TasksPageRenderProbe.bodyRuns, cells = TasksCellBodyCounts.evaluations
+            action()
+            settle(hosting)
+            settle(hosting)
+            let ran = TasksCellBodyCounts.evaluations.reduce(0) { $0 + max(0, $1.value - cells[$1.key, default: 0]) }
+            let result = (sends - sent, TasksPageRenderProbe.bodyRuns - pageRuns, ran)
+            print("SELECTION_STORE \(name) sends=\(result.0) page=\(result.1) cells=\(result.2)")
+            return result
+        }
+        func changed(_ result: (sends: Int, page: Int, cells: Int), _ name: String,
+                     file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertEqual(result.sends, 1, "\(name): a real change sends once", file: file, line: line)
+            XCTAssertGreaterThan(result.page, 0, "\(name): a real change runs the page", file: file, line: line)
+        }
+        func unchanged(_ result: (sends: Int, page: Int, cells: Int), _ name: String,
+                       file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertEqual(result.sends, 0, "\(name): an unchanged selection sent objectWillChange", file: file, line: line)
+            XCTAssertEqual(result.page, 0, "\(name): an unchanged selection ran TasksPage.body", file: file, line: line)
+            XCTAssertEqual(result.cells, 0, "\(name): an unchanged selection ran cells", file: file, line: line)
+        }
+        let last = try XCTUnwrap(ids.last)
+
+        let control = turn("control") {}
+        XCTAssertEqual(control.sends, 0, "control: nothing sends with nothing stored")
+        XCTAssertEqual(control.page, 0, "control: no page body runs with nothing stored")
+
+        // ↓ to the last row, then ↓ held there (TasksPage's arrow keys).
+        changed(turn("select_last") { model.selectOnly(last) }, "select_last")
+        XCTAssertEqual(model.selection, [last])
+        unchanged(turn("select_last_again") { model.selectOnly(last) }, "select_last_again")
+        XCTAssertEqual(model.selection, [last], "↓ held at the last row: still the last row")
+        XCTAssertEqual(model.selectionAnchorForTesting, last)
+
+        // ⇧↓ at the last row with one row selected: the same one-row range.
+        unchanged(turn("extend_edge_one") { model.extendSelection(to: last, visible: ids, from: last) }, "extend_edge_one")
+        XCTAssertEqual(model.selection, [last])
+
+        // ⇧↑ twice grows the range, then ⇧↓ back to the edge and ⇧↓ again.
+        let above = ids[ids.count - 2], twoAbove = ids[ids.count - 3]
+        changed(turn("extend_up") { model.extendSelection(to: above, visible: ids, from: last) }, "extend_up")
+        changed(turn("extend_up_again") { model.extendSelection(to: twoAbove, visible: ids, from: above) }, "extend_up_again")
+        XCTAssertEqual(model.selection, Set(ids.suffix(3)))
+        unchanged(turn("extend_same_range") { model.extendSelection(to: twoAbove, visible: ids, from: twoAbove) },
+                  "extend_same_range")
+        XCTAssertEqual(model.selection, Set(ids.suffix(3)), "⇧ to the same row: the same range")
+
+        // A click on empty space: clears once, then clears nothing.
+        changed(turn("clear") { model.clearSelection() }, "clear")
+        XCTAssertEqual(model.selection, [])
+        unchanged(turn("clear_empty") { model.clearSelection() }, "clear_empty")
+        XCTAssertNil(model.selectionAnchorForTesting, "clear with nothing selected: no anchor")
+
+        // Only `selection` skips: another published value stored again
+        // (no next event, stored as no next event) still sends.
+        XCTAssertNil(model.nextEvent as TasksNextEvent?, "harness: no next event")
+        let other = turn("other_value_again") { model.nextEvent = nil }
+        XCTAssertEqual(other.sends, 1, "an equal store to another published value still sends")
+    }
+
     /// The same through real clicks in a key window (`rowClicked`: the
     /// click, then the page's focus): a second click on the row that is
     /// selected and holds the keyboard sends nothing and runs no page body
