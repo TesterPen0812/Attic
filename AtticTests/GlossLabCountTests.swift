@@ -1133,5 +1133,199 @@ final class GlossLabValuesTests: XCTestCase {
         let tall = CGRect(x: 0, y: -100, width: 1052, height: 2000)
         XCTAssertEqual(GlossSamples.raised(tall, into: visible), tall)
     }
+
+    /// The stack test (owner, 24 Nov: "Yes, Opus builds"): every value
+    /// starts where the brief says, loads, is written by Copy values in one
+    /// line, and no preset, All off or Reset sliders touches it.
+    func testStackTestValuesLoadCopyAndStayOutOfPresets() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertFalse(fresh.samplesStack); XCTAssertEqual(fresh.samplesStackVariant, 11)
+        XCTAssertEqual(fresh.samplesGround, .off); XCTAssertEqual(fresh.samplesGroundMaterial, .blur)
+        XCTAssertEqual(fresh.samplesGroundDim, 8); XCTAssertFalse(fresh.samplesStackTint)
+        XCTAssertEqual(fresh.samplesSubdued, 0); XCTAssertEqual(fresh.samplesAdaptive, 2)
+        XCTAssertFalse(fresh.samplesTintReduced); XCTAssertEqual(fresh.samplesSubvariant, "")
+        XCTAssertFalse(fresh.samplesStackKey)
+        let freshText = fresh.valuesText(app: Self.app(mode: "Light"))
+        XCTAssertTrue(freshText.contains("Stack test: off, variant 11, ground off (blur, dim 8 %), smoke 25 % as a veil, lensing 0, scrim 0, "
+            + "subdued 0, adaptive 2, reduced tint opacity off, subvariant not set, key window off"), freshText)
+        defaults.set(true, forKey: "GlossLab.samplesStack")
+        defaults.set(5.0, forKey: "GlossLab.samplesStackVariant")
+        defaults.set("below", forKey: "GlossLab.samplesGround")
+        defaults.set("clear", forKey: "GlossLab.samplesGroundMaterial")
+        defaults.set(20.0, forKey: "GlossLab.samplesGroundDim")
+        defaults.set(true, forKey: "GlossLab.samplesStackTint")
+        defaults.set(1.0, forKey: "GlossLab.samplesSubdued")
+        defaults.set(3.0, forKey: "GlossLab.samplesAdaptive")
+        defaults.set(true, forKey: "GlossLab.samplesTintReduced")
+        defaults.set("platter", forKey: "GlossLab.samplesSubvariant")
+        defaults.set(true, forKey: "GlossLab.samplesStackKey")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.samplesStack); XCTAssertEqual(lab.samplesStackVariant, 5)
+        XCTAssertEqual(lab.samplesGround, .below); XCTAssertEqual(lab.samplesGroundMaterial, .clear)
+        XCTAssertEqual(lab.samplesGroundDim, 20); XCTAssertTrue(lab.samplesStackTint)
+        XCTAssertEqual(lab.samplesSubdued, 1); XCTAssertEqual(lab.samplesAdaptive, 3)
+        XCTAssertTrue(lab.samplesTintReduced); XCTAssertEqual(lab.samplesSubvariant, "platter")
+        XCTAssertTrue(lab.samplesStackKey)
+        let text = lab.valuesText(app: Self.app(mode: "Light"))
+        XCTAssertTrue(text.contains("Stack test: on, variant 5, ground window below (clear glass, dim 20 %), smoke 25 % as the glass's tint, "
+            + "lensing 0, scrim 0, subdued 1, adaptive 3, reduced tint opacity on, subvariant \"platter\", key window on"), text)
+        XCTAssertFalse(lab.labLines.lowercased().contains("stack"), "the stack test is not a numbered idea")
+        lab.allOff(); lab.resetSliders()
+        let preset = try XCTUnwrap(GlossLab.presets.first { $0.id == "thickGlass" })
+        lab.apply(preset)
+        XCTAssertEqual(lab.stackLine, GlossLab(defaults: defaults).stackLine, "All off, Reset sliders or a preset moved a stack value")
+        lab.samplesGround = .same; lab.samplesGroundMaterial = .regular; lab.samplesGroundDim = 12
+        lab.samplesSubvariant = ""; lab.samplesStackKey = false; lab.samplesStackVariant = 19
+        XCTAssertEqual(lab.currentPreset?.id, "thickGlass", "a stack value broke the preset's match")
+        let again = GlossLab(defaults: defaults)
+        XCTAssertEqual(again.samplesGround, .same); XCTAssertEqual(again.samplesGroundMaterial, .regular)
+        XCTAssertEqual(again.samplesGroundDim, 12); XCTAssertEqual(again.samplesSubvariant, "")
+        XCTAssertFalse(again.samplesStackKey); XCTAssertEqual(again.samplesStackVariant, 19, "a change is kept")
+    }
+
+    /// The stack test's window: a column of two 138 x 62 capsules and a
+    /// 138 pt round square, 14 pt apart, 60 pt of room round them; the
+    /// ground 40 pt beyond the pieces. It replaces every card set.
+    func testStackTestWindowSize() {
+        XCTAssertEqual(GlossSamples.stackGroup, CGSize(width: 290, height: 138))
+        XCTAssertEqual(GlossSamples.stackWindowSize, CGSize(width: 410, height: 258))
+        XCTAssertEqual(GlossSamples.stackGroundRect, CGRect(x: 20, y: 20, width: 370, height: 218))
+        for light in [false, true] {
+            for system in [false, true] {
+                XCTAssertEqual(GlossSamples.windowSize(lightRow: light, systemVariants: system, stack: true), GlossSamples.stackWindowSize)
+                XCTAssertEqual(GlossSamples.windowSize(lightRow: light, systemVariants: system, stack: false),
+                               GlossSamples.windowSize(lightRow: light, systemVariants: system), "stack test off: the card sets as before")
+            }
+        }
+        // The ground window sits 20 pt in from every side of the cards window.
+        XCTAssertEqual(GlossSamples.stackGroundFrame(under: CGRect(x: 100, y: 200, width: 410, height: 258)),
+                       CGRect(x: 120, y: 220, width: 370, height: 218))
+    }
+
+    /// The Blur ground's mask: opaque in the middle, nothing at the rim,
+    /// and half way through its 30 pt fade about half.
+    func testStackGroundFadesTowardsItsRim() throws {
+        let size = GlossSamples.stackGroundRect.size
+        let mask = GlossSamples.fadeMask(size: size)
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
+                                                 bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                 colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        mask.draw(in: CGRect(origin: .zero, size: size))
+        NSGraphicsContext.restoreGraphicsState()
+        func alpha(_ x: Int, _ y: Int) -> CGFloat { rep.colorAt(x: x, y: y)?.alphaComponent ?? -1 }
+        let midY = Int(size.height / 2), midX = Int(size.width / 2)
+        XCTAssertEqual(alpha(midX, midY), 1, accuracy: 0.01, "the middle is all ground")
+        XCTAssertEqual(alpha(31, midY), 1, accuracy: 0.02, "the fade ends 30 pt in")
+        XCTAssertLessThan(alpha(0, midY), 0.05, "the rim has no ground")
+        XCTAssertEqual(alpha(15, midY), 0.5, accuracy: 0.1, "half way through the fade")
+        XCTAssertLessThan(alpha(2, 2), 0.01, "the corner is round")
+    }
+
+    /// The ground view: Blur is the public behind-window blur with the soft
+    /// mask; Regular and Clear glass are a round rectangle of 44 pt with no
+    /// blur shown; the dim is black at its strength.
+    func testStackGroundViewShowsTheChosenMaterial() throws {
+        let view = GlossStackGroundView(frame: CGRect(origin: .zero, size: GlossSamples.stackGroundRect.size))
+        view.configure(material: .blur, dim: 0.08)
+        view.layout()
+        let blur = try XCTUnwrap(view.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+        XCTAssertFalse(blur.isHidden); XCTAssertNotNil(blur.maskImage)
+        XCTAssertEqual(blur.blendingMode, .behindWindow); XCTAssertEqual(blur.state, .active)
+        XCTAssertEqual(blur.material, GlossStackGroundView.blurMaterial)
+        XCTAssertNil(view.subviews.first { $0 is NSGlassEffectView }, "no glass made for Blur")
+        XCTAssertNil(view.hitTest(CGPoint(x: 100, y: 100)), "the ground takes no clicks")
+        for (material, style) in [(GlossLab.StackGroundMaterial.regular, NSGlassEffectView.Style.regular), (.clear, .clear)] {
+            view.configure(material: material, dim: 0.2)
+            view.layout()
+            let glass = try XCTUnwrap(view.subviews.compactMap { $0 as? NSGlassEffectView }.first)
+            XCTAssertFalse(glass.isHidden); XCTAssertTrue(blur.isHidden)
+            XCTAssertEqual(glass.style, style); XCTAssertEqual(glass.cornerRadius, 44)
+            XCTAssertEqual(glass.frame, view.bounds)
+        }
+        XCTAssertEqual(view.dim, 0.2)
+    }
+
+    /// Each further hidden setting reaches the glass view and reads back
+    /// where this system has it; the subvariant clears when the field is
+    /// emptied; a plain view is left alone. `_tintOpacityReduced` is not
+    /// on 26.4.1 (seen on 27.0), so it is checked only where it answers.
+    func testStackPieceSettingsReachTheGlassView() {
+        let glass = NSGlassEffectView()
+        for key in [GlossSystemGlass.subduedKey, GlossSystemGlass.adaptiveKey, GlossSystemGlass.subvariantKey] {
+            XCTAssertTrue(GlossSystemGlass.answers(glass, key), "this system's glass view has no \(key)")
+        }
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.adaptiveKey, of: glass), 2, "the view's own adaptive value")
+        XCTAssertNil(GlossSystemGlass.subvariant(of: glass), "no subvariant to start with")
+        let tintAnswers = GlossSystemGlass.answers(glass, GlossSystemGlass.tintReducedKey)
+        let set = GlossSystemGlass.PieceSettings(variant: 5, lensing: 1, scrim: 1, subdued: 2, adaptive: 1, tintReduced: true,
+                                                 subvariant: "zzNotASubvariant")
+        GlossSystemGlass.apply(set, to: glass)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.variantKey, of: glass), 5)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.lensingKey, of: glass), 1)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.scrimKey, of: glass), 1)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.subduedKey, of: glass), 2)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.adaptiveKey, of: glass), 1)
+        XCTAssertEqual(GlossSystemGlass.subvariant(of: glass), "zzNotASubvariant", "a name the system does not know is kept, not refused")
+        XCTAssertEqual(GlossSystemGlass.flag(GlossSystemGlass.tintReducedKey, of: glass), tintAnswers ? true : nil)
+        GlossSystemGlass.apply(GlossSystemGlass.PieceSettings(), to: glass)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.variantKey, of: glass), 11)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.subduedKey, of: glass), 0)
+        XCTAssertEqual(GlossSystemGlass.value(GlossSystemGlass.adaptiveKey, of: glass), 2)
+        XCTAssertNil(GlossSystemGlass.subvariant(of: glass), "an empty field clears the subvariant")
+        XCTAssertEqual(GlossSystemGlass.flag(GlossSystemGlass.tintReducedKey, of: glass), tintAnswers ? false : nil)
+        let plain = NSView()
+        for key in [GlossSystemGlass.subduedKey, GlossSystemGlass.adaptiveKey, GlossSystemGlass.tintReducedKey, GlossSystemGlass.subvariantKey] {
+            XCTAssertFalse(GlossSystemGlass.answers(plain, key))
+        }
+        GlossSystemGlass.apply(set, to: plain) // no such settings: nothing happens
+        XCTAssertNil(GlossSystemGlass.subvariant(of: plain)); XCTAssertNil(GlossSystemGlass.flag(GlossSystemGlass.tintReducedKey, of: plain))
+    }
+
+    /// With the Key window switch off (or the stack test off) the cards
+    /// window cannot become key, exactly as before; only both on let it.
+    func testSamplesWindowTakesTheKeyboardOnlyWithTheKeySwitch() {
+        let window = GlossSamplesWindows.makeWindow()
+        XCTAssertFalse(window.canBecomeKey, "the cards window never takes the keyboard")
+        XCTAssertTrue(window.becomesKeyOnlyIfNeeded)
+        let lab = GlossLab(defaults: nil)
+        XCTAssertFalse(GlossSamplesWindows.keyAllowed(for: lab))
+        lab.samplesStackKey = true
+        XCTAssertFalse(GlossSamplesWindows.keyAllowed(for: lab), "the switch belongs to the stack test")
+        lab.samplesStack = true
+        XCTAssertTrue(GlossSamplesWindows.keyAllowed(for: lab))
+        lab.samplesStackKey = false
+        XCTAssertFalse(GlossSamplesWindows.keyAllowed(for: lab))
+        window.keyAllowed = true
+        XCTAssertTrue(window.canBecomeKey); XCTAssertFalse(window.becomesKeyOnlyIfNeeded)
+        window.keyAllowed = false
+        XCTAssertFalse(window.canBecomeKey, "off again: as before"); XCTAssertTrue(window.becomesKeyOnlyIfNeeded)
+    }
+
+    /// The ground's own window ("Window below"): clear, borderless, without
+    /// a shadow, taking no clicks and never key, the ground's size, and
+    /// wanted only in the stack test with that ground chosen.
+    func testStackGroundWindowIsClearAndTakesNoClicks() {
+        let ground = GlossSamplesWindows.makeGroundWindow()
+        XCTAssertFalse(ground.isVisible, "making the window showed it")
+        XCTAssertFalse(ground.isOpaque); XCTAssertEqual(ground.backgroundColor?.alphaComponent, 0)
+        XCTAssertFalse(ground.hasShadow); XCTAssertTrue(ground.ignoresMouseEvents)
+        XCTAssertFalse(ground.canBecomeKey)
+        XCTAssertEqual(ground.title, "Gloss samples ground")
+        XCTAssertEqual(ground.frame.size, GlossSamples.stackGroundRect.size)
+        XCTAssertTrue(ground.contentView is GlossStackGroundView)
+        let lab = GlossLab(defaults: nil)
+        for place in GlossLab.StackGround.allCases {
+            lab.samplesGround = place
+            lab.samplesStack = false
+            XCTAssertFalse(GlossSamplesWindows.groundWindowWanted(for: lab))
+            lab.samplesStack = true
+            XCTAssertEqual(GlossSamplesWindows.groundWindowWanted(for: lab), place == .below)
+        }
+    }
 }
 #endif

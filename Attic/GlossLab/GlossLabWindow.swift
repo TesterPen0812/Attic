@@ -207,6 +207,9 @@ struct GlossLabView: View {
                         Text("The glass the system keeps to itself: AppKit's glass view with its hidden variant number set, one number per card. Unsupported, for looking only. Lensing and Scrim are two more hidden settings, put on every card; 0 is what the system starts with.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Toggle("Stack test (in place of every card set)", isOn: $lab.samplesStack)
+                    if lab.samplesSystem || lab.samplesStack {
                         Stepper(value: $lab.samplesLensing, in: 0...3, step: 1) {
                             Text("Lensing \(Int(lab.samplesLensing.rounded()))")
                         }
@@ -214,6 +217,7 @@ struct GlossLabView: View {
                             Text("Scrim \(Int(lab.samplesScrim.rounded()))")
                         }
                     }
+                    if lab.samplesStack { stackControls }
                 }
 
                 section("Presets")
@@ -327,6 +331,38 @@ struct GlossLabView: View {
                     lab.edgeLight = on
                     if !on { lab.movingLight = false }
                 })
+    }
+
+    // MARK: Stack test
+
+    /// The stack test's controls, one per part of the stack.
+    @ViewBuilder private var stackControls: some View {
+        Text("Control Centre's three pieces, each AppKit's glass view with one hidden variant number. Each part of the stack is its own control: the ground under the pieces, the veil (smoke) on them, more hidden settings, and the key window. Unsupported settings, for looking only.")
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        Stepper(value: $lab.samplesStackVariant, in: 0...23, step: 1) {
+            Text("Variant \(Int(lab.samplesStackVariant.rounded()))")
+        }
+        Picker("Ground", selection: $lab.samplesGround) {
+            ForEach(GlossLab.StackGround.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        Picker("Ground material", selection: $lab.samplesGroundMaterial) {
+            ForEach(GlossLab.StackGroundMaterial.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        slider("Ground dim", $lab.samplesGroundDim, 0...30, unit: " %")
+        Toggle("Smoke as the glass's tint (the Veil above)", isOn: $lab.samplesStackTint)
+        Stepper(value: $lab.samplesSubdued, in: 0...3, step: 1) {
+            Text("Subdued \(Int(lab.samplesSubdued.rounded()))")
+        }
+        Stepper(value: $lab.samplesAdaptive, in: 0...3, step: 1) {
+            Text("Adaptive \(Int(lab.samplesAdaptive.rounded()))")
+        }
+        Toggle("Reduced tint opacity", isOn: $lab.samplesTintReduced)
+        TextField("Subvariant (empty: not set)", text: $lab.samplesSubvariant)
+            .textFieldStyle(.roundedBorder)
+        Toggle("Key window (the cards window may take the keyboard)", isOn: $lab.samplesStackKey)
     }
 
     // MARK: Presets
@@ -619,6 +655,73 @@ enum GlossSamples {
         return CGSize(width: windowSize.width, height: margin * 2 + card * rows + gap * (rows - 1))
     }
 
+    // The stack test (24 Nov): Control Centre's three pieces, a column of
+    // two capsules and a round square, with clear room round them where the
+    // ground lies.
+    static let stackCapsule = CGSize(width: 138, height: 62)
+    static let stackSquare: CGFloat = 138
+    static let stackSquareCorner: CGFloat = 30
+    static let stackGap: CGFloat = 14
+    static let stackRoom: CGFloat = 60
+    /// How far the ground reaches beyond the pieces, and the width of its
+    /// fade (Blur); a glass ground, which cannot be faded, is a round
+    /// rectangle of `stackGroundCorner`.
+    static let stackGroundReach: CGFloat = 40
+    static let stackGroundFade: CGFloat = 30
+    static let stackGroundCorner: CGFloat = 44
+
+    /// The three pieces together: 290 x 138.
+    static var stackGroup: CGSize {
+        CGSize(width: stackCapsule.width + stackGap + stackSquare,
+               height: max(stackCapsule.height * 2 + stackGap, stackSquare))
+    }
+
+    /// The window in stack test: the pieces with the clear room round
+    /// them, 410 x 258.
+    static var stackWindowSize: CGSize {
+        CGSize(width: stackGroup.width + stackRoom * 2, height: stackGroup.height + stackRoom * 2)
+    }
+
+    /// The ground in the window, from its top left corner: 40 pt beyond
+    /// the pieces on every side.
+    static var stackGroundRect: CGRect {
+        CGRect(x: stackRoom - stackGroundReach, y: stackRoom - stackGroundReach,
+               width: stackGroup.width + stackGroundReach * 2, height: stackGroup.height + stackGroundReach * 2)
+    }
+
+    /// The window's size for what it shows; the stack test, when on,
+    /// replaces every card set.
+    static func windowSize(lightRow: Bool, systemVariants: Bool, stack: Bool) -> CGSize {
+        stack ? stackWindowSize : windowSize(lightRow: lightRow, systemVariants: systemVariants)
+    }
+
+    /// The ground window's frame on screen for the cards window's `frame`.
+    static func stackGroundFrame(under frame: CGRect) -> CGRect {
+        let ground = stackGroundRect
+        return CGRect(x: frame.minX + ground.minX, y: frame.maxY - ground.maxY, width: ground.width, height: ground.height)
+    }
+
+    /// The ground's soft edge for Blur: opaque inside, fading to nothing
+    /// over `fade` towards the rim, its corners concentric round ones.
+    static func fadeMask(size: CGSize, fade: CGFloat = stackGroundFade, corner: CGFloat = stackGroundCorner) -> NSImage {
+        NSImage(size: size, flipped: false) { rect in
+            NSGraphicsContext.saveGraphicsState()
+            defer { NSGraphicsContext.restoreGraphicsState() }
+            NSColor.clear.setFill()
+            rect.fill(using: .copy)
+            NSGraphicsContext.current?.compositingOperation = .copy
+            let steps = max(Int(fade * 2), 1)
+            for step in 0...steps {
+                let inset = fade * CGFloat(step) / CGFloat(steps)
+                let t = inset / fade
+                NSColor(white: 0, alpha: t * t * (3 - 2 * t)).setFill()
+                let radius = max(corner - inset, 0)
+                NSBezierPath(roundedRect: rect.insetBy(dx: inset, dy: inset), xRadius: radius, yRadius: radius).fill()
+            }
+            return true
+        }
+    }
+
     /// `frame` moved up or down by the least that brings it wholly inside
     /// `visible`, when it is no taller than `visible`; left alone if it is.
     /// For the moment the window grows or shrinks: a set that is taller
@@ -721,6 +824,57 @@ enum GlossSystemGlass {
             view.setValue(NSNumber(value: wanted), forKey: key)
         }
     }
+
+    // The stack test's further hidden settings (24 Nov). On 26.4.1 the
+    // glass view answers to `_subduedState`, `_adaptiveAppearance` (2 to
+    // start with) and `_subvariant` (a string, nil to start with), but not
+    // to `_tintOpacityReduced`, which was seen on 27.0; a system without
+    // one leaves the pieces as they are.
+    static let subduedKey = "_subduedState"
+    static let adaptiveKey = "_adaptiveAppearance"
+    static let tintReducedKey = "_tintOpacityReduced"
+    static let subvariantKey = "_subvariant"
+
+    /// Everything the stack test puts on a piece's glass.
+    struct PieceSettings: Equatable {
+        var variant = 11
+        var lensing = 0
+        var scrim = 0
+        var subdued = 0
+        var adaptive = 2
+        var tintReduced = false
+        /// Empty: not set.
+        var subvariant = ""
+    }
+
+    /// A switch setting's value now, nil where the system has no such setting.
+    static func flag(_ key: String, of view: NSView) -> Bool? {
+        guard answers(view, key) else { return nil }
+        return (view.value(forKey: key) as? NSNumber)?.boolValue
+    }
+
+    /// The subvariant now; nil where it is not set or the system has none.
+    static func subvariant(of view: NSView) -> String? {
+        guard answers(view, subvariantKey) else { return nil }
+        return view.value(forKey: subvariantKey) as? String
+    }
+
+    /// Puts every piece setting on `view`, each only where the system has
+    /// it and only when it differs.
+    static func apply(_ settings: PieceSettings, to view: NSView) {
+        apply(variant: settings.variant, lensing: settings.lensing, scrim: settings.scrim, to: view)
+        for (key, wanted) in [(subduedKey, settings.subdued), (adaptiveKey, settings.adaptive)] {
+            guard let now = value(key, of: view), now != wanted else { continue }
+            view.setValue(NSNumber(value: wanted), forKey: key)
+        }
+        if let now = flag(tintReducedKey, of: view), now != settings.tintReduced {
+            view.setValue(NSNumber(value: settings.tintReduced), forKey: tintReducedKey)
+        }
+        if answers(view, subvariantKey) {
+            let wanted: String? = settings.subvariant.isEmpty ? nil : settings.subvariant
+            if subvariant(of: view) != wanted { view.setValue(wanted, forKey: subvariantKey) }
+        }
+    }
 }
 
 /// AppKit's glass view with one hidden variant set on it, as a card's
@@ -754,6 +908,253 @@ struct GlossSystemCard: View {
             .background { GlossSystemGlassView(variant: variant, lensing: lensing, scrim: scrim) }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("System variant \(variant)")
+    }
+}
+
+/// A stack test piece's glass: AppKit's glass view with the hidden
+/// settings on it, as `GlossSystemGlassView` does it, and the smoke as its
+/// public tint when that switch is on.
+struct GlossStackGlassView: NSViewRepresentable {
+    let settings: GlossSystemGlass.PieceSettings
+    let corner: CGFloat
+    let tint: NSColor?
+
+    func makeNSView(context: Context) -> NSGlassEffectView {
+        let view = NSGlassEffectView()
+        view.contentView = NSView()
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: NSGlassEffectView, context: Context) {
+        if view.cornerRadius != corner { view.cornerRadius = corner }
+        if view.tintColor != tint { view.tintColor = tint }
+        GlossSystemGlass.apply(settings, to: view)
+    }
+}
+
+/// One stack test piece: its content over the glass, and the smoke between
+/// them as a black veil, or on the glass as its tint.
+struct GlossStackPiece<Content: View>: View {
+    let size: CGSize
+    let corner: CGFloat
+    let settings: GlossSystemGlass.PieceSettings
+    /// 0 to 1.
+    let smoke: Double
+    let smokeAsTint: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+        content
+            .foregroundStyle(.white)
+            .frame(width: size.width, height: size.height)
+            .background {
+                ZStack {
+                    GlossStackGlassView(settings: settings, corner: corner,
+                                        tint: smokeAsTint ? NSColor.black.withAlphaComponent(smoke) : nil)
+                    if !smokeAsTint { shape.fill(Color.black.opacity(smoke)) }
+                }
+            }
+    }
+}
+
+/// The stack test's blurred ground: a public behind-window blur faded
+/// towards its rim, or Apple's Regular or Clear glass as a round
+/// rectangle (a glass view cannot be faded), with black over it at the dim.
+/// The same view lies under the pieces in the cards window or fills the
+/// window below it. It takes no clicks.
+final class GlossStackGroundView: NSView {
+    /// The public material Blur uses: the least tinted over white and over
+    /// black on the Air (24 Nov; levels in the round's report).
+    static let blurMaterial: NSVisualEffectView.Material = .hudWindow
+
+    private let blur = NSVisualEffectView()
+    private let dimView = NSView()
+    private var glass: NSGlassEffectView?
+    private(set) var material: GlossLab.StackGroundMaterial = .blur
+    /// -1 until the first `configure`, so the first dim is always drawn.
+    private(set) var dim: Double = -1
+    private var maskSize: CGSize = .zero
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        blur.material = Self.blurMaterial
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        dimView.layer = CALayer()
+        dimView.wantsLayer = true
+        addSubview(blur)
+        addSubview(dimView)
+        needsLayout = true
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func configure(material: GlossLab.StackGroundMaterial, dim: Double) {
+        if material != self.material {
+            self.material = material
+            maskSize = .zero
+            needsLayout = true
+        }
+        if dim != self.dim {
+            self.dim = dim
+            dimView.layer?.backgroundColor = NSColor.black.withAlphaComponent(dim).cgColor
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        let glassStyle: NSGlassEffectView.Style? = switch material {
+        case .blur: nil
+        case .regular: .regular
+        case .clear: .clear
+        }
+        if let glassStyle {
+            let view = glass ?? {
+                let made = NSGlassEffectView()
+                made.contentView = NSView()
+                made.cornerRadius = GlossSamples.stackGroundCorner
+                addSubview(made, positioned: .below, relativeTo: dimView)
+                glass = made
+                return made
+            }()
+            if view.style != glassStyle { view.style = glassStyle }
+            view.frame = bounds
+            view.isHidden = false
+            blur.isHidden = true
+        } else {
+            glass?.isHidden = true
+            blur.isHidden = false
+            blur.frame = bounds
+        }
+        dimView.frame = bounds
+        guard maskSize != bounds.size, bounds.width > 0, bounds.height > 0 else { return }
+        maskSize = bounds.size
+        if glassStyle == nil {
+            let mask = GlossSamples.fadeMask(size: bounds.size)
+            blur.maskImage = mask
+            let layer = CALayer()
+            layer.frame = CGRect(origin: .zero, size: bounds.size)
+            layer.contents = mask.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            dimView.layer?.mask = layer
+            dimView.layer?.cornerRadius = 0
+        } else {
+            dimView.layer?.mask = nil
+            dimView.layer?.cornerRadius = GlossSamples.stackGroundCorner
+            dimView.layer?.cornerCurve = .continuous
+        }
+    }
+}
+
+/// The ground as a view under the pieces in the cards window.
+struct GlossStackGround: NSViewRepresentable {
+    let material: GlossLab.StackGroundMaterial
+    let dim: Double
+
+    func makeNSView(context: Context) -> GlossStackGroundView {
+        let view = GlossStackGroundView(frame: .zero)
+        view.configure(material: material, dim: dim)
+        return view
+    }
+
+    func updateNSView(_ view: GlossStackGroundView, context: Context) {
+        view.configure(material: material, dim: dim)
+    }
+}
+
+/// The stack test: Control Centre's three pieces as it arranges them, a
+/// column of two capsules and a round square, over the ground when it is
+/// in this window, with the close button in the top right corner.
+struct GlossStackTest: View {
+    @Bindable var lab: GlossLab
+    let closeButton: AnyView
+
+    private var settings: GlossSystemGlass.PieceSettings {
+        GlossSystemGlass.PieceSettings(
+            variant: Int(lab.samplesStackVariant.rounded()), lensing: Int(lab.samplesLensing.rounded()),
+            scrim: Int(lab.samplesScrim.rounded()), subdued: Int(lab.samplesSubdued.rounded()),
+            adaptive: Int(lab.samplesAdaptive.rounded()), tintReduced: lab.samplesTintReduced,
+            subvariant: lab.samplesSubvariant)
+    }
+
+    var body: some View {
+        let size = GlossSamples.stackWindowSize
+        let ground = GlossSamples.stackGroundRect
+        let room = GlossSamples.stackRoom
+        ZStack(alignment: .topLeading) {
+            if lab.samplesGround == .same {
+                GlossStackGround(material: lab.samplesGroundMaterial, dim: lab.samplesGroundDim / 100)
+                    .frame(width: ground.width, height: ground.height)
+                    .padding(.leading, ground.minX)
+                    .padding(.top, ground.minY)
+            }
+            HStack(alignment: .top, spacing: GlossSamples.stackGap) {
+                VStack(spacing: GlossSamples.stackGap) {
+                    capsule(symbol: "wifi", title: "Wi-Fi", subtitle: "Home")
+                    capsule(symbol: "moon.fill", title: "Focus", subtitle: "Do Not Disturb")
+                }
+                square
+            }
+            .padding(.leading, room)
+            .padding(.top, room)
+            closeButton
+                .padding(.leading, size.width - 10 - GlossSamples.closeButton)
+                .padding(.top, 10)
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Stack test")
+    }
+
+    private func piece<Content: View>(_ size: CGSize, corner: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+        GlossStackPiece(size: size, corner: corner, settings: settings, smoke: lab.samplesSmoke / 100,
+                        smokeAsTint: lab.samplesStackTint, content: content)
+    }
+
+    private func capsule(symbol: String, title: String, subtitle: String) -> some View {
+        let size = GlossSamples.stackCapsule
+        return piece(size, corner: size.height / 2) {
+            HStack(spacing: 9) {
+                ZStack {
+                    Circle().fill(Color.white)
+                    Image(systemName: symbol)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.blue)
+                }
+                .frame(width: 36, height: 36)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.system(size: 13, weight: .semibold))
+                    Text(subtitle).font(.system(size: 11)).opacity(0.6)
+                }
+                .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 13)
+        }
+    }
+
+    private var square: some View {
+        let side = GlossSamples.stackSquare
+        return piece(CGSize(width: side, height: side), corner: GlossSamples.stackSquareCorner) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Not Playing").font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 0)
+                HStack(spacing: 22) {
+                    Image(systemName: "backward.fill")
+                    Image(systemName: "play.fill")
+                    Image(systemName: "forward.fill")
+                }
+                .font(.system(size: 17))
+                .opacity(0.5)
+                .frame(maxWidth: .infinity)
+            }
+            .lineLimit(1)
+            .padding(14)
+            .frame(width: side, height: side, alignment: .topLeading)
+        }
     }
 }
 
@@ -816,7 +1217,21 @@ struct GlossSamplesView: View {
     @Bindable var lab: GlossLab
 
     var body: some View {
-        let size = GlossSamples.windowSize(lightRow: lab.samplesLight, systemVariants: lab.samplesSystem)
+        let size = GlossSamples.windowSize(lightRow: lab.samplesLight, systemVariants: lab.samplesSystem, stack: lab.samplesStack)
+        Group {
+            if lab.samplesStack {
+                GlossStackTest(lab: lab, closeButton: AnyView(closeButton))
+            } else {
+                cardSets
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .environment(\.colorScheme, .dark)
+        .gesture(WindowDragGesture())
+    }
+
+    /// Every card set, as before the stack test.
+    private var cardSets: some View {
         VStack(alignment: .leading, spacing: GlossSamples.gap) {
             if lab.samplesSystem {
                 systemRows
@@ -832,9 +1247,6 @@ struct GlossSamplesView: View {
             }
         }
         .padding(GlossSamples.margin)
-        .frame(width: size.width, height: size.height, alignment: .topLeading)
-        .environment(\.colorScheme, .dark)
-        .gesture(WindowDragGesture())
     }
 
     /// The system's variants in rows, the close button after the first.
@@ -889,13 +1301,34 @@ final class GlossSamplesWindows {
 
     static let title = "Gloss samples"
     static let backdropTitle = "Gloss samples backdrop"
+    static let groundTitle = "Gloss samples ground"
+
+    /// The cards window, which never takes the keyboard unless the stack
+    /// test's Key window switch lets it (to test whether glass in a window
+    /// that is not key is drawn flatter).
+    final class Panel: NSPanel {
+        var keyAllowed = false {
+            didSet { becomesKeyOnlyIfNeeded = !keyAllowed }
+        }
+
+        override var canBecomeKey: Bool { keyAllowed || super.canBecomeKey }
+    }
+
+    /// Whether the cards window may become key: only in the stack test,
+    /// with its Key window switch on.
+    static func keyAllowed(for lab: GlossLab) -> Bool { lab.samplesStack && lab.samplesStackKey }
+
+    /// Whether the ground has a window of its own under the cards window.
+    static func groundWindowWanted(for lab: GlossLab) -> Bool { lab.samplesStack && lab.samplesGround == .below }
     /// The one-row window's origin, as saved before there was a light row.
     private static let originKey = GlossLab.prefix + "samplesOrigin"
     private static let topLeftKey = GlossLab.prefix + "samplesTopLeft"
 
-    private var window: NSPanel?
+    private var window: Panel?
     private var backdropWindow: NSWindow?
+    private var groundWindow: NSWindow?
     private var moveObserver: NSObjectProtocol?
+    private var checkReported = false
 
     /// Shows or hides the window with the lab's switch, and sizes it for
     /// the light row, from now on.
@@ -904,6 +1337,11 @@ final class GlossSamplesWindows {
             _ = GlossLab.shared.samplesShown
             _ = GlossLab.shared.samplesLight
             _ = GlossLab.shared.samplesSystem
+            _ = GlossLab.shared.samplesStack
+            _ = GlossLab.shared.samplesStackKey
+            _ = GlossLab.shared.samplesGround
+            _ = GlossLab.shared.samplesGroundMaterial
+            _ = GlossLab.shared.samplesGroundDim
         } onChange: { [weak self] in
             Task { @MainActor in self?.configure() }
         }
@@ -911,9 +1349,9 @@ final class GlossSamplesWindows {
     }
 
     /// The window, made and not yet shown.
-    static func makeWindow() -> NSPanel {
-        let panel = NSPanel(contentRect: CGRect(origin: .zero, size: GlossSamples.windowSize),
-                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    static func makeWindow() -> Panel {
+        let panel = Panel(contentRect: CGRect(origin: .zero, size: GlossSamples.windowSize),
+                          styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = title
         panel.isReleasedWhenClosed = false
         panel.isOpaque = false
@@ -935,8 +1373,10 @@ final class GlossSamplesWindows {
     }
 
     private func apply() {
-        guard GlossLab.shared.samplesShown else {
+        let lab = GlossLab.shared
+        guard lab.samplesShown else {
             window?.orderOut(nil)
+            groundWindow?.orderOut(nil)
             backdropWindow?.orderOut(nil)
             return
         }
@@ -954,8 +1394,17 @@ final class GlossSamplesWindows {
         }
         guard let window else { return }
         let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        let size = GlossSamples.windowSize(lightRow: GlossLab.shared.samplesLight, systemVariants: GlossLab.shared.samplesSystem)
-        if !window.isVisible {
+        let size = GlossSamples.windowSize(lightRow: lab.samplesLight, systemVariants: lab.samplesSystem, stack: lab.samplesStack)
+        let wasVisible = window.isVisible
+        // The Key window switch: going off, a key window gives the keyboard
+        // up by leaving the screen for a moment (it is shown again below).
+        let keyAllowed = Self.keyAllowed(for: lab)
+        let keyTurnedOn = keyAllowed && !window.keyAllowed
+        if window.keyAllowed != keyAllowed {
+            window.keyAllowed = keyAllowed
+            if !keyAllowed, window.isKeyWindow { window.orderOut(nil) }
+        }
+        if !wasVisible {
             let saved = GlossSamples.origin(
                 savedTopLeft: UserDefaults.standard.string(forKey: Self.topLeftKey).map(NSPointFromString),
                 savedOneRowOrigin: UserDefaults.standard.string(forKey: Self.originKey).map(NSPointFromString),
@@ -970,6 +1419,78 @@ final class GlossSamplesWindows {
         }
         applyTestBackdrop(under: window)
         window.orderFrontRegardless()
+        applyGroundWindow(under: window, lab: lab)
+        if keyAllowed, keyTurnedOn || !wasVisible, !window.isKeyWindow { window.makeKey() }
+        reportForCheck(window)
+    }
+
+    /// The stack test's "Window below" ground: a clear borderless window of
+    /// its own, a child of the cards window kept right under it, so it moves
+    /// with it. Taken away when the ground is anything else.
+    private func applyGroundWindow(under window: Panel, lab: GlossLab) {
+        guard Self.groundWindowWanted(for: lab) else {
+            if let groundWindow {
+                groundWindow.parent?.removeChildWindow(groundWindow)
+                groundWindow.orderOut(nil)
+            }
+            return
+        }
+        let ground = groundWindow ?? Self.makeGroundWindow()
+        groundWindow = ground
+        (ground.contentView as? GlossStackGroundView)?.configure(material: lab.samplesGroundMaterial, dim: lab.samplesGroundDim / 100)
+        if ground.parent !== window {
+            ground.setFrame(GlossSamples.stackGroundFrame(under: window.frame), display: false)
+            window.addChildWindow(ground, ordered: .below)
+        }
+        ground.setFrame(GlossSamples.stackGroundFrame(under: window.frame), display: true)
+    }
+
+    /// The ground's own window: clear, borderless, without a shadow, and
+    /// taking no clicks; it is never key.
+    static func makeGroundWindow() -> NSWindow {
+        let ground = NSWindow(contentRect: CGRect(origin: .zero, size: GlossSamples.stackGroundRect.size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        ground.title = groundTitle
+        ground.isReleasedWhenClosed = false
+        ground.isOpaque = false
+        ground.backgroundColor = .clear
+        ground.hasShadow = false
+        ground.ignoresMouseEvents = true
+        ground.level = .floating
+        ground.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        ground.appearance = NSAppearance(named: .darkAqua)
+        ground.contentView = GlossStackGroundView(frame: CGRect(origin: .zero, size: GlossSamples.stackGroundRect.size))
+        return ground
+    }
+
+    /// A check's seam, never in the lab window, only with a test backdrop
+    /// (`-GlossLab.samplesBackdrop`): once, 2 s after the window is shown,
+    /// writes the window order, the frames and the key state to standard
+    /// output; with `-GlossLab.samplesMoveBy "{dx, dy}"` it then moves the
+    /// cards window by that much, as a drag would, and writes them again.
+    private func reportForCheck(_ window: Panel) {
+        guard !checkReported, UserDefaults.standard.string(forKey: GlossLab.prefix + "samplesBackdrop") != nil else { return }
+        checkReported = true
+        Task { @MainActor [weak self, weak window] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let window else { return }
+            self?.writeCheckLine("shown", window)
+            guard let move = UserDefaults.standard.string(forKey: GlossLab.prefix + "samplesMoveBy") else { return }
+            let by = NSPointFromString(move)
+            window.setFrameOrigin(CGPoint(x: window.frame.minX + by.x, y: window.frame.minY + by.y))
+            try? await Task.sleep(for: .seconds(1))
+            self?.writeCheckLine("moved", window)
+        }
+    }
+
+    private func writeCheckLine(_ when: String, _ window: Panel) {
+        let order = NSWindow.windowNumbers(options: [])?.compactMap { NSApp.window(withWindowNumber: $0.intValue)?.title } ?? []
+        let ground = groundWindow.flatMap { $0.isVisible ? NSStringFromRect($0.frame) : nil } ?? "none"
+        let expected = NSStringFromRect(GlossSamples.stackGroundFrame(under: window.frame))
+        print("GLOSS_STACK \(when) key=\(window.isKeyWindow) canBecomeKey=\(window.canBecomeKey) appActive=\(NSApp.isActive) "
+              + "cards=\(NSStringFromRect(window.frame)) ground=\(ground) groundExpected=\(expected) "
+              + "groundIsChild=\(groundWindow?.parent === window) frontToBack=\(order)")
+        fflush(stdout)
     }
 
     private func saveOrigin() {
@@ -994,7 +1515,12 @@ final class GlossSamplesWindows {
             backdrop.ignoresMouseEvents = true
             backdrop.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             if name == "text" {
-                backdrop.contentView = NSHostingView(rootView: GlossSamplesTextBackdrop(lines: GlossLab.shared.samplesSystem ? 30 : GlossLab.shared.samplesLight ? 17 : 10))
+                let lab = GlossLab.shared
+                // The stack test's text has no coloured shapes, so a piece's
+                // middle has only lines of text behind it to measure.
+                backdrop.contentView = NSHostingView(rootView: lab.samplesStack
+                    ? GlossSamplesTextBackdrop(lines: 14, shapes: false)
+                    : GlossSamplesTextBackdrop(lines: lab.samplesSystem ? 30 : lab.samplesLight ? 17 : 10))
             } else {
                 backdrop.contentView = NSHostingView(rootView: GlossBackdropView(backdrop: GlossLab.Backdrop(rawValue: name) ?? .black))
             }
@@ -1009,6 +1535,7 @@ final class GlossSamplesWindows {
 /// strong colours, like a busy window behind the cards.
 struct GlossSamplesTextBackdrop: View {
     var lines = 10
+    var shapes = true
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -1025,9 +1552,11 @@ struct GlossSamplesTextBackdrop: View {
                 }
             }
             .padding(.top, 8)
-            Circle().fill(Color(red: 0.55, green: 0.15, blue: 0.85)).frame(width: 90, height: 90).offset(x: 250, y: 70)
-            Capsule().fill(Color(red: 0.1, green: 0.45, blue: 0.95)).frame(width: 220, height: 22).offset(x: 480, y: 120)
-            Rectangle().fill(Color(red: 0.12, green: 0.12, blue: 0.14)).frame(width: 150, height: 250).offset(x: 790, y: 0)
+            if shapes {
+                Circle().fill(Color(red: 0.55, green: 0.15, blue: 0.85)).frame(width: 90, height: 90).offset(x: 250, y: 70)
+                Capsule().fill(Color(red: 0.1, green: 0.45, blue: 0.95)).frame(width: 220, height: 22).offset(x: 480, y: 120)
+                Rectangle().fill(Color(red: 0.12, green: 0.12, blue: 0.14)).frame(width: 150, height: 250).offset(x: 790, y: 0)
+            }
         }
         .clipped()
     }

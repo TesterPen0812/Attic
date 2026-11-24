@@ -202,6 +202,54 @@ final class GlossLab {
     var samplesSystem = false { didSet { save(samplesSystem, "samplesSystem") } }
     var samplesLensing: Double = 0 { didSet { save(samplesLensing, "samplesLensing") } }
     var samplesScrim: Double = 0 { didSet { save(samplesScrim, "samplesScrim") } }
+    /// The stack test (24 Nov, owner: "Yes, Opus builds"; brief
+    /// `ops/design/gloss-lab-stack-brief-2026-11-24.md`): Control Centre's
+    /// pieces as one stack, each part on its own control, in place of every
+    /// card set. The pieces' hidden variant (0 to 23), the ground under them
+    /// and its material and dim (0 to 30 %), the veil as the glass's tint,
+    /// three more hidden settings and a subvariant (empty: not set), and
+    /// whether the cards window may become the key window. The lab window's
+    /// own state, like the other sample values. Unsupported settings: for
+    /// looking in the lab, never for the panel.
+    var samplesStack = false { didSet { save(samplesStack, "samplesStack") } }
+    var samplesStackVariant: Double = 11 { didSet { save(samplesStackVariant, "samplesStackVariant") } }
+    var samplesGround: StackGround = .off { didSet { save(samplesGround.rawValue, "samplesGround") } }
+    var samplesGroundMaterial: StackGroundMaterial = .blur { didSet { save(samplesGroundMaterial.rawValue, "samplesGroundMaterial") } }
+    var samplesGroundDim: Double = 8 { didSet { save(samplesGroundDim, "samplesGroundDim") } }
+    var samplesStackTint = false { didSet { save(samplesStackTint, "samplesStackTint") } }
+    var samplesSubdued: Double = 0 { didSet { save(samplesSubdued, "samplesSubdued") } }
+    var samplesAdaptive: Double = 2 { didSet { save(samplesAdaptive, "samplesAdaptive") } }
+    var samplesTintReduced = false { didSet { save(samplesTintReduced, "samplesTintReduced") } }
+    var samplesSubvariant = "" { didSet { save(samplesSubvariant, "samplesSubvariant") } }
+    var samplesStackKey = false { didSet { save(samplesStackKey, "samplesStackKey") } }
+
+    /// Where the stack test's blurred ground is: none, a view under the
+    /// pieces in the cards window, or a window of its own under it.
+    enum StackGround: String, CaseIterable, Identifiable {
+        case off, same, below
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .off: "Off"
+            case .same: "Same window"
+            case .below: "Window below"
+            }
+        }
+    }
+
+    /// What the ground is made of: a public behind-window blur, or Apple's
+    /// Regular or Clear glass.
+    enum StackGroundMaterial: String, CaseIterable, Identifiable {
+        case blur, regular, clear
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .blur: "Blur"
+            case .regular: "Regular glass"
+            case .clear: "Clear glass"
+            }
+        }
+    }
 
     init(defaults: UserDefaults?) {
         self.defaults = defaults
@@ -248,6 +296,16 @@ final class GlossLab {
         bool("samplesShown", &samplesShown); double("samplesSmoke", &samplesSmoke)
         bool("samplesLight", &samplesLight); bool("samplesSystem", &samplesSystem)
         double("samplesLensing", &samplesLensing); double("samplesScrim", &samplesScrim)
+        bool("samplesStack", &samplesStack); double("samplesStackVariant", &samplesStackVariant)
+        if let raw = defaults.string(forKey: Self.prefix + "samplesGround"), let value = StackGround(rawValue: raw) { samplesGround = value }
+        if let raw = defaults.string(forKey: Self.prefix + "samplesGroundMaterial"), let value = StackGroundMaterial(rawValue: raw) {
+            samplesGroundMaterial = value
+        }
+        double("samplesGroundDim", &samplesGroundDim); bool("samplesStackTint", &samplesStackTint)
+        double("samplesSubdued", &samplesSubdued); double("samplesAdaptive", &samplesAdaptive)
+        bool("samplesTintReduced", &samplesTintReduced)
+        if let value = defaults.string(forKey: Self.prefix + "samplesSubvariant") { samplesSubvariant = value }
+        bool("samplesStackKey", &samplesStackKey)
         // A launch argument (`-GlossLab.preset <id>`) shows a preset for
         // one run. Still loading, so nothing of it is saved.
         if let id = defaults.string(forKey: Self.prefix + "preset"), let preset = Self.presets.first(where: { $0.id == id }) {
@@ -420,9 +478,22 @@ final class GlossLab {
         Brighten glass: \(on(app.brightenGlass))
         Backdrop: \(backdrop.title)
         Material samples: \(on(samplesShown)), veil \(Int(samplesSmoke.rounded())) %, light row \(on(samplesLight)), system variants \(on(samplesSystem)) (lensing \(Int(samplesLensing.rounded())), scrim \(Int(samplesScrim.rounded())))
+        \(stackLine)
         Preset: \(currentPreset?.title ?? "none (own values)")
         \(labLines)
         """
+    }
+
+    /// The stack test's values as one line, for "Copy values".
+    var stackLine: String {
+        func on(_ value: Bool) -> String { value ? "on" : "off" }
+        func n(_ value: Double) -> Int { Int(value.rounded()) }
+        let subvariant = samplesSubvariant.isEmpty ? "not set" : "\"\(samplesSubvariant)\""
+        return "Stack test: \(on(samplesStack)), variant \(n(samplesStackVariant)), ground \(samplesGround.title.lowercased()) "
+            + "(\(samplesGroundMaterial.title.lowercased()), dim \(n(samplesGroundDim)) %), smoke \(n(samplesSmoke)) % "
+            + "as \(samplesStackTint ? "the glass's tint" : "a veil"), lensing \(n(samplesLensing)), scrim \(n(samplesScrim)), "
+            + "subdued \(n(samplesSubdued)), adaptive \(n(samplesAdaptive)), reduced tint opacity \(on(samplesTintReduced)), "
+            + "subvariant \(subvariant), key window \(on(samplesStackKey))"
     }
 
     /// The lab's own switches and sliders as text, numbered as in the
