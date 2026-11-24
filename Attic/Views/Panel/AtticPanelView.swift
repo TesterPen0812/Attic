@@ -1095,10 +1095,11 @@ struct PanelKeptPageFrame: ViewModifier {
         content
             .frame(width: isCurrent ? nil : settled.value.width, height: isCurrent ? nil : settled.value.height,
                    alignment: .topLeading)
-            // Takes its proposal whatever the page inside asks for: a
-            // shrinking panel must not inherit a larger kept page's size,
-            // which would shift the current page inside the ZStack.
-            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+            // Hidden, it takes its proposal whatever the page inside asks
+            // for: a shrinking panel must not inherit a larger kept page's
+            // size, which would shift the current page inside the ZStack.
+            .frame(minWidth: isCurrent ? nil : 0, maxWidth: isCurrent ? nil : .infinity,
+                   minHeight: isCurrent ? nil : 0, maxHeight: isCurrent ? nil : .infinity, alignment: .topLeading)
     }
 }
 
