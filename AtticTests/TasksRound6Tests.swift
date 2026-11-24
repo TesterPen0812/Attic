@@ -1000,8 +1000,9 @@ final class TasksPageKeyHandlerTests: XCTestCase {
         // Ready for keys: drawn once, in the key window, and no field holding
         // the keyboard (a field that types keeps every key, `pageKey`).
         waitForTestOperation("the page ready for keys") {
-            TasksPageRenderProbe.bodyRuns > runs && window.isKeyWindow && !AtticTextInput.hasKeyboard
+            TasksPageRenderProbe.bodyRuns > runs && window.isKeyWindow && !AtticTextInput.hasKeyboard && !addBar
         }
+        print("TASKS_KEYS ready add_bar=\(addBar) has_keyboard=\(AtticTextInput.hasKeyboard) tab=\(model.tab) shown=\(model.isPageShown)")
         // ↓, waited on until the page's handler has taken it.
         func down() {
             let reached = TasksPageRenderProbe.pageKeys
@@ -1025,6 +1026,7 @@ final class TasksPageKeyHandlerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rows.count, 3, "harness: the demo seed has rows")
 
         down()
+        print("TASKS_KEYS first add_bar=\(addBar) has_keyboard=\(AtticTextInput.hasKeyboard) editing=\(String(describing: model.editingTitleID)) selection=\(model.selection.count)")
         XCTAssertEqual(model.selection, [rows[0]], "harness: ↓ with nothing selected selects the first row")
 
         swap(to: PanelComposerRoute(open: { _, _ in }, isOpen: { true }))
