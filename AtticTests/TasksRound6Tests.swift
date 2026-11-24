@@ -937,6 +937,8 @@ final class TasksRound6SearchTests: XCTestCase {
 /// down to the tabs' kept hosts took it as a change.
 @MainActor
 final class TasksPageKeyHandlerTests: XCTestCase {
+    // One lane only (Scripts/generated_test_routes.json routes this file).
+    #if !ATTIC_GENERATED_TESTS
     /// A composer route the test can swap after the page is up, as the
     /// panel's would change.
     final class ComposerSwitch: ObservableObject {
@@ -1051,4 +1053,5 @@ final class TasksPageKeyHandlerTests: XCTestCase {
         waitForTestOperation("the page leaves its window") { TasksPageRenderProbe.disappearances > left }
         XCTAssertTrue(boxes.allSatisfy { $0.handle == nil }, "a page that left still holds a copy of itself through its key box")
     }
+    #endif
 }
