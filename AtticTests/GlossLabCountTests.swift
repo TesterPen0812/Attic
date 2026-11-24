@@ -2482,6 +2482,17 @@ final class GlossLabValuesTests: XCTestCase {
         let host = try XCTUnwrap(window.contentView as? NSHostingView<GlossMatchView>)
         XCTAssertEqual(host.sizingOptions, [])
         XCTAssertEqual(window.frame.size, GlossMatch.cellSize)
+        // Over the backdrop a drag would take the copies off the part of
+        // the pattern they are measured over; without it the sheet moves.
+        XCTAssertFalse(GlossMatchWindows.sheetMoves(calibrating: true), "the sheet can be dragged off the pattern")
+        XCTAssertTrue(GlossMatchWindows.sheetMoves(calibrating: false))
+        // The backdrop's Close button takes the sheet down too: its other
+        // switch is in the lab's window, under the backdrop.
+        let lab = GlossLab(defaults: nil)
+        lab.calibration = true; lab.match = true
+        GlossMatchWindows.closeBoth(lab)
+        XCTAssertFalse(lab.calibration, "Close calibration left the backdrop up")
+        XCTAssertFalse(lab.match, "Close calibration left the sheet up")
     }
 }
 #endif

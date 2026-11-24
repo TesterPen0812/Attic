@@ -2878,6 +2878,19 @@ final class GlossMatchWindows {
         return panel
     }
 
+    /// The backdrop's "Close calibration": both windows go, since the
+    /// sheet's other switch is in the lab's window, which lies under the
+    /// backdrop.
+    static func closeBoth(_ lab: GlossLab) {
+        lab.calibration = false
+        lab.match = false
+    }
+
+    /// Whether the sheet moves by its background: not over the backdrop,
+    /// where a drag takes the copies off the part of the pattern they are
+    /// measured over.
+    static func sheetMoves(calibrating: Bool) -> Bool { !calibrating }
+
     /// The backdrop's frame on a screen: its visible part (under the menu
     /// bar, clear of the Dock), on whole points.
     static func calibrationFrame(visible: CGRect) -> CGRect { visible.integral }
@@ -2890,7 +2903,7 @@ final class GlossMatchWindows {
         if lab.calibration {
             let window = calibrationWindow ?? Self.makeCalibrationWindow()
             if calibrationWindow == nil {
-                (window.contentView as? GlossCalibrationView)?.onClose = { GlossLab.shared.calibration = false }
+                (window.contentView as? GlossCalibrationView)?.onClose = { GlossMatchWindows.closeBoth(.shared) }
                 (window.contentView as? GlossCalibrationView)?.onPattern = { GlossLab.shared.calibrationPattern = $0 }
                 calibrationWindow = window
             }
@@ -2920,6 +2933,7 @@ final class GlossMatchWindows {
                 placedFor = placing
                 window.setFrame(frame, display: true)
             }
+            window.isMovableByWindowBackground = Self.sheetMoves(calibrating: lab.calibration)
             window.orderFrontRegardless()
         } else {
             if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
