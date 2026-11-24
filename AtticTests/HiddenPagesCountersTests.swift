@@ -1107,4 +1107,72 @@ final class HiddenPagesCountersTests: XCTestCase {
             pump(rig.content, rig.panel)
         }
     }
+
+    // MARK: - Hidden pages' focus readers at a Tasks focus move (SPEED-FOCUS-HIDDEN-PAGES)
+
+    /// The trace (Air, opt=1, 8effff9f, ops/reviews/focus-move-pass-hunt.md
+    /// step b): a mouse click that moves focus between two Tasks rows reaches
+    /// the focus readers of every page kept built in the panel's root host,
+    /// twice (`External: FocusItem?` in the mouse-down handler, then
+    /// `External: FocusStore` in the next pass). The hidden Calendar, Notes
+    /// and Draw pages are about 40 % of the handler's SwiftUI events.
+    ///
+    /// A real click (press and release through the app's queue) into the key
+    /// panel moves SwiftUI's focus from row C to row D. One sentinel focus
+    /// reader sits in each page (`AtticFocusCheckProbe`); its count is the
+    /// number of times the focus move reached that page's part of the graph.
+    /// The control: the shown Tasks page's sentinel counts. The guard: no
+    /// hidden page's does.
+    func testAHiddenPageTakesNoPartInATasksFocusMove() throws {
+        try requireKeyWindowTests()
+        try withRig { rig in
+            rig.panel.makeKey()
+            pump(rig.content, rig.panel)
+            XCTAssertTrue(rig.panel.isKeyWindow, "harness: the panel is the key window")
+
+            let ids = rig.page.rows(for: .now).map(\.id)
+            XCTAssertGreaterThan(ids.count, 4, "harness: Now has rows to click")
+            let c = ids[2], d = ids[4]
+            @MainActor func click(_ id: UUID) throws {
+                let frame = try XCTUnwrap(rig.page.agentRowFrames([id]).first?.frame, "harness: the row \(id) is on the page")
+                let point = CGPoint(x: frame.minX + min(120, frame.width / 2), y: frame.midY)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    let event = try XCTUnwrap(NSEvent.mouseEvent(
+                        with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: rig.panel.windowNumber, context: nil, eventNumber: 1, clickCount: 1,
+                        pressure: type == .leftMouseDown ? 1 : 0))
+                    NSApp.postEvent(event, atStart: false)
+                }
+                Hosted.pumpEvents()
+                pump(rig.content, rig.panel)
+            }
+
+            try click(c)  // the list takes the keyboard's focus once
+            XCTAssertEqual(rig.page.selection, [c], "harness: the first click selected C")
+            XCTAssertEqual(rig.page.keyboardFocus?.id, c, "harness: SwiftUI's focus reached C")
+            AtticFocusReaderCensus.reset()
+
+            try click(d)  // MOVE: SwiftUI's focus goes from C to D
+            let checks = AtticFocusReaderCensus.focusChecks
+            AtticFocusReaderCensus.reset()
+            XCTAssertEqual(rig.page.selection, [d], "harness: the click selected D")
+            XCTAssertEqual(rig.page.keyboardFocus?.id, d, "harness: SwiftUI's focus moved to D")
+
+            // The sentinels count focus changes, not frames: a pump with no input checks none.
+            pump(rig.content, rig.panel)
+            let idle = AtticFocusReaderCensus.focusChecks.values.reduce(0, +)
+            AtticFocusReaderCensus.reset()
+            XCTAssertEqual(idle, 0, "harness: a sentinel was checked with no focus change")
+
+            let hidden = ["calendar", "notes", "canvas"]
+            let line = (["tasks"] + hidden).map { "\($0)=\(checks[$0, default: 0])" }.joined(separator: " ")
+            print("HIDDEN_FOCUS_CHECKS move-click " + line)
+            XCTAssertGreaterThan(checks["tasks", default: 0], 0,
+                                 "control: the focus move reached the shown Tasks page's sentinel (\(line))")
+            for page in hidden {
+                XCTAssertEqual(checks[page, default: 0], 0,
+                               "a Tasks focus move re-checked a focus reader in the hidden \(page) page (\(line))")
+            }
+        }
+    }
 }
