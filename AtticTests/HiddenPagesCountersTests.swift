@@ -868,12 +868,14 @@ final class HiddenPagesCountersTests: XCTestCase {
                 let start = rig.state.panelSize
                 rig.state.setInteractionLock(.windowResize, isActive: true)
                 frame(rig)
-                let shellBefore = Self.shellRuns
                 resize(rig, to: dragSize(start, step: 3))
                 var first: [ObjectIdentifier: CGFloat]?
                 waitForTestOperation("the first frame after the size write on \(page)") {
                     frame(rig)
-                    guard Self.shellRuns > shellBefore else { return false }
+                    // The frame the write produced: the root laid out at the
+                    // new size (a size write no longer runs the shell, so
+                    // its body is not the signal; resize-cause.md, cause 1).
+                    guard PanelRootLayout.lastPlacedSize == dragSize(start, step: 3) else { return false }
                     first = widths(of: page, rig)
                     return true
                 }
@@ -934,7 +936,9 @@ final class HiddenPagesCountersTests: XCTestCase {
                 var first: [CGFloat] = []
                 waitForTestOperation("the first frame after size write \(step) on Tasks") {
                     frame(rig)
-                    guard Self.shellRuns > before.5 else { return false }
+                    // The frame the write produced: the root laid out at the
+                    // new size (a size write no longer runs the shell).
+                    guard PanelRootLayout.lastPlacedSize == size else { return false }
                     first = drawnTasksHostWidths(rig)
                     return true
                 }
