@@ -73,7 +73,6 @@ final class PanelIntegrationTests: XCTestCase {
         let pager = TasksPagerPages(
             span: model.pagerSwipe.span, model: model, store: panel.store,
             motion: model.pagerSwipe.motion, count: 3,
-            size: CGSize(width: 300, height: 200),
             page: { index, drawn in
                 Text(drawn ? "Drawing" : "Quiet")
                     .onAppear { if index == 0 { pageVisible = drawn } }
