@@ -664,13 +664,11 @@ final class CornerRevealSettingsTests: XCTestCase {
     /// The panel's size is no longer published state (PR 69), so a shrink
     /// that is no pointer drag has to wake the cursor-away decision by
     /// itself. The pointer rests in the part of the panel the shrink removes
-    /// and sends no event afterwards; the panel shrinks (a frame set on the
-    /// window, or an accessibility client's request); the panel hides.
+    /// and sends no event afterwards; the panel shrinks at an accessibility
+    /// client's request; the panel hides. (A plain frame set on the window
+    /// is not a route here: it hid the panel with the fix removed, so it
+    /// pinned nothing: Opus review of PR 69, N2.)
     func testAShrinkThatLeavesARestingPointerOutsideHidesThePanel() throws {
-        for route in ["frame", "accessibility"] { try assertAShrinkHidesThePanel(by: route) }
-    }
-
-    private func assertAShrinkHidesThePanel(by route: String) throws {
         let previous = AtticMotionPreference.systemReduceMotionOverride
         AtticMotionPreference.systemReduceMotionOverride = true
         defer { AtticMotionPreference.systemReduceMotionOverride = previous }
@@ -700,19 +698,14 @@ final class CornerRevealSettingsTests: XCTestCase {
         rig.uiState.isPanelPinned = false
         rig.monitor.sampleForTesting(at: resting)
         spin(rig.settings.hideDelay + 0.6)
-        XCTAssertTrue(rig.controller.isPanelVisible, "\(route): the pointer rests inside: the panel stays")
+        XCTAssertTrue(rig.controller.isPanelVisible, "the pointer rests inside: the panel stays")
 
-        if route == "frame" {
-            // The window's own delegate writes the size (`windowDidResize`).
-            panel.setVisibleContentFrame(narrow, display: true)
-        } else {
-            _ = resize(width: 320)
-        }
-        XCTAssertEqual(panel.visibleContentFrame.width, narrow.width, accuracy: 0.5, "\(route)")
-        XCTAssertFalse(rig.controller.containsScreenPoint(resting), "\(route): the shrink left the pointer outside")
+        _ = resize(width: 320)
+        XCTAssertEqual(panel.visibleContentFrame.width, narrow.width, accuracy: 0.5)
+        XCTAssertFalse(rig.controller.containsScreenPoint(resting), "the shrink left the pointer outside")
         let deadline = Date().addingTimeInterval(3)
         while rig.controller.isPanelVisible, Date() < deadline { spin(0.01) }
-        XCTAssertFalse(rig.controller.isPanelVisible, "\(route): no pointer event follows; the shrink itself wakes the hide")
+        XCTAssertFalse(rig.controller.isPanelVisible, "no pointer event follows; the shrink itself wakes the hide")
     }
 }
 
