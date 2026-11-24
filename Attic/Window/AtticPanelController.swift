@@ -1076,8 +1076,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         hostingView.onLiveResizeBegan = { [weak self] in
             self?.beginLiveResize()
         }
-        hostingView.onLiveResizeChanged = { [weak self] size in
-            self?.uiState.updatePanelSize(size)
+        hostingView.onLiveResizeChanged = { [weak self] _ in
+            // The window's own size after the step, which is what
+            // `windowDidResize` has just written (the window may round the
+            // frame it was asked for): one accepted write per drag step.
+            guard let self else { return }
+            self.uiState.updatePanelSize(self.panel.visibleContentFrame.size)
         }
         hostingView.onLiveResizeEnded = { [weak self] size in
             self?.endLiveResize(at: size)

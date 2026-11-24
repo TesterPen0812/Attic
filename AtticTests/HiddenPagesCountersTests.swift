@@ -1146,9 +1146,13 @@ extension HiddenPagesCountersTests {
                     pump(rig.content, rig.panel, seconds: 1.0)
                 }
                 XCTAssertEqual(rig.state.selectedSection, page.section, "harness: \(page) is shown")
-                var published = 0, tasksHost = 0, notesHost = 0
+                var published = 0, tasksHost = 0, notesHost = 0, sentToIsland = 0
                 let subscription = rig.state.objectWillChange.sink { published += 1 }
                 defer { subscription.cancel() }
+                // The island's glass is in another window and cannot take
+                // the size from layout: it is sent each size, live.
+                let islandFeed = rig.state.panelSizeChanges.sink { _ in sentToIsland += 1 }
+                defer { islandFeed.cancel() }
                 let previousTasks = PanelInvalidationProbe.tasksHost, previousNotes = PanelInvalidationProbe.notesHost
                 PanelInvalidationProbe.tasksHost = { tasksHost += 1 }
                 PanelInvalidationProbe.notesHost = { notesHost += 1 }
@@ -1160,7 +1164,7 @@ extension HiddenPagesCountersTests {
                 let nativeStart = widths(of: page, rig)
                 rig.state.setInteractionLock(.windowResize, isActive: true)
                 pump(rig.content, rig.panel)
-                published = 0; tasksHost = 0; notesHost = 0
+                published = 0; tasksHost = 0; notesHost = 0; sentToIsland = 0
                 let shellBefore = Self.shellRuns
                 let drawBefore = PanelCanvasNoticeAwareHost.bodyEvaluations
                 for step in 1...Self.dragSteps {
@@ -1176,6 +1180,7 @@ extension HiddenPagesCountersTests {
                 }
                 XCTAssertEqual(rig.state.panelSize, dragSize(start, step: Self.dragSteps), "harness: the drag reached its size")
                 XCTAssertEqual(published, 0, "\(page): the panel's state published on the \(Self.dragSteps) steps of a drag")
+                XCTAssertEqual(sentToIsland, Self.dragSteps, "\(page): the island is sent each step's size once")
                 XCTAssertEqual(Self.shellRuns - shellBefore, 0, "\(page): the shell's body ran on the steps of a drag")
                 XCTAssertEqual(tasksHost, 0, "\(page): the Tasks host's body ran on the steps of a drag")
                 XCTAssertEqual(notesHost, 0, "\(page): the Notes host's body ran on the steps of a drag")
