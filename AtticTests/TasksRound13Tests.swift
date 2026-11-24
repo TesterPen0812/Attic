@@ -682,6 +682,9 @@ extension TasksRound13Tests {
         hosted.spin(0.6)
     }
 
+    /// Whether the row's cell is built: its frame is set in the cell's
+    /// `onAppear` and removed in its `onDisappear` (TasksPage's cell), so
+    /// false after a scroll is the lazy list's teardown of that cell, seen.
     private func isBuilt(_ hosted: Hosted, _ id: UUID) -> Bool {
         hosted.pointer.frame(for: TasksRowID(tab: .now, id: id)) != nil
     }
@@ -727,8 +730,10 @@ extension TasksRound13Tests {
             hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)
             hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)  // rows 0-2, cursor on 2
         case .cursorOutside:
-            try clickRow(hosted, ids[2], modifiers: .command)  // rows 0 and 2, cursor on 2
-            try clickRow(hosted, ids[2], modifiers: .command)  // row 2 leaves the selection
+            // Two ⌘-clicks on row 2 leave the cursor on row 2 and nothing
+            // selected (the trunk, lt-trunk.log 24 Nov 20:2x, Air).
+            try clickRow(hosted, ids[2], modifiers: .command)
+            try clickRow(hosted, ids[2], modifiers: .command)
         }
         let cursorBefore = hosted.model.keyboardFocus.map { index($0.id) }
         let selection = hosted.model.selection.map(index).sorted()
@@ -775,23 +780,24 @@ extension TasksRound13Tests {
         }
     }
 
-    /// Condition 1, the cursor on a row that is not selected (⌘-click on a
-    /// selected row takes it out of the selection and leaves the cursor on
-    /// it): the key acts where the trunk acts.
+    /// Condition 1, the cursor on a row that is not selected (two ⌘-clicks
+    /// on row 2 leave the cursor there and the selection empty): the key
+    /// acts on the cursor row, as the trunk does.
     func testKeysOnAnOutOfRangeCursorRowOutsideTheSelection() throws {
         try requireKeyWindowTests()
         for key in Self.rowKeys {
             let hosted = try longHosted()
             defer { hosted.close() }
             let result = try keyOutOfRange(.cursorOutside, key: key, hosted)
-            XCTAssertEqual(result.selection, [0], "harness: row 0 stays selected")
+            XCTAssertEqual(result.selection, [], "harness: nothing is selected")
             XCTAssertEqual(result.cursorBefore, 2, "harness: the cursor stayed on row 2")
             XCTAssertEqual(result.acted, [2: key.after], "\(key.name) out of the built range")
         }
     }
 
-    /// Condition 4: the same state, scrolled back. Whether the row draws
-    /// the keyboard's ring, and where the first ↓ after it goes.
+    /// Condition 4: the same state, scrolled back. The trunk keeps the
+    /// cursor on the row and draws its ring again, and the first ↓ after it
+    /// goes on to the next row (lt-trunk.log, 24 Nov 20:2x, Air).
     func testAnOutOfRangeCursorRowScrolledBackAndTheFirstDownAfter() throws {
         try requireKeyWindowTests()
         let hosted = try longHosted()
@@ -808,8 +814,8 @@ extension TasksRound13Tests {
         hosted.press("\u{F701}", keyCode: 125)
         let next = hosted.model.keyboardFocus.map { ids.firstIndex(of: $0.id) ?? -1 }
         print("OUT_OF_RANGE back ring=\(ring) cursor=\(cursor.map(String.init) ?? "nil") first_down=\(next.map(String.init) ?? "nil") selection=\(hosted.model.selection.map { ids.firstIndex(of: $0) ?? -1 }.sorted())")
-        XCTAssertFalse(ring, "the trunk draws no ring on the row when it scrolls back")
-        XCTAssertNil(cursor, "the trunk's cursor stays nil once its row was torn down")
+        XCTAssertTrue(ring, "the row draws the keyboard's ring when it scrolls back")
+        XCTAssertEqual(cursor, 1, "the cursor stays on the row while it is torn down")
         XCTAssertEqual(next, 2, "the first ↓ after goes on from the selected row")
         XCTAssertEqual(hosted.model.selection, [ids[2]], "the first ↓ selects the row it reaches")
     }
