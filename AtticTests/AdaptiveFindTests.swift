@@ -130,6 +130,8 @@ final class AdaptiveFindTests: XCTestCase {
     func testFindOpensInTheTopRowFoldsTheRowAndLeavesTheNoteStill() throws {
         try withNote { host, _, _, engine, _ in
             let layout = PanelPageLayout(cornerSize: 52, panelSize: host.bounds.size)
+            // The width before Find opens, as the layout's size was.
+            let widthAtRest = host.bounds.width
             let scroll = try XCTUnwrap(engine.scrollView)
             let insetBefore = scroll.contentInsets.top
             for id in ["panel-pin-button", "panel-more-button", "notes-search-button"] {
@@ -141,7 +143,7 @@ final class AdaptiveFindTests: XCTestCase {
             XCTAssertTrue(engine.find.isShown)
             XCTAssertTrue(engine.find.shownInTopRow, "on the Notes page Find takes the top row")
             let field = try XCTUnwrap(frame(of: "note-find-bar", in: host), "Find's field")
-            let expected = PanelTopRowLayout.fieldFrame(layout)
+            let expected = PanelTopRowLayout.fieldFrame(layout, panelWidth: widthAtRest)
             XCTAssertEqual(field.minX, expected.minX, accuracy: 1, "the field fills the row")
             XCTAssertEqual(field.maxX, expected.maxX, accuracy: 1)
             XCTAssertEqual(field.minY, expected.minY, accuracy: 1)

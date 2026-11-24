@@ -122,13 +122,13 @@ final class PanelChromeTests: XCTestCase {
     func testTopRowPlaces() {
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
         let chrome = layout.chromeInsets
-        let search = PanelTopRowLayout.searchButtonFrame(layout)
-        let more = PanelTopRowLayout.moreButtonFrame(layout)
+        let search = PanelTopRowLayout.searchButtonFrame(layout, panelWidth: 340)
+        let more = PanelTopRowLayout.moreButtonFrame(layout, panelWidth: 340)
         XCTAssertEqual(search.maxX, 340 - chrome.trailing, accuracy: 0.001, "Search at the far right")
         XCTAssertEqual(search.minX - more.maxX, 5, accuracy: 0.001, "••• one gap before it")
-        let tabs = PanelTopRowLayout.switchFrame(layout, width: TasksTopTabsMetrics.width(selection: .now))
+        let tabs = PanelTopRowLayout.switchFrame(layout, panelWidth: 340, width: TasksTopTabsMetrics.width(selection: .now))
         XCTAssertEqual(more.minX - tabs.maxX, 10, accuracy: 0.001)
-        let field = PanelTopRowLayout.fieldFrame(layout)
+        let field = PanelTopRowLayout.fieldFrame(layout, panelWidth: 340)
         XCTAssertEqual(field.minX, chrome.leading, accuracy: 0.001)
         XCTAssertEqual(340 - field.maxX, chrome.trailing, accuracy: 0.001)
         XCTAssertEqual(field.minX, 340 - field.maxX, accuracy: 0.001, "the open field: equal space on both sides")

@@ -728,7 +728,13 @@ final class HiddenPagesCountersTests: XCTestCase {
             measure(rig, "C5 release") { release(rig) }
             print("HIDDEN_COUNTS C5 drag-total " + Self.line(drag))
             XCTAssertEqual(rig.state.panelSize, dragSize(start, step: Self.dragSteps), "harness: the drag reached its size")
-            XCTAssertGreaterThan(drag["shell", default: 0], 0, "harness: the size writes reached the shell")
+            // The size is a layout input now (resize-cause.md, lead's ruling
+            // of 24 Nov 13:42, criterion 2): a write no longer runs the
+            // shell. The harness check is that each step reached the shown
+            // page through layout.
+            XCTAssertEqual(drag["shell", default: 0], 0, "a size write of a drag ran the shell's body")
+            XCTAssertEqual(PanelRootLayout.lastPlacedSize, dragSize(start, step: Self.dragSteps),
+                           "harness: the drag's last size reached the root's layout")
             // Calendar too (M2): the shell re-runs on each write, and its
             // hand-off to the hidden Calendar must compare equal.
             for page in hidden {
@@ -765,6 +771,21 @@ final class HiddenPagesCountersTests: XCTestCase {
 
     private func widths(of page: PanelPage, _ rig: Rig) -> [ObjectIdentifier: CGFloat] {
         nativeViews(of: page, rig).mapValues(\.bounds.width)
+    }
+
+    /// A page's page-wide native views: each is as wide as its page, so
+    /// shown it is as wide as the window. (PR 69 review: a width that only
+    /// moves by the step would pass for a page that stays too narrow.)
+    private func pageWideWidths(of page: PanelPage, _ rig: Rig) -> [CGFloat] {
+        func find(_ name: String, in view: NSView) -> [NSView] {
+            (view.className.hasSuffix(name) ? [view] : []) + view.subviews.flatMap { find(name, in: $0) }
+        }
+        switch page {
+        case .tasks: return find("KeptContentContainer", in: rig.content).filter { !$0.isHiddenOrHasHiddenAncestor }.map(\.bounds.width)
+        case .notes: return find("NotesPageSwipeView", in: rig.content).map(\.bounds.width)
+        case .calendar: return find("CalendarPageInput5Input", in: rig.content).map(\.bounds.width)
+        case .canvas: return find("DrawBoardView", in: rig.content).map(\.bounds.width)
+        }
     }
 
     /// Condition (a) of the brief: a page hidden through a whole drag on
@@ -862,12 +883,14 @@ final class HiddenPagesCountersTests: XCTestCase {
                 let start = rig.state.panelSize
                 rig.state.setInteractionLock(.windowResize, isActive: true)
                 frame(rig)
-                let shellBefore = Self.shellRuns
                 resize(rig, to: dragSize(start, step: 3))
                 var first: [ObjectIdentifier: CGFloat]?
                 waitForTestOperation("the first frame after the size write on \(page)") {
                     frame(rig)
-                    guard Self.shellRuns > shellBefore else { return false }
+                    // The frame the write produced: the root laid out at the
+                    // new size (a size write no longer runs the shell, so
+                    // its body is not the signal; resize-cause.md, cause 1).
+                    guard PanelRootLayout.lastPlacedSize == dragSize(start, step: 3) else { return false }
                     first = widths(of: page, rig)
                     return true
                 }
@@ -928,7 +951,9 @@ final class HiddenPagesCountersTests: XCTestCase {
                 var first: [CGFloat] = []
                 waitForTestOperation("the first frame after size write \(step) on Tasks") {
                     frame(rig)
-                    guard Self.shellRuns > before.5 else { return false }
+                    // The frame the write produced: the root laid out at the
+                    // new size (a size write no longer runs the shell).
+                    guard PanelRootLayout.lastPlacedSize == size else { return false }
                     first = drawnTasksHostWidths(rig)
                     return true
                 }
@@ -1105,6 +1130,253 @@ final class HiddenPagesCountersTests: XCTestCase {
             XCTAssertGreaterThan(keyboardRings, 0, "harness: with the keyboard driving, the rings hold a focus state")
             tracker.observe(.leftMouseDown, keyCode: nil)
             pump(rig.content, rig.panel)
+        }
+    }
+}
+
+// MARK: - Resize: the size is a layout input (ops/design/resize-cause.md, cause 1)
+
+/// The panel's size reaches the pages through layout (the window's frame),
+/// never as shell state. Each step of a resize drag is driven as
+/// `AtticPanelController` drives it: the window's frame, then the size
+/// write. `layoutSubtreeIfNeeded` and `displayIfNeeded` are one frame, with
+/// no run-loop turn between the write and the reading.
+extension HiddenPagesCountersTests {
+    private func oneFrame(_ rig: Rig) {
+        rig.content.layoutSubtreeIfNeeded()
+        rig.panel.displayIfNeeded()
+    }
+
+    /// Criteria 2 and 4. On each drag step, whatever page is shown: the
+    /// panel's state publishes nothing, the shell's body does not run, and
+    /// the root of a page whose content does not depend on the width
+    /// (Tasks under the reading width, Notes, Draw) does not run. In that
+    /// same frame the root is laid out at the window's content size and the
+    /// shown page's page-wide native view has taken the step.
+    func testRZ1ADragStepPublishesNoSizeAndRunsNoShellOrPageRoot() throws {
+        for page in PanelPage.allCases {
+            try withRig { rig in
+                if page != .tasks {
+                    rig.state.switchPage(to: page.section, motion: .instant)
+                    pump(rig.content, rig.panel, seconds: 1.0)
+                }
+                XCTAssertEqual(rig.state.selectedSection, page.section, "harness: \(page) is shown")
+                var published = 0, tasksHost = 0, notesHost = 0, sentToIsland = 0
+                let subscription = rig.state.objectWillChange.sink { published += 1 }
+                defer { subscription.cancel() }
+                // The island's glass is in another window and cannot take
+                // the size from layout: it is sent each size, live.
+                let islandFeed = rig.state.panelSizeChanges.sink { _ in sentToIsland += 1 }
+                defer { islandFeed.cancel() }
+                let previousTasks = PanelInvalidationProbe.tasksHost, previousNotes = PanelInvalidationProbe.notesHost
+                PanelInvalidationProbe.tasksHost = { tasksHost += 1 }
+                PanelInvalidationProbe.notesHost = { notesHost += 1 }
+                defer {
+                    PanelInvalidationProbe.tasksHost = previousTasks
+                    PanelInvalidationProbe.notesHost = previousNotes
+                }
+                let start = rig.state.panelSize
+                let nativeStart = widths(of: page, rig)
+                rig.state.setInteractionLock(.windowResize, isActive: true)
+                pump(rig.content, rig.panel)
+                published = 0; tasksHost = 0; notesHost = 0; sentToIsland = 0
+                let shellBefore = Self.shellRuns
+                let drawBefore = PanelCanvasNoticeAwareHost.bodyEvaluations
+                for step in 1...Self.dragSteps {
+                    let size = dragSize(start, step: step)
+                    resize(rig, to: size)
+                    oneFrame(rig)
+                    XCTAssertEqual(PanelRootLayout.lastPlacedSize, size,
+                                   "\(page) step \(step): the root is laid out at the window's content size in the step's frame")
+                    for (view, width) in widths(of: page, rig) {
+                        XCTAssertEqual(width - (nativeStart[view] ?? width), size.width - start.width, accuracy: 0.5,
+                                       "\(page) step \(step): the shown page's native view took the step in the same frame")
+                    }
+                    let pageWide = pageWideWidths(of: page, rig)
+                    XCTAssertFalse(pageWide.isEmpty, "\(page) step \(step): the shown page has a page-wide native view")
+                    for width in pageWide {
+                        XCTAssertEqual(width, rig.panel.contentRect(forFrameRect: rig.panel.frame).width, accuracy: 0.5,
+                                       "\(page) step \(step): the shown page is as wide as the window in the step's frame")
+                    }
+                }
+                XCTAssertEqual(rig.state.panelSize, dragSize(start, step: Self.dragSteps), "harness: the drag reached its size")
+                XCTAssertEqual(published, 0, "\(page): the panel's state published on the \(Self.dragSteps) steps of a drag")
+                XCTAssertEqual(sentToIsland, Self.dragSteps, "\(page): the island is sent each step's size once")
+                XCTAssertEqual(Self.shellRuns - shellBefore, 0, "\(page): the shell's body ran on the steps of a drag")
+                XCTAssertEqual(tasksHost, 0, "\(page): the Tasks host's body ran on the steps of a drag")
+                XCTAssertEqual(notesHost, 0, "\(page): the Notes host's body ran on the steps of a drag")
+                XCTAssertEqual(PanelCanvasNoticeAwareHost.bodyEvaluations - drawBefore, 0,
+                               "\(page): the Draw host's body ran on the steps of a drag")
+                release(rig)
+                pump(rig.content, rig.panel)
+            }
+        }
+    }
+
+    /// The layout a page is handed carries no size: two ordinary sizes give
+    /// equal values, so a resize hands no page a new one.
+    func testRZ2TheLayoutIsTheSameValueAtEveryOrdinarySize() {
+        let small = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 340, height: 560))
+        let large = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 900, height: 700))
+        XCTAssertEqual(small, large)
+        // The insets still follow a panel too small for its corner.
+        let tiny = PanelPageLayout(cornerSize: 140, panelSize: CGSize(width: 200, height: 560))
+        XCTAssertNotEqual(tiny, PanelPageLayout(cornerSize: 140, panelSize: CGSize(width: 340, height: 560)))
+        XCTAssertEqual(tiny.chromeInsets, PanelGeometry.chromeInsets(cornerSize: 140, panelSize: CGSize(width: 200, height: 560)))
+    }
+
+    /// Kept behaviour (criterion 5): a hidden page keeps the drag's start
+    /// size through every step and takes the final size on release.
+    func testRZ3HiddenPagesKeepTheDragsStartSizeAndCatchUpOnRelease() throws {
+        try withRig { rig in
+            let hidden = [PanelPage.notes, .calendar, .canvas]
+            var before: [ObjectIdentifier: CGFloat] = [:]
+            for page in hidden { before.merge(widths(of: page, rig)) { first, _ in first } }
+            for page in hidden { XCTAssertFalse(widths(of: page, rig).isEmpty, "harness: hidden \(page) has a native view to read") }
+            let start = rig.state.panelSize
+            rig.state.setInteractionLock(.windowResize, isActive: true)
+            oneFrame(rig)
+            for step in 1...Self.dragSteps {
+                resize(rig, to: dragSize(start, step: step))
+                oneFrame(rig)
+                XCTAssertEqual(rig.state.retainedPageSizeDuringLiveResize, start, "step \(step): the hidden pages hold the start size")
+                for page in hidden {
+                    let now = widths(of: page, rig)
+                    XCTAssertFalse(now.isEmpty, "step \(step): hidden \(page) has a native view to read")
+                    for (view, width) in now {
+                        XCTAssertEqual(width, before[view] ?? -1, accuracy: 0.5, "step \(step): hidden \(page) was laid out again")
+                    }
+                }
+            }
+            release(rig)
+            let grown = dragSize(start, step: Self.dragSteps).width - start.width
+            waitForTestOperation("the hidden pages take the final size") {
+                oneFrame(rig)
+                return hidden.allSatisfy { page in
+                    let now = widths(of: page, rig)
+                    return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - grown) < 0.5 }
+                }
+            }
+            XCTAssertNil(rig.state.retainedPageSizeDuringLiveResize)
+        }
+    }
+
+    /// Criterion 6: a size change that is not our drag (a reveal, a display
+    /// change, a programmatic frame; `windowDidResize`) still reaches the
+    /// hidden pages.
+    func testRZ4ASizeChangeOutsideADragReachesTheHiddenPages() throws {
+        try withRig { rig in
+            let hidden = [PanelPage.notes, .calendar, .canvas]
+            var before: [ObjectIdentifier: CGFloat] = [:]
+            for page in hidden {
+                XCTAssertFalse(widths(of: page, rig).isEmpty, "harness: hidden \(page) has a native view to read")
+                before.merge(widths(of: page, rig)) { first, _ in first }
+            }
+            let start = rig.state.panelSize
+            resize(rig, to: CGSize(width: start.width + 24, height: start.height + 12))
+            waitForTestOperation("the hidden pages take a size written outside a drag") {
+                oneFrame(rig)
+                return hidden.allSatisfy { page in
+                    let now = widths(of: page, rig)
+                    return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - 24) < 0.5 }
+                }
+            }
+        }
+    }
+
+    /// Kept behaviour (criterion 5): the 600 pt reading column, read where
+    /// the page is laid out. Up to the reading width the page is handed the
+    /// layout unchanged; past it, the side insets grow by half the extra.
+    func testRZ5TheReadingColumnFollowsTheLaidOutWidth() {
+        final class Seen { var layouts: [PanelPageLayout] = [] }
+        let seen = Seen()
+        let layout = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 340, height: 560))
+        let host = NSHostingView(rootView: PanelReadingColumn(layout: layout) { column -> Color in
+            seen.layouts.append(column)
+            return Color.clear
+        })
+        for (width, extra) in [(340.0, 0.0), (592, 0), (600, 0), (608, 4), (1700, 550)] {
+            seen.layouts.removeAll()
+            host.frame = CGRect(x: 0, y: 0, width: width, height: 560)
+            host.layoutSubtreeIfNeeded()
+            guard let column = seen.layouts.last else {
+                XCTFail("width \(width): the page was handed no layout at this width")
+                continue
+            }
+            XCTAssertEqual(column, layout.readingColumn(panelWidth: width), "width \(width)")
+            XCTAssertEqual(column.contentInsets.leading, layout.contentInsets.leading + extra, accuracy: 0.001, "width \(width)")
+            XCTAssertEqual(column.chromeInsets.trailing, layout.chromeInsets.trailing + extra, accuracy: 0.001, "width \(width)")
+            if extra == 0 { XCTAssertEqual(column, layout, "width \(width): under the reading width the page's layout is unchanged") }
+        }
+    }
+}
+
+// MARK: - PR 69 fix round 1, item 2: a hidden page's rows read the page's own width
+
+extension HiddenPagesCountersTests {
+    /// The width a row is handed is its page's own frame. An open note is
+    /// hidden behind Tasks through a drag: on every step its bottom row is
+    /// handed the width the page is held at, never the live one. Shown
+    /// mid-drag, it is handed the window's width, and no stale one.
+    func testRZ6AHiddenEditorsRowReadsThePagesOwnWidth() throws {
+        #if ATTIC_LOCAL_ONLY
+        try withRig { rig in
+            var handed: [CGFloat] = []
+            PanelInvalidationProbe.rowPageWidth = { row, width in if row == "notes-editor" { handed.append(width) } }
+            defer { PanelInvalidationProbe.rowPageWidth = nil }
+            rig.state.switchPage(to: .notes, motion: .instant)
+            pump(rig.content, rig.panel, seconds: 1.0)
+            let noteID = rig.seed.freeNotes[0]
+            XCTAssertEqual(wait { await rig.draft.pages.openFromLibrary(noteID: noteID) }, true, "harness: the note opened")
+            rig.notesLibrary.dismissAfterOpenedNote(rig.draft.pages, requestedQuery: "")
+            pump(rig.content, rig.panel, seconds: 1.0)
+            XCTAssertFalse(rig.draft.pages.isLibraryPresented, "harness: Notes rests on the open note")
+            let start = rig.state.panelSize
+            XCTAssertEqual(try XCTUnwrap(handed.last, "harness: the editor's row is laid out"), start.width, accuracy: 0.5,
+                           "shown, the row is handed the panel's width")
+
+            rig.state.switchPage(to: .tasks, motion: .instant)
+            pump(rig.content, rig.panel, seconds: 1.0)
+            rig.state.setInteractionLock(.windowResize, isActive: true)
+            oneFrame(rig)
+            handed.removeAll()
+            for step in 1...Self.dragSteps {
+                resize(rig, to: dragSize(start, step: step))
+                oneFrame(rig)
+                XCTAssertEqual(handed.filter { abs($0 - start.width) >= 0.5 }, [],
+                               "step \(step): the hidden editor's row was handed a width its page does not have")
+            }
+            let live = dragSize(start, step: Self.dragSteps).width
+            handed.removeAll()
+            rig.state.switchPage(to: .notes, motion: .instant)
+            oneFrame(rig)
+            XCTAssertEqual(try XCTUnwrap(handed.last, "shown mid-drag, the row is laid out in the first frame"), live, accuracy: 0.5,
+                           "shown mid-drag, the row has the window's width in its first frame")
+            XCTAssertEqual(handed.filter { abs($0 - live) >= 0.5 }, [], "shown mid-drag, the row was handed a stale width")
+            release(rig)
+            pump(rig.content, rig.panel)
+        }
+        #endif
+    }
+
+    /// The reader itself, for every row that uses it: its own width plus
+    /// the outset, whatever the panel's coordinate space around it measures.
+    func testRZ6TheWidthReaderReadsItsOwnWidthNotThePanelSpaces() {
+        final class Seen { var widths: [CGFloat] = [] }
+        let seen = Seen()
+        let host = NSHostingView(rootView: PanelWidthReader(row: "pin", outset: 40) { width -> Color in
+            seen.widths.append(width)
+            return Color.clear
+        }
+        .frame(width: 300, height: 30)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .coordinateSpace(PanelPageLayout.coordinateSpace))
+        for panel in [340.0, 500, 388] {
+            seen.widths.removeAll()
+            host.frame = CGRect(x: 0, y: 0, width: panel, height: 30)
+            host.layoutSubtreeIfNeeded()
+            if panel == 340 { XCTAssertEqual(seen.widths.last, 340, "harness: the reader ran") }
+            XCTAssertEqual(seen.widths.filter { $0 != 340 }, [], "panel \(panel): a row 300 wide with 40 around it is in a page 340 wide")
         }
     }
 }

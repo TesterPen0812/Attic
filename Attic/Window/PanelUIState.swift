@@ -197,11 +197,27 @@ final class PanelUIState: ObservableObject {
     @Published var isCanvasConfirmationPresented = false
     @Published var isPanelPinned = false
     @Published var dockingPreviewCorner: ScreenCorner?
-    @Published private(set) var panelSize = PanelGeometry.defaultPanelSize
-    /// During a live resize, invisible retained pages can keep their last
-    /// proposal. Only the page the user is resizing needs each intermediate
-    /// size; the retained pages catch up on release.
-    @Published private(set) var retainedPageSizeDuringLiveResize: CGSize?
+    /// The panel's size now, written on every size change. Not published:
+    /// the window's frame lays the views out (`PanelRootLayout`), so no view
+    /// is told the size through state. Event handlers and the AppKit side
+    /// read it here.
+    private(set) var panelSize = PanelGeometry.defaultPanelSize
+    /// All the corner-aware insets take from the size: half the shorter
+    /// side, capped at the largest corner. Constant on every ordinary size,
+    /// so the shell is told only when its insets would change.
+    @Published private(set) var panelCornerRoom = PanelGeometry.cornerRoom(for: PanelGeometry.defaultPanelSize)
+    /// The size outside a resize drag: every size change that is not a drag
+    /// step, and the drag's end. Hidden pages are framed at it, so during a
+    /// drag they keep the drag's start size and catch up on release; only
+    /// the shown page follows each step, through layout.
+    let settledPanelSize = PanelSettledSize(PanelGeometry.defaultPanelSize)
+    /// Every accepted size, for a reader in another window (the island's
+    /// glass), which cannot take the panel's size from its own layout.
+    let panelSizeChanges = PassthroughSubject<CGSize, Never>()
+    /// The size hidden pages hold while a resize drag is on; nil otherwise.
+    var retainedPageSizeDuringLiveResize: CGSize? {
+        managedInteractionLocks.contains(.windowResize) ? settledPanelSize.value : nil
+    }
     @Published private(set) var selectedSection: PanelSection = .tasks {
         didSet { resumeDefaults?.set(selectedSection.rawValue, forKey: "AtticPanel.lastPage") }
     }
@@ -241,9 +257,7 @@ final class PanelUIState: ObservableObject {
             guard managedInteractionLocks.contains(reason) else { return }
             managedInteractionLocks.remove(reason)
         }
-        if reason == .windowResize {
-            retainedPageSizeDuringLiveResize = isActive ? panelSize : nil
-        }
+        if reason == .windowResize, !isActive { settledPanelSize.settle(panelSize) }
     }
 
     /// Whether the pages are built. Nothing is built before the first
@@ -364,6 +378,16 @@ final class PanelUIState: ObservableObject {
         guard abs(panelSize.width - size.width) >= 0.25
                 || abs(panelSize.height - size.height) >= 0.25 else { return }
         panelSize = size
+        let room = PanelGeometry.cornerRoom(for: size)
+        if room != panelCornerRoom {
+            #if ATTIC_LOCAL_ONLY
+            PanelInvalidationProbe.publishedSize?()
+            #endif
+            panelCornerRoom = room
+        }
+        // A drag's steps reach the shown page through layout alone.
+        if !managedInteractionLocks.contains(.windowResize) { settledPanelSize.settle(size) }
+        panelSizeChanges.send(size)
     }
 
     func beginAdding() {
@@ -569,5 +593,23 @@ final class PanelEditHold {
         guard isHeld else { return }
         isHeld = false
         apply(false)
+    }
+}
+
+/// The panel's size outside a resize drag (`PanelUIState.settledPanelSize`).
+/// Its own object, so the frames around hidden pages observe it and the
+/// shell does not.
+@MainActor
+final class PanelSettledSize: ObservableObject {
+    @Published private(set) var value: CGSize
+
+    init(_ value: CGSize) { self.value = value }
+
+    fileprivate func settle(_ size: CGSize) {
+        guard value != size else { return }
+        #if ATTIC_LOCAL_ONLY
+        PanelInvalidationProbe.publishedSize?()
+        #endif
+        value = size
     }
 }

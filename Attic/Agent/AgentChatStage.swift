@@ -235,12 +235,17 @@ struct AgentChatStage: View {
     private var solid: Bool { design.tokens.context.reducedFrom != nil || AtticVariableBlurView.backdropClass == nil }
 
     /// The ✦'s centre: where the blur opens from.
-    private var star: CGPoint {
+    private func star(in size: CGSize) -> CGPoint {
         let insets = PanelSharedBottomBar.plusInsets(layout: layout)
         let side = AtticControlSize.headerControl
-        return CGPoint(x: layout.panelSize.width - insets.trailing - side - TasksDesignMetrics.footerGap - side / 2,
-                       y: layout.panelSize.height - insets.bottom - side / 2)
+        return CGPoint(x: size.width - insets.trailing - side - TasksDesignMetrics.footerGap - side / 2,
+                       y: size.height - insets.bottom - side / 2)
     }
+
+    /// The size the stage was last laid out at, for its event handlers.
+    /// Written in layout, never observed.
+    private final class LaidOut { var size: CGSize = .zero }
+    @State private var laidOut = LaidOut()
 
     private var tint: NSColor {
         let alpha: CGFloat = solid ? 0.9 : dark ? 0.3 : 0.24
@@ -251,7 +256,18 @@ struct AgentChatStage: View {
         #if DEBUG
         let _ = Self.bodyEvaluations += 1
         #endif
-        ZStack(alignment: .topTrailing) {
+        // The stage covers the panel: its own size is the panel's, read
+        // here in layout (the layout value carries no size). It is mounted
+        // only while the chat is open, so a closed chat reads nothing.
+        GeometryReader { proxy in
+            let _ = laidOut.size = proxy.size
+            stage(size: proxy.size).frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+
+    private func stage(size: CGSize) -> some View {
+        let star = star(in: size)
+        return ZStack(alignment: .topTrailing) {
             AgentChatBackdrop(shown: shown, reveal: reveal, clearing: model.watch.clearing, origin: star, tint: tint,
                               fades: !alive, solid: solid,
                               onEscape: { model.escape() },
@@ -283,10 +299,10 @@ struct AgentChatStage: View {
                 // The thread arrives with the blur under it, never over the
                 // page's still readable rows (screen 9): the wipe's circle,
                 // or its fade.
-                .modifier(AgentChatWipeReveal(reveal: reveal, wipe: AgentChatWipe(origin: star, size: layout.panelSize), fades: !alive))
+                .modifier(AgentChatWipeReveal(reveal: reveal, wipe: AgentChatWipe(origin: star, size: size), fades: !alive))
                 .opacity(aside ? 0 : 1)
                 .allowsHitTesting(!aside)
-                AgentChatComposer(model: model, fx: fx, shown: shown, layout: layout, alive: alive, setTyping: setTyping, didClose: didClose)
+                AgentChatComposer(model: model, fx: fx, shown: shown, layout: layout, panelWidth: size.width, alive: alive, setTyping: setTyping, didClose: didClose)
             }
             if !model.entries.isEmpty || !model.history.isEmpty {
                 PanelControlFold(folded: !shown, animation: { _ in .easeOut(duration: 0.2) }) { topControls }
@@ -346,7 +362,7 @@ struct AgentChatStage: View {
         guard !dispersing else { return }
         let duration = alive ? 0.24 : Self.fade
         if alive, let composer = fx.composerFrame {
-            fx.burst(layout.panelSize.width / 2, composer.minY * 0.4, count: 22, speed: 120)
+            fx.burst(laidOut.size.width / 2, composer.minY * 0.4, count: 22, speed: 120)
         }
         withAnimation(alive ? .easeIn(duration: duration) : .linear(duration: duration)) { dispersing = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
@@ -361,6 +377,7 @@ struct AgentChatStage: View {
         #if DEBUG && ATTIC_LOCAL_ONLY
         if shown { DispatchQueue.main.async { AgentPassProbe.stageUpdated() } }
         #endif
+        let star = star(in: laidOut.size)
         fx.wipeOrigin = star
         if alive { fx.open(at: star) } else { fx.clearLive() }
         wipe(to: shown)
@@ -650,6 +667,8 @@ struct AgentChatComposer: View {
     let fx: AgentChatFX
     let shown: Bool
     let layout: PanelPageLayout
+    /// The panel's width, from the stage's layout.
+    let panelWidth: CGFloat
     let alive: Bool
     let setTyping: (Bool) -> Void
     let didClose: () -> Void
@@ -671,7 +690,7 @@ struct AgentChatComposer: View {
     }
 
     private var insets: EdgeInsets { PanelSharedBottomBar.plusInsets(layout: layout) }
-    private var width: CGFloat { max(0, layout.panelSize.width - insets.leading - insets.trailing) }
+    private var width: CGFloat { max(0, panelWidth - insets.leading - insets.trailing) }
     private var side: CGFloat { AtticControlSize.headerControl }
 
     var body: some View {

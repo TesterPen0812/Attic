@@ -658,6 +658,55 @@ final class CornerRevealSettingsTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - PR 69 fix round 1, item 1: a shrink wakes the cursor-away decision
+
+    /// The panel's size is no longer published state (PR 69), so a shrink
+    /// that is no pointer drag has to wake the cursor-away decision by
+    /// itself. The pointer rests in the part of the panel the shrink removes
+    /// and sends no event afterwards; the panel shrinks at an accessibility
+    /// client's request; the panel hides. (A plain frame set on the window
+    /// is not a route here: it hid the panel with the fix removed, so it
+    /// pinned nothing: Opus review of PR 69, N2.)
+    func testAShrinkThatLeavesARestingPointerOutsideHidesThePanel() throws {
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = previous }
+        let rig = try makePanel()
+        rig.settings.panelDismissMode = .moveCursorAway
+        rig.settings.hideDelay = 0.1
+        rig.monitor.start()
+        defer { rig.monitor.stop(); spin(0.4) }
+        XCTAssertEqual(rig.monitor.revealProgrammatically(takesKeyboard: false, focusesAddBar: false), .shown)
+        let panel = rig.controller.panelForTesting
+        func resize(width: CGFloat) -> CGRect {
+            var frame = panel.visibleContentFrame
+            frame.size.width = width
+            panel.setAccessibilityFrame(frame)
+            spin(0.05)
+            return panel.visibleContentFrame
+        }
+        // Pinned while the two frames are read, so nothing hides it yet.
+        rig.uiState.isPanelPinned = true
+        let narrow = resize(width: 320), wide = resize(width: 560)
+        XCTAssertGreaterThanOrEqual(wide.width - narrow.width, 100, "harness: the panel has room to shrink by: \(wide) \(narrow)")
+        // In the wide panel, outside the narrow one.
+        let resting = CGPoint(x: narrow.minX > wide.minX + 1 ? wide.minX + 20 : wide.maxX - 20, y: wide.midY)
+        XCTAssertTrue(wide.contains(resting) && !narrow.contains(resting), "\(resting) in \(wide), not in \(narrow)")
+        XCTAssertFalse(rig.monitor.isInHotspotForTesting(resting, flags: []))
+        rig.monitor.pointerLocationForTesting = resting
+        rig.uiState.isPanelPinned = false
+        rig.monitor.sampleForTesting(at: resting)
+        spin(rig.settings.hideDelay + 0.6)
+        XCTAssertTrue(rig.controller.isPanelVisible, "the pointer rests inside: the panel stays")
+
+        _ = resize(width: 320)
+        XCTAssertEqual(panel.visibleContentFrame.width, narrow.width, accuracy: 0.5)
+        XCTAssertFalse(rig.controller.containsScreenPoint(resting), "the shrink left the pointer outside")
+        let deadline = Date().addingTimeInterval(3)
+        while rig.controller.isPanelVisible, Date() < deadline { spin(0.01) }
+        XCTAssertFalse(rig.controller.isPanelVisible, "no pointer event follows; the shrink itself wakes the hide")
+    }
 }
 
 // MARK: - PR 43 narrowing (Astra r2 on 190723de): test-only reds, run on 79c06ffc, c8a3f0a9, 52c77361

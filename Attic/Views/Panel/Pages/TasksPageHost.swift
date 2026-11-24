@@ -135,15 +135,19 @@ struct TasksPageHost: View {
         let model = state.model(for: store, toasts: toasts)
         let _ = installTaskNoteServices(model)
         let _ = { if model.services.openCalendarDay == nil { model.services.openCalendarDay = openCalendarDay } }()
-        TasksPage(
-            model: model,
-            store: store,
-            // A wide panel keeps a readable column (U-42).
-            layout: layout.readingColumn(),
-            addBarFocused: $addBarFocused,
-            chrome: pageChrome
-        )
-        .equatable()
+        // A wide panel keeps a readable column (U-42), worked out where
+        // the page is laid out: up to the column's width the page is handed
+        // one unchanging layout, so resizing never reaches its `==`.
+        PanelReadingColumn(layout: layout) { column in
+            TasksPage(
+                model: model,
+                store: store,
+                layout: column,
+                addBarFocused: $addBarFocused,
+                chrome: pageChrome
+            )
+            .equatable()
+        }
         // Swipe to close (owner, 2026-10-01; pinned or not, 2026-10-02): a
         // swipe toward the panel's edge past the last page that way is the
         // panel's.
