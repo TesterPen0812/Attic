@@ -583,6 +583,26 @@ struct GlossLabPanelShadow: View {
         let _ = GlossLabCounters.shadowLayer += 1
         #endif
         let lab = GlossLab.shared
+        // The panel's blur behind (24 Nov): Apple's blur under the whole
+        // panel, behind its glass, with the shadow over it. Off, this is
+        // the shadow alone, as before; the strength and the see-through are
+        // read only while it is on.
+        if lab.panelBlur, GlossBackdropGround.isAvailable {
+            let reach = GlossPanelBlur.reach(radius: lab.panelBlurRadius, margin: margin)
+            ZStack {
+                GlossPanelBlurBehind(cornerSize: cornerSize, exponent: AtticStyle.panelSquircleExponent,
+                                     radius: lab.panelBlurRadius, seeThrough: lab.panelBlurSeeThrough, reach: reach)
+                    .padding(-reach)
+                shadow(lab)
+            }
+        } else {
+            shadow(lab)
+        }
+    }
+
+    /// 7, or the trunk's shadow while 7 and its spill are off.
+    @ViewBuilder
+    private func shadow(_ lab: GlossLab) -> some View {
         if !lab.glassShadow && !lab.glassSpill {
             AtticPanelOutsideShadow(shape: shape, elevation: elevation)
         } else {
@@ -615,6 +635,202 @@ struct GlossLabPanelShadow: View {
             }
             .compositingGroup()
         }
+    }
+}
+
+// MARK: The panel's blur behind (24 Nov)
+
+/// The panel's blur behind (owner, 24 Nov, on the Control Centre preset:
+/// "add a switch that adds blur in the background to it. Blur and maybe a
+/// semi-transparent blur"): Apple's blur, the private backdrop layer the
+/// stack test's ground uses (`GlossBackdropGround`), at one strength under
+/// the whole panel and behind its glass. The layer's mask is the panel's
+/// own squircle: full inside it, nothing outside, so nothing is blurred
+/// beyond the panel's edge. Unsupported; lab only.
+@MainActor
+enum GlossPanelBlur {
+    /// How far the layer reaches beyond the panel's shape, pt. The blur
+    /// darkens towards the layer's own edge wherever its mask is full there
+    /// (Air prototype, 24 Nov, `ops/reviews/gloss-lab-ground-24nov.md`), so
+    /// the layer is larger than the shape and its mask is nothing out
+    /// there: three times the radius, at least 8 pt, held inside the
+    /// window's transparent margin.
+    static func reach(radius: Double, margin: CGFloat) -> CGFloat {
+        max(0, min(margin, max(8, CGFloat(radius) * 3)))
+    }
+
+    /// The blur layer's own opacity for a see-through of 0 to 100 %: what
+    /// is left shows the sharp backdrop behind the window.
+    static func opacity(seeThrough: Double) -> Float {
+        Float(1 - min(max(seeThrough, 0), 100) / 100)
+    }
+
+    /// The mask for a layer of `size` whose panel lies `reach` in from
+    /// every side: white whose alpha is 1 inside the panel's squircle and 0
+    /// outside it (the variable blur reads the mask's alpha), premultiplied,
+    /// at `scale` pixels per point.
+    static func mask(size: CGSize, reach: CGFloat, cornerSize: CGFloat, exponent: CGFloat, scale: CGFloat) -> CGImage? {
+        let width = Int((size.width * scale).rounded()), height = Int((size.height * scale).rounded())
+        guard width > 0, height > 0,
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        let panel = CGRect(origin: .zero, size: size).insetBy(dx: reach, dy: reach)
+        context.addPath(Squircle(cornerRadius: cornerSize, exponent: exponent).path(in: panel).cgPath)
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fillPath()
+        return context.makeImage()
+    }
+
+    /// The check file: the blur's check line, written to the app's own
+    /// temporary folder (inside a preview's sandbox container) whenever it
+    /// changes, so it can be read where nobody captures the screen.
+    static var checkFileURL: URL { FileManager.default.temporaryDirectory.appendingPathComponent("gloss-panel-check.txt") }
+}
+
+/// The panel's blur behind as a view: the private layer, sized `reach`
+/// beyond the panel on every side. It takes no clicks and no keyboard.
+struct GlossPanelBlurBehind: NSViewRepresentable {
+    let cornerSize: CGFloat
+    let exponent: CGFloat
+    let radius: Double
+    /// 0 to 100 %.
+    let seeThrough: Double
+    let reach: CGFloat
+
+    func makeNSView(context: Context) -> GlossPanelBlurView {
+        let view = GlossPanelBlurView(frame: .zero)
+        view.configure(cornerSize: cornerSize, exponent: exponent, radius: radius, seeThrough: seeThrough, reach: reach)
+        return view
+    }
+
+    func updateNSView(_ view: GlossPanelBlurView, context: Context) {
+        view.configure(cornerSize: cornerSize, exponent: exponent, radius: radius, seeThrough: seeThrough, reach: reach)
+    }
+
+    static func dismantleNSView(_ view: GlossPanelBlurView, coordinator: ()) { view.writeOff() }
+}
+
+final class GlossPanelBlurView: NSView {
+    private var backdrop: GlossBackdropGround.Parts?
+    private var backdropTried = false
+    private(set) var cornerSize: CGFloat = 0
+    private(set) var exponent: CGFloat = 5
+    private(set) var radius: Double = 0
+    private(set) var seeThrough: Double = 0
+    private(set) var reach: CGFloat = 0
+    private var mask: CGImage?
+    private var maskMade: [CGFloat]?
+    private var appliedRadius: Double?
+    private var checkWritten: String?
+    /// The private layer, for the checks; nil where this system lacks a piece.
+    var backdropLayer: CALayer? { backdrop?.layer }
+    #if DEBUG
+    /// Test seam: how many masks this view has made.
+    private(set) var masksMade = 0
+    #endif
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
+        setAccessibilityElement(false)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override var acceptsFirstResponder: Bool { false }
+    override func accessibilityChildren() -> [Any]? { [] }
+
+    func configure(cornerSize: CGFloat, exponent: CGFloat, radius: Double, seeThrough: Double, reach: CGFloat) {
+        guard cornerSize != self.cornerSize || exponent != self.exponent || radius != self.radius
+                || seeThrough != self.seeThrough || reach != self.reach else { return }
+        self.cornerSize = cornerSize
+        self.exponent = exponent
+        self.radius = radius
+        self.seeThrough = seeThrough
+        self.reach = reach
+        needsLayout = true
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsLayout = true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        defer { writeCheckFile() }
+        if !backdropTried {
+            backdropTried = true
+            backdrop = GlossBackdropGround.make()
+            if let made = backdrop?.layer { layer?.addSublayer(made) }
+        }
+        guard let parts = backdrop else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        parts.layer.frame = bounds
+        // On the backdrop layer itself, not on a layer round it: an
+        // opacity on a parent would draw the layer into a group first,
+        // where it has nothing behind it to sample.
+        parts.layer.opacity = GlossPanelBlur.opacity(seeThrough: seeThrough)
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let made = [bounds.width, bounds.height, reach, cornerSize, exponent, scale]
+        var maskChanged = false
+        if maskMade != made {
+            maskMade = made
+            mask = GlossPanelBlur.mask(size: bounds.size, reach: reach, cornerSize: cornerSize, exponent: exponent, scale: scale)
+            maskChanged = true
+            #if DEBUG
+            masksMade += 1
+            #endif
+        }
+        if maskChanged || appliedRadius != radius {
+            appliedRadius = radius
+            GlossBackdropGround.apply(parts, radius: CGFloat(radius), mask: mask)
+        }
+    }
+
+    /// The blur's state as one line: its view, how far it reaches beyond
+    /// the panel, and what its layer holds.
+    func checkLine() -> String {
+        var text = "panelBlur=on view=\(NSStringFromSize(bounds.size)) reach=\(reach) corner=\(cornerSize)"
+        guard let layer = backdropLayer else { return text + " layer=none" }
+        let back = GlossBackdropGround.readBack(layer)
+        let aware = GlossBackdropGround.answers(layer, GlossBackdropGround.behindWindowKey)
+            ? "\(layer.value(forKey: GlossBackdropGround.behindWindowKey) ?? "nil")" : "-"
+        let inputs = (layer.filters?.first as? NSObject).map(GlossBackdropGround.numericInputs) ?? []
+        text += " layer=\(NSStringFromClass(type(of: layer))) windowServerAware=\(aware) radius=\(back.radius.map { "\($0)" } ?? "nil") "
+            + "opacity=\(layer.opacity) seeThrough=\(seeThrough) mask=\(back.mask.map { "\($0.width)x\($0.height)" } ?? "nil") "
+            + "scale=\(window?.backingScaleFactor ?? 0) inWindow=\(window != nil) inputs=[\(inputs.joined(separator: ","))]"
+        return text
+    }
+
+    private func writeCheckFile() {
+        let line = checkLine()
+        guard line != checkWritten else { return }
+        checkWritten = line
+        try? (line + "\n").write(to: GlossPanelBlur.checkFileURL, atomically: true, encoding: .utf8)
+    }
+
+    /// The switch went off (the view is taken away): the check file says so.
+    func writeOff() {
+        checkWritten = nil
+        try? "panelBlur=off\n".write(to: GlossPanelBlur.checkFileURL, atomically: true, encoding: .utf8)
     }
 }
 

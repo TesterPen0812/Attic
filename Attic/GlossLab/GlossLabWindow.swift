@@ -231,6 +231,14 @@ struct GlossLabView: View {
                     note: "Apple's Clear glass in place of the regular one: more of what is behind comes through, and it bends at the edge.") {
                     slider("Fill · \(modeName)", dark ? $lab.clearBodyFillDark : $lab.clearBodyFillLight, 0...80, unit: " %")
                 }
+                row("Blur behind", $lab.panelBlur,
+                    note: "A light blur of what is behind the whole panel, under its glass: Apple's blur, the kind Control Centre's ground uses, at one strength everywhere. Blur see-through is how much of the sharp backdrop still shows through the blur. A private layer, unsupported: for looking in the lab. Not drawn on a page where Tiles stand in for the panel.") {
+                    if !GlossBackdropGround.isAvailable {
+                        Text(GlossBackdropGround.unavailableLine).font(.caption).foregroundStyle(.secondary)
+                    }
+                    fineSlider("Strength", $lab.panelBlurRadius, 0...20)
+                    slider("Blur see-through", $lab.panelBlurSeeThrough, 0...100, unit: " %")
+                }
                 row("Refracting rim", $lab.clearBand,
                     note: "Today's glass with a rim of Clear glass, which bends what is behind it. Width is how far in the bend reaches; Apple's glass has no strength setting. Under a Clear glass body the whole edge already bends, so this draws nothing.") {
                     slider("Width", $lab.clearBandWidth, 2...40, unit: " pt")
@@ -361,7 +369,7 @@ struct GlossLabView: View {
             if let line = GlossBackdropGround.line(for: lab.samplesGroundMaterial) {
                 Text(line).font(.caption).foregroundStyle(.secondary)
             }
-            slider("Blur radius", $lab.samplesGroundRadius, 0...40, unit: " pt")
+            fineSlider("Blur radius", $lab.samplesGroundRadius, 0...40)
             slider("Reach", $lab.samplesGroundReach, 20...160, unit: " pt")
             slider("Fade start", $lab.samplesGroundHold, 0...60, unit: " pt")
             slider("Fade curve", $lab.samplesGroundCurve, 1...4)
@@ -479,6 +487,34 @@ struct GlossLabView: View {
                 .frame(width: 62, alignment: .trailing)
         }
         .font(.callout)
+    }
+
+    /// A slider with a number field and a stepper beside it, so a value can
+    /// be set to 0.1 (24 Nov: the real Control Centre's ground blur reads as
+    /// a small number, and a slider alone cannot land on one). All three
+    /// write the value held inside `range` and rounded to one decimal.
+    private func fineSlider(_ label: String, _ value: Binding<Double>, _ range: ClosedRange<Double>) -> some View {
+        let held = Binding<Double>(
+            get: { value.wrappedValue },
+            set: { value.wrappedValue = GlossLabView.tenths($0, in: range) })
+        return HStack(spacing: 8) {
+            Text(label).frame(width: 104, alignment: .leading)
+            Slider(value: held, in: range)
+            TextField(label, value: held, format: .number.precision(.fractionLength(0...1)))
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .frame(width: 48)
+            Stepper(label, value: held, in: range, step: 0.1)
+                .labelsHidden()
+        }
+        .font(.callout)
+    }
+
+    /// `value` held inside `range` and rounded to one decimal.
+    nonisolated static func tenths(_ value: Double, in range: ClosedRange<Double>) -> Double {
+        guard value.isFinite else { return range.lowerBound }
+        return (min(max(value, range.lowerBound), range.upperBound) * 10).rounded() / 10
     }
 }
 

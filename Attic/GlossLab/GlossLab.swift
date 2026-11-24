@@ -224,8 +224,9 @@ final class GlossLab {
     var samplesStackKey = false { didSet { save(samplesStackKey, "samplesStackKey") } }
     /// Apple's blur, the fourth ground material (24 Nov, owner: "Lift it,
     /// Opus builds"; brief `ops/design/gloss-lab-ground-brief-2026-11-24.md`):
-    /// its blur radius (0 to 40 pt) and how far beyond the pieces it reaches
-    /// before the blur is gone (20 to 80 pt). The lab window's own state.
+    /// its blur radius (0 to 40 pt, settable to 0.1 since 24 Nov) and how
+    /// far beyond the pieces it reaches before the blur is gone (20 to 80
+    /// pt). The lab window's own state.
     var samplesGroundRadius: Double = 20 { didSet { save(samplesGroundRadius, "samplesGroundRadius") } }
     var samplesGroundReach: Double = 60 { didSet { save(samplesGroundReach, "samplesGroundReach") } }
     /// Apple's blur's fade (24 Nov, owner: "Fix the fade"; brief
@@ -237,6 +238,22 @@ final class GlossLab {
     var samplesGroundHold: Double = 25 { didSet { save(samplesGroundHold, "samplesGroundHold") } }
     var samplesGroundCurve: Double = GlossLab.groundCurveStart { didSet { save(samplesGroundCurve, "samplesGroundCurve") } }
     var samplesGroundExtras = "" { didSet { save(samplesGroundExtras, "samplesGroundExtras") } }
+    /// The panel's blur behind (24 Nov, owner on the Control Centre preset:
+    /// "add a switch that adds blur in the background to it. Blur and maybe
+    /// a semi-transparent blur"): Apple's blur, uniform under the whole
+    /// panel and under its glass; its strength (the filter's radius, 0 to
+    /// 40, settable to 0.1); and how much of the sharp backdrop still shows
+    /// through the blur, % (0 to 100: the blur layer's own opacity is the
+    /// rest). Off to start with. The lab's own state for the panel: no
+    /// preset, All off or Reset sliders touches them, and they are not part
+    /// of `labLines`, so a preset still matches and a launch preset keeps
+    /// them. Unsupported (a private layer): for looking in the lab.
+    var panelBlur = false { didSet { save(panelBlur, "panelBlur") } }
+    var panelBlurRadius: Double = GlossLab.panelBlurRadiusStart { didSet { save(panelBlurRadius, "panelBlurRadius") } }
+    var panelBlurSeeThrough: Double = 0 { didSet { save(panelBlurSeeThrough, "panelBlurSeeThrough") } }
+    /// The blur's starting strength: the lead's first value (24 Nov), kept
+    /// until the measured match of the real Control Centre's ground is in.
+    static let panelBlurRadiusStart: Double = 2
     /// The fade curve's starting value, chosen from the Air's measured
     /// series at curves 1 to 4 (fade start 25, reach 60): the smallest
     /// largest step between neighbouring 4 pt of the walk out to the rim,
@@ -333,6 +350,8 @@ final class GlossLab {
         double("samplesGroundRadius", &samplesGroundRadius); double("samplesGroundReach", &samplesGroundReach)
         double("samplesGroundHold", &samplesGroundHold); double("samplesGroundCurve", &samplesGroundCurve)
         if let value = defaults.string(forKey: Self.prefix + "samplesGroundExtras") { samplesGroundExtras = value }
+        bool("panelBlur", &panelBlur); double("panelBlurRadius", &panelBlurRadius)
+        double("panelBlurSeeThrough", &panelBlurSeeThrough)
         // A launch argument (`-GlossLab.preset <id>`) shows a preset for
         // one run. Still loading, so nothing of it is saved.
         if let id = defaults.string(forKey: Self.prefix + "preset"), let preset = Self.presets.first(where: { $0.id == id }) {
@@ -507,6 +526,7 @@ final class GlossLab {
         Material samples: \(on(samplesShown)), veil \(Int(samplesSmoke.rounded())) %, light row \(on(samplesLight)), system variants \(on(samplesSystem)) (lensing \(Int(samplesLensing.rounded())), scrim \(Int(samplesScrim.rounded())))
         \(stackLine)
         \(fadeLine)
+        \(panelBlurLine)
         Preset: \(currentPreset?.title ?? "none (own values)")
         \(labLines)
         """
@@ -522,7 +542,7 @@ final class GlossLab {
             + "as \(samplesStackTint ? "the glass's tint" : "a veil"), lensing \(n(samplesLensing)), scrim \(n(samplesScrim)), "
             + "subdued \(n(samplesSubdued)), adaptive \(n(samplesAdaptive)), reduced tint opacity \(on(samplesTintReduced)), "
             + "subvariant \(subvariant), key window \(on(samplesStackKey)), "
-            + "Apple's blur radius \(n(samplesGroundRadius)) pt, reach \(n(samplesGroundReach)) pt"
+            + "Apple's blur radius \(Self.fine(samplesGroundRadius)) pt, reach \(n(samplesGroundReach)) pt"
     }
 
     /// Apple's blur's fade as one line, for "Copy values" (its own line, so
@@ -531,6 +551,18 @@ final class GlossLab {
         let extras = samplesGroundExtras.trimmingCharacters(in: .whitespacesAndNewlines)
         return "Apple's blur fade: start \(Int(samplesGroundHold.rounded())) pt, curve \(String(format: "%.1f", samplesGroundCurve)), "
             + "extras \(extras.isEmpty ? "none" : "\"\(extras)\"")"
+    }
+
+    /// The panel's blur behind as one line, for "Copy values".
+    var panelBlurLine: String {
+        "Panel blur behind: \(panelBlur ? "on" : "off"), strength \(Self.fine(panelBlurRadius)), "
+            + "see-through \(Int(panelBlurSeeThrough.rounded())) %"
+    }
+
+    /// A value settable to 0.1 as text: whole numbers plain, else one decimal.
+    static func fine(_ value: Double) -> String {
+        let tenths = (value * 10).rounded() / 10
+        return tenths == tenths.rounded() ? String(Int(tenths)) : String(format: "%.1f", tenths)
     }
 
     /// The lab's own switches and sliders as text, numbered as in the

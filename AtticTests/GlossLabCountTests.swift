@@ -536,6 +536,121 @@ final class GlossLabCountTests: XCTestCase {
         XCTAssertEqual(GlossLabPanelShadow.softRadius(15, drop: 6, margin: AtticStyle.dockedPanelMargin), 15)
         XCTAssertEqual(GlossLabPanelShadow.softRadius(15, drop: 6, margin: AtticStyle.panelElevationMargin), 11)
     }
+
+    // MARK: The panel's blur behind (24 Nov)
+
+    private func blurViews(in view: NSView) -> [GlossPanelBlurView] {
+        view.subviews.flatMap { ($0 as? GlossPanelBlurView).map { [$0] } ?? blurViews(in: $0) }
+    }
+
+    private var labBodies: Int {
+        GlossLabCounters.stageSurface + GlossLabCounters.surfaceLayer + GlossLabCounters.rimLayer
+            + GlossLabCounters.controlEdgeLight + GlossLabCounters.shadowLayer
+    }
+
+    /// The panel's blur behind: off, the panel holds no blur view and its
+    /// strength and see-through re-run nothing; flipping it re-runs only the
+    /// shadow layer, which holds it; on, one private layer lies under the
+    /// panel, a little larger than it, takes no clicks, and a new strength
+    /// or see-through reaches it through the shadow layer alone; and one
+    /// resize write with it on runs no more bodies than with it off.
+    func testPanelBlurBehindFlipAndOneResizeWrite() throws {
+        let lab = GlossLab.shared
+        func rest() {
+            lab.allOff(); lab.resetSliders()
+            lab.panelBlur = false; lab.panelBlurRadius = GlossLab.panelBlurRadiusStart; lab.panelBlurSeeThrough = 0
+        }
+        rest()
+        defer { rest() }
+        let (panel, view) = host(elevation: .light)
+        defer { panel.orderOut(nil); panel.close() }
+        spin()
+        func settle() { spin(); view.layoutSubtreeIfNeeded(); panel.displayIfNeeded(); CATransaction.flush() }
+        XCTAssertTrue(blurViews(in: view).isEmpty, "off, the panel holds a blur view")
+        GlossLabCounters.reset()
+        lab.panelBlurRadius = 5; lab.panelBlurSeeThrough = 20
+        settle()
+        XCTAssertEqual(labBodies, 0, "off, the strength or the see-through re-ran a body")
+        XCTAssertTrue(blurViews(in: view).isEmpty)
+        lab.panelBlurRadius = GlossLab.panelBlurRadiusStart; lab.panelBlurSeeThrough = 0
+        var lines: [String] = []
+        for value in [true, false, true] {
+            GlossLabCounters.reset()
+            lab.panelBlur = value
+            settle()
+            lines.append("panel blur \(value ? "on" : "off"): shadow layer \(GlossLabCounters.shadowLayer), all lab-touched bodies \(labBodies)")
+            XCTAssertGreaterThanOrEqual(GlossLabCounters.shadowLayer, 1, "the flip did not re-run the shadow layer")
+            XCTAssertEqual(labBodies, GlossLabCounters.shadowLayer, "the flip re-ran more than the shadow layer")
+            XCTAssertEqual(blurViews(in: view).count, value ? 1 : 0)
+        }
+        let blur = try XCTUnwrap(blurViews(in: view).first)
+        let layer = try XCTUnwrap(blur.backdropLayer, "no private layer made")
+        XCTAssertEqual(NSStringFromClass(type(of: layer)), "CABackdropLayer")
+        XCTAssertEqual(GlossBackdropGround.readBack(layer).radius, GlossLab.panelBlurRadiusStart)
+        XCTAssertEqual(layer.opacity, 1)
+        // The start strength is 2: three times it is under the 8 pt floor.
+        XCTAssertEqual(blur.reach, 8)
+        let frame = blur.convert(blur.bounds, to: view)
+        let wanted = view.bounds.insetBy(dx: -8, dy: -8)
+        XCTAssertEqual(frame.minX, wanted.minX, accuracy: 0.5); XCTAssertEqual(frame.minY, wanted.minY, accuracy: 0.5)
+        XCTAssertEqual(frame.width, wanted.width, accuracy: 0.5); XCTAssertEqual(frame.height, wanted.height, accuracy: 0.5)
+        XCTAssertNil(blur.hitTest(CGPoint(x: 100, y: 100)), "the blur takes clicks")
+        XCTAssertFalse(blur.acceptsFirstResponder)
+        // A new strength and see-through reach the layer through the shadow
+        // layer alone.
+        GlossLabCounters.reset()
+        lab.panelBlurRadius = 0.4
+        settle()
+        XCTAssertEqual(labBodies, GlossLabCounters.shadowLayer, "the strength re-ran more than the shadow layer")
+        XCTAssertEqual(try XCTUnwrap(GlossBackdropGround.readBack(layer).radius), 0.4, accuracy: 0.0001)
+        GlossLabCounters.reset()
+        lab.panelBlurSeeThrough = 40
+        settle()
+        XCTAssertEqual(labBodies, GlossLabCounters.shadowLayer, "the see-through re-ran more than the shadow layer")
+        XCTAssertEqual(layer.opacity, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(blurViews(in: view).count, 1, "a new value made a second blur view")
+        // One resize write, against all off with the panel's shadow.
+        lab.panelBlurRadius = GlossLab.panelBlurRadiusStart; lab.panelBlurSeeThrough = 0
+        let off = oneResize(elevation: .light) { $0.panelBlur = false }
+        let on = oneResize(elevation: .light) { $0.panelBlur = true }
+        lines.append("one resize write, with the panel's shadow: off \(off); panel blur on \(on)")
+        XCTAssertEqual(on, off, "the panel's blur adds body runs on one resize write")
+        // One mask per size: the resize makes one more, a new strength
+        // none. (The switch went off and on above, so this is a new view.)
+        settle()
+        let live = try XCTUnwrap(blurViews(in: view).first)
+        let masks = live.masksMade
+        panel.setContentSize(CGSize(width: 400, height: 600))
+        settle()
+        XCTAssertEqual(live.masksMade, masks + 1, "one resize made \(live.masksMade - masks) masks")
+        XCTAssertEqual(live.backdropLayer?.frame, live.bounds)
+        // 2.5 keeps the 8 pt reach, so the layer's size and its mask stay.
+        lab.panelBlurRadius = 2.5
+        settle()
+        XCTAssertEqual(live.masksMade, masks + 1, "a new strength made a mask")
+        XCTAssertEqual(live.backdropLayer.flatMap { GlossBackdropGround.readBack($0).radius }, 2.5)
+        // 4 reaches 12 pt: the layer grows by 4 pt a side and takes one new mask.
+        let width = live.bounds.width
+        lab.panelBlurRadius = 4
+        settle()
+        XCTAssertEqual(live.reach, 12); XCTAssertEqual(live.bounds.width, width + 8, accuracy: 0.5)
+        XCTAssertEqual(live.masksMade, masks + 2)
+        print("GLOSS_LAB_PANEL_BLUR\n\(lines.joined(separator: "\n"))\nGLOSS_LAB_PANEL_BLUR_END")
+    }
+
+    /// Where this system lacks a piece of Apple's blur (the test seam), the
+    /// switch draws nothing and the panel is the shadow alone.
+    func testPanelBlurBehindDrawsNothingWithoutThePrivateLayer() {
+        let lab = GlossLab.shared
+        lab.allOff(); lab.resetSliders()
+        defer { GlossBackdropGround.backdropClassNameForTesting = nil; lab.panelBlur = false }
+        GlossBackdropGround.backdropClassNameForTesting = "AtticGlossNoSuchBackdropLayer"
+        lab.panelBlur = true
+        let (panel, view) = host(elevation: .light)
+        defer { panel.orderOut(nil); panel.close() }
+        spin()
+        XCTAssertTrue(blurViews(in: view).isEmpty, "a blur view without the private layer")
+    }
 }
 #endif
 
@@ -1741,6 +1856,167 @@ final class GlossLabValuesTests: XCTestCase {
         view.configure(material: .blur, dim: 0, radius: 14, reach: 80)
         view.layout()
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "another material wrote the check file")
+    }
+    // MARK: The panel's blur behind (24 Nov)
+
+    /// The panel's blur behind, its strength and its see-through load from
+    /// storage without being written back, are written by Copy values on a
+    /// line of their own, stay out of presets, All off and Reset sliders,
+    /// and a change is kept; a preset shown by launch argument keeps them.
+    func testPanelBlurValuesLoadCopyAndStayOutOfPresets() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(CountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertFalse(fresh.panelBlur); XCTAssertEqual(fresh.panelBlurRadius, 2); XCTAssertEqual(fresh.panelBlurSeeThrough, 0)
+        XCTAssertEqual(GlossLab.panelBlurRadiusStart, 2)
+        XCTAssertEqual(fresh.panelBlurLine, "Panel blur behind: off, strength 2, see-through 0 %")
+        XCTAssertTrue(fresh.valuesText(app: Self.app(mode: "Light")).contains("\n" + fresh.panelBlurLine), "not on a line of its own")
+        defaults.set(true, forKey: "GlossLab.panelBlur")
+        defaults.set(2.3, forKey: "GlossLab.panelBlurRadius")
+        defaults.set(35.0, forKey: "GlossLab.panelBlurSeeThrough")
+        defaults.writes = []
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.panelBlur); XCTAssertEqual(lab.panelBlurRadius, 2.3); XCTAssertEqual(lab.panelBlurSeeThrough, 35)
+        XCTAssertEqual(defaults.writes, [], "loading wrote values back")
+        XCTAssertTrue(lab.valuesText(app: Self.app(mode: "Dark")).contains("Panel blur behind: on, strength 2.3, see-through 35 %"))
+        lab.allOff(); lab.resetSliders()
+        XCTAssertTrue(lab.panelBlur, "All off reached the panel's blur")
+        XCTAssertEqual(lab.panelBlurRadius, 2.3); XCTAssertEqual(lab.panelBlurSeeThrough, 35, "Reset sliders reached the panel's blur")
+        XCTAssertEqual(lab.currentPreset?.id, "today", "the panel's blur broke Today's match")
+        lab.apply(try XCTUnwrap(GlossLab.presets.first { $0.id == "controlCentre" }))
+        XCTAssertTrue(lab.panelBlur); XCTAssertEqual(lab.panelBlurRadius, 2.3); XCTAssertEqual(lab.panelBlurSeeThrough, 35, "a preset moved the panel's blur")
+        defaults.writes = []
+        lab.panelBlur = false; lab.panelBlurRadius = 0.7; lab.panelBlurSeeThrough = 60
+        XCTAssertEqual(defaults.writes, ["GlossLab.panelBlur", "GlossLab.panelBlurRadius", "GlossLab.panelBlurSeeThrough"])
+        XCTAssertEqual(lab.currentPreset?.id, "controlCentre", "a panel blur value broke the preset's match")
+        let again = GlossLab(defaults: defaults)
+        XCTAssertFalse(again.panelBlur); XCTAssertEqual(again.panelBlurRadius, 0.7); XCTAssertEqual(again.panelBlurSeeThrough, 60, "a change is kept")
+        // The launch arguments the hand-over uses: a preset and the switch.
+        defaults.set("controlCentre", forKey: "GlossLab.preset")
+        defaults.set(true, forKey: "GlossLab.panelBlur")
+        let shown = GlossLab(defaults: defaults)
+        XCTAssertEqual(shown.currentPreset?.id, "controlCentre")
+        XCTAssertTrue(shown.panelBlur, "a preset shown by launch argument turned the panel's blur off")
+        XCTAssertEqual(shown.panelBlurRadius, 0.7); XCTAssertEqual(shown.panelBlurSeeThrough, 60)
+    }
+
+    /// A strength reads to one decimal, a whole one plain (so the stack
+    /// line's "20 pt" reads as before), and the fine sliders hold a value
+    /// inside their range at one decimal.
+    func testFineValuesReadAndHoldToOneDecimal() {
+        XCTAssertEqual(GlossLab.fine(20), "20"); XCTAssertEqual(GlossLab.fine(2.3), "2.3"); XCTAssertEqual(GlossLab.fine(0.1), "0.1")
+        XCTAssertEqual(GlossLab.fine(2.04), "2"); XCTAssertEqual(GlossLab.fine(12.96), "13"); XCTAssertEqual(GlossLab.fine(0), "0")
+        let lab = GlossLab(defaults: nil)
+        XCTAssertTrue(lab.stackLine.hasSuffix("Apple's blur radius 20 pt, reach 60 pt"), lab.stackLine)
+        lab.samplesGroundRadius = 2.3
+        XCTAssertTrue(lab.stackLine.hasSuffix("Apple's blur radius 2.3 pt, reach 60 pt"), lab.stackLine)
+        XCTAssertEqual(GlossLabView.tenths(2.34, in: 0...40), 2.3); XCTAssertEqual(GlossLabView.tenths(0.1, in: 0...40), 0.1)
+        XCTAssertEqual(GlossLabView.tenths(0.05, in: 0...40), 0.1); XCTAssertEqual(GlossLabView.tenths(0.04, in: 0...40), 0)
+        XCTAssertEqual(GlossLabView.tenths(-1, in: 0...40), 0); XCTAssertEqual(GlossLabView.tenths(55, in: 0...40), 40)
+        XCTAssertEqual(GlossLabView.tenths(.nan, in: 0...20), 0); XCTAssertEqual(GlossLabView.tenths(.infinity, in: 0...20), 0)
+        // Ten steps of 0.1 from 1.9 land on 2.9, not beside it.
+        var value = 1.9
+        for _ in 0..<10 { value = GlossLabView.tenths(value + 0.1, in: 0...20) }
+        XCTAssertEqual(value, 2.9)
+    }
+
+    /// The blur's layer reaches beyond the panel inside the window's margin,
+    /// its mask is the panel's squircle (full inside, nothing in the reach
+    /// band or beyond the corner's curve), and the see-through is the
+    /// layer's opacity.
+    func testPanelBlurReachMaskAndSeeThrough() throws {
+        XCTAssertEqual(GlossPanelBlur.reach(radius: 2, margin: 28), 8); XCTAssertEqual(GlossPanelBlur.reach(radius: 0, margin: 28), 8)
+        XCTAssertEqual(GlossPanelBlur.reach(radius: 5, margin: 28), 15); XCTAssertEqual(GlossPanelBlur.reach(radius: 20, margin: 28), 28)
+        XCTAssertEqual(GlossPanelBlur.reach(radius: 20, margin: 40), 40); XCTAssertEqual(GlossPanelBlur.reach(radius: 2, margin: 0), 0)
+        XCTAssertEqual(GlossPanelBlur.opacity(seeThrough: 0), 1); XCTAssertEqual(GlossPanelBlur.opacity(seeThrough: 100), 0)
+        XCTAssertEqual(GlossPanelBlur.opacity(seeThrough: 30), 0.7, accuracy: 0.0001)
+        XCTAssertEqual(GlossPanelBlur.opacity(seeThrough: -5), 1); XCTAssertEqual(GlossPanelBlur.opacity(seeThrough: 140), 0)
+        let size = CGSize(width: 200, height: 300), reach: CGFloat = 10
+        let image = try XCTUnwrap(GlossPanelBlur.mask(size: size, reach: reach, cornerSize: 26,
+                                                      exponent: AtticStyle.panelSquircleExponent, scale: 2))
+        XCTAssertEqual(image.width, 400); XCTAssertEqual(image.height, 600)
+        let data = try XCTUnwrap(image.dataProvider?.data as Data?)
+        func pixel(_ x: Int, _ y: Int) -> [UInt8] { let i = y * image.bytesPerRow + x * 4; return Array(data[i..<i + 4]) }
+        XCTAssertEqual(pixel(200, 300), [255, 255, 255, 255], "white, opaque over the panel")
+        XCTAssertEqual(pixel(24, 300), [255, 255, 255, 255], "full just inside the panel's left edge")
+        XCTAssertEqual(pixel(375, 300), [255, 255, 255, 255], "full just inside the panel's right edge")
+        XCTAssertEqual(pixel(200, 24), [255, 255, 255, 255]); XCTAssertEqual(pixel(200, 575), [255, 255, 255, 255])
+        for (x, y) in [(10, 300), (389, 300), (200, 10), (200, 589), (0, 0), (399, 599)] {
+            XCTAssertEqual(pixel(x, y)[3], 0, "the reach band at \(x), \(y) is blurred")
+        }
+        for (x, y) in [(22, 22), (377, 22), (22, 577), (377, 577)] {
+            XCTAssertEqual(pixel(x, y)[3], 0, "beyond the corner's curve at \(x), \(y) is blurred")
+        }
+        XCTAssertNil(GlossPanelBlur.mask(size: .zero, reach: 0, cornerSize: 26, exponent: 5, scale: 2))
+    }
+
+    /// The private layer is made, samples behind the window, fills the
+    /// view, and the strength, the mask and the see-through reach it; a
+    /// strength of 0.1 reaches it as 0.1; only a new size makes a new mask;
+    /// the view takes no clicks.
+    func testPanelBlurValuesReachTheLayer() throws {
+        let view = GlossPanelBlurView(frame: CGRect(x: 0, y: 0, width: 300, height: 400))
+        view.configure(cornerSize: 26, exponent: AtticStyle.panelSquircleExponent, radius: 2, seeThrough: 0, reach: 8)
+        view.layout()
+        let layer = try XCTUnwrap(view.backdropLayer, "no private layer made")
+        XCTAssertEqual(NSStringFromClass(type(of: layer)), "CABackdropLayer")
+        XCTAssertEqual(layer.value(forKey: GlossBackdropGround.behindWindowKey) as? Bool, true, "it must sample behind the window")
+        XCTAssertTrue(view.layer?.sublayers?.contains(layer) == true, "the layer is not shown")
+        XCTAssertEqual(layer.frame, view.bounds)
+        var back = GlossBackdropGround.readBack(layer)
+        XCTAssertEqual(back.radius, 2)
+        let mask = try XCTUnwrap(back.mask, "the mask did not reach the layer")
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        XCTAssertEqual(mask.width, Int((300 * scale).rounded())); XCTAssertEqual(mask.height, Int((400 * scale).rounded()))
+        XCTAssertEqual(layer.opacity, 1)
+        XCTAssertEqual(view.masksMade, 1)
+        view.configure(cornerSize: 26, exponent: AtticStyle.panelSquircleExponent, radius: 0.1, seeThrough: 40, reach: 8)
+        view.layout()
+        back = GlossBackdropGround.readBack(layer)
+        XCTAssertEqual(try XCTUnwrap(back.radius), 0.1, accuracy: 0.0001, "a strength of 0.1 did not reach the layer")
+        XCTAssertNotNil(back.mask); XCTAssertEqual(layer.opacity, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(view.masksMade, 1, "a new strength or see-through made a mask")
+        view.setFrameSize(CGSize(width: 320, height: 420))
+        view.layout()
+        XCTAssertEqual(view.masksMade, 2); XCTAssertEqual(layer.frame, view.bounds)
+        XCTAssertEqual(GlossBackdropGround.readBack(layer).mask?.width, Int((320 * scale).rounded()))
+        XCTAssertNil(view.hitTest(CGPoint(x: 100, y: 100)), "the blur takes clicks")
+        XCTAssertFalse(view.acceptsFirstResponder)
+        XCTAssertNil(view.subviews.first, "the blur holds a view of its own")
+        // Without the private class (the test seam) nothing is made and
+        // nothing throws.
+        defer { GlossBackdropGround.backdropClassNameForTesting = nil }
+        GlossBackdropGround.backdropClassNameForTesting = "AtticGlossNoSuchBackdropLayer"
+        let bare = GlossPanelBlurView(frame: CGRect(x: 0, y: 0, width: 300, height: 400))
+        bare.configure(cornerSize: 26, exponent: AtticStyle.panelSquircleExponent, radius: 2, seeThrough: 0, reach: 8)
+        bare.layout()
+        XCTAssertNil(bare.backdropLayer); XCTAssertTrue(bare.checkLine().hasSuffix("layer=none"), bare.checkLine())
+    }
+
+    /// Laying the blur out writes its check line to the check file; taking
+    /// it away writes that it is off.
+    func testPanelBlurCheckFileHoldsTheValuesSet() throws {
+        let url = GlossPanelBlur.checkFileURL
+        XCTAssertEqual(url.lastPathComponent, "gloss-panel-check.txt")
+        XCTAssertEqual(url.deletingLastPathComponent().standardizedFileURL, FileManager.default.temporaryDirectory.standardizedFileURL)
+        try? FileManager.default.removeItem(at: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let view = GlossPanelBlurView(frame: CGRect(x: 0, y: 0, width: 300, height: 400))
+        view.configure(cornerSize: 26, exponent: AtticStyle.panelSquircleExponent, radius: 2.3, seeThrough: 35, reach: 8)
+        view.layout()
+        var line = try String(contentsOf: url, encoding: .utf8)
+        for part in ["panelBlur=on", "view={300, 400}", "reach=8.0", "corner=26.0", "layer=CABackdropLayer", "windowServerAware=1",
+                     "radius=2.3", "opacity=0.65", "seeThrough=35.0", "inWindow=false", "inputRadius=2.3"] {
+            XCTAssertTrue(line.contains(part), "missing \(part): \(line)")
+        }
+        XCTAssertEqual(line.split(separator: "\n").count, 1, "one line")
+        view.configure(cornerSize: 26, exponent: AtticStyle.panelSquircleExponent, radius: 0.5, seeThrough: 0, reach: 8)
+        view.layout()
+        line = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(line.contains("radius=0.5") && line.contains("opacity=1.0"), line)
+        view.writeOff()
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "panelBlur=off\n")
     }
 }
 #endif
