@@ -1691,11 +1691,14 @@ final class GlossSamplesWindows {
             if !keyAllowed, window.isKeyWindow { window.orderOut(nil) }
         }
         if !wasVisible {
+            // Placed as the window without the extra room would be, saved
+            // or not, then grown round the pieces.
+            let base = CGSize(width: size.width - extra * 2, height: size.height - extra * 2)
             let saved = GlossSamples.origin(
                 savedTopLeft: UserDefaults.standard.string(forKey: Self.topLeftKey).map(NSPointFromString),
                 savedOneRowOrigin: UserDefaults.standard.string(forKey: Self.originKey).map(NSPointFromString),
-                size: size).map { CGPoint(x: $0.x - extra, y: $0.y + extra) }
-            window.setFrame(GlossSamples.frame(savedOrigin: saved, size: size, visible: visible), display: true)
+                size: base)
+            window.setFrame(GlossSamples.frame(savedOrigin: saved, size: base, visible: visible).insetBy(dx: -extra, dy: -extra), display: true)
         } else if window.frame.size != size {
             // Rows came or went: the top edge stays where it is, unless
             // the taller window would then hang off the screen. Room that
