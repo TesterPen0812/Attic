@@ -869,6 +869,44 @@ extension TasksRound13Tests {
         try clickRow(second, others[0])
         XCTAssertEqual(selected(second, others), [5], "the press leaves the selection")
         XCTAssertEqual(index(second, others, second.model.keyboardFocus?.id), 0, "and moves the cursor to its row")
+        // A second press at the same point lands in the quick look the
+        // first one opened, below the row's own part: the cursor leaves the
+        // row (the trunk: `second row=0 after cursor=nil selection=[]`).
+        let third = try longHosted()
+        defer { third.close() }
+        let rows = third.model.rows(for: .now).map(\.id)
+        try clickRow(third, rows[0])
+        XCTAssertEqual(index(third, rows, third.model.keyboardFocus?.id), 0, "harness: the first press put the cursor on row 0")
+        try clickRow(third, rows[0])
+        print("LIST_FOCUS quicklook-press cursor=\(index(third, rows, third.model.keyboardFocus?.id).map(String.init) ?? "nil") "
+              + "selection=\(selected(third, rows)) holds=\(TasksRowFocusLink.current?.holds(.now) ?? false) "
+              + "responder=\(third.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")")
+        XCTAssertNil(third.model.keyboardFocus, "a press in the open quick look takes the cursor off the row")
+        XCTAssertEqual(selected(third, rows), [], "and selects nothing")
+    }
+
+    /// A row key right after a press on a control inside the row: Space
+    /// completes that row. Read from the trunk's source, not run there: the
+    /// focused row answers its own keys (AtticTaskComponents.swift,
+    /// `AtticListTaskFocusModifier`). A difference here goes to the lead
+    /// (LOG 24 Nov 17:0x, e), not to a patch.
+    func testSpaceAfterAPressOnARowsControlCompletesThatRow() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[0])
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 0, "harness: the press put the cursor on row 0")
+        let before = states(hosted, ids)
+        print("LIST_FOCUS key-after-press before holds=\(TasksRowFocusLink.current?.holds(.now) ?? false) inList=\(keyboardIsInNowList(hosted))")
+        hosted.press(" ", keyCode: 49)
+        var waited = 0.0
+        while waited < 3, states(hosted, ids) == before { hosted.spin(0.1); waited += 0.1 }
+        hosted.spin(0.5)
+        let after = states(hosted, ids)
+        let acted = ids.enumerated().compactMap { offset, id in after[id] != before[id] ? "\(offset):\(after[id] ?? "?")" : nil }
+        print("LIST_FOCUS key-after-press acted=\(acted) holds=\(TasksRowFocusLink.current?.holds(.now) ?? false)")
+        XCTAssertEqual(acted, ["0:done"], "Space after a press on row 0's control completes row 0")
     }
 
     /// The lead's ruling (LOG 24 Nov 21:28): after a tab switch a row has
@@ -891,6 +929,9 @@ extension TasksRound13Tests {
         func check(_ name: String, _ hosted: Hosted, tab: TasksTab, downReachesARow: Bool) {
             XCTAssertEqual(hosted.model.tab, tab, "harness: \(name): the switch landed")
             XCTAssertNil(hosted.model.keyboardFocus, "\(name): no row has the cursor after the switch")
+            let holding = TasksRowFocusLink.current?.tabsHoldingFocus(besides: tab) ?? []
+            print("LIST_FOCUS switch \(name) holding_besides=\(holding.map(\.rawValue)) holds=\(TasksRowFocusLink.current?.holds(tab) ?? false)")
+            XCTAssertEqual(holding, [], "\(name): no list target of a tab that is not shown holds the keyboard")
             hosted.press("\u{F701}", keyCode: 125)
             XCTAssertEqual(hosted.model.keyboardFocus?.page, downReachesARow ? tab.rawValue : nil,
                            "\(name): the ↓ after the switch")
