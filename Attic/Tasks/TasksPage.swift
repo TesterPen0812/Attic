@@ -300,6 +300,9 @@ struct TasksPage: View {
         .onKeyPress(phases: .down) { [keyHandler] press in keyHandler.press(press) }
         .onAppear { pageAppeared() }
         .onDisappear {
+            #if DEBUG
+            TasksPageRenderProbe.disappearances += 1
+            #endif
             cancelTransientState()
             eventMonitors.stop()
         }
@@ -3065,6 +3068,9 @@ struct TasksPage: View {
     /// ⌘Z and ⇧⌘Z undo and redo. Space, ⇧Space, ⌘B, Delete and ⌘Return are
     /// the row's own (`AtticTaskKeys`).
     private func pageKey(_ press: KeyPress) -> KeyPress.Result {
+        #if DEBUG
+        TasksPageRenderProbe.pageKeys += 1
+        #endif
         // The shared card owns the keyboard even if its editor temporarily
         // loses first responder. In particular, Done must not turn its
         // draft's next letter into a new search.
@@ -6120,6 +6126,14 @@ private struct TasksSubtaskDraftView<Content: View>: View {
 @MainActor final class TasksPageKeyHandler {
     var handle: ((KeyPress) -> KeyPress.Result)?
 
+    #if DEBUG
+    /// Every box alive, held weakly (tests read what each still holds).
+    static let live = NSHashTable<TasksPageKeyHandler>.weakObjects()
+    init() { Self.live.add(self) }
+    #else
+    init() {}
+    #endif
+
     func press(_ press: KeyPress) -> KeyPress.Result {
         handle?(press) ?? .ignored
     }
@@ -6133,6 +6147,9 @@ private struct TasksSubtaskDraftView<Content: View>: View {
     static var bodyRuns = 0
     /// New environments below the page's key handler.
     static var environmentsBelowKeys = 0
+    /// Keys that reached `pageKey`, and the page's `onDisappear` runs.
+    static var pageKeys = 0
+    static var disappearances = 0
     /// The tab being set, from its `willSet` until the set is over: a body
     /// that runs then runs inside the tab's announcement.
     static var settingTab: TasksTab?

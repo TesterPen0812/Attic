@@ -929,3 +929,125 @@ final class TasksRound6SearchTests: XCTestCase {
     }
     #endif
 }
+
+/// The Tasks page's key handler and the environment below it (board
+/// SPEED-KEPTHOST-ENV-REROOT; the lead, LOG 24 Nov 06:36). A handler that
+/// is a new value on every body pass made `.onKeyPress` write a new
+/// environment below it each time, with the same contents, and every view
+/// down to the tabs' kept hosts took it as a change.
+@MainActor
+final class TasksPageKeyHandlerTests: XCTestCase {
+    /// A composer route the test can swap after the page is up, as the
+    /// panel's would change.
+    final class ComposerSwitch: ObservableObject {
+        @Published var route: PanelComposerRoute?
+    }
+
+    private struct Switched: View {
+        @ObservedObject var composer: ComposerSwitch
+        let page: TasksPage
+        var body: some View { page.environment(\.panelComposer, composer.route) }
+    }
+
+    private final class KeyPanel: NSPanel {
+        override var canBecomeKey: Bool { true }
+    }
+
+    func testAPagePassWithNothingChangedKeepsTheEnvironmentBelowItsKeyHandler() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let runs = TasksPageRenderProbe.bodyRuns
+        let environments = TasksPageRenderProbe.environmentsBelowKeys
+        for pass in 1...5 {
+            hosted.model.objectWillChange.send()
+            waitForTestOperation("page pass \(pass)") { TasksPageRenderProbe.bodyRuns - runs >= pass }
+        }
+        let passes = TasksPageRenderProbe.bodyRuns - runs
+        let below = TasksPageRenderProbe.environmentsBelowKeys - environments
+        print("TASKS_KEYS page_passes=\(passes) environments_below_keys=\(below)")
+        XCTAssertGreaterThanOrEqual(passes, 5, "harness: the page's body ran on each send")
+        XCTAssertEqual(below, 0, "a page pass with nothing changed wrote a new environment below the key handler")
+    }
+
+    /// The box takes each pass's page: once the composer card is open, the
+    /// page's keys stand down, and they come back when it closes. This
+    /// covers a value the page holds by copy (an environment value); the
+    /// page's other copied inputs (`layout`, `chrome`, the add bar's
+    /// binding, `design`, the tag colouring) take the same route, and its
+    /// `@State`, `@FocusState` and model are read live through references.
+    func testTheKeyHandlerActsOnThePageAsItIsNow() throws {
+        try requireKeyWindowTests()
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try TasksPagePreview.seedDemo(in: container, long: false)
+        let store = TaskStore(container: container)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let size = CGSize(width: AtticLayout.panelSize.width, height: 520)
+        var addBar = false
+        let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
+                             addBarFocused: Binding(get: { addBar }, set: { addBar = $0 }),
+                             chrome: TasksPageChrome(), pointer: TasksPointer())
+        let composer = ComposerSwitch()
+        let window = KeyPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let runs = TasksPageRenderProbe.bodyRuns
+        window.contentView = NSHostingView(rootView: Switched(composer: composer, page: page)
+            .atticDesign(AtticDesignContext(mode: .light))
+            .frame(width: size.width, height: size.height))
+        window.orderFront(nil)
+        window.makeKey()
+        defer { window.close() }
+        waitForTestOperation("the page's first pass in a key window") {
+            TasksPageRenderProbe.bodyRuns > runs && window.isKeyWindow
+        }
+        // ↓, waited on until the page's handler has taken it.
+        func down() {
+            let reached = TasksPageRenderProbe.pageKeys
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
+                                             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                             context: nil, characters: "\u{F701}", charactersIgnoringModifiers: "\u{F701}",
+                                             isARepeat: false, keyCode: 125)!
+                NSApp.postEvent(event, atStart: false)
+                Hosted.pumpEvents()
+            }
+            waitForTestOperation("↓ reaches the page's handler") { TasksPageRenderProbe.pageKeys > reached }
+        }
+        // A new composer route, waited on until the page has run with it.
+        func swap(to route: PanelComposerRoute?) {
+            let before = TasksPageRenderProbe.bodyRuns
+            composer.route = route
+            waitForTestOperation("the page runs with the new route") { TasksPageRenderProbe.bodyRuns > before }
+        }
+        let rows = model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThanOrEqual(rows.count, 3, "harness: the demo seed has rows")
+
+        down()
+        XCTAssertEqual(model.selection, [rows[0]], "harness: ↓ with nothing selected selects the first row")
+
+        swap(to: PanelComposerRoute(open: { _, _ in }, isOpen: { true }))
+        down()
+        XCTAssertEqual(model.selection, [rows[0]], "with the card open, the page's keys stand down")
+
+        swap(to: nil)
+        down()
+        XCTAssertEqual(model.selection, [rows[1]], "with the card gone, ↓ moves again")
+    }
+
+    /// The box holds the page's handler, and the handler a copy of the page,
+    /// which holds the box's state: a page that leaves must let go of it, as
+    /// its event monitors do (TasksPageEventMonitors), or every Tasks → Notes
+    /// → Tasks switch strands a generation of the page's state.
+    func testThePageLetsGoOfItsKeyHandlerWhenItLeaves() throws {
+        let before = Set(TasksPageKeyHandler.live.allObjects.map(ObjectIdentifier.init))
+        let hosted = try Hosted(height: 520)
+        let boxes = TasksPageKeyHandler.live.allObjects.filter { !before.contains(ObjectIdentifier($0)) }
+        XCTAssertFalse(boxes.isEmpty, "harness: the page made its key box")
+        XCTAssertTrue(boxes.contains { $0.handle != nil }, "harness: the page handed its box a handler")
+        let left = TasksPageRenderProbe.disappearances
+        hosted.window.contentView = nil
+        hosted.close()
+        waitForTestOperation("the page leaves its window") { TasksPageRenderProbe.disappearances > left }
+        XCTAssertTrue(boxes.allSatisfy { $0.handle == nil }, "a page that left still holds a copy of itself through its key box")
+    }
+}
