@@ -273,7 +273,19 @@ final class GlossLab {
     /// and it is not saved. It takes itself down `calibrationTimeout`
     /// seconds after the last click on it (`-GlossLab.calibrationTimeout`,
     /// this launch only, not saved; 3 minutes to start with).
+    ///
+    /// The sheet has no close of its own, so `match` follows the same
+    /// rule: on only by `-GlossLab.match YES` on this launch or the lab's
+    /// switch in this run, never read from a stored value, never saved.
+    ///
+    /// `calibrationKeyTest` is a check of our own, this launch only, not
+    /// saved and not in "Copy values": "window@5" or "queue@5" has the app
+    /// send one Escape key press to its own backdrop window (or put it in
+    /// its own event queue) that many seconds after the backdrop went up,
+    /// so Escape can be shown on a screen with no key pressed and nothing
+    /// posted to the system (`GlossMatchWindows.KeyTest`).
     var calibration = false
+    var calibrationKeyTest = ""
     var calibrationTimeout: Double = GlossLab.calibrationTimeoutStart
     static let calibrationTimeoutStart: Double = 180
     /// Never shorter than a look at it, never longer than half an hour.
@@ -293,7 +305,7 @@ final class GlossLab {
         return false
     }
     var calibrationPattern: CalibrationPattern = .tile { didSet { save(calibrationPattern.rawValue, "calibrationPattern") } }
-    var match = false { didSet { save(match, "match") } }
+    var match = false
     var matchSpec = GlossLab.matchSpecStart { didSet { save(matchSpec, "matchSpec") } }
     var matchOrigin = "" { didSet { save(matchOrigin, "matchOrigin") } }
     /// The sheet's starting text: three copies at ground blurs round the
@@ -359,6 +371,8 @@ final class GlossLab {
         let launch = launchArguments
             ?? (defaults === UserDefaults.standard ? UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain) : [:])
         calibration = Self.launchSwitch(launch[Self.prefix + "calibration"])
+        match = Self.launchSwitch(launch[Self.prefix + "match"])
+        if let value = launch[Self.prefix + "calibrationKeyTest"] as? String { calibrationKeyTest = value }
         if let value = launch[Self.prefix + "calibrationTimeout"] { calibrationTimeout = Self.heldCalibrationTimeout(value) }
         guard let defaults else { return }
         func bool(_ key: String, _ value: inout Bool) {
@@ -417,8 +431,8 @@ final class GlossLab {
         if let value = defaults.string(forKey: Self.prefix + "samplesGroundExtras") { samplesGroundExtras = value }
         bool("panelBlur", &panelBlur); double("panelBlurRadius", &panelBlurRadius)
         double("panelBlurSeeThrough", &panelBlurSeeThrough)
-        // `calibration` is never read from a stored value (see its note).
-        bool("match", &match)
+        // `calibration` and `match` are never read from a stored value
+        // (see their note).
         if let raw = defaults.string(forKey: Self.prefix + "calibrationPattern"), let value = CalibrationPattern(rawValue: raw) {
             calibrationPattern = value
         }

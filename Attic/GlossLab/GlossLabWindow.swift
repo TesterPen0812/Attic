@@ -223,14 +223,14 @@ struct GlossLabView: View {
 
                 section("Match")
                 row("Calibration backdrop", $lab.calibration,
-                    note: "A test pattern of our own over the whole screen under the menu bar: flat fields, hard edges, checkers and text, the same everywhere, so a screenshot with the real Control Centre open over it can be measured. It covers this window too. To take it down: Escape, or \"Close test pattern\" in its bottom left corner; it also takes itself down 3 minutes after the last click on it, and it never comes back at the next launch.") {
+                    note: "A test pattern of our own over the whole screen under the menu bar: flat fields, hard edges, checkers and text, the same everywhere, so a screenshot with the real Control Centre open over it can be measured. It covers this window too. To take it down: \"Close test pattern\" in its bottom left corner, or Escape after a click on the pattern; it also takes itself down 3 minutes after the last click on it, and it never comes back at the next launch.") {
                     Picker("Pattern", selection: $lab.calibrationPattern) {
                         ForEach(GlossLab.CalibrationPattern.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
                 }
                 row("Match sheet", $lab.match,
-                    note: "Our pieces in Control Centre's arrangement at its sizes, in a window of their own, with Apple's blur as the ground. Copies apart by \"/\", each with its own settings (radius=1 / radius=2, variant=7), or a walk through one setting (walk variant; walk radius 0.5 1 2 / dim=10). Settings: ground, radius, dim, hold, curve, smoke, tint, variant, lensing, scrim, subdued, adaptive, reduced. What a copy does not name is the stack test's value, below.") {
+                    note: "Our pieces in Control Centre's arrangement at its sizes, in a window of their own, with Apple's blur as the ground. Copies apart by \"/\", each with its own settings (radius=1 / radius=2, variant=7), or a walk through one setting (walk variant; walk radius 0.5 1 2 / dim=10). Settings: ground, radius, dim, hold, curve, smoke, tint, variant, lensing, scrim, subdued, adaptive, reduced. What a copy does not name is the stack test's value, below. It goes with the backdrop when that is closed, and it never comes back at the next launch.") {
                     matchControls
                 }
 
@@ -2329,8 +2329,11 @@ struct GlossCalibrationWatch: Equatable {
 }
 
 /// The backdrop's own controls, drawn by hand on an opaque black plate with
-/// a white rim, in fixed colours: "Close test pattern (Esc)", the four
-/// patterns, and the time left before the backdrop takes itself down. On
+/// a white rim, in fixed colours: "Close test pattern", the four
+/// patterns, and the time left before the backdrop takes itself down. The
+/// label does not name Escape: Escape reaches the backdrop only while one
+/// of our own windows has the keyboard, and a label must not promise what
+/// can fail. On
 /// 24 Nov the stock button and picker stood here; their plates are
 /// see-through and their text one colour, so over white (or, in a light
 /// system, over black) they could not be read and the owner could not close
@@ -2344,7 +2347,7 @@ final class GlossCalibrationBar: NSView {
         case countdown
     }
 
-    static let closeTitle = "Close test pattern (Esc)"
+    static let closeTitle = "Close test pattern"
     static let height: CGFloat = 32
     static let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
     private static let padding: CGFloat = 12
@@ -2468,7 +2471,8 @@ final class GlossCalibrationBar: NSView {
 /// screenshots is here). It takes every click inside it and does nothing
 /// with one outside the bar (it is not click-through, so nothing hidden
 /// under it is clicked by mistake); every click pushes its closing time on.
-/// Escape closes it while its window has the keyboard.
+/// Escape closes it while its window has the keyboard (it takes the
+/// keyboard when shown and on every click).
 final class GlossCalibrationView: NSView {
     /// "Close test pattern" was clicked.
     var onClose: (() -> Void)?
@@ -2972,67 +2976,33 @@ final class GlossCalibrationPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-/// One showing of the backdrop, from up to down: its closing time, the
-/// claim on the Escape key, and why it went. It holds no window, so every
-/// way down is tried in tests; whatever way it ends, the Escape key is
-/// given back exactly once and `close` is called at most once.
+/// One showing of the backdrop, from up to down: its closing time and why
+/// it went. It holds no window, so every way down is tried in tests;
+/// whatever way it ends, `close` is called at most once. It claims no key
+/// from the system: Escape is ours only while one of our own windows has
+/// the keyboard (the first build of this claimed Escape from every app,
+/// which changed how the owner's other apps behave; taken out on the
+/// lead's word, 24 Nov).
 @MainActor
 final class GlossCalibrationSession {
-    enum Reason: String {
+    enum Reason: String, CaseIterable {
         /// "Close test pattern" was clicked.
         case button
         /// Escape, with the backdrop's window or another of ours holding the keyboard.
         case escape
-        /// Escape through the system-wide claim, from any app.
-        case hotKey
         /// Nobody clicked on it for the set time.
         case timeout
         /// The lab's switch, or the app's own state, turned it off.
         case switchedOff
     }
 
-    /// How Escape is claimed from every app while the backdrop is up.
-    /// `claim` is given what to do on a press and says how it went
-    /// ("registered", or the refusal); `release` gives the key back.
-    struct EscapeKey {
-        var claim: @MainActor (@escaping @MainActor () -> Void) -> String
-        var release: @MainActor () -> Void
-
-        /// The app's own Carbon hot key (`GlobalHotKey`), on Escape alone.
-        /// No permission is asked for; the system may refuse a key without
-        /// modifiers, which the claim's text then says.
-        @MainActor static let system: EscapeKey = {
-            final class Holder { var key: GlobalHotKey? }
-            let holder = Holder()
-            return EscapeKey(claim: { action in
-                let key = GlobalHotKey(combination: GlobalHotKeyCombination(keyCode: GlossMatchWindows.escapeKeyCode, modifiers: 0),
-                                       action: action)
-                holder.key = key
-                switch key.register() {
-                case .registered: return "registered"
-                case .failed(let failure): return "refused(status \(failure.status))"
-                case .notRegistered: return "notRegistered"
-                }
-            }, release: {
-                holder.key?.unregister()
-                holder.key = nil
-            })
-        }()
-    }
-
     private(set) var watch: GlossCalibrationWatch
-    /// How the claim on Escape went.
-    private(set) var escapeClaim: String
     private(set) var ended: Reason?
-    private let escapeKey: EscapeKey
     private let close: @MainActor (Reason) -> Void
 
-    init(timeout: TimeInterval, now: Date, escapeKey: EscapeKey, close: @escaping @MainActor (Reason) -> Void) {
+    init(timeout: TimeInterval, now: Date, close: @escaping @MainActor (Reason) -> Void) {
         watch = GlossCalibrationWatch(timeout: timeout, now: now)
-        self.escapeKey = escapeKey
         self.close = close
-        escapeClaim = ""
-        escapeClaim = escapeKey.claim { [weak self] in self?.end(.hotKey) }
     }
 
     /// A click on the backdrop: the closing time starts again.
@@ -3052,12 +3022,11 @@ final class GlossCalibrationSession {
         return Int(watch.remaining(now).rounded(.up))
     }
 
-    /// Down, for a reason: Escape is given back, then `close` is told.
+    /// Down, for a reason: `close` is told, unless the switch did it.
     /// Only the first call counts.
     func end(_ reason: Reason) {
         guard ended == nil else { return }
         ended = reason
-        escapeKey.release()
         if reason != .switchedOff { close(reason) }
     }
 }
@@ -3088,8 +3057,55 @@ final class GlossMatchWindows {
     private var keyMonitor: Any?
     /// Why the backdrop last went down, with the time: for the check file.
     private(set) var lastClose: String?
-    /// How Escape is claimed from every app (tests put their own in).
-    lazy var escapeKey = GlossCalibrationSession.EscapeKey.system
+    /// The Escape check of this showing, when it is due, and what it said
+    /// when it was sent: for the check file.
+    private var keyTestDue: (test: KeyTest, at: Date)?
+    private(set) var keyTestNote: String?
+
+    /// A check of our own that Escape closes the backdrop on a real
+    /// screen, with no key pressed and nothing posted to the system: the
+    /// app sends one Escape key press to its own backdrop window
+    /// (`window`: through the window to whatever holds its keyboard
+    /// focus), or puts it in its own event queue (`queue`: the way a real
+    /// press arrives once the system has handed it to the app, past the
+    /// key watch). `-GlossLab.calibrationKeyTest window@5`.
+    struct KeyTest: Equatable {
+        enum Route: String { case window, queue }
+        var route: Route
+        /// Seconds after the backdrop went up.
+        var after: Double
+        static let afterRange: ClosedRange<Double> = 1...60
+
+        /// "window@5", "queue@12"; anything else is no check.
+        init?(_ text: String) {
+            let parts = text.trimmingCharacters(in: .whitespaces).split(separator: "@", omittingEmptySubsequences: false)
+            guard parts.count == 2, let route = Route(rawValue: String(parts[0])), let after = Double(parts[1]), after.isFinite else { return nil }
+            self.route = route
+            self.after = min(max(after, Self.afterRange.lowerBound), Self.afterRange.upperBound)
+        }
+
+        /// The key press: Escape down, addressed to the window.
+        @MainActor
+        static func event(for window: NSWindow) -> NSEvent? {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                             windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                             isARepeat: false, keyCode: UInt16(GlossMatchWindows.escapeKeyCode))
+        }
+
+        /// Sends it, and says what it found: whether the window had the
+        /// keyboard and the app was in front at that moment.
+        @MainActor
+        func send(to window: NSWindow, now: Date) -> String {
+            let found = "keyTest=\(route.rawValue) sent=\(GlossMatchWindows.clockText(now)) windowKey=\(window.isKeyWindow) "
+                + "appActive=\(NSApp.isActive) focusOnPattern=\(window.firstResponder === window.contentView)"
+            guard let event = Self.event(for: window) else { return found + " event=none" }
+            switch route {
+            case .window: window.sendEvent(event)
+            case .queue: NSApp.postEvent(event, atStart: false)
+            }
+            return found
+        }
+    }
 
     /// Escape's key code, and what counts as Escape: the key alone, or
     /// with Shift.
@@ -3198,8 +3214,12 @@ final class GlossMatchWindows {
             view?.pattern = lab.calibrationPattern
             window.setFrame(Self.calibrationFrame(visible: visible), display: true)
             window.orderFrontRegardless()
-            // The keyboard at once, so Escape works before any click.
-            if isNew { window.makeKey() }
+            // The keyboard at once, on the pattern, so Escape works before
+            // any click while the system lets this window have it.
+            if isNew {
+                window.makeFirstResponder(view)
+                window.makeKey()
+            }
         } else {
             endSession()
             calibrationWindow?.orderOut(nil)
@@ -3236,12 +3256,15 @@ final class GlossMatchWindows {
         writeCheckFile(lab)
     }
 
-    /// The backdrop is up: its closing time starts, Escape is claimed
-    /// (from every app, and by a watch on our own windows' keys), and its
-    /// controls are wired. Every way down goes through the session, which
-    /// turns both switches off.
+    /// The backdrop is up: its closing time starts, a watch on our own
+    /// windows' keys takes Escape (nothing is claimed from other apps),
+    /// and its controls are wired. Every way down goes through the
+    /// session, which turns both switches off.
     private func startSession(_ lab: GlossLab, view: GlossCalibrationView?) {
-        let session = GlossCalibrationSession(timeout: lab.calibrationTimeout, now: Date(), escapeKey: escapeKey) { [weak self] reason in
+        let started = Date()
+        keyTestNote = nil
+        keyTestDue = KeyTest(lab.calibrationKeyTest).map { ($0, started.addingTimeInterval($0.after)) }
+        let session = GlossCalibrationSession(timeout: lab.calibrationTimeout, now: started) { [weak self] reason in
             self?.lastClose = "\(reason.rawValue) \(GlossMatchWindows.clockText(Date()))"
             GlossMatchWindows.closeBoth(.shared)
         }
@@ -3252,10 +3275,11 @@ final class GlossMatchWindows {
         view?.onClick = { [weak session] in session?.clicked(Date()) }
         view?.onPattern = { GlossLab.shared.calibrationPattern = $0 }
         view?.bar.remaining = session.tick(Date())
-        let clock = Timer(timeInterval: 1, repeats: true) { [weak session, weak view] _ in
+        let clock = Timer(timeInterval: 1, repeats: true) { [weak self, weak session, weak view] _ in
             MainActor.assumeIsolated {
                 guard let session else { return }
                 view?.bar.remaining = session.tick(Date())
+                self?.sendKeyTestIfDue(Date())
             }
         }
         // In the common modes, so it also runs while a control is tracked.
@@ -3271,9 +3295,19 @@ final class GlossMatchWindows {
         }
     }
 
-    /// The backdrop is down: the clock and the key watch stop, and Escape
-    /// is given back if the session has not done so already.
+    /// The Escape check, once, when its time has come and the backdrop is
+    /// still up. What it found is written to the check file before the
+    /// key press is handled, so a press that closes nothing shows too.
+    private func sendKeyTestIfDue(_ now: Date) {
+        guard let due = keyTestDue, now >= due.at, let window = calibrationWindow, session?.ended == nil else { return }
+        keyTestDue = nil
+        keyTestNote = due.test.send(to: window, now: now)
+        writeCheckFile(.shared)
+    }
+
+    /// The backdrop is down: the clock and the key watch stop.
     private func endSession() {
+        keyTestDue = nil
         clock?.invalidate()
         clock = nil
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
@@ -3292,10 +3326,10 @@ final class GlossMatchWindows {
 
     /// The backdrop's line of the check file.
     static func calibrationCheckLine(pattern: GlossLab.CalibrationPattern, frame: CGRect, scale: CGFloat, level: Int,
-                                     escapeClaim: String, timeout: Double) -> String {
+                                     timeout: Double) -> String {
         "calibration=on pattern=\(pattern.rawValue) frame=\(NSStringFromRect(frame)) "
             + "scale=\(scale) tile=\(NSStringFromSize(GlossCalibration.tileSize)) "
-            + "cell=\(Int(GlossCalibration.cell)) level=\(level) escapeKey=\(escapeClaim) closesAfter=\(Int(timeout.rounded()))s"
+            + "cell=\(Int(GlossCalibration.cell)) level=\(level) closesAfter=\(Int(timeout.rounded()))s"
     }
 
     /// The two windows' state as text: whether each is up, its frame and
@@ -3305,10 +3339,11 @@ final class GlossMatchWindows {
         var lines: [String] = []
         if let window = calibrationWindow {
             lines.append(Self.calibrationCheckLine(pattern: lab.calibrationPattern, frame: window.frame, scale: window.backingScaleFactor,
-                                                   level: window.level.rawValue, escapeClaim: session?.escapeClaim ?? "none",
-                                                   timeout: session?.watch.timeout ?? lab.calibrationTimeout))
+                                                   level: window.level.rawValue,
+                                                   timeout: session?.watch.timeout ?? lab.calibrationTimeout)
+                         + (keyTestNote.map { " \($0)" } ?? ""))
         } else {
-            lines.append("calibration=off" + (lastClose.map { " closed=\($0)" } ?? ""))
+            lines.append("calibration=off" + (lastClose.map { " closed=\($0)" } ?? "") + (keyTestNote.map { " \($0)" } ?? ""))
         }
         if let window = sheetWindow {
             let sheet = GlossMatch.sheet(for: lab)

@@ -2108,19 +2108,28 @@ final class GlossLabValuesTests: XCTestCase {
         defaults.set("walk variant / lensing=1", forKey: "GlossLab.matchSpec")
         defaults.set("1206,49", forKey: "GlossLab.matchOrigin")
         defaults.writes = []
-        // A stored "on" never brings the backdrop back: an ordinary launch
-        // (no argument) has it off, whatever is stored.
+        // A stored "on" never brings the backdrop or the sheet back: an
+        // ordinary launch (no argument) has both off, whatever is stored.
         let ordinary = GlossLab(defaults: defaults)
         XCTAssertFalse(ordinary.calibration, "a stored value brought the backdrop back")
-        XCTAssertTrue(ordinary.match); XCTAssertEqual(ordinary.calibrationPattern, .grey)
+        XCTAssertFalse(ordinary.match, "a stored value brought the sheet back")
+        XCTAssertEqual(ordinary.calibrationPattern, .grey)
         XCTAssertFalse(GlossLab(defaults: defaults, launchArguments: [:]).calibration)
+        XCTAssertFalse(GlossLab(defaults: defaults, launchArguments: [:]).match)
         XCTAssertFalse(GlossLab(defaults: defaults, launchArguments: ["GlossLab.calibration": "NO"]).calibration)
-        // Passed on this launch, it is on (arguments arrive as text).
-        let lab = GlossLab(defaults: defaults, launchArguments: ["GlossLab.calibration": "YES"])
+        XCTAssertFalse(GlossLab(defaults: defaults, launchArguments: ["GlossLab.match": "NO"]).match)
+        // Each is on by its own argument only.
+        let backdropOnly = GlossLab(defaults: defaults, launchArguments: ["GlossLab.calibration": "YES"])
+        XCTAssertTrue(backdropOnly.calibration); XCTAssertFalse(backdropOnly.match, "the backdrop's argument brought the sheet")
+        let sheetOnly = GlossLab(defaults: defaults, launchArguments: ["GlossLab.match": "YES"])
+        XCTAssertTrue(sheetOnly.match); XCTAssertFalse(sheetOnly.calibration)
+        // Passed on this launch, they are on (arguments arrive as text).
+        let lab = GlossLab(defaults: defaults, launchArguments: ["GlossLab.calibration": "YES", "GlossLab.match": "YES"])
         XCTAssertTrue(lab.calibration); XCTAssertTrue(lab.match); XCTAssertEqual(lab.calibrationPattern, .grey)
         XCTAssertEqual(lab.matchSpec, "walk variant / lensing=1"); XCTAssertEqual(lab.matchOrigin, "1206,49")
         XCTAssertEqual(defaults.writes, [], "loading wrote values back")
         XCTAssertTrue(GlossLab(defaults: nil, launchArguments: ["GlossLab.calibration": true]).calibration)
+        XCTAssertTrue(GlossLab(defaults: nil, launchArguments: ["GlossLab.match": true]).match)
         XCTAssertTrue(GlossLab.launchSwitch("1")); XCTAssertTrue(GlossLab.launchSwitch("true")); XCTAssertFalse(GlossLab.launchSwitch("maybe"))
         XCTAssertFalse(GlossLab.launchSwitch(nil))
         let line = "Calibration backdrop: on (grey), closes itself after 180 s, match sheet: on, "
@@ -2134,10 +2143,12 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(lab.matchLine, line, "a preset moved the match values")
         defaults.writes = []
         lab.calibration = false; lab.calibrationPattern = .black; lab.match = false; lab.matchSpec = "radius=4"; lab.matchOrigin = ""
-        lab.calibration = true; lab.calibrationTimeout = 60
-        XCTAssertEqual(defaults.writes, ["GlossLab.calibrationPattern", "GlossLab.match", "GlossLab.matchSpec", "GlossLab.matchOrigin"],
-                       "the backdrop's switch or its closing time was saved")
-        lab.calibration = false
+        lab.calibration = true; lab.match = true; lab.calibrationTimeout = 60; lab.calibrationKeyTest = "window@5"
+        XCTAssertEqual(defaults.writes, ["GlossLab.calibrationPattern", "GlossLab.matchSpec", "GlossLab.matchOrigin"],
+                       "the backdrop's switch, the sheet's, the closing time or the Escape check was saved")
+        XCTAssertNil(defaults.object(forKey: "GlossLab.calibrationKeyTest"))
+        XCTAssertEqual(defaults.object(forKey: "GlossLab.match") as? Bool, true, "the old stored value is left as it was, unread")
+        lab.calibration = false; lab.match = false
         XCTAssertEqual(lab.currentPreset?.id, "controlCentre", "a match value broke the preset's match")
         let again = GlossLab(defaults: defaults)
         XCTAssertFalse(again.calibration); XCTAssertFalse(again.match); XCTAssertEqual(again.calibrationPattern, .black)
@@ -2147,11 +2158,16 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(GlossLab(defaults: defaults).calibrationPattern, .tile)
         // The launch arguments the hand-over uses, with a preset.
         defaults.set("controlCentre", forKey: "GlossLab.preset")
-        defaults.set(true, forKey: "GlossLab.match")
-        let shown = GlossLab(defaults: defaults, launchArguments: ["GlossLab.calibration": "YES", "GlossLab.calibrationTimeout": "900"])
+        let shown = GlossLab(defaults: defaults, launchArguments: ["GlossLab.calibration": "YES", "GlossLab.match": "YES",
+                                                                   "GlossLab.calibrationTimeout": "900",
+                                                                   "GlossLab.calibrationKeyTest": "queue@7"])
         XCTAssertTrue(shown.calibration && shown.match, "a preset shown by launch argument turned the match windows off")
         XCTAssertEqual(shown.calibrationTimeout, 900)
         XCTAssertTrue(shown.matchLine.contains("closes itself after 900 s"))
+        // The Escape check is this launch's only, and not a value to copy.
+        XCTAssertEqual(shown.calibrationKeyTest, "queue@7")
+        XCTAssertEqual(GlossLab(defaults: defaults).calibrationKeyTest, "")
+        XCTAssertFalse(shown.valuesText(app: Self.app(mode: "Dark")).contains("queue@7"))
     }
 
     /// The backdrop's closing time: 3 minutes to start with, set only by
@@ -2309,9 +2325,10 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertEqual(bar.frame.size, GlossCalibrationBar.size)
         XCTAssertTrue(view.bounds.contains(bar.frame), "the controls are not wholly on the backdrop")
         XCTAssertLessThanOrEqual(GlossCalibrationBar.size.width, 700, "the controls would not fit a small screen")
-        // Left to right: Close (it says what it does and names Escape),
+        // Left to right: Close (it says what it does; it does not name
+        // Escape, which works only while our window has the keyboard),
         // the four patterns, the time left.
-        XCTAssertEqual(GlossCalibrationBar.closeTitle, "Close test pattern (Esc)")
+        XCTAssertEqual(GlossCalibrationBar.closeTitle, "Close test pattern")
         XCTAssertEqual(GlossCalibrationBar.cells.map(\.cell),
                        [.close, .pattern(.tile), .pattern(.white), .pattern(.grey), .pattern(.black), .countdown])
         XCTAssertEqual(GlossCalibrationBar.cells.dropFirst().prefix(4).map { GlossCalibrationBar.title($0.cell) }, ["Tile", "White", "Grey", "Black"])
@@ -2417,99 +2434,106 @@ final class GlossLabValuesTests: XCTestCase {
     }
 
     /// One showing of the backdrop, by every way down: the button, Escape
-    /// in our own window, Escape from any app, the closing time, and the
-    /// lab's switch. Each time Escape is claimed once and given back once,
-    /// the closing is told once with its reason, and nothing after the end
-    /// counts. The claim here is a stand-in: the tests never take the
-    /// system's Escape key.
+    /// in our own window, the closing time, and the lab's switch. The
+    /// closing is told once with its reason, and nothing after the end
+    /// counts. No key is claimed from the system: there are these four
+    /// reasons and no other.
     func testCalibrationSessionEndsOnceByEveryWayDown() {
-        final class Key {
-            var claims = 0, releases = 0
-            var press: (@MainActor () -> Void)?
-            var answer = "registered"
-        }
-        let start = Date(timeIntervalSinceReferenceDate: 5000)
-        func session(_ key: Key, timeout: TimeInterval = 180, told: @escaping @MainActor (GlossCalibrationSession.Reason) -> Void)
-            -> GlossCalibrationSession {
-            let escape = GlossCalibrationSession.EscapeKey(claim: { action in
-                key.claims += 1
-                key.press = action
-                return key.answer
-            }, release: { key.releases += 1 })
-            return GlossCalibrationSession(timeout: timeout, now: start, escapeKey: escape, close: told)
-        }
         typealias Reason = GlossCalibrationSession.Reason
-        let ways: [(Reason, (GlossCalibrationSession, Key) -> Void)] = [
-            (.button, { one, _ in one.end(.button) }),
-            (.escape, { one, _ in one.end(.escape) }),
-            (.hotKey, { _, key in key.press?() }),
-            (.timeout, { one, _ in XCTAssertEqual(one.tick(start.addingTimeInterval(180)), 0) }),
+        XCTAssertEqual(Reason.allCases, [.button, .escape, .timeout, .switchedOff], "a way down was added or lost")
+        XCTAssertEqual(Reason.allCases.map(\.rawValue), ["button", "escape", "timeout", "switchedOff"])
+        let start = Date(timeIntervalSinceReferenceDate: 5000)
+        func session(timeout: TimeInterval = 180, told: @escaping @MainActor (Reason) -> Void) -> GlossCalibrationSession {
+            GlossCalibrationSession(timeout: timeout, now: start, close: told)
+        }
+        let ways: [(Reason, (GlossCalibrationSession) -> Void)] = [
+            (.button, { one in one.end(.button) }),
+            (.escape, { one in one.end(.escape) }),
+            (.timeout, { one in XCTAssertEqual(one.tick(start.addingTimeInterval(180)), 0) }),
         ]
         for (reason, way) in ways {
-            let key = Key()
             var told: [Reason] = []
-            let one = session(key) { told.append($0) }
-            XCTAssertEqual(key.claims, 1); XCTAssertEqual(key.releases, 0); XCTAssertEqual(one.escapeClaim, "registered")
+            let one = session { told.append($0) }
             XCTAssertNil(one.ended)
             XCTAssertEqual(one.tick(start.addingTimeInterval(0.2)), 180, "whole seconds left, rounded up")
             XCTAssertEqual(one.tick(start.addingTimeInterval(179.5)), 1)
             XCTAssertEqual(told, [], "\(reason): it went down early")
-            way(one, key)
+            way(one)
             XCTAssertEqual(told, [reason]); XCTAssertEqual(one.ended, reason)
-            XCTAssertEqual(key.releases, 1, "\(reason): Escape was not given back")
             // Nothing after the end counts.
-            one.end(.button); one.end(.switchedOff); key.press?(); one.clicked(start.addingTimeInterval(200))
+            one.end(.button); one.end(.escape); one.end(.switchedOff); one.clicked(start.addingTimeInterval(200))
             XCTAssertEqual(one.tick(start.addingTimeInterval(9999)), 0)
             XCTAssertEqual(told, [reason], "\(reason): the closing was told twice")
-            XCTAssertEqual(key.releases, 1, "\(reason): Escape was given back twice")
-            XCTAssertEqual(key.claims, 1)
+            XCTAssertEqual(one.ended, reason)
         }
-        // The lab's switch turned it off: Escape is given back, and nobody
-        // is told to turn the switches off again.
-        let key = Key()
+        // The lab's switch turned it off: nobody is told to turn the
+        // switches off again.
         var told: [Reason] = []
-        let off = session(key) { told.append($0) }
+        let off = session { told.append($0) }
         off.end(.switchedOff)
-        XCTAssertEqual(told, []); XCTAssertEqual(key.releases, 1); XCTAssertEqual(off.ended, .switchedOff)
+        XCTAssertEqual(told, []); XCTAssertEqual(off.ended, .switchedOff)
         // A click pushes the closing time on; without one it goes down at
         // its time, with the short time a launch argument may set too.
-        let clickedKey = Key()
         var clickedTold: [Reason] = []
-        let clicked = session(clickedKey, timeout: 10) { clickedTold.append($0) }
+        let clicked = session(timeout: 10) { clickedTold.append($0) }
         clicked.clicked(start.addingTimeInterval(9))
         XCTAssertEqual(clicked.tick(start.addingTimeInterval(10)), 9)
         XCTAssertEqual(clickedTold, [])
         XCTAssertEqual(clicked.tick(start.addingTimeInterval(19)), 0)
-        XCTAssertEqual(clickedTold, [.timeout]); XCTAssertEqual(clickedKey.releases, 1)
-        // A refused claim is said, and the other ways down still work.
-        let refusedKey = Key()
-        refusedKey.answer = "refused(status -9878)"
-        var refusedTold: [Reason] = []
-        let refused = session(refusedKey) { refusedTold.append($0) }
-        XCTAssertEqual(refused.escapeClaim, "refused(status -9878)")
-        refused.end(.escape)
-        XCTAssertEqual(refusedTold, [.escape])
-        // The check file's line says how the claim went and the closing time.
+        XCTAssertEqual(clickedTold, [.timeout])
+        // The check file's line says the level and the closing time, and
+        // nothing of a key claimed from the system.
         let line = GlossMatchWindows.calibrationCheckLine(pattern: .grey, frame: CGRect(x: 0, y: 51, width: 1800, height: 1079), scale: 2,
-                                                          level: 2, escapeClaim: "registered", timeout: 180)
+                                                          level: 2, timeout: 180)
         XCTAssertEqual(line, "calibration=on pattern=grey frame={{0, 51}, {1800, 1079}} scale=2.0 tile={384, 256} cell=64 level=2 "
-                       + "escapeKey=registered closesAfter=180s")
+                       + "closesAfter=180s")
         XCTAssertEqual(GlossMatchWindows.clockText(Date(timeIntervalSince1970: 0)).count, 8)
         // Both switches go off by the session's closing (what the windows
         // wire it to).
-        let lab = GlossLab(defaults: nil, launchArguments: ["GlossLab.calibration": "YES"])
-        lab.match = true
-        let wiredKey = Key()
-        let wired = session(wiredKey) { _ in GlossMatchWindows.closeBoth(lab) }
+        let lab = GlossLab(defaults: nil, launchArguments: ["GlossLab.calibration": "YES", "GlossLab.match": "YES"])
+        let wired = session { _ in GlossMatchWindows.closeBoth(lab) }
         XCTAssertTrue(lab.calibration && lab.match)
         XCTAssertEqual(wired.tick(start.addingTimeInterval(181)), 0)
         XCTAssertFalse(lab.calibration, "the closing time left the backdrop up")
         XCTAssertFalse(lab.match, "the closing time left the sheet up")
     }
 
+    /// The Escape check of our own ("window@5", "queue@5", this launch
+    /// only): what it is read as, and that the key press it sends to our
+    /// own backdrop window is Escape and closes the backdrop through the
+    /// window itself, with nothing posted to the system. Only the window
+    /// route is sent here; the queue route is the app's event loop, seen
+    /// on a screen.
+    func testEscapeCheckSendsEscapeToOurOwnBackdropWindow() throws {
+        typealias KeyTest = GlossMatchWindows.KeyTest
+        XCTAssertEqual(KeyTest("window@5"), try XCTUnwrap(KeyTest(" window@5 ")))
+        XCTAssertEqual(KeyTest("window@5")?.route, .window); XCTAssertEqual(KeyTest("window@5")?.after, 5)
+        XCTAssertEqual(KeyTest("queue@12.5")?.route, .queue); XCTAssertEqual(KeyTest("queue@12.5")?.after, 12.5)
+        XCTAssertEqual(KeyTest("queue@0")?.after, 1, "held to a second at least")
+        XCTAssertEqual(KeyTest("window@900")?.after, 60, "held to a minute at most")
+        for junk in ["", "window", "window@", "@5", "system@5", "window@soon", "window@5@6", "window@nan", "YES"] {
+            XCTAssertNil(KeyTest(junk), "\"\(junk)\" was read as a check")
+        }
+        let window = GlossMatchWindows.makeCalibrationWindow()
+        let view = try XCTUnwrap(window.contentView as? GlossCalibrationView)
+        let event = try XCTUnwrap(KeyTest.event(for: window))
+        XCTAssertTrue(GlossMatchWindows.isEscape(event))
+        XCTAssertEqual(event.windowNumber, window.windowNumber); XCTAssertEqual(event.keyCode, 53)
+        var escaped = 0, closed = 0
+        view.onEscape = { escaped += 1 }
+        view.onClose = { closed += 1 }
+        XCTAssertTrue(window.makeFirstResponder(view))
+        let found = try XCTUnwrap(KeyTest("window@5")).send(to: window, now: Date(timeIntervalSince1970: 0))
+        XCTAssertEqual(escaped, 1, "the key press sent to the window did not reach the pattern")
+        XCTAssertEqual(closed, 0)
+        XCTAssertTrue(found.hasPrefix("keyTest=window sent="), found)
+        XCTAssertTrue(found.contains(" windowKey=false appActive="), "the test host's window held the keyboard: \(found)")
+        XCTAssertTrue(found.hasSuffix(" focusOnPattern=true"), found)
+    }
+
     /// The backdrop's controls can be read over every pattern: the bar is
     /// drawn the same, pixel for pixel, whatever the backdrop shows (its
-    /// own opaque plate), "Close test pattern (Esc)" stands black on white,
+    /// own opaque plate), "Close test pattern" stands black on white,
     /// the other cells white on black, and the bar's rim is white (so it
     /// shows on the black pattern).
     func testCalibrationControlsReadTheSameOverEveryPattern() throws {
