@@ -39,9 +39,9 @@ final class TasksRound13Tests: XCTestCase {
 
     /// host-boundary.md §5.1 row, as the user's sequence: a rename on Now,
     /// a switch to Later (which saves it), then ↓. Wanted: a Later row takes
-    /// the keyboard. On the trunk no row did (KB-DOWN-AFTER-RENAME-SWITCH,
-    /// pinned so); with the list owning the keyboard (list-owned-focus,
-    /// lead 08:00 ruling 4) ↓ reaches a Later row, the wanted result.
+    /// the keyboard. Today no row does, on step 1 as on the trunk
+    /// (`4b55a9e8`, the same test): pinned, KB-DOWN-AFTER-RENAME-SWITCH. Its
+    /// fix flips this assertion.
     func testDownAfterASwitchThatSavedARenameIsPinned() throws {
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
@@ -60,9 +60,7 @@ final class TasksRound13Tests: XCTestCase {
         hosted.press("\u{F701}", keyCode: 125)
         print("LIST_FOCUS rename-switch after-down cursor_page=\(hosted.model.keyboardFocus.map { "\($0.page)" } ?? "nil") "
               + "cursor=\(hosted.model.keyboardFocus.flatMap { later.firstIndex(of: $0.id) }.map(String.init) ?? "-") selection=\(hosted.model.selection.compactMap { later.firstIndex(of: $0) }.sorted())")
-        let reached = try XCTUnwrap(hosted.model.keyboardFocus, "KB-DOWN-AFTER-RENAME-SWITCH: ↓ reaches a row")
-        XCTAssertEqual(reached.page, TasksTab.backlog.rawValue, "the row ↓ reaches is a Later row")
-        XCTAssertTrue(hosted.model.rows(for: .backlog).contains { $0.id == reached.id }, "a row of the Later list shown")
+        XCTAssertNil(hosted.model.keyboardFocus?.page, "KB-DOWN-AFTER-RENAME-SWITCH: today ↓ reaches no row (pinned; the fix makes it a Later row)")
     }
 
     /// host-boundary.md §5.1 row: a responder in the panel outside the tabs
