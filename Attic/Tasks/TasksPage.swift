@@ -339,13 +339,13 @@ struct TasksPage: View {
         #if DEBUG
         TasksPageRenderProbe.listFocusReports.append("\(tab.rawValue):\(holds)")
         #endif
-        // Tab reached the list of a page kept built beside the one shown
-        // (hidden, so nothing showed where the keyboard was): the
-        // keyboard goes on to the shown page's rows or the add bar.
-        if holds, model.isPageShown, tab != model.tab {
-            keepKeyboardOnShownPage(arrivedOn: tab)
-            return
-        }
+        // A list target gaining the keyboard writes no cursor: the input
+        // that moves the cursor writes it (a press, a key, Tab). Least of
+        // all on a tab that is not shown: a title editor that resigns
+        // after a switch leaves its own tab's list target focused, and no
+        // row of the shown tab takes the cursor from that (the lead, LOG
+        // 24 Nov 21:28). No Tab reaches a hidden tab's list: its host
+        // refuses the keyboard, and the page orders Tab (`TasksTabOrder`).
         // The list let go (a click on a field, a control, the panel): the
         // cursor goes with it, as a row's focus went with the row before.
         if !holds, model.keyboardFocus?.page == tab.rawValue {
@@ -359,8 +359,8 @@ struct TasksPage: View {
     /// list was built), with trunk's selection rule (H12-06: an existing
     /// single selection follows a keyboard move, none stays none, a range
     /// stays; later menu or restore selections still win).
-    private func cursorMoved(_ focus: AtticRowFocusID?) {
-        let keyboardDriving = focusTracker.isKeyboardDriving
+    private func cursorMoved(_ focus: AtticRowFocusID?, byMouse: Bool = false) {
+        let keyboardDriving = !byMouse && focusTracker.isKeyboardDriving
         model.receiveKeyboardFocus(focus, keyboardDriving: keyboardDriving)
         model.cellUpdates.objectWillChange.send()
         pointer.keyboardRow = focus.flatMap { focus in
@@ -775,41 +775,6 @@ struct TasksPage: View {
         // The shell's toast and notices sit above everything in the bottom
         // stack, so a selection bar or paste offer never hides under them.
         .background(TasksNoticeClearance(stack: bottomStack, bottomInset: bottomInset, contentBottom: layout.contentInsets.bottom))
-    }
-
-    /// Tab or Shift-Tab moved the keyboard into a row of a page kept built
-    /// beside the one shown (deep review P2-04: a Tab stop with nothing to
-    /// show for it, since that page is hidden). It goes where the next
-    /// visible stop is, in the direction it was travelling: past a page
-    /// after the shown one, on to the add bar (Tab) or back to the shown
-    /// page's last row (Shift-Tab); past a page before it, on to the shown
-    /// page's first row (Tab) or back to the add bar (Shift-Tab, wrapping
-    /// as the window's key loop does).
-    private func keepKeyboardOnShownPage(arrivedOn page: TasksTab) {
-        let event = NSApp.currentEvent
-        let backward = event?.type == .keyDown && event?.modifierFlags.contains(.shift) == true
-        let order = TasksTab.allCases
-        let after = (order.firstIndex(of: page) ?? 0) > (order.firstIndex(of: model.tab) ?? 0)
-        let rows = visibleIDs()
-        focusTracker.noteKeyboardNavigation()
-        if backward == after, let row = backward ? rows.last : rows.first {
-            setFocus(row)
-        } else {
-            focusedRow = nil
-            focusNewTaskStop()
-        }
-    }
-
-    /// Where a new task starts, as a keyboard stop: the panel's "+" (the
-    /// card replaced the add bar there), or the add bar.
-    private func focusNewTaskStop() {
-        if panelComposer != nil {
-            tabTarget.request(.plus)
-            tabTarget.queueControlFocus(PanelPlusFocusID(), for: .plus, in: model.tab,
-                                        model: model, requests: focusRequests)
-        } else {
-            addBarFocused = true
-        }
     }
 
     /// A list whose rows a query or a view changed: back to its top, where
@@ -3077,6 +3042,17 @@ struct TasksPage: View {
             if !model.selection.isEmpty { model.clearSelection() }
             if focusedRow != nil { focusedRow = nil }
         }
+        // A press inside a row, a control in it too (its circle, its
+        // subtask count, its date): the cursor goes to that row, and the
+        // press selects nothing; a tap on the row itself then selects, as
+        // before. A row that took focus took the keyboard from any press
+        // inside it; the list keeps that. No focus state is written: the
+        // press itself gives the list target the keyboard.
+        if let row = pointer.pressedRow(event, tab: model.tab, top: viewportTop, bottomInset: bandTop,
+                                        ownHeight: { id in rowOwnHeight(id, in: model.tab) }),
+           row != model.editingTitleID, row != focusedID {
+            cursorMoved(AtticRowFocusID(page: model.tab.rawValue, id: row), byMouse: true)
+        }
         // Only the rows' visible part: between the tabs' band and the
         // bottom stack's band (round 7, R4).
         pointer.press(event, tab: model.tab, below: viewportTop, aboveBottom: bandTop) { id in
@@ -3264,6 +3240,17 @@ struct TasksPage: View {
         if let measured = pointer.frame(for: TasksRowID(tab: tab, id: id))?.height, measured > 0 { return measured }
         guard let row = model.rows(for: tab).first(where: { Self.dragHeightLookupVisits += 1; return $0.id == id }) else { return AtticLayout.rowPitch }
         return estimatedHeight(row)
+    }
+
+    /// The height of a row's own part: the row without its quick look.
+    /// nil for a row the list does not hold.
+    private func rowOwnHeight(_ id: UUID, in tab: TasksTab) -> CGFloat? {
+        // A row with nothing open under it is its own part whole.
+        if !model.expanded.contains(id), let measured = pointer.frame(for: TasksRowID(tab: tab, id: id))?.height { return measured }
+        let rows = tab == .done ? model.doneDays().flatMap(\.rows) : model.rows(for: tab)
+        return rows.first { $0.id == id }.map { row in
+            TasksRowDesign.height(twoLine: row.model.hasDetails, tiles: !row.model.tileFiles.isEmpty && row.status != .done)
+        }
     }
 
     private func estimatedHeight(_ row: TasksListRow) -> CGFloat {
@@ -5459,6 +5446,18 @@ final class TasksPointer {
               let view, let point = location(of: event), point.y >= top, point.y <= view.bounds.height - bottomInset
         else { return false }
         return row(at: point, in: tab) == nil
+    }
+
+    /// A left press (not a Control-click, which opens the row's menu) in
+    /// the list's space, inside a row's own part: that row. `ownHeight` is
+    /// the row's height without its quick look, whose lines take the
+    /// keyboard themselves.
+    func pressedRow(_ event: NSEvent, tab: TasksTab, top: CGFloat, bottomInset: CGFloat, ownHeight: (UUID) -> CGFloat?) -> UUID? {
+        guard event.type == .leftMouseDown, MenuPress(type: event.type, modifiers: event.modifierFlags) == .none,
+              let view, let point = location(of: event), point.y >= top, point.y <= view.bounds.height - bottomInset,
+              let id = row(at: point, in: tab), let frame = frame(for: TasksRowID(tab: tab, id: id)),
+              let height = ownHeight(id), point.y - frame.minY <= height else { return nil }
+        return id
     }
 
     /// The row under `point` on page `tab`: the one whose frame holds it
