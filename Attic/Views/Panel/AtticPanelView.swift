@@ -11,6 +11,8 @@ import SwiftData
     /// A size-derived value was published (the corner room, the settled size).
     static var publishedSize: (() -> Void)?
     static var relevantSettings: (() -> Void)?
+    /// The page width a bottom row was handed (`PanelWidthReader`), by row.
+    static var rowPageWidth: ((String, CGFloat) -> Void)?
 }
 #endif
 

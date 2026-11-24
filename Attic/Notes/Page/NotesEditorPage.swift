@@ -698,9 +698,9 @@ struct NotesEditorPage: View {
             if controller.isLibraryPresented {
                 libraryBar
             } else {
-                // The pill's room follows the panel's width, read here
+                // The pill's room follows the page's width, read here
                 // where the row is laid out (the layout carries no size).
-                PanelWidthReader(bareOutset: 2 * layout.chromeInsets.leading) { editorBar(panelWidth: $0) }
+                PanelWidthReader(row: "notes-editor", outset: 2 * layout.chromeInsets.leading) { editorBar(panelWidth: $0) }
                     .transition(.opacity)
             }
         }

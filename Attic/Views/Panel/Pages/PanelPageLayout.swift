@@ -60,17 +60,25 @@ struct PanelPageLayout: Equatable {
     }
 }
 
-/// Reads the panel's width where a view is laid out, in the same pass as
-/// the window's frame: the bounds of the panel's coordinate space, or, for
-/// a page hosted bare (no shell around it), the reader's own width plus
-/// `bareOutset`. The content is centred in the reader, as a frame would.
+/// Reads the width of the page a row sits in, where the row is laid out:
+/// the row's own width plus `outset`, the room the page keeps on the row's
+/// two sides. It is the page's own frame, in the same pass: the shown page
+/// has the window's width, and a page kept hidden through a resize drag
+/// has the width it is held at (never the live one). The content is
+/// centred in the reader, as a frame would.
 struct PanelWidthReader<Content: View>: View {
-    var bareOutset: CGFloat = 0
+    /// Names the row for `PanelInvalidationProbe.rowPageWidth`.
+    let row: String
+    var outset: CGFloat = 0
     @ViewBuilder var content: (CGFloat) -> Content
 
     var body: some View {
         GeometryReader { proxy in
-            content(proxy.bounds(of: PanelPageLayout.coordinateSpace)?.width ?? proxy.size.width + bareOutset)
+            let width = proxy.size.width + outset
+            #if ATTIC_LOCAL_ONLY
+            let _ = PanelInvalidationProbe.rowPageWidth?(row, width)
+            #endif
+            content(width)
                 .frame(width: proxy.size.width, height: proxy.size.height)
         }
     }

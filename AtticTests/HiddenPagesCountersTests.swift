@@ -1279,3 +1279,73 @@ extension HiddenPagesCountersTests {
         }
     }
 }
+
+// MARK: - PR 69 fix round 1, item 2: a hidden page's rows read the page's own width
+
+extension HiddenPagesCountersTests {
+    /// The width a row is handed is its page's own frame. An open note is
+    /// hidden behind Tasks through a drag: on every step its bottom row is
+    /// handed the width the page is held at, never the live one. Shown
+    /// mid-drag, it is handed the window's width, and no stale one.
+    func testRZ6AHiddenEditorsRowReadsThePagesOwnWidth() throws {
+        #if ATTIC_LOCAL_ONLY
+        try withRig { rig in
+            var handed: [CGFloat] = []
+            PanelInvalidationProbe.rowPageWidth = { row, width in if row == "notes-editor" { handed.append(width) } }
+            defer { PanelInvalidationProbe.rowPageWidth = nil }
+            rig.state.switchPage(to: .notes, motion: .instant)
+            pump(rig.content, rig.panel, seconds: 1.0)
+            let noteID = rig.seed.freeNotes[0]
+            XCTAssertEqual(wait { await rig.draft.pages.openFromLibrary(noteID: noteID) }, true, "harness: the note opened")
+            rig.notesLibrary.dismissAfterOpenedNote(rig.draft.pages, requestedQuery: "")
+            pump(rig.content, rig.panel, seconds: 1.0)
+            XCTAssertFalse(rig.draft.pages.isLibraryPresented, "harness: Notes rests on the open note")
+            let start = rig.state.panelSize
+            XCTAssertEqual(try XCTUnwrap(handed.last, "harness: the editor's row is laid out"), start.width, accuracy: 0.5,
+                           "shown, the row is handed the panel's width")
+
+            rig.state.switchPage(to: .tasks, motion: .instant)
+            pump(rig.content, rig.panel, seconds: 1.0)
+            rig.state.setInteractionLock(.windowResize, isActive: true)
+            oneFrame(rig)
+            handed.removeAll()
+            for step in 1...Self.dragSteps {
+                resize(rig, to: dragSize(start, step: step))
+                oneFrame(rig)
+                XCTAssertEqual(handed.filter { abs($0 - start.width) >= 0.5 }, [],
+                               "step \(step): the hidden editor's row was handed a width its page does not have")
+            }
+            let live = dragSize(start, step: Self.dragSteps).width
+            handed.removeAll()
+            rig.state.switchPage(to: .notes, motion: .instant)
+            oneFrame(rig)
+            XCTAssertEqual(try XCTUnwrap(handed.last, "shown mid-drag, the row is laid out in the first frame"), live, accuracy: 0.5,
+                           "shown mid-drag, the row has the window's width in its first frame")
+            XCTAssertEqual(handed.filter { abs($0 - live) >= 0.5 }, [], "shown mid-drag, the row was handed a stale width")
+            release(rig)
+            pump(rig.content, rig.panel)
+        }
+        #endif
+    }
+
+    /// The reader itself, for every row that uses it: its own width plus
+    /// the outset, whatever the panel's coordinate space around it measures.
+    func testRZ6TheWidthReaderReadsItsOwnWidthNotThePanelSpaces() {
+        final class Seen { var widths: [CGFloat] = [] }
+        let seen = Seen()
+        let host = NSHostingView(rootView: PanelWidthReader(row: "pin", outset: 40) { width -> Color in
+            seen.widths.append(width)
+            return Color.clear
+        }
+        .frame(width: 300, height: 30)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .coordinateSpace(PanelPageLayout.coordinateSpace))
+        for panel in [340.0, 500, 388] {
+            seen.widths.removeAll()
+            host.frame = CGRect(x: 0, y: 0, width: panel, height: 30)
+            host.layoutSubtreeIfNeeded()
+            if panel == 340 { XCTAssertEqual(seen.widths.last, 340, "harness: the reader ran") }
+            XCTAssertEqual(seen.widths.filter { $0 != 340 }, [], "panel \(panel): a row 300 wide with 40 around it is in a page 340 wide")
+        }
+    }
+}

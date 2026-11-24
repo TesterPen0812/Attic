@@ -579,9 +579,9 @@ struct TaskNotePage: View {
     private var bottomRow: some View {
         AtticControlGroup {
             NoteFormatRowSwitch(state: chrome.formatRow, model: { [weak chrome] in chrome?.controls?.formatModel }) {
-            // The pill's room follows the panel's width, read here where
+            // The pill's room follows the page's width, read here where
             // the row is laid out (the layout carries no size).
-            PanelWidthReader(bareOutset: 2 * layout.chromeInsets.leading) { panelWidth in
+            PanelWidthReader(row: "task-note", outset: 2 * layout.chromeInsets.leading) { panelWidth in
             HStack(spacing: 0) {
                 AtticRaisedButton(systemName: placement == .window ? "rectangle.portrait.and.arrow.right" : "chevron.left",
                                   label: placement == .window ? "Move to Panel" : "Back",
