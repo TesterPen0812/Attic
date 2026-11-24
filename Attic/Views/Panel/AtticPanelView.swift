@@ -13,6 +13,9 @@ import SwiftData
     static var relevantSettings: (() -> Void)?
     /// The page width a bottom row was handed (`PanelWidthReader`), by row.
     static var rowPageWidth: ((String, CGFloat) -> Void)?
+    /// The island's per-window root wrapper and its glass view ran.
+    static var islandRoot: (() -> Void)?
+    static var islandSurface: (() -> Void)?
 }
 #endif
 

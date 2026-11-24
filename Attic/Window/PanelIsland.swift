@@ -1020,9 +1020,25 @@ private struct PanelIslandSurface: View {
     let cornerRadius: CGFloat
 
     @Environment(\.atticDesign) private var design
-    @Environment(\.atticPanelSurfaceSize) private var panelSize
+    @Environment(\.panelIslandSizeSource) private var source
+    /// The panel's size, for the glass (`nativeGlassSize`). The island is
+    /// another window and cannot take it from its own layout, so this view,
+    /// its one reader, is sent each accepted size: a step of a resize
+    /// re-runs this body and nothing above it. Until the first one arrives
+    /// it reads the size the panel has, so it is never stale when shown.
+    @State private var sentSize: CGSize?
 
     var body: some View {
+        #if ATTIC_LOCAL_ONLY
+        let _ = PanelInvalidationProbe.islandSurface?()
+        #endif
+        surface(panelSize: sentSize ?? source?.panelSize ?? AtticLayout.panelSize)
+            .onReceive(source?.panelSizeChanges.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) {
+                if sentSize != $0 { sentSize = $0 }
+            }
+    }
+
+    @ViewBuilder private func surface(panelSize: CGSize) -> some View {
         let shape = Squircle(cornerRadius: cornerRadius, exponent: AtticShape.controlExponent)
         let shadow = PanelIslandLayout.contactShadow(dark: design.mode == .dark)
         AtticSurfaceBackground(model: design.tokens.panel, shape: shape, nativeGlassSize: panelSize)
@@ -1167,22 +1183,34 @@ private struct PanelIslandRoot<Content: View>: View {
     }
 }
 
-/// Feeds the root the panel size without observing all of `PanelUIState`.
+/// Hands the island's glass the panel's state to take the size from,
+/// without observing `PanelUIState` or holding the size itself: a size
+/// write runs nothing here (`PanelIslandSurface` subscribes).
 /// Its controls retain native glass independently of key ownership.
 private struct PanelIslandKeyed<Content: View>: View {
     let settings: AppSettings
     let model: PanelIslandModel
     let uiState: PanelUIState
     let content: Content
-    @State private var panelSize = AtticLayout.panelSize
 
     var body: some View {
+        #if ATTIC_LOCAL_ONLY
+        let _ = PanelInvalidationProbe.islandRoot?()
+        #endif
         PanelIslandRoot(settings: settings, isPanelKey: false, content: content)
-            .environment(\.atticPanelSurfaceSize, panelSize)
-            // Another window: it cannot take the panel's size from its
-            // own layout, so it is sent each accepted size.
-            .onAppear { if panelSize != uiState.panelSize { panelSize = uiState.panelSize } }
-            .onReceive(uiState.panelSizeChanges) { if panelSize != $0 { panelSize = $0 } }
+            .environment(\.panelIslandSizeSource, uiState)
+    }
+}
+
+private struct PanelIslandSizeSourceKey: EnvironmentKey {
+    static let defaultValue: PanelUIState? = nil
+}
+
+private extension EnvironmentValues {
+    /// Where the island's glass takes the panel's size from.
+    var panelIslandSizeSource: PanelUIState? {
+        get { self[PanelIslandSizeSourceKey.self] }
+        set { self[PanelIslandSizeSourceKey.self] = newValue }
     }
 }
 

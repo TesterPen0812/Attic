@@ -175,6 +175,37 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(panel.uiState.panelSize.width, width, accuracy: 0.5)
     }
 
+    /// PR 69 fix round 1, item 6 (the lead's 16:05 condition a): the island
+    /// is another window, so its glass is sent each accepted size. A size
+    /// write re-runs the glass view and nothing above it in the island's
+    /// windows (the island, the name label, the stand-in).
+    func testASizeWriteRunsOnlyTheIslandsGlassView() throws {
+        #if ATTIC_LOCAL_ONLY
+        var roots = 0, surfaces = 0
+        PanelInvalidationProbe.islandRoot = { roots += 1 }
+        PanelInvalidationProbe.islandSurface = { surfaces += 1 }
+        defer {
+            PanelInvalidationProbe.islandRoot = nil
+            PanelInvalidationProbe.islandSurface = nil
+        }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        XCTAssertGreaterThan(roots, 0, "harness: the island's windows are built")
+        XCTAssertGreaterThan(surfaces, 0, "harness: the island's glass is drawn")
+        let size = panel.uiState.panelSize
+        roots = 0
+        surfaces = 0
+        for step in 1...6 {
+            panel.uiState.updatePanelSize(CGSize(width: size.width + CGFloat(step * 8), height: size.height))
+            spin(0.05)
+        }
+        print("ISLAND_SIZE_FEED steps=6 roots=\(roots) glass=\(surfaces)")
+        XCTAssertEqual(roots, 0, "a size write ran the island's root wrapper")
+        XCTAssertGreaterThanOrEqual(surfaces, 6, "the island's glass takes each size")
+        #endif
+    }
+
     /// Deliver an edge drag to the real AppKit hosting responder; the window
     /// frame, controller callback and retained SwiftUI pages all participate.
     /// The hidden page should keep its layout until the drag is released.
