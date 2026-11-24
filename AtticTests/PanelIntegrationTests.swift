@@ -242,6 +242,15 @@ final class PanelIntegrationTests: XCTestCase {
                 pressure: type == .leftMouseUp ? 0 : 1
             ))
         }
+        // What the body counts stood in for, read on the laid-out views
+        // (lead, 24 Nov 16:22: the size reaches the pages through layout).
+        let tasksPage = pageWideViews("KeptContentContainer", in: host).filter { !$0.isHiddenOrHasHiddenAncestor }
+        let notesPage = pageWideViews("NotesPageSwipeView", in: host)
+        XCTAssertFalse(tasksPage.isEmpty, "harness: the shown Tasks page has a page-wide native view")
+        XCTAssertFalse(notesPage.isEmpty, "harness: the retained Notes page has a page-wide native view")
+        for view in tasksPage + notesPage {
+            XCTAssertEqual(view.bounds.width, initial.width, accuracy: 0.5, "harness: \(view.className) is page-wide at rest")
+        }
         host.mouseDown(with: try event(.leftMouseDown, at: grip, timestamp: 1))
         XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.windowResize))
         var stepTimesMs: [Double] = []
@@ -252,6 +261,17 @@ final class PanelIntegrationTests: XCTestCase {
             host.mouseDragged(with: dragged)
             host.layoutSubtreeIfNeeded()
             stepTimesMs.append((CACurrentMediaTime() - began) * 1_000)
+            let content = window.visibleContentFrame.width
+            XCTAssertEqual(PanelRootLayout.lastPlacedSize?.width ?? -1, content, accuracy: 0.5,
+                           "step \(index): The visible shell must follow the window size")
+            for view in tasksPage {
+                XCTAssertEqual(view.bounds.width, content, accuracy: 0.5,
+                               "step \(index): The current Tasks page must receive the new geometry")
+            }
+            for view in notesPage {
+                XCTAssertEqual(view.bounds.width, initial.width, accuracy: 0.5,
+                               "step \(index): The hidden Notes page keeps the drag's start width")
+            }
             spin(0.015)
         }
         XCTAssertEqual(window.visibleContentFrame.width, initial.width + 60, accuracy: 1,
@@ -266,15 +286,17 @@ final class PanelIntegrationTests: XCTestCase {
             "RESIZE_MEASURE steps=60 shell=%d tasks=%d retained_notes=%d median_ms=%.3f p95_ms=%.3f worst_ms=%.3f",
             during[0], during[1], during[2], ordered[ordered.count / 2], ordered[56], ordered.last ?? 0
         )) { _ in }
-        XCTAssertGreaterThan(during[0], 0, "The visible shell must follow the window size")
-        XCTAssertGreaterThan(during[1], 0, "The current Tasks page must receive the new geometry")
         XCTAssertLessThanOrEqual(during[2], 3, "The hidden Notes page should not rebuild for intermediate resize sizes")
         let beforeEnd = counts[2]
         let release = CGPoint(x: grip.x + direction * 60, y: grip.y)
         host.mouseUp(with: try event(.leftMouseUp, at: release, timestamp: 2.3))
         spin(0.2)
         XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.windowResize))
-        XCTAssertGreaterThan(counts[2], beforeEnd, "The retained page must receive the final geometry at release")
+        let final = window.visibleContentFrame.width
+        for view in notesPage {
+            XCTAssertEqual(view.bounds.width, final, accuracy: 0.5, "The retained page must receive the final geometry at release")
+        }
+        print("RESIZE_HOST_COUNTS release retained_notes=\(counts[2] - beforeEnd)")
         XCTAssertEqual(panel.uiState.panelSize.width, initial.width + 60, accuracy: 1)
         #endif
     }
