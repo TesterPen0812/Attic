@@ -362,7 +362,15 @@ struct GlossLabView: View {
                 Text(line).font(.caption).foregroundStyle(.secondary)
             }
             slider("Blur radius", $lab.samplesGroundRadius, 0...40, unit: " pt")
-            slider("Reach", $lab.samplesGroundReach, 20...80, unit: " pt")
+            slider("Reach", $lab.samplesGroundReach, 20...160, unit: " pt")
+            slider("Fade start", $lab.samplesGroundHold, 0...60, unit: " pt")
+            slider("Fade curve", $lab.samplesGroundCurve, 1...4)
+            TextField("Extra filter inputs (key=value; …)", text: $lab.samplesGroundExtras)
+                .textFieldStyle(.roundedBorder)
+            if let line = GlossBackdropGround.extrasLine(lab.samplesGroundExtras) {
+                Text(line).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         slider("Ground dim", $lab.samplesGroundDim, 0...30, unit: " %")
         Toggle("Smoke as the glass's tint (the Veil above)", isOn: $lab.samplesStackTint)
@@ -768,28 +776,53 @@ enum GlossSamples {
     /// from the pieces' round rectangle (corner as the square's), so the
     /// corners fall off evenly.
     static func variableStrength(at point: CGPoint, size: CGSize, reach: CGFloat) -> CGFloat {
+        variableStrength(at: point, size: size, reach: reach, hold: reach * variableHold, curve: 1)
+    }
+
+    /// The fade (24 Nov, "Fix the fade"): the blur is full to `hold` pt from
+    /// the pieces (kept `variableHoldGap` under the reach), then falls by
+    /// the smoothstep raised to `curve`. A curve over 1 drops the radius
+    /// early and spends most of the distance going from a little blur to
+    /// none, since a small radius still reads as blurred (Air, step 0 of
+    /// the fade round: at curve 1 the text came back only in the last 12 pt).
+    /// At curve 1 this is the first round's function, value for value.
+    static func variableStrength(at point: CGPoint, size: CGSize, reach: CGFloat, hold: CGFloat, curve: CGFloat) -> CGFloat {
         let halfWidth = max(size.width / 2 - reach, 0), halfHeight = max(size.height / 2 - reach, 0)
         let corner = min(stackSquareCorner, halfWidth, halfHeight)
         let qx = max(abs(point.x - size.width / 2) - (halfWidth - corner), 0)
         let qy = max(abs(point.y - size.height / 2) - (halfHeight - corner), 0)
         let distance = max((qx * qx + qy * qy).squareRoot() - corner, 0)
-        let hold = reach * variableHold
+        let hold = variableFadeStart(hold, reach: reach)
         guard distance > hold, reach > hold else { return 1 }
         let left = 1 - min((distance - hold) / (reach - hold), 1)
-        return left * left * (3 - 2 * left)
+        let smooth = left * left * (3 - 2 * left)
+        return curve == 1 ? smooth : pow(smooth, max(curve, 1))
+    }
+
+    /// How far under the reach the fade start is kept at least.
+    static let variableHoldGap: CGFloat = 5
+
+    /// The fade start in use: `hold`, at least 0 and `variableHoldGap`
+    /// under the reach.
+    static func variableFadeStart(_ hold: CGFloat, reach: CGFloat) -> CGFloat {
+        max(min(hold, reach - variableHoldGap), 0)
     }
 
     /// Apple's blur's mask at `scale` pixels per point: white whose alpha is
     /// the strength (the variable blur reads the mask's alpha; Air prototype,
     /// 24 Nov), premultiplied.
     static func variableMask(size: CGSize, reach: CGFloat, scale: CGFloat) -> CGImage? {
+        variableMask(size: size, reach: reach, hold: reach * variableHold, curve: 1, scale: scale)
+    }
+
+    static func variableMask(size: CGSize, reach: CGFloat, hold: CGFloat, curve: CGFloat, scale: CGFloat) -> CGImage? {
         let width = Int((size.width * scale).rounded()), height = Int((size.height * scale).rounded())
         guard width > 0, height > 0 else { return nil }
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         for y in 0..<height {
             for x in 0..<width {
                 let point = CGPoint(x: (CGFloat(x) + 0.5) / scale, y: (CGFloat(y) + 0.5) / scale)
-                let value = UInt8((variableStrength(at: point, size: size, reach: reach) * 255).rounded())
+                let value = UInt8((variableStrength(at: point, size: size, reach: reach, hold: hold, curve: curve) * 255).rounded())
                 let index = (y * width + x) * 4
                 pixels[index] = value; pixels[index + 1] = value; pixels[index + 2] = value; pixels[index + 3] = value
             }
@@ -1087,7 +1120,9 @@ enum GlossBackdropGround {
     /// The layer with its filter, or nil where this system lacks a piece.
     struct Parts {
         let layer: CALayer
-        let filter: NSObject
+        /// Made again when the extra inputs change, so a cleared input does
+        /// not stay set (fade round, 24 Nov).
+        var filter: NSObject
         /// Whether the filter takes `inputNormalizeEdges` (it is set on where so).
         let normalizes: Bool
     }
@@ -1095,8 +1130,17 @@ enum GlossBackdropGround {
     static func make() -> Parts? { make(backdropClass: backdropClassNameForTesting ?? backdropClassName) }
 
     private static func make(backdropClass name: String) -> Parts? {
-        guard let layerClass = NSClassFromString(name) as? CALayer.Type,
-              let filterClass = NSClassFromString(filterClassName) else { return nil }
+        guard let layerClass = NSClassFromString(name) as? CALayer.Type, let made = makeFilter() else { return nil }
+        let layer = layerClass.init()
+        guard answers(layer, behindWindowKey) else { return nil }
+        layer.setValue(true, forKey: behindWindowKey)
+        return Parts(layer: layer, filter: made.filter, normalizes: made.keys.contains(normalizeKey))
+    }
+
+    /// A new variable blur filter with its input keys, `inputNormalizeEdges`
+    /// set on where it takes it; nil where this system lacks a piece.
+    static func makeFilter() -> (filter: NSObject, keys: [String])? {
+        guard let filterClass = NSClassFromString(filterClassName) else { return nil }
         let maker = NSSelectorFromString("filterWithType:")
         let filters = filterClass as AnyObject
         guard filters.responds(to: maker) else { return nil }
@@ -1104,18 +1148,91 @@ enum GlossBackdropGround {
         if filters.responds(to: typesSelector) {
             guard let types = filters.perform(typesSelector)?.takeUnretainedValue() as? [String], types.contains(filterType) else { return nil }
         }
-        guard let filter = filters.perform(maker, with: filterType)?.takeUnretainedValue() as? NSObject else { return nil }
-        let keysSelector = NSSelectorFromString("inputKeys")
-        guard filter.responds(to: keysSelector),
-              let keys = filter.perform(keysSelector)?.takeUnretainedValue() as? [String],
-              keys.contains(radiusKey), keys.contains(maskKey) else { return nil }
-        let layer = layerClass.init()
-        guard answers(layer, behindWindowKey) else { return nil }
-        layer.setValue(true, forKey: behindWindowKey)
-        let normalizes = keys.contains(normalizeKey)
-        if normalizes { filter.setValue(true, forKey: normalizeKey) }
-        return Parts(layer: layer, filter: filter, normalizes: normalizes)
+        guard let filter = filters.perform(maker, with: filterType)?.takeUnretainedValue() as? NSObject,
+              let keys = inputKeys(of: filter), keys.contains(radiusKey), keys.contains(maskKey) else { return nil }
+        if keys.contains(normalizeKey) { filter.setValue(true, forKey: normalizeKey) }
+        return (filter, keys)
     }
+
+    /// The filter's own list of input keys, or nil where it gives none.
+    static func inputKeys(of filter: NSObject) -> [String]? {
+        let keysSelector = NSSelectorFromString("inputKeys")
+        guard filter.responds(to: keysSelector) else { return nil }
+        return filter.perform(keysSelector)?.takeUnretainedValue() as? [String]
+    }
+
+    // MARK: Extra inputs (fade round, 24 Nov)
+
+    /// What an extras text gives: the pairs applied, in order, and what was
+    /// ignored (a key, or the whole piece where it has no `=`).
+    struct Extras: Equatable {
+        struct Pair: Equatable { let key: String; let value: Double }
+        var applied: [Pair] = []
+        var ignored: [String] = []
+        static let none = Extras()
+        /// "Applied: inputFade=1.0. Ignored: foo."
+        var line: String {
+            let applied = applied.isEmpty ? "none" : applied.map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
+            return "Applied: \(applied). Ignored: \(ignored.isEmpty ? "none" : ignored.joined(separator: ", "))."
+        }
+    }
+
+    /// Inputs the lab's own controls set (the radius slider, the mask), so
+    /// an extra pair never takes them over.
+    static let ownKeys: Set<String> = [radiusKey, maskKey]
+
+    /// Reads `key=value` pairs, split by `;` or new lines. A pair is kept
+    /// only where `keys` (the filter's own `inputKeys`) lists the key, the
+    /// lab's controls do not set it, its value is a finite number and the
+    /// filter's current value for it is a number or unset. Everything else
+    /// is ignored; an empty text gives nothing.
+    static func extras(_ text: String, keys: [String], current: (String) -> Any?) -> Extras {
+        var result = Extras()
+        for piece in text.split(whereSeparator: { $0 == ";" || $0.isNewline }) {
+            let pair = piece.trimmingCharacters(in: .whitespaces)
+            if pair.isEmpty { continue }
+            guard let equals = pair.firstIndex(of: "=") else { result.ignored.append(pair); continue }
+            let key = pair[..<equals].trimmingCharacters(in: .whitespaces)
+            let raw = pair[pair.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty, keys.contains(key), !ownKeys.contains(key),
+                  let value = Double(raw), value.isFinite else { result.ignored.append(key.isEmpty ? pair : key); continue }
+            if let now = current(key), !(now is NSNumber) { result.ignored.append(key); continue }
+            result.applied.append(Extras.Pair(key: key, value: value))
+        }
+        return result
+    }
+
+    /// Reads `text` against `filter` and sets the pairs it keeps on it by
+    /// key-value coding.
+    @discardableResult
+    static func applyExtras(_ text: String, to filter: NSObject) -> Extras {
+        guard let keys = inputKeys(of: filter) else { return .none }
+        let extras = extras(text, keys: keys) { filter.value(forKey: $0) }
+        for pair in extras.applied { filter.setValue(NSNumber(value: pair.value), forKey: pair.key) }
+        return extras
+    }
+
+    /// The quiet line under the extras field: the keys applied and ignored,
+    /// against a new filter as the ground makes one; nil for an empty text.
+    static func extrasLine(_ text: String) -> String? {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard let made = makeFilter() else { return unavailableLine }
+        let extras = extras(text, keys: made.keys) { made.filter.value(forKey: $0) }
+        return extras.line
+    }
+
+    /// Every numeric input `filter` holds, as `key=value`, in its own order.
+    static func numericInputs(_ filter: NSObject) -> [String] {
+        (inputKeys(of: filter) ?? []).compactMap { key in
+            (filter.value(forKey: key) as? NSNumber).map { "\(key)=\($0)" }
+        }
+    }
+
+    /// The check file (fade round): the ground's check line, written to the
+    /// app's own temporary folder (inside a preview's sandbox container)
+    /// whenever Apple's blur is configured, so it can be read where nobody
+    /// captures the screen.
+    static var checkFileURL: URL { FileManager.default.temporaryDirectory.appendingPathComponent("gloss-ground-check.txt") }
 
     /// Whether `layer` has the setting `key`, its setter and its getter.
     static func answers(_ layer: CALayer, _ key: String) -> Bool {
@@ -1183,6 +1300,15 @@ final class GlossStackGroundView: NSView {
     private var variableMask: CGImage?
     private var variableMaskMade: [CGFloat]?
     private var appliedRadius: Double?
+    // The fade (24 Nov): fade start (pt), curve, the extra inputs' text, the
+    // text the filter was made with, what it gave, and the last check line
+    // written to the check file.
+    private(set) var hold: CGFloat = 25
+    private(set) var curve: CGFloat = 1
+    private(set) var extras = ""
+    private var filterExtras = ""
+    private(set) var appliedExtras = GlossBackdropGround.Extras.none
+    private var checkWritten: String?
     /// What is drawn: the chosen material, or the public Blur where Apple's
     /// blur was chosen and this system cannot draw it.
     private(set) var drawnMaterial: GlossLab.StackGroundMaterial = .blur
@@ -1205,19 +1331,22 @@ final class GlossStackGroundView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    /// `radius` and `reach` are Apple's blur's; the other materials leave
-    /// them unused.
+    /// `radius`, `reach`, `hold`, `curve` and `extras` are Apple's blur's;
+    /// the other materials leave them unused.
     func configure(material: GlossLab.StackGroundMaterial, dim: Double, radius: Double = 20,
-                   reach: CGFloat = GlossSamples.stackGroundReach) {
+                   reach: CGFloat = GlossSamples.stackGroundReach, hold: CGFloat = 25, curve: CGFloat = 1, extras: String = "") {
         if material != self.material {
             self.material = material
             maskSize = .zero
             variableMaskMade = nil
             needsLayout = true
         }
-        if radius != self.radius || reach != self.reach {
+        if radius != self.radius || reach != self.reach || hold != self.hold || curve != self.curve || extras != self.extras {
             self.radius = radius
             self.reach = reach
+            self.hold = hold
+            self.curve = curve
+            self.extras = extras
             needsLayout = true
         }
         if dim != self.dim {
@@ -1233,6 +1362,9 @@ final class GlossStackGroundView: NSView {
 
     override func layout() {
         super.layout()
+        // Apple's blur chosen: its check line goes to the check file after
+        // this pass (fade round); nothing for the other materials.
+        defer { if material == .variable { writeCheckFile() } }
         if material == .variable, !backdropTried {
             backdropTried = true
             backdrop = GlossBackdropGround.make()
@@ -1245,8 +1377,8 @@ final class GlossStackGroundView: NSView {
         case .regular: .regular
         case .clear: .clear
         }
-        if drawn == .variable, let backdrop {
-            layoutVariable(backdrop)
+        if drawn == .variable, backdrop != nil {
+            layoutVariable()
             return
         }
         if let glassStyle {
@@ -1288,7 +1420,8 @@ final class GlossStackGroundView: NSView {
     /// Apple's blur: the private layer fills the ground; its mask (full
     /// near the pieces, nothing at the rim) sets the blur radius point by
     /// point, and the same mask fades the dim, so neither has a border.
-    private func layoutVariable(_ parts: GlossBackdropGround.Parts) {
+    private func layoutVariable() {
+        guard var parts = backdrop else { return }
         glass?.isHidden = true
         blur.isHidden = true
         let host = backdropHost ?? {
@@ -1307,11 +1440,20 @@ final class GlossStackGroundView: NSView {
         parts.layer.frame = host.bounds
         guard bounds.width > 0, bounds.height > 0 else { CATransaction.commit(); return }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        let made = [bounds.width, bounds.height, reach, scale]
+        let made = [bounds.width, bounds.height, reach, scale, hold, curve]
         var maskChanged = false
+        // New extra inputs: a new filter, so an input taken out of the text
+        // goes back to unset (none: the filter made with the layer, as before).
+        if filterExtras != extras {
+            if let fresh = GlossBackdropGround.makeFilter() { parts.filter = fresh.filter }
+            appliedExtras = GlossBackdropGround.applyExtras(extras, to: parts.filter)
+            filterExtras = extras
+            backdrop = parts
+            maskChanged = true
+        }
         if variableMaskMade != made {
             variableMaskMade = made
-            variableMask = GlossSamples.variableMask(size: bounds.size, reach: reach, scale: scale)
+            variableMask = GlossSamples.variableMask(size: bounds.size, reach: reach, hold: hold, curve: curve, scale: scale)
             let fade = CALayer()
             fade.frame = CGRect(origin: .zero, size: bounds.size)
             fade.contents = variableMask
@@ -1325,6 +1467,35 @@ final class GlossStackGroundView: NSView {
         }
         CATransaction.commit()
     }
+
+    /// The ground's state as one line: the material chosen and drawn, and
+    /// for Apple's blur what its layer holds, the fade and every numeric
+    /// input of the layer's filter.
+    func checkLine() -> String {
+        var text = "groundChosen=\(material.rawValue) groundDrawn=\(drawnMaterial.rawValue) groundView=\(NSStringFromSize(bounds.size))"
+        if let layer = backdropLayer {
+            let back = GlossBackdropGround.readBack(layer)
+            let aware = GlossBackdropGround.answers(layer, GlossBackdropGround.behindWindowKey)
+                ? "\(layer.value(forKey: GlossBackdropGround.behindWindowKey) ?? "nil")" : "-"
+            text += " layer=\(NSStringFromClass(type(of: layer))) windowServerAware=\(aware) radius=\(back.radius.map { "\($0)" } ?? "nil") "
+                + "mask=\(back.mask.map { "\($0.width)x\($0.height)" } ?? "nil")"
+        }
+        if material == .variable {
+            let inputs = (backdropLayer?.filters?.first as? NSObject).map(GlossBackdropGround.numericInputs) ?? []
+            text += " hold=\(hold) holdUsed=\(GlossSamples.variableFadeStart(hold, reach: reach)) curve=\(curve) reach=\(reach) "
+                + "extrasApplied=[\(appliedExtras.applied.map { "\($0.key)=\($0.value)" }.joined(separator: ","))] "
+                + "extrasIgnored=[\(appliedExtras.ignored.joined(separator: ","))] inputs=[\(inputs.joined(separator: ","))]"
+        }
+        return text
+    }
+
+    /// Writes the check line to the check file when it changed.
+    private func writeCheckFile() {
+        let line = checkLine()
+        guard line != checkWritten else { return }
+        checkWritten = line
+        try? (line + "\n").write(to: GlossBackdropGround.checkFileURL, atomically: true, encoding: .utf8)
+    }
 }
 
 /// The ground as a view under the pieces in the cards window.
@@ -1333,15 +1504,18 @@ struct GlossStackGround: NSViewRepresentable {
     let dim: Double
     let radius: Double
     let reach: CGFloat
+    let hold: CGFloat
+    let curve: CGFloat
+    let extras: String
 
     func makeNSView(context: Context) -> GlossStackGroundView {
         let view = GlossStackGroundView(frame: .zero)
-        view.configure(material: material, dim: dim, radius: radius, reach: reach)
+        view.configure(material: material, dim: dim, radius: radius, reach: reach, hold: hold, curve: curve, extras: extras)
         return view
     }
 
     func updateNSView(_ view: GlossStackGroundView, context: Context) {
-        view.configure(material: material, dim: dim, radius: radius, reach: reach)
+        view.configure(material: material, dim: dim, radius: radius, reach: reach, hold: hold, curve: curve, extras: extras)
     }
 }
 
@@ -1368,7 +1542,8 @@ struct GlossStackTest: View {
         ZStack(alignment: .topLeading) {
             if lab.samplesGround == .same {
                 GlossStackGround(material: lab.samplesGroundMaterial, dim: lab.samplesGroundDim / 100,
-                                 radius: lab.samplesGroundRadius, reach: reach)
+                                 radius: lab.samplesGroundRadius, reach: reach, hold: CGFloat(lab.samplesGroundHold),
+                                 curve: CGFloat(lab.samplesGroundCurve), extras: lab.samplesGroundExtras)
                     .frame(width: ground.width, height: ground.height)
                     .padding(.leading, ground.minX)
                     .padding(.top, ground.minY)
@@ -1630,6 +1805,9 @@ final class GlossSamplesWindows {
             _ = GlossLab.shared.samplesGroundDim
             _ = GlossLab.shared.samplesGroundRadius
             _ = GlossLab.shared.samplesGroundReach
+            _ = GlossLab.shared.samplesGroundHold
+            _ = GlossLab.shared.samplesGroundCurve
+            _ = GlossLab.shared.samplesGroundExtras
         } onChange: { [weak self] in
             Task { @MainActor in self?.configure() }
         }
@@ -1736,7 +1914,9 @@ final class GlossSamplesWindows {
         groundWindow = ground
         let reach = GlossSamples.stackGroundReach(for: lab)
         (ground.contentView as? GlossStackGroundView)?.configure(material: lab.samplesGroundMaterial, dim: lab.samplesGroundDim / 100,
-                                                                 radius: lab.samplesGroundRadius, reach: reach)
+                                                                 radius: lab.samplesGroundRadius, reach: reach,
+                                                                 hold: CGFloat(lab.samplesGroundHold), curve: CGFloat(lab.samplesGroundCurve),
+                                                                 extras: lab.samplesGroundExtras)
         let frame = GlossSamples.stackGroundFrame(under: window.frame, room: GlossSamples.stackRoom(for: lab), reach: reach)
         if ground.parent !== window {
             ground.setFrame(frame, display: false)
@@ -1814,16 +1994,7 @@ final class GlossSamplesWindows {
             return nil
         }
         let view = GlossLab.shared.samplesGround == .below ? find(groundWindow?.contentView) : find(window.contentView)
-        guard let view else { return "groundView=none" }
-        var text = "groundChosen=\(view.material.rawValue) groundDrawn=\(view.drawnMaterial.rawValue) groundView=\(NSStringFromSize(view.bounds.size))"
-        if let layer = view.backdropLayer {
-            let back = GlossBackdropGround.readBack(layer)
-            let aware = GlossBackdropGround.answers(layer, GlossBackdropGround.behindWindowKey)
-                ? "\(layer.value(forKey: GlossBackdropGround.behindWindowKey) ?? "nil")" : "-"
-            text += " layer=\(NSStringFromClass(type(of: layer))) windowServerAware=\(aware) radius=\(back.radius.map { "\($0)" } ?? "nil") "
-                + "mask=\(back.mask.map { "\($0.width)x\($0.height)" } ?? "nil")"
-        }
-        return text
+        return view?.checkLine() ?? "groundView=none"
     }
 
     /// The check seam's close (`-GlossLab.samplesCloseCheck YES`): shuts
@@ -1870,7 +2041,16 @@ final class GlossSamplesWindows {
             }
             backdropWindow = backdrop
         }
-        backdropWindow?.setFrame(window.frame.insetBy(dx: -30, dy: -30), display: true)
+        // It covers the ground window as well where Apple's blur's reach
+        // makes that larger than the cards (fade round; the same frame as
+        // before at a reach of 60 pt or less).
+        let lab = GlossLab.shared
+        var covered = window.frame
+        if Self.groundWindowWanted(for: lab) {
+            covered = covered.union(GlossSamples.stackGroundFrame(under: window.frame, room: GlossSamples.stackRoom(for: lab),
+                                                                  reach: GlossSamples.stackGroundReach(for: lab)))
+        }
+        backdropWindow?.setFrame(covered.insetBy(dx: -30, dy: -30), display: true)
         backdropWindow?.orderFrontRegardless()
     }
 }

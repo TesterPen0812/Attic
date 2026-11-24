@@ -228,6 +228,22 @@ final class GlossLab {
     /// before the blur is gone (20 to 80 pt). The lab window's own state.
     var samplesGroundRadius: Double = 20 { didSet { save(samplesGroundRadius, "samplesGroundRadius") } }
     var samplesGroundReach: Double = 60 { didSet { save(samplesGroundReach, "samplesGroundReach") } }
+    /// Apple's blur's fade (24 Nov, owner: "Fix the fade"; brief
+    /// `ops/design/gloss-lab-fade-brief-2026-11-24.md`): how far from the
+    /// pieces the blur stays full (0 to 60 pt, kept 5 pt under the reach),
+    /// the power the fall is raised to (1 to 4; 1 is the first round's
+    /// smoothstep), and extra numeric inputs for the variable blur filter as
+    /// `key=value` pairs (empty: none). The lab window's own state.
+    var samplesGroundHold: Double = 25 { didSet { save(samplesGroundHold, "samplesGroundHold") } }
+    var samplesGroundCurve: Double = GlossLab.groundCurveStart { didSet { save(samplesGroundCurve, "samplesGroundCurve") } }
+    var samplesGroundExtras = "" { didSet { save(samplesGroundExtras, "samplesGroundExtras") } }
+    /// The fade curve's starting value, chosen from the Air's measured
+    /// series at curves 1 to 4 (fade start 25, reach 60): the smallest
+    /// largest step between neighbouring 4 pt of the walk out to the rim,
+    /// taken as the larger of text and texture, was 0.62, 0.48, 0.44, 0.48.
+    /// Higher curves move the return to sharp inward; they do not widen it
+    /// (report `ops/reviews/gloss-lab-fade-24nov.md`).
+    static let groundCurveStart: Double = 3
 
     /// Where the stack test's blurred ground is: none, a view under the
     /// pieces in the cards window, or a window of its own under it.
@@ -315,6 +331,8 @@ final class GlossLab {
         if let value = defaults.string(forKey: Self.prefix + "samplesSubvariant") { samplesSubvariant = value }
         bool("samplesStackKey", &samplesStackKey)
         double("samplesGroundRadius", &samplesGroundRadius); double("samplesGroundReach", &samplesGroundReach)
+        double("samplesGroundHold", &samplesGroundHold); double("samplesGroundCurve", &samplesGroundCurve)
+        if let value = defaults.string(forKey: Self.prefix + "samplesGroundExtras") { samplesGroundExtras = value }
         // A launch argument (`-GlossLab.preset <id>`) shows a preset for
         // one run. Still loading, so nothing of it is saved.
         if let id = defaults.string(forKey: Self.prefix + "preset"), let preset = Self.presets.first(where: { $0.id == id }) {
@@ -488,6 +506,7 @@ final class GlossLab {
         Backdrop: \(backdrop.title)
         Material samples: \(on(samplesShown)), veil \(Int(samplesSmoke.rounded())) %, light row \(on(samplesLight)), system variants \(on(samplesSystem)) (lensing \(Int(samplesLensing.rounded())), scrim \(Int(samplesScrim.rounded())))
         \(stackLine)
+        \(fadeLine)
         Preset: \(currentPreset?.title ?? "none (own values)")
         \(labLines)
         """
@@ -504,6 +523,14 @@ final class GlossLab {
             + "subdued \(n(samplesSubdued)), adaptive \(n(samplesAdaptive)), reduced tint opacity \(on(samplesTintReduced)), "
             + "subvariant \(subvariant), key window \(on(samplesStackKey)), "
             + "Apple's blur radius \(n(samplesGroundRadius)) pt, reach \(n(samplesGroundReach)) pt"
+    }
+
+    /// Apple's blur's fade as one line, for "Copy values" (its own line, so
+    /// the stack line reads as before).
+    var fadeLine: String {
+        let extras = samplesGroundExtras.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "Apple's blur fade: start \(Int(samplesGroundHold.rounded())) pt, curve \(String(format: "%.1f", samplesGroundCurve)), "
+            + "extras \(extras.isEmpty ? "none" : "\"\(extras)\"")"
     }
 
     /// The lab's own switches and sliders as text, numbered as in the

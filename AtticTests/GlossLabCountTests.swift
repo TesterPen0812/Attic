@@ -1519,5 +1519,228 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertTrue(GlossBackdropGround.isAvailable)
         XCTAssertEqual(GlossSamples.drawnGroundMaterial(.variable), .variable)
     }
+
+    // MARK: The fade (24 Nov, "Fix the fade")
+
+    /// Fade start, curve and extras load from storage, are written by Copy
+    /// values on a line of their own, and stay out of presets, All off and
+    /// Reset sliders.
+    func testFadeValuesLoadCopyAndStayOutOfPresets() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertEqual(fresh.samplesGroundHold, 25); XCTAssertEqual(fresh.samplesGroundCurve, GlossLab.groundCurveStart)
+        XCTAssertEqual(fresh.samplesGroundExtras, "")
+        XCTAssertEqual(fresh.fadeLine, "Apple's blur fade: start 25 pt, curve \(String(format: "%.1f", GlossLab.groundCurveStart)), extras none")
+        XCTAssertTrue(fresh.valuesText(app: Self.app(mode: "Light")).contains(fresh.fadeLine))
+        defaults.set("variable", forKey: "GlossLab.samplesGroundMaterial")
+        defaults.set(10.0, forKey: "GlossLab.samplesGroundHold")
+        defaults.set(2.5, forKey: "GlossLab.samplesGroundCurve")
+        defaults.set("inputFade=1; inputDither=0", forKey: "GlossLab.samplesGroundExtras")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertEqual(lab.samplesGroundHold, 10); XCTAssertEqual(lab.samplesGroundCurve, 2.5)
+        XCTAssertEqual(lab.samplesGroundExtras, "inputFade=1; inputDither=0")
+        let text = lab.valuesText(app: Self.app(mode: "Light"))
+        XCTAssertTrue(text.contains("Apple's blur fade: start 10 pt, curve 2.5, extras \"inputFade=1; inputDither=0\""), text)
+        XCTAssertTrue(lab.stackLine.hasSuffix("Apple's blur radius 20 pt, reach 60 pt"), "the stack line reads as before")
+        lab.allOff(); lab.resetSliders()
+        let preset = try XCTUnwrap(GlossLab.presets.first { $0.id == "thickGlass" })
+        lab.apply(preset)
+        XCTAssertEqual(lab.samplesGroundHold, 10); XCTAssertEqual(lab.samplesGroundCurve, 2.5)
+        XCTAssertEqual(lab.samplesGroundExtras, "inputFade=1; inputDither=0", "All off, Reset sliders or a preset moved the fade")
+        lab.samplesGroundHold = 40; lab.samplesGroundCurve = 4; lab.samplesGroundExtras = ""
+        XCTAssertEqual(lab.currentPreset?.id, "thickGlass", "a fade value broke the preset's match")
+        let again = GlossLab(defaults: defaults)
+        XCTAssertEqual(again.samplesGroundHold, 40); XCTAssertEqual(again.samplesGroundCurve, 4)
+        XCTAssertEqual(again.samplesGroundExtras, "", "a change is kept")
+    }
+
+    /// The first round's strength function, copied verbatim from `ddfcc821`
+    /// (`GlossSamples.variableStrength`, hold 25/60 of the reach), so curve
+    /// 1 can be held to it.
+    private static func firstRoundStrength(at point: CGPoint, size: CGSize, reach: CGFloat) -> CGFloat {
+        let halfWidth = max(size.width / 2 - reach, 0), halfHeight = max(size.height / 2 - reach, 0)
+        let corner = min(GlossSamples.stackSquareCorner, halfWidth, halfHeight)
+        let qx = max(abs(point.x - size.width / 2) - (halfWidth - corner), 0)
+        let qy = max(abs(point.y - size.height / 2) - (halfHeight - corner), 0)
+        let distance = max((qx * qx + qy * qy).squareRoot() - corner, 0)
+        let hold = reach * (25.0 / 60.0)
+        guard distance > hold, reach > hold else { return 1 }
+        let left = 1 - min((distance - hold) / (reach - hold), 1)
+        return left * left * (3 - 2 * left)
+    }
+
+    /// The first round's mask bytes, made as `ddfcc821` made them.
+    private static func firstRoundMask(size: CGSize, reach: CGFloat, scale: CGFloat) -> [UInt8] {
+        let width = Int((size.width * scale).rounded()), height = Int((size.height * scale).rounded())
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let point = CGPoint(x: (CGFloat(x) + 0.5) / scale, y: (CGFloat(y) + 0.5) / scale)
+                let value = UInt8((firstRoundStrength(at: point, size: size, reach: reach) * 255).rounded())
+                let index = (y * width + x) * 4
+                pixels[index] = value; pixels[index + 1] = value; pixels[index + 2] = value; pixels[index + 3] = value
+            }
+        }
+        return pixels
+    }
+
+    private static func bytes(_ image: CGImage) throws -> [UInt8] {
+        let data = try XCTUnwrap(image.dataProvider?.data as Data?)
+        XCTAssertEqual(image.bytesPerRow, image.width * 4)
+        return [UInt8](data)
+    }
+
+    /// At fade start 25, curve 1 and reach 60 the strength and the mask are
+    /// the first round's, value for value and byte for byte, and so is the
+    /// mask the ground's layer holds with no extra inputs.
+    func testFadeAtCurveOneIsTheFirstRoundsMask() throws {
+        let reach: CGFloat = 60
+        let size = CGSize(width: 290 + reach * 2, height: 138 + reach * 2)
+        var y: CGFloat = 0
+        while y <= size.height {
+            var x: CGFloat = 0
+            while x <= size.width {
+                let point = CGPoint(x: x, y: y)
+                XCTAssertEqual(GlossSamples.variableStrength(at: point, size: size, reach: reach, hold: 25, curve: 1),
+                               Self.firstRoundStrength(at: point, size: size, reach: reach), "at \(point)")
+                x += 1.25
+            }
+            y += 1.25
+        }
+        for scale in [CGFloat(1), 2] {
+            let mask = try XCTUnwrap(GlossSamples.variableMask(size: size, reach: reach, hold: 25, curve: 1, scale: scale))
+            XCTAssertEqual(try Self.bytes(mask), Self.firstRoundMask(size: size, reach: reach, scale: scale), "mask at scale \(scale)")
+        }
+        let view = GlossStackGroundView(frame: CGRect(origin: .zero, size: size))
+        view.configure(material: .variable, dim: 0, radius: 20, reach: reach, hold: 25, curve: 1, extras: "")
+        view.layout()
+        let held = try XCTUnwrap(GlossBackdropGround.readBack(try XCTUnwrap(view.backdropLayer)).mask)
+        let scale = CGFloat(held.width) / size.width
+        XCTAssertEqual(try Self.bytes(held), Self.firstRoundMask(size: size, reach: reach, scale: scale), "the layer's mask")
+    }
+
+    /// For every curve, fade start and reach: full to the fade start (kept
+    /// 5 pt under the reach), nothing at the rim, never rising with
+    /// distance; a higher curve is never stronger than curve 1.
+    func testFadeStrengthIsFullThenFallsToTheRimForEveryCurve() {
+        for reach in [CGFloat(20), 60, 120, 160] {
+            let size = CGSize(width: 290 + reach * 2, height: 138 + reach * 2)
+            for hold in [CGFloat(0), 25, 60] {
+                let used = GlossSamples.variableFadeStart(hold, reach: reach)
+                XCTAssertEqual(used, min(hold, reach - 5))
+                for curve in [CGFloat(1), 1.5, 2, 3, 4] {
+                    var last: CGFloat = 1
+                    var distance: CGFloat = 0
+                    while distance <= reach {
+                        let point = CGPoint(x: reach - distance, y: size.height / 2)
+                        let strength = GlossSamples.variableStrength(at: point, size: size, reach: reach, hold: hold, curve: curve)
+                        let label = "reach \(reach) hold \(hold) curve \(curve) at \(distance) pt"
+                        if distance <= used { XCTAssertEqual(strength, 1, label) }
+                        XCTAssertLessThanOrEqual(strength, last + 1e-12, "rises with distance: \(label)")
+                        XCTAssertLessThanOrEqual(strength, GlossSamples.variableStrength(at: point, size: size, reach: reach, hold: hold, curve: 1) + 1e-12, label)
+                        last = strength
+                        distance += 0.5
+                    }
+                    XCTAssertEqual(GlossSamples.variableStrength(at: CGPoint(x: 0, y: size.height / 2), size: size, reach: reach, hold: hold, curve: curve),
+                                   0, accuracy: 1e-9, "the rim: reach \(reach) hold \(hold) curve \(curve)")
+                }
+            }
+        }
+    }
+
+    /// Reach goes to 160 pt: the cards window grows round the pieces in
+    /// Same window, the window below is the ground's size, and neither cuts
+    /// the ground.
+    func testFadeWindowSizeAtReach160() {
+        let lab = GlossLab(defaults: nil)
+        lab.samplesStack = true; lab.samplesGround = .same; lab.samplesGroundMaterial = .variable; lab.samplesGroundReach = 160
+        XCTAssertEqual(GlossSamples.stackRoom(for: lab), 160)
+        XCTAssertEqual(GlossSamples.windowSize(for: lab), CGSize(width: 610, height: 458))
+        XCTAssertEqual(GlossSamples.stackGroundRect(room: 160, reach: 160), CGRect(x: 0, y: 0, width: 610, height: 458))
+        XCTAssertEqual(NSHostingView(rootView: GlossSamplesView(lab: lab)).fittingSize, CGSize(width: 610, height: 458))
+        lab.samplesGround = .below
+        XCTAssertEqual(GlossSamples.windowSize(for: lab), CGSize(width: 410, height: 258))
+        XCTAssertEqual(GlossSamples.stackGroundFrame(under: CGRect(x: 300, y: 200, width: 410, height: 258), room: 60, reach: 160),
+                       CGRect(x: 200, y: 100, width: 610, height: 458), "the pieces lie 160 pt in from the ground window's sides")
+    }
+
+    /// The extras text: only pairs whose key the filter lists, that the lab's
+    /// own controls do not set, whose value is a finite number and whose
+    /// current value is a number or unset; everything else is ignored and
+    /// nothing throws. Against the real filter as well.
+    func testFadeExtrasKeepOnlyNumbersForTheFiltersOwnKeys() throws {
+        let keys = ["inputMaskImage", "inputRadius", "inputNormalizeEdges", "inputFade", "inputDither", "inputSourceSublayerName"]
+        func read(_ text: String) -> GlossBackdropGround.Extras {
+            GlossBackdropGround.extras(text, keys: keys) { $0 == "inputSourceSublayerName" ? "name" as NSString : nil }
+        }
+        typealias Pair = GlossBackdropGround.Extras.Pair
+        XCTAssertEqual(read(""), .none, "an empty text")
+        XCTAssertEqual(read("  ;\n ; "), .none, "only separators")
+        XCTAssertEqual(read("inputFade=1"), GlossBackdropGround.Extras(applied: [Pair(key: "inputFade", value: 1)]))
+        XCTAssertEqual(read(" inputFade = 0.5 ;\ninputDither=0").applied, [Pair(key: "inputFade", value: 0.5), Pair(key: "inputDither", value: 0)])
+        XCTAssertEqual(read("inputNoSuchKey=1").ignored, ["inputNoSuchKey"], "an unknown key")
+        XCTAssertEqual(read("inputBlurFillDarkenOpacity=0").ignored, ["inputBlurFillDarkenOpacity"], "a key this filter lacks")
+        XCTAssertEqual(read("inputFade=abc").ignored, ["inputFade"], "not a number")
+        XCTAssertEqual(read("inputFade=nan; inputDither=inf").ignored, ["inputFade", "inputDither"], "not a finite number")
+        XCTAssertEqual(read("inputFade=").ignored, ["inputFade"], "no value")
+        XCTAssertEqual(read("inputFade").ignored, ["inputFade"], "no =")
+        XCTAssertEqual(read("=1").ignored, ["=1"], "no key")
+        XCTAssertEqual(read("inputRadius=5; inputMaskImage=1").ignored, ["inputRadius", "inputMaskImage"], "the lab's own inputs")
+        XCTAssertEqual(read("inputSourceSublayerName=1").ignored, ["inputSourceSublayerName"], "not a numeric input")
+        let mixed = read("inputFade=1; junk; inputNope=2; inputDither=x")
+        XCTAssertEqual(mixed.applied, [Pair(key: "inputFade", value: 1)])
+        XCTAssertEqual(mixed.ignored, ["junk", "inputNope", "inputDither"])
+        XCTAssertEqual(mixed.line, "Applied: inputFade=1.0. Ignored: junk, inputNope, inputDither.")
+        XCTAssertNil(GlossBackdropGround.extrasLine("  "))
+        // The real filter: its own keys decide, and setting them does not throw.
+        let made = try XCTUnwrap(GlossBackdropGround.makeFilter())
+        let text = "inputFade=1; inputBlurFillDarkenOpacity=0; inputRadius=3; bogus"
+        let applied = GlossBackdropGround.applyExtras(text, to: made.filter)
+        XCTAssertEqual((made.filter.value(forKey: "inputFade") as? NSNumber)?.doubleValue, 1)
+        XCTAssertNotEqual((made.filter.value(forKey: "inputRadius") as? NSNumber)?.doubleValue, 3, "the radius is the slider's")
+        let fill = made.keys.contains("inputBlurFillDarkenOpacity")
+        XCTAssertEqual(applied.applied.map(\.key), fill ? ["inputFade", "inputBlurFillDarkenOpacity"] : ["inputFade"])
+        XCTAssertEqual(applied.ignored, fill ? ["inputRadius", "bogus"] : ["inputBlurFillDarkenOpacity", "inputRadius", "bogus"])
+        XCTAssertEqual(GlossBackdropGround.extrasLine(text), applied.line)
+    }
+
+    /// Configuring Apple's blur writes its check line to the check file, with
+    /// the fade, the extras and the filter's numeric inputs; clearing the
+    /// extras makes a new filter, so the input goes back to unset; another
+    /// material writes nothing.
+    func testFadeCheckFileHoldsTheValuesSet() throws {
+        let url = GlossBackdropGround.checkFileURL
+        XCTAssertEqual(url.lastPathComponent, "gloss-ground-check.txt")
+        XCTAssertEqual(url.deletingLastPathComponent().standardizedFileURL, FileManager.default.temporaryDirectory.standardizedFileURL)
+        try? FileManager.default.removeItem(at: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let size = GlossSamples.stackGroundRect(room: 80, reach: 80).size
+        let view = GlossStackGroundView(frame: CGRect(origin: .zero, size: size))
+        view.configure(material: .variable, dim: 0, radius: 14, reach: 80, hold: 10, curve: 3, extras: "inputFade=1; bogus=2")
+        view.layout()
+        var line = try String(contentsOf: url, encoding: .utf8)
+        for part in ["groundChosen=variable", "groundDrawn=variable", "radius=14.0", "hold=10.0", "holdUsed=10.0", "curve=3.0", "reach=80.0",
+                     "extrasApplied=[inputFade=1.0]", "extrasIgnored=[bogus]", "inputRadius=14", "inputFade=1"] {
+            XCTAssertTrue(line.contains(part), "missing \(part): \(line)")
+        }
+        XCTAssertEqual(line.split(separator: "\n").count, 1, "one line")
+        let layer = try XCTUnwrap(view.backdropLayer)
+        XCTAssertEqual(((layer.filters?.first as? NSObject)?.value(forKey: "inputFade") as? NSNumber)?.doubleValue, 1)
+        view.configure(material: .variable, dim: 0, radius: 14, reach: 80, hold: 78, curve: 3, extras: "")
+        view.layout()
+        line = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(line.contains("hold=78.0 holdUsed=75.0"), line)
+        XCTAssertTrue(line.contains("extrasApplied=[] extrasIgnored=[]"), line)
+        XCTAssertNotEqual(((layer.filters?.first as? NSObject)?.value(forKey: "inputFade") as? NSNumber)?.doubleValue, 1,
+                          "a cleared extra input stayed set")
+        XCTAssertEqual(GlossBackdropGround.readBack(layer).radius, 14, "the new filter has the radius")
+        XCTAssertNotNil(GlossBackdropGround.readBack(layer).mask, "the new filter has the mask")
+        try FileManager.default.removeItem(at: url)
+        view.configure(material: .blur, dim: 0, radius: 14, reach: 80)
+        view.layout()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "another material wrote the check file")
+    }
 }
 #endif
