@@ -1152,8 +1152,10 @@ final class HiddenPagesCountersTests: XCTestCase {
             XCTAssertEqual(rig.page.keyboardFocus?.id, c, "harness: SwiftUI's focus reached C")
             AtticFocusReaderCensus.reset()
 
+            let shellBefore = Self.shellRuns
             try click(d)  // MOVE: SwiftUI's focus goes from C to D
             let checks = AtticFocusReaderCensus.focusChecks
+            let moveShellRuns = Self.shellRuns - shellBefore
             AtticFocusReaderCensus.reset()
             XCTAssertEqual(rig.page.selection, [d], "harness: the click selected D")
             XCTAssertEqual(rig.page.keyboardFocus?.id, d, "harness: SwiftUI's focus moved to D")
@@ -1163,6 +1165,16 @@ final class HiddenPagesCountersTests: XCTestCase {
             let idle = AtticFocusReaderCensus.focusChecks.values.reduce(0, +)
             AtticFocusReaderCensus.reset()
             XCTAssertEqual(idle, 0, "harness: a sentinel was checked with no focus change")
+
+            // A click that moves no focus (D again): no sentinel is checked, so
+            // the counts above come from the focus move, not from the click.
+            let stayShellBefore = Self.shellRuns
+            try click(d)
+            let stay = AtticFocusReaderCensus.focusChecks
+            AtticFocusReaderCensus.reset()
+            print("HIDDEN_FOCUS_CHECKS stay-click " + stay.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+                  + " shell_runs_move=\(moveShellRuns) shell_runs_stay=\(Self.shellRuns - stayShellBefore)")
+            XCTAssertEqual(stay.values.reduce(0, +), 0, "harness: a click that moves no focus checked a sentinel (\(stay))")
 
             let hidden = ["calendar", "notes", "canvas"]
             let line = (["tasks"] + hidden).map { "\($0)=\(checks[$0, default: 0])" }.joined(separator: " ")
