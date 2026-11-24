@@ -1327,5 +1327,181 @@ final class GlossLabValuesTests: XCTestCase {
             XCTAssertEqual(GlossSamplesWindows.groundWindowWanted(for: lab), place == .below)
         }
     }
+
+    // MARK: Apple's blur (24 Nov, owner: "Lift it, Opus builds")
+
+    /// Apple's blur's two values start where the brief says, load, are
+    /// written by Copy values on the stack test's line with the material's
+    /// name, and no preset, All off or Reset sliders touches them.
+    func testAppleBlurValuesLoadCopyAndStayOutOfPresets() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(GlossLab.StackGroundMaterial.variable.title, "Apple's blur")
+        XCTAssertEqual(GlossLab.StackGroundMaterial(rawValue: "variable"), .variable)
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertEqual(fresh.samplesGroundRadius, 20); XCTAssertEqual(fresh.samplesGroundReach, 60)
+        XCTAssertTrue(fresh.stackLine.hasSuffix("key window off, Apple's blur radius 20 pt, reach 60 pt"), fresh.stackLine)
+        defaults.set("variable", forKey: "GlossLab.samplesGroundMaterial")
+        defaults.set(12.0, forKey: "GlossLab.samplesGroundRadius")
+        defaults.set(30.0, forKey: "GlossLab.samplesGroundReach")
+        defaults.set("same", forKey: "GlossLab.samplesGround")
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertEqual(lab.samplesGroundMaterial, .variable)
+        XCTAssertEqual(lab.samplesGroundRadius, 12); XCTAssertEqual(lab.samplesGroundReach, 30)
+        let text = lab.valuesText(app: Self.app(mode: "Light"))
+        XCTAssertTrue(text.contains("ground same window (apple's blur, dim 8 %)"), text)
+        XCTAssertTrue(text.contains("Apple's blur radius 12 pt, reach 30 pt"), text)
+        lab.allOff(); lab.resetSliders()
+        let preset = try XCTUnwrap(GlossLab.presets.first { $0.id == "thickGlass" })
+        lab.apply(preset)
+        XCTAssertEqual(lab.samplesGroundRadius, 12); XCTAssertEqual(lab.samplesGroundReach, 30)
+        XCTAssertEqual(lab.samplesGroundMaterial, .variable, "All off, Reset sliders or a preset moved Apple's blur")
+        lab.samplesGroundRadius = 40; lab.samplesGroundReach = 80
+        XCTAssertEqual(lab.currentPreset?.id, "thickGlass", "an Apple's blur value broke the preset's match")
+        let again = GlossLab(defaults: defaults)
+        XCTAssertEqual(again.samplesGroundRadius, 40); XCTAssertEqual(again.samplesGroundReach, 80, "a change is kept")
+    }
+
+    /// With Apple's blur the ground reaches as far as Reach: in the cards
+    /// window the room round the pieces grows to it where it is over 60 pt
+    /// (the pieces stay `room` in from the sides), the window below is the
+    /// ground's size; every other material keeps 410 x 258 and the 40 pt
+    /// ground exactly.
+    func testAppleBlurWindowSizeFollowsTheReach() {
+        XCTAssertTrue(GlossBackdropGround.isAvailable, "this system lacks a piece of Apple's blur")
+        let lab = GlossLab(defaults: nil)
+        lab.samplesStack = true; lab.samplesGround = .same; lab.samplesGroundMaterial = .variable
+        for (reach, room) in [(CGFloat(20), CGFloat(60)), (60, 60), (80, 80)] {
+            lab.samplesGroundReach = Double(reach)
+            XCTAssertEqual(GlossSamples.stackGroundReach(for: lab), reach)
+            XCTAssertEqual(GlossSamples.stackRoom(for: lab), room, "reach \(reach)")
+            XCTAssertEqual(GlossSamples.windowSize(for: lab), CGSize(width: 290 + room * 2, height: 138 + room * 2))
+            let ground = GlossSamples.stackGroundRect(room: room, reach: reach)
+            XCTAssertEqual(ground, CGRect(x: room - reach, y: room - reach, width: 290 + reach * 2, height: 138 + reach * 2))
+            XCTAssertGreaterThanOrEqual(ground.minX, 0, "the ground is cut off at reach \(reach)")
+            let window = GlossSamples.windowSize(for: lab)
+            XCTAssertLessThanOrEqual(ground.maxX, window.width); XCTAssertLessThanOrEqual(ground.maxY, window.height)
+        }
+        // Window below: the cards window keeps its 60 pt room; the ground
+        // window is the ground, centred on the pieces.
+        lab.samplesGround = .below; lab.samplesGroundReach = 80
+        XCTAssertEqual(GlossSamples.stackRoom(for: lab), 60)
+        XCTAssertEqual(GlossSamples.windowSize(for: lab), CGSize(width: 410, height: 258))
+        XCTAssertEqual(GlossSamples.stackGroundFrame(under: CGRect(x: 100, y: 200, width: 410, height: 258), room: 60, reach: 80),
+                       CGRect(x: 80, y: 180, width: 450, height: 298), "the pieces lie 80 pt in from the ground window's sides")
+        // Every other material, whatever Reach says: exactly as before.
+        for material in [GlossLab.StackGroundMaterial.blur, .regular, .clear] {
+            lab.samplesGroundMaterial = material
+            for place in [GlossLab.StackGround.same, .below] {
+                lab.samplesGround = place
+                XCTAssertEqual(GlossSamples.stackGroundReach(for: lab), 40)
+                XCTAssertEqual(GlossSamples.windowSize(for: lab), GlossSamples.stackWindowSize)
+                XCTAssertEqual(GlossSamples.stackGroundRect(room: GlossSamples.stackRoom(for: lab), reach: 40), GlossSamples.stackGroundRect)
+            }
+        }
+        lab.samplesStack = false
+        XCTAssertEqual(GlossSamples.windowSize(for: lab), GlossSamples.windowSize(lightRow: lab.samplesLight, systemVariants: lab.samplesSystem))
+    }
+
+    /// Apple's blur's mask: full over the pieces and for the first 25/60 of
+    /// the reach, then a smooth fall to nothing at the rim, by the distance
+    /// from the pieces' round rectangle, so a corner falls as a side does.
+    func testAppleBlurMaskFallsFromThePiecesToTheRim() throws {
+        let reach: CGFloat = 60
+        let size = CGSize(width: 290 + reach * 2, height: 138 + reach * 2)
+        func strength(_ x: CGFloat, _ y: CGFloat) -> CGFloat { GlossSamples.variableStrength(at: CGPoint(x: x, y: y), size: size, reach: reach) }
+        XCTAssertEqual(strength(size.width / 2, size.height / 2), 1, "over the pieces")
+        XCTAssertEqual(strength(reach + 10, size.height / 2), 1, "inside the pieces' edge")
+        XCTAssertEqual(strength(reach - 24, size.height / 2), 1, "full for the first 25 pt")
+        XCTAssertEqual(strength(0, size.height / 2), 0, accuracy: 0.001, "nothing at the rim")
+        XCTAssertEqual(strength(size.width / 2, size.height), 0, accuracy: 0.001, "nothing at the bottom rim")
+        XCTAssertEqual(strength(reach - 42.5, size.height / 2), 0.5, accuracy: 0.01, "half way through the fall")
+        XCTAssertEqual(strength(0, 0), 0, "the ground's corner")
+        // The pieces' corner arc (centre 30 pt in from the group's corner,
+        // radius 30): 40 pt out from it along the diagonal is as strong as
+        // 40 pt out from a side.
+        let arc = CGPoint(x: reach + 30, y: reach + 30)
+        let along = (30 + 40) / CGFloat(2).squareRoot()
+        let side = strength(reach - 40, size.height / 2)
+        XCTAssertEqual(strength(arc.x - along, arc.y - along), side, accuracy: 0.01)
+        XCTAssertGreaterThan(side, 0.05); XCTAssertLessThan(side, 0.95)
+        let image = try XCTUnwrap(GlossSamples.variableMask(size: size, reach: reach, scale: 2))
+        XCTAssertEqual(image.width, Int(size.width * 2)); XCTAssertEqual(image.height, Int(size.height * 2))
+        let data = try XCTUnwrap(image.dataProvider?.data as Data?)
+        func pixel(_ x: Int, _ y: Int) -> [UInt8] { let i = y * image.bytesPerRow + x * 4; return Array(data[i..<i + 4]) }
+        XCTAssertEqual(pixel(image.width / 2, image.height / 2), [255, 255, 255, 255], "white, opaque over the pieces")
+        XCTAssertEqual(pixel(0, image.height / 2)[3], 0, "clear at the rim")
+        let mid = pixel(Int((reach - 42.5) * 2), image.height / 2)
+        XCTAssertEqual(mid[0], mid[3], "premultiplied white"); XCTAssertEqual(Double(mid[3]), 127.5, accuracy: 4)
+    }
+
+    /// The private layer is made, samples behind the window, and the radius
+    /// and the mask reach it and read back; a new radius reaches it too; the
+    /// other materials hide it and draw as before.
+    func testAppleBlurRadiusAndMaskReachTheLayer() throws {
+        XCTAssertNil(GlossBackdropGround.backdropClassNameForTesting, "the seam is set outside a test")
+        let size = GlossSamples.stackGroundRect(room: 60, reach: 30).size
+        let view = GlossStackGroundView(frame: CGRect(origin: .zero, size: size))
+        view.configure(material: .variable, dim: 0.08, radius: 12, reach: 30)
+        view.layout()
+        XCTAssertEqual(view.drawnMaterial, .variable)
+        let layer = try XCTUnwrap(view.backdropLayer, "no private layer made")
+        XCTAssertEqual(NSStringFromClass(type(of: layer)), "CABackdropLayer")
+        XCTAssertEqual(layer.value(forKey: GlossBackdropGround.behindWindowKey) as? Bool, true, "it must sample behind the window")
+        XCTAssertEqual(layer.frame, view.bounds)
+        var back = GlossBackdropGround.readBack(layer)
+        XCTAssertEqual(back.radius, 12)
+        let mask = try XCTUnwrap(back.mask, "the mask did not reach the layer")
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        XCTAssertEqual(mask.width, Int((size.width * scale).rounded()))
+        XCTAssertNotNil(view.subviews.first { !$0.isHidden && $0.layer?.sublayers?.contains(layer) == true }, "the layer is not shown")
+        let blur = try XCTUnwrap(view.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+        XCTAssertTrue(blur.isHidden, "the public blur is drawn as well")
+        XCTAssertNil(view.subviews.first { $0 is NSGlassEffectView }, "no glass made for Apple's blur")
+        XCTAssertNil(view.hitTest(CGPoint(x: 100, y: 100)), "the ground takes no clicks")
+        XCTAssertEqual(view.dim, 0.08)
+        view.configure(material: .variable, dim: 0.08, radius: 30, reach: 30)
+        view.layout()
+        back = GlossBackdropGround.readBack(layer)
+        XCTAssertEqual(back.radius, 30, "a new radius did not reach the layer")
+        view.configure(material: .blur, dim: 0.08, radius: 30, reach: 30)
+        view.layout()
+        XCTAssertEqual(view.drawnMaterial, .blur)
+        XCTAssertFalse(blur.isHidden); XCTAssertNotNil(blur.maskImage)
+        XCTAssertNil(view.subviews.first { !$0.isHidden && $0.layer?.sublayers?.contains(layer) == true }, "Blur still shows Apple's blur")
+        view.configure(material: .variable, dim: 0.08, radius: 30, reach: 30)
+        view.layout()
+        XCTAssertTrue(blur.isHidden); XCTAssertEqual(GlossBackdropGround.readBack(layer).radius, 30)
+    }
+
+    /// With the private class made unavailable (the test seam), Apple's
+    /// blur draws the public Blur ground with its geometry, the quiet line
+    /// is shown, and nothing throws; with the seam cleared it is back.
+    func testAppleBlurFallsBackToBlurWithoutThePrivateLayer() throws {
+        defer { GlossBackdropGround.backdropClassNameForTesting = nil }
+        XCTAssertNil(GlossBackdropGround.line(for: .variable), "this system lacks a piece of Apple's blur")
+        for missing in ["AtticGlossNoSuchBackdropLayer", "CALayer"] {
+            GlossBackdropGround.backdropClassNameForTesting = missing
+            XCTAssertFalse(GlossBackdropGround.isAvailable, missing)
+            XCTAssertNil(GlossBackdropGround.make(), missing)
+            XCTAssertEqual(GlossBackdropGround.line(for: .variable), "Apple's blur is not available on this macOS")
+            XCTAssertNil(GlossBackdropGround.line(for: .blur), "the line belongs to Apple's blur")
+            XCTAssertEqual(GlossSamples.drawnGroundMaterial(.variable), .blur)
+            let lab = GlossLab(defaults: nil)
+            lab.samplesStack = true; lab.samplesGround = .same; lab.samplesGroundMaterial = .variable; lab.samplesGroundReach = 80
+            XCTAssertEqual(GlossSamples.windowSize(for: lab), GlossSamples.stackWindowSize, "the fall-back keeps Blur's window")
+            XCTAssertEqual(GlossSamples.stackGroundReach(for: lab), 40)
+            let view = GlossStackGroundView(frame: CGRect(origin: .zero, size: GlossSamples.stackGroundRect.size))
+            view.configure(material: .variable, dim: 0.08, radius: 20, reach: 40)
+            view.layout()
+            XCTAssertEqual(view.drawnMaterial, .blur); XCTAssertNil(view.backdropLayer)
+            let blur = try XCTUnwrap(view.subviews.compactMap { $0 as? NSVisualEffectView }.first)
+            XCTAssertFalse(blur.isHidden); XCTAssertNotNil(blur.maskImage, "the public Blur's soft rim")
+        }
+        GlossBackdropGround.backdropClassNameForTesting = nil
+        XCTAssertTrue(GlossBackdropGround.isAvailable)
+        XCTAssertEqual(GlossSamples.drawnGroundMaterial(.variable), .variable)
+    }
 }
 #endif

@@ -351,6 +351,13 @@ struct GlossLabView: View {
             ForEach(GlossLab.StackGroundMaterial.allCases) { Text($0.title).tag($0) }
         }
         .pickerStyle(.segmented)
+        if lab.samplesGroundMaterial == .variable {
+            if let line = GlossBackdropGround.line(for: lab.samplesGroundMaterial) {
+                Text(line).font(.caption).foregroundStyle(.secondary)
+            }
+            slider("Blur radius", $lab.samplesGroundRadius, 0...40, unit: " pt")
+            slider("Reach", $lab.samplesGroundReach, 20...80, unit: " pt")
+        }
         slider("Ground dim", $lab.samplesGroundDim, 0...30, unit: " %")
         Toggle("Smoke as the glass's tint (the Veil above)", isOn: $lab.samplesStackTint)
         Stepper(value: $lab.samplesSubdued, in: 0...3, step: 1) {
@@ -697,8 +704,94 @@ enum GlossSamples {
 
     /// The ground window's frame on screen for the cards window's `frame`.
     static func stackGroundFrame(under frame: CGRect) -> CGRect {
-        let ground = stackGroundRect
+        stackGroundFrame(under: frame, room: stackRoom, reach: stackGroundReach)
+    }
+
+    // Apple's blur (24 Nov): its ground reaches as far as its Reach slider,
+    // so in the cards window the room round the pieces grows with it, and
+    // the window below is as large as the ground. Every other material keeps
+    // the 60 pt room and the 40 pt ground above, exactly.
+
+    /// The material the ground is drawn with: Apple's blur where this system
+    /// has its pieces, the public Blur where it does not.
+    @MainActor static func drawnGroundMaterial(_ material: GlossLab.StackGroundMaterial) -> GlossLab.StackGroundMaterial {
+        material == .variable && !GlossBackdropGround.isAvailable ? .blur : material
+    }
+
+    /// How far the ground reaches beyond the pieces.
+    @MainActor static func stackGroundReach(for lab: GlossLab) -> CGFloat {
+        drawnGroundMaterial(lab.samplesGroundMaterial) == .variable ? CGFloat(lab.samplesGroundReach) : stackGroundReach
+    }
+
+    /// The clear room round the pieces in the cards window: 60 pt, or the
+    /// ground's reach where that is more and the ground is in this window.
+    @MainActor static func stackRoom(for lab: GlossLab) -> CGFloat {
+        lab.samplesStack && lab.samplesGround == .same ? max(stackRoom, stackGroundReach(for: lab)) : stackRoom
+    }
+
+    static func stackWindowSize(room: CGFloat) -> CGSize {
+        CGSize(width: stackGroup.width + room * 2, height: stackGroup.height + room * 2)
+    }
+
+    /// The ground in the window, from its top left corner, `reach` beyond
+    /// the pieces, which lie `room` in from the window's sides.
+    static func stackGroundRect(room: CGFloat, reach: CGFloat) -> CGRect {
+        CGRect(x: room - reach, y: room - reach, width: stackGroup.width + reach * 2, height: stackGroup.height + reach * 2)
+    }
+
+    static func stackGroundFrame(under frame: CGRect, room: CGFloat, reach: CGFloat) -> CGRect {
+        let ground = stackGroundRect(room: room, reach: reach)
         return CGRect(x: frame.minX + ground.minX, y: frame.maxY - ground.maxY, width: ground.width, height: ground.height)
+    }
+
+    /// The cards window's size for the lab's values.
+    @MainActor static func windowSize(for lab: GlossLab) -> CGSize {
+        lab.samplesStack ? stackWindowSize(room: stackRoom(for: lab))
+            : windowSize(lightRow: lab.samplesLight, systemVariants: lab.samplesSystem)
+    }
+
+    /// The share of the reach over which Apple's blur stays at full
+    /// strength before it falls: the real ground's blur fades out between
+    /// about 25 and 60 pt from the pieces (`ops/reviews/
+    /// gloss-lab-control-centre-analysis-24nov.md` §1), so 25 of 60.
+    static let variableHold: CGFloat = 25.0 / 60.0
+
+    /// Apple's blur's strength at `point` in a ground of `size` whose pieces
+    /// lie `reach` in from every side: 1 over the pieces and for the first
+    /// part of the reach, then a smooth fall to 0 at the rim, by the distance
+    /// from the pieces' round rectangle (corner as the square's), so the
+    /// corners fall off evenly.
+    static func variableStrength(at point: CGPoint, size: CGSize, reach: CGFloat) -> CGFloat {
+        let halfWidth = max(size.width / 2 - reach, 0), halfHeight = max(size.height / 2 - reach, 0)
+        let corner = min(stackSquareCorner, halfWidth, halfHeight)
+        let qx = max(abs(point.x - size.width / 2) - (halfWidth - corner), 0)
+        let qy = max(abs(point.y - size.height / 2) - (halfHeight - corner), 0)
+        let distance = max((qx * qx + qy * qy).squareRoot() - corner, 0)
+        let hold = reach * variableHold
+        guard distance > hold, reach > hold else { return 1 }
+        let left = 1 - min((distance - hold) / (reach - hold), 1)
+        return left * left * (3 - 2 * left)
+    }
+
+    /// Apple's blur's mask at `scale` pixels per point: white whose alpha is
+    /// the strength (the variable blur reads the mask's alpha; Air prototype,
+    /// 24 Nov), premultiplied.
+    static func variableMask(size: CGSize, reach: CGFloat, scale: CGFloat) -> CGImage? {
+        let width = Int((size.width * scale).rounded()), height = Int((size.height * scale).rounded())
+        guard width > 0, height > 0 else { return nil }
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let point = CGPoint(x: (CGFloat(x) + 0.5) / scale, y: (CGFloat(y) + 0.5) / scale)
+                let value = UInt8((variableStrength(at: point, size: size, reach: reach) * 255).rounded())
+                let index = (y * width + x) * 4
+                pixels[index] = value; pixels[index + 1] = value; pixels[index + 2] = value; pixels[index + 3] = value
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 
     /// The ground's soft edge for Blur: opaque inside, fading to nothing
@@ -959,6 +1052,103 @@ struct GlossStackPiece<Content: View>: View {
     }
 }
 
+/// Apple's blur: Control Centre's kind of ground, a private backdrop layer
+/// (`CABackdropLayer`) that samples what lies behind the window, carrying
+/// a private variable-blur filter (`CAFilter`, type `variableBlur`) whose
+/// mask sets the radius point by point. Lifted for the lab's stack test
+/// only (owner, 24 Nov: "Lift it, Opus builds"); nothing outside the sample
+/// cards' ground uses it. Unsupported: every class, selector, filter type,
+/// input key and layer setting is looked up by name and used only if it
+/// answers, so a system without one draws the public Blur instead.
+/// Step 0 probe (24 Nov): all present on macOS 26.4.1 and 27.0; AppKit's
+/// own behind-window blur is a backdrop layer with `windowServerAware` on.
+@MainActor
+enum GlossBackdropGround {
+    static let backdropClassName = "CABackdropLayer"
+    static let filterClassName = "CAFilter"
+    static let filterType = "variableBlur"
+    static let radiusKey = "inputRadius"
+    static let maskKey = "inputMaskImage"
+    static let normalizeKey = "inputNormalizeEdges"
+    /// The layer setting that makes it sample what lies behind the window.
+    static let behindWindowKey = "windowServerAware"
+    static let unavailableLine = "Apple's blur is not available on this macOS"
+
+    /// A test seam, nil in production: a class name looked up in place of
+    /// `CABackdropLayer`, to make it unavailable.
+    static var backdropClassNameForTesting: String?
+
+    /// The layer with its filter, or nil where this system lacks a piece.
+    struct Parts {
+        let layer: CALayer
+        let filter: NSObject
+        /// Whether the filter takes `inputNormalizeEdges` (it is set on where so).
+        let normalizes: Bool
+    }
+
+    static func make() -> Parts? { make(backdropClass: backdropClassNameForTesting ?? backdropClassName) }
+
+    private static func make(backdropClass name: String) -> Parts? {
+        guard let layerClass = NSClassFromString(name) as? CALayer.Type,
+              let filterClass = NSClassFromString(filterClassName) else { return nil }
+        let maker = NSSelectorFromString("filterWithType:")
+        let filters = filterClass as AnyObject
+        guard filters.responds(to: maker) else { return nil }
+        let typesSelector = NSSelectorFromString("filterTypes")
+        if filters.responds(to: typesSelector) {
+            guard let types = filters.perform(typesSelector)?.takeUnretainedValue() as? [String], types.contains(filterType) else { return nil }
+        }
+        guard let filter = filters.perform(maker, with: filterType)?.takeUnretainedValue() as? NSObject else { return nil }
+        let keysSelector = NSSelectorFromString("inputKeys")
+        guard filter.responds(to: keysSelector),
+              let keys = filter.perform(keysSelector)?.takeUnretainedValue() as? [String],
+              keys.contains(radiusKey), keys.contains(maskKey) else { return nil }
+        let layer = layerClass.init()
+        guard answers(layer, behindWindowKey) else { return nil }
+        layer.setValue(true, forKey: behindWindowKey)
+        let normalizes = keys.contains(normalizeKey)
+        if normalizes { filter.setValue(true, forKey: normalizeKey) }
+        return Parts(layer: layer, filter: filter, normalizes: normalizes)
+    }
+
+    /// Whether `layer` has the setting `key`, its setter and its getter.
+    static func answers(_ layer: CALayer, _ key: String) -> Bool {
+        let setter = "set" + key.prefix(1).uppercased() + key.dropFirst() + ":"
+        return layer.responds(to: NSSelectorFromString(setter)) && layer.responds(to: NSSelectorFromString(key))
+    }
+
+    /// Asked of this system once; a test that sets the seam asks again.
+    private static let systemHasIt = make(backdropClass: backdropClassName) != nil
+    static var isAvailable: Bool { backdropClassNameForTesting == nil ? systemHasIt : make() != nil }
+
+    /// The quiet line the Sample cards row shows when Apple's blur is chosen
+    /// and this system cannot draw it; nil otherwise.
+    static func line(for material: GlossLab.StackGroundMaterial) -> String? {
+        material == .variable && !isAvailable ? unavailableLine : nil
+    }
+
+    /// Puts the radius and the mask on the filter and the filter on the layer
+    /// (the layer keeps its own copy, so it is put on again each time).
+    static func apply(_ parts: Parts, radius: CGFloat, mask: CGImage?) {
+        parts.filter.setValue(NSNumber(value: Double(radius)), forKey: radiusKey)
+        parts.filter.setValue(mask, forKey: maskKey)
+        parts.layer.filters = [parts.filter]
+    }
+
+    /// The radius and the mask as the layer holds them, for the checks.
+    static func readBack(_ layer: CALayer) -> (radius: Double?, mask: CGImage?) {
+        guard let filterClass = NSClassFromString(filterClassName),
+              let filter = layer.filters?.first as? NSObject, filter.isKind(of: filterClass) else { return (nil, nil) }
+        let radius = (filter.value(forKey: radiusKey) as? NSNumber)?.doubleValue
+        var mask: CGImage?
+        if let any = filter.value(forKey: maskKey) {
+            let value = any as AnyObject
+            if CFGetTypeID(value) == CGImage.typeID { mask = (value as! CGImage) }
+        }
+        return (radius, mask)
+    }
+}
+
 /// The stack test's blurred ground: a public behind-window blur faded
 /// towards its rim, or Apple's Regular or Clear glass as a round
 /// rectangle (a glass view cannot be faded), with black over it at the dim.
@@ -976,6 +1166,22 @@ final class GlossStackGroundView: NSView {
     /// -1 until the first `configure`, so the first dim is always drawn.
     private(set) var dim: Double = -1
     private var maskSize: CGSize = .zero
+    // Apple's blur: its radius and reach, the private layer (made the first
+    // time it is drawn; nil where this system lacks a piece) in a view of
+    // its own under the dim, and what its mask was made for.
+    private(set) var radius: Double = 20
+    private(set) var reach: CGFloat = GlossSamples.stackGroundReach
+    private var backdrop: GlossBackdropGround.Parts?
+    private var backdropTried = false
+    private var backdropHost: NSView?
+    private var variableMask: CGImage?
+    private var variableMaskMade: [CGFloat]?
+    private var appliedRadius: Double?
+    /// What is drawn: the chosen material, or the public Blur where Apple's
+    /// blur was chosen and this system cannot draw it.
+    private(set) var drawnMaterial: GlossLab.StackGroundMaterial = .blur
+    /// Apple's blur's layer, for the checks.
+    var backdropLayer: CALayer? { backdrop?.layer }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -993,10 +1199,19 @@ final class GlossStackGroundView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func configure(material: GlossLab.StackGroundMaterial, dim: Double) {
+    /// `radius` and `reach` are Apple's blur's; the other materials leave
+    /// them unused.
+    func configure(material: GlossLab.StackGroundMaterial, dim: Double, radius: Double = 20,
+                   reach: CGFloat = GlossSamples.stackGroundReach) {
         if material != self.material {
             self.material = material
             maskSize = .zero
+            variableMaskMade = nil
+            needsLayout = true
+        }
+        if radius != self.radius || reach != self.reach {
+            self.radius = radius
+            self.reach = reach
             needsLayout = true
         }
         if dim != self.dim {
@@ -1005,12 +1220,28 @@ final class GlossStackGroundView: NSView {
         }
     }
 
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsLayout = true
+    }
+
     override func layout() {
         super.layout()
-        let glassStyle: NSGlassEffectView.Style? = switch material {
-        case .blur: nil
+        if material == .variable, !backdropTried {
+            backdropTried = true
+            backdrop = GlossBackdropGround.make()
+        }
+        let drawn: GlossLab.StackGroundMaterial = material == .variable && backdrop == nil ? .blur : material
+        drawnMaterial = drawn
+        if drawn != .variable { backdropHost?.isHidden = true }
+        let glassStyle: NSGlassEffectView.Style? = switch drawn {
+        case .blur, .variable: nil
         case .regular: .regular
         case .clear: .clear
+        }
+        if drawn == .variable, let backdrop {
+            layoutVariable(backdrop)
+            return
         }
         if let glassStyle {
             let view = glass ?? {
@@ -1047,21 +1278,64 @@ final class GlossStackGroundView: NSView {
             dimView.layer?.cornerCurve = .continuous
         }
     }
+
+    /// Apple's blur: the private layer fills the ground; its mask (full
+    /// near the pieces, nothing at the rim) sets the blur radius point by
+    /// point, and the same mask fades the dim, so neither has a border.
+    private func layoutVariable(_ parts: GlossBackdropGround.Parts) {
+        glass?.isHidden = true
+        blur.isHidden = true
+        let host = backdropHost ?? {
+            let made = NSView()
+            made.wantsLayer = true
+            made.layer?.addSublayer(parts.layer)
+            addSubview(made, positioned: .below, relativeTo: dimView)
+            backdropHost = made
+            return made
+        }()
+        host.isHidden = false
+        host.frame = bounds
+        dimView.frame = bounds
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        parts.layer.frame = host.bounds
+        guard bounds.width > 0, bounds.height > 0 else { CATransaction.commit(); return }
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let made = [bounds.width, bounds.height, reach, scale]
+        var maskChanged = false
+        if variableMaskMade != made {
+            variableMaskMade = made
+            variableMask = GlossSamples.variableMask(size: bounds.size, reach: reach, scale: scale)
+            let fade = CALayer()
+            fade.frame = CGRect(origin: .zero, size: bounds.size)
+            fade.contents = variableMask
+            dimView.layer?.mask = fade
+            dimView.layer?.cornerRadius = 0
+            maskChanged = true
+        }
+        if maskChanged || appliedRadius != radius {
+            appliedRadius = radius
+            GlossBackdropGround.apply(parts, radius: CGFloat(radius), mask: variableMask)
+        }
+        CATransaction.commit()
+    }
 }
 
 /// The ground as a view under the pieces in the cards window.
 struct GlossStackGround: NSViewRepresentable {
     let material: GlossLab.StackGroundMaterial
     let dim: Double
+    let radius: Double
+    let reach: CGFloat
 
     func makeNSView(context: Context) -> GlossStackGroundView {
         let view = GlossStackGroundView(frame: .zero)
-        view.configure(material: material, dim: dim)
+        view.configure(material: material, dim: dim, radius: radius, reach: reach)
         return view
     }
 
     func updateNSView(_ view: GlossStackGroundView, context: Context) {
-        view.configure(material: material, dim: dim)
+        view.configure(material: material, dim: dim, radius: radius, reach: reach)
     }
 }
 
@@ -1081,12 +1355,14 @@ struct GlossStackTest: View {
     }
 
     var body: some View {
-        let size = GlossSamples.stackWindowSize
-        let ground = GlossSamples.stackGroundRect
-        let room = GlossSamples.stackRoom
+        let room = GlossSamples.stackRoom(for: lab)
+        let reach = GlossSamples.stackGroundReach(for: lab)
+        let size = GlossSamples.stackWindowSize(room: room)
+        let ground = GlossSamples.stackGroundRect(room: room, reach: reach)
         ZStack(alignment: .topLeading) {
             if lab.samplesGround == .same {
-                GlossStackGround(material: lab.samplesGroundMaterial, dim: lab.samplesGroundDim / 100)
+                GlossStackGround(material: lab.samplesGroundMaterial, dim: lab.samplesGroundDim / 100,
+                                 radius: lab.samplesGroundRadius, reach: reach)
                     .frame(width: ground.width, height: ground.height)
                     .padding(.leading, ground.minX)
                     .padding(.top, ground.minY)
@@ -1329,6 +1605,9 @@ final class GlossSamplesWindows {
     private var groundWindow: NSWindow?
     private var moveObserver: NSObjectProtocol?
     private var checkReported = false
+    /// The cards window's room round the pieces beyond the usual 60 pt, as
+    /// it is now; the saved place is kept without it.
+    private var shownExtra: CGFloat = 0
 
     /// Shows or hides the window with the lab's switch, and sizes it for
     /// the light row, from now on.
@@ -1342,6 +1621,8 @@ final class GlossSamplesWindows {
             _ = GlossLab.shared.samplesGround
             _ = GlossLab.shared.samplesGroundMaterial
             _ = GlossLab.shared.samplesGroundDim
+            _ = GlossLab.shared.samplesGroundRadius
+            _ = GlossLab.shared.samplesGroundReach
         } onChange: { [weak self] in
             Task { @MainActor in self?.configure() }
         }
@@ -1394,7 +1675,12 @@ final class GlossSamplesWindows {
         }
         guard let window else { return }
         let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        let size = GlossSamples.windowSize(lightRow: lab.samplesLight, systemVariants: lab.samplesSystem, stack: lab.samplesStack)
+        let size = GlossSamples.windowSize(for: lab)
+        // Room beyond the usual 60 pt (Apple's blur's reach in this window):
+        // the window grows round the pieces, so they stay where they are.
+        let extra = lab.samplesStack ? GlossSamples.stackRoom(for: lab) - GlossSamples.stackRoom : 0
+        let grew = extra - shownExtra
+        shownExtra = extra
         let wasVisible = window.isVisible
         // The Key window switch: going off, a key window gives the keyboard
         // up by leaving the screen for a moment (it is shown again below).
@@ -1408,13 +1694,14 @@ final class GlossSamplesWindows {
             let saved = GlossSamples.origin(
                 savedTopLeft: UserDefaults.standard.string(forKey: Self.topLeftKey).map(NSPointFromString),
                 savedOneRowOrigin: UserDefaults.standard.string(forKey: Self.originKey).map(NSPointFromString),
-                size: size)
+                size: size).map { CGPoint(x: $0.x - extra, y: $0.y + extra) }
             window.setFrame(GlossSamples.frame(savedOrigin: saved, size: size, visible: visible), display: true)
         } else if window.frame.size != size {
             // Rows came or went: the top edge stays where it is, unless
-            // the taller window would then hang off the screen.
+            // the taller window would then hang off the screen. Room that
+            // came or went round the pieces moves the corner by as much.
             let frame = window.frame
-            let grown = CGRect(x: frame.minX, y: frame.maxY - size.height, width: size.width, height: size.height)
+            let grown = CGRect(x: frame.minX - grew, y: frame.maxY + grew - size.height, width: size.width, height: size.height)
             window.setFrame(GlossSamples.raised(grown, into: window.screen?.visibleFrame ?? visible), display: true)
         }
         applyTestBackdrop(under: window)
@@ -1437,12 +1724,15 @@ final class GlossSamplesWindows {
         }
         let ground = groundWindow ?? Self.makeGroundWindow()
         groundWindow = ground
-        (ground.contentView as? GlossStackGroundView)?.configure(material: lab.samplesGroundMaterial, dim: lab.samplesGroundDim / 100)
+        let reach = GlossSamples.stackGroundReach(for: lab)
+        (ground.contentView as? GlossStackGroundView)?.configure(material: lab.samplesGroundMaterial, dim: lab.samplesGroundDim / 100,
+                                                                 radius: lab.samplesGroundRadius, reach: reach)
+        let frame = GlossSamples.stackGroundFrame(under: window.frame, room: GlossSamples.stackRoom(for: lab), reach: reach)
         if ground.parent !== window {
-            ground.setFrame(GlossSamples.stackGroundFrame(under: window.frame), display: false)
+            ground.setFrame(frame, display: false)
             window.addChildWindow(ground, ordered: .below)
         }
-        ground.setFrame(GlossSamples.stackGroundFrame(under: window.frame), display: true)
+        ground.setFrame(frame, display: true)
     }
 
     /// The ground's own window: clear, borderless, without a shadow, and
@@ -1480,29 +1770,67 @@ final class GlossSamplesWindows {
             self?.writeCheckLine("shown", window)
             let dx = UserDefaults.standard.double(forKey: GlossLab.prefix + "samplesMoveX")
             let dy = UserDefaults.standard.double(forKey: GlossLab.prefix + "samplesMoveY")
-            guard dx != 0 || dy != 0 else { return }
-            window.setFrameOrigin(CGPoint(x: window.frame.minX + dx, y: window.frame.minY + dy))
-            try? await Task.sleep(for: .seconds(1))
-            self?.writeCheckLine("moved", window)
+            if dx != 0 || dy != 0 {
+                window.setFrameOrigin(CGPoint(x: window.frame.minX + dx, y: window.frame.minY + dy))
+                try? await Task.sleep(for: .seconds(1))
+                self?.writeCheckLine("moved", window)
+            }
+            try? await Task.sleep(for: .seconds(2))
+            await self?.closeForCheck()
         }
     }
 
     private func writeCheckLine(_ when: String, _ window: Panel) {
         let order = NSWindow.windowNumbers(options: [])?.compactMap { NSApp.window(withWindowNumber: $0.intValue)?.title } ?? []
+        let lab = GlossLab.shared
         let ground = groundWindow.flatMap { $0.isVisible ? NSStringFromRect($0.frame) : nil } ?? "none"
-        let expected = NSStringFromRect(GlossSamples.stackGroundFrame(under: window.frame))
+        let expected = NSStringFromRect(GlossSamples.stackGroundFrame(
+            under: window.frame, room: GlossSamples.stackRoom(for: lab), reach: GlossSamples.stackGroundReach(for: lab)))
         let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         print("GLOSS_STACK \(when) key=\(window.isKeyWindow) canBecomeKey=\(window.canBecomeKey) appActive=\(NSApp.isActive) "
               + "reduceTransparency=\(reduceTransparency) "
               + "cards=\(NSStringFromRect(window.frame)) ground=\(ground) groundExpected=\(expected) "
-              + "groundIsChild=\(groundWindow?.parent === window) frontToBack=\(order)")
+              + "groundIsChild=\(groundWindow?.parent === window) frontToBack=\(order) \(groundCheck(window))")
+        fflush(stdout)
+    }
+
+    /// The live ground view's state for the check line: the material chosen
+    /// and drawn, and, for Apple's blur, what its layer holds.
+    private func groundCheck(_ window: Panel) -> String {
+        func find(_ view: NSView?) -> GlossStackGroundView? {
+            guard let view else { return nil }
+            if let ground = view as? GlossStackGroundView { return ground }
+            for sub in view.subviews { if let found = find(sub) { return found } }
+            return nil
+        }
+        let view = GlossLab.shared.samplesGround == .below ? find(groundWindow?.contentView) : find(window.contentView)
+        guard let view else { return "groundView=none" }
+        var text = "groundChosen=\(view.material.rawValue) groundDrawn=\(view.drawnMaterial.rawValue) groundView=\(NSStringFromSize(view.bounds.size))"
+        if let layer = view.backdropLayer {
+            let back = GlossBackdropGround.readBack(layer)
+            let aware = GlossBackdropGround.answers(layer, GlossBackdropGround.behindWindowKey)
+                ? "\(layer.value(forKey: GlossBackdropGround.behindWindowKey) ?? "nil")" : "-"
+            text += " layer=\(NSStringFromClass(type(of: layer))) windowServerAware=\(aware) radius=\(back.radius.map { "\($0)" } ?? "nil") "
+                + "mask=\(back.mask.map { "\($0.width)x\($0.height)" } ?? "nil")"
+        }
+        return text
+    }
+
+    /// The check seam's close (`-GlossLab.samplesCloseCheck YES`): shuts
+    /// the cards as their close button does, then lists the windows still up.
+    private func closeForCheck() async {
+        guard UserDefaults.standard.bool(forKey: GlossLab.prefix + "samplesCloseCheck") else { return }
+        GlossLab.shared.samplesShown = false
+        try? await Task.sleep(for: .seconds(1))
+        let up = NSApp.windows.filter(\.isVisible).map(\.title)
+        print("GLOSS_STACK closed visible=\(up)")
         fflush(stdout)
     }
 
     private func saveOrigin() {
         guard let window, window.isVisible else { return }
         let frame = window.frame
-        UserDefaults.standard.set(NSStringFromPoint(CGPoint(x: frame.minX, y: frame.maxY)), forKey: Self.topLeftKey)
+        UserDefaults.standard.set(NSStringFromPoint(CGPoint(x: frame.minX + shownExtra, y: frame.maxY - shownExtra)), forKey: Self.topLeftKey)
     }
 
     /// A check's seam, never in the lab window: `-GlossLab.samplesBackdrop

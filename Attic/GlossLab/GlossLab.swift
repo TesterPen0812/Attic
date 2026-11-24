@@ -222,6 +222,12 @@ final class GlossLab {
     var samplesTintReduced = false { didSet { save(samplesTintReduced, "samplesTintReduced") } }
     var samplesSubvariant = "" { didSet { save(samplesSubvariant, "samplesSubvariant") } }
     var samplesStackKey = false { didSet { save(samplesStackKey, "samplesStackKey") } }
+    /// Apple's blur, the fourth ground material (24 Nov, owner: "Lift it,
+    /// Opus builds"; brief `ops/design/gloss-lab-ground-brief-2026-11-24.md`):
+    /// its blur radius (0 to 40 pt) and how far beyond the pieces it reaches
+    /// before the blur is gone (20 to 80 pt). The lab window's own state.
+    var samplesGroundRadius: Double = 20 { didSet { save(samplesGroundRadius, "samplesGroundRadius") } }
+    var samplesGroundReach: Double = 60 { didSet { save(samplesGroundReach, "samplesGroundReach") } }
 
     /// Where the stack test's blurred ground is: none, a view under the
     /// pieces in the cards window, or a window of its own under it.
@@ -237,16 +243,18 @@ final class GlossLab {
         }
     }
 
-    /// What the ground is made of: a public behind-window blur, or Apple's
-    /// Regular or Clear glass.
+    /// What the ground is made of: a public behind-window blur, Apple's
+    /// Regular or Clear glass, or Apple's blur (Control Centre's own kind of
+    /// ground: a private backdrop layer with a variable blur and a mask).
     enum StackGroundMaterial: String, CaseIterable, Identifiable {
-        case blur, regular, clear
+        case blur, regular, clear, variable
         var id: String { rawValue }
         var title: String {
             switch self {
             case .blur: "Blur"
             case .regular: "Regular glass"
             case .clear: "Clear glass"
+            case .variable: "Apple's blur"
             }
         }
     }
@@ -306,6 +314,7 @@ final class GlossLab {
         bool("samplesTintReduced", &samplesTintReduced)
         if let value = defaults.string(forKey: Self.prefix + "samplesSubvariant") { samplesSubvariant = value }
         bool("samplesStackKey", &samplesStackKey)
+        double("samplesGroundRadius", &samplesGroundRadius); double("samplesGroundReach", &samplesGroundReach)
         // A launch argument (`-GlossLab.preset <id>`) shows a preset for
         // one run. Still loading, so nothing of it is saved.
         if let id = defaults.string(forKey: Self.prefix + "preset"), let preset = Self.presets.first(where: { $0.id == id }) {
@@ -493,7 +502,8 @@ final class GlossLab {
             + "(\(samplesGroundMaterial.title.lowercased()), dim \(n(samplesGroundDim)) %), smoke \(n(samplesSmoke)) % "
             + "as \(samplesStackTint ? "the glass's tint" : "a veil"), lensing \(n(samplesLensing)), scrim \(n(samplesScrim)), "
             + "subdued \(n(samplesSubdued)), adaptive \(n(samplesAdaptive)), reduced tint opacity \(on(samplesTintReduced)), "
-            + "subvariant \(subvariant), key window \(on(samplesStackKey))"
+            + "subvariant \(subvariant), key window \(on(samplesStackKey)), "
+            + "Apple's blur radius \(n(samplesGroundRadius)) pt, reach \(n(samplesGroundReach)) pt"
     }
 
     /// The lab's own switches and sliders as text, numbered as in the
