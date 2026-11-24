@@ -144,6 +144,37 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    /// The native views of class `name` under `root` (a page's page-wide view).
+    private func pageWideViews(_ name: String, in root: NSView) -> [NSView] {
+        (root.className.hasSuffix(name) ? [root] : []) + root.subviews.flatMap { pageWideViews(name, in: $0) }
+    }
+
+    /// PR 69 fix round 1, item 3: a size change that is no drag reaches the
+    /// kept Notes page through the window's own delegate (`windowDidResize`),
+    /// with nothing in the test writing the size.
+    func testAFrameChangeOutsideADragReachesTheKeptNotesPageThroughTheWindow() throws {
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        panel.uiState.prepareBuiltPage(.notes)
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
+        let tasksPage = pageWideViews("KeptContentContainer", in: host).filter { !$0.isHiddenOrHasHiddenAncestor }
+        let notesPage = pageWideViews("NotesPageSwipeView", in: host)
+        XCTAssertFalse(tasksPage.isEmpty, "harness: the shown Tasks page has a page-wide native view")
+        XCTAssertFalse(notesPage.isEmpty, "harness: the kept Notes page has a page-wide native view")
+        var frame = window.visibleContentFrame
+        frame.size.width += 40
+        window.setVisibleContentFrame(frame, display: true)
+        let width = window.visibleContentFrame.width
+        XCTAssertEqual(width, frame.width, accuracy: 0.5, "harness: the window took the frame")
+        spin(until: { host.layoutSubtreeIfNeeded(); return notesPage.allSatisfy { abs($0.bounds.width - width) < 0.5 } })
+        for view in tasksPage + notesPage {
+            XCTAssertEqual(view.bounds.width, width, accuracy: 0.5, "\(view.className) took a size set outside a drag")
+        }
+        XCTAssertEqual(panel.uiState.panelSize.width, width, accuracy: 0.5)
+    }
+
     /// Deliver an edge drag to the real AppKit hosting responder; the window
     /// frame, controller callback and retained SwiftUI pages all participate.
     /// The hidden page should keep its layout until the drag is released.

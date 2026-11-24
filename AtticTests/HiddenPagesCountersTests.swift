@@ -773,6 +773,21 @@ final class HiddenPagesCountersTests: XCTestCase {
         nativeViews(of: page, rig).mapValues(\.bounds.width)
     }
 
+    /// A page's page-wide native views: each is as wide as its page, so
+    /// shown it is as wide as the window. (PR 69 review: a width that only
+    /// moves by the step would pass for a page that stays too narrow.)
+    private func pageWideWidths(of page: PanelPage, _ rig: Rig) -> [CGFloat] {
+        func find(_ name: String, in view: NSView) -> [NSView] {
+            (view.className.hasSuffix(name) ? [view] : []) + view.subviews.flatMap { find(name, in: $0) }
+        }
+        switch page {
+        case .tasks: return find("KeptContentContainer", in: rig.content).filter { !$0.isHiddenOrHasHiddenAncestor }.map(\.bounds.width)
+        case .notes: return find("NotesPageSwipeView", in: rig.content).map(\.bounds.width)
+        case .calendar: return find("CalendarPageInput5Input", in: rig.content).map(\.bounds.width)
+        case .canvas: return find("DrawBoardView", in: rig.content).map(\.bounds.width)
+        }
+    }
+
     /// Condition (a) of the brief: a page hidden through a whole drag on
     /// Tasks is right in its first frame after a switch to it. Read in the
     /// first layout pass with it shown (once per run-loop turn, with a
@@ -1177,6 +1192,12 @@ extension HiddenPagesCountersTests {
                         XCTAssertEqual(width - (nativeStart[view] ?? width), size.width - start.width, accuracy: 0.5,
                                        "\(page) step \(step): the shown page's native view took the step in the same frame")
                     }
+                    let pageWide = pageWideWidths(of: page, rig)
+                    XCTAssertFalse(pageWide.isEmpty, "\(page) step \(step): the shown page has a page-wide native view")
+                    for width in pageWide {
+                        XCTAssertEqual(width, rig.panel.contentRect(forFrameRect: rig.panel.frame).width, accuracy: 0.5,
+                                       "\(page) step \(step): the shown page is as wide as the window in the step's frame")
+                    }
                 }
                 XCTAssertEqual(rig.state.panelSize, dragSize(start, step: Self.dragSteps), "harness: the drag reached its size")
                 XCTAssertEqual(published, 0, "\(page): the panel's state published on the \(Self.dragSteps) steps of a drag")
@@ -1211,7 +1232,7 @@ extension HiddenPagesCountersTests {
             let hidden = [PanelPage.notes, .calendar, .canvas]
             var before: [ObjectIdentifier: CGFloat] = [:]
             for page in hidden { before.merge(widths(of: page, rig)) { first, _ in first } }
-            XCTAssertFalse(before.isEmpty, "harness: the hidden pages have page-wide native views")
+            for page in hidden { XCTAssertFalse(widths(of: page, rig).isEmpty, "harness: hidden \(page) has a native view to read") }
             let start = rig.state.panelSize
             rig.state.setInteractionLock(.windowResize, isActive: true)
             oneFrame(rig)
@@ -1220,7 +1241,9 @@ extension HiddenPagesCountersTests {
                 oneFrame(rig)
                 XCTAssertEqual(rig.state.retainedPageSizeDuringLiveResize, start, "step \(step): the hidden pages hold the start size")
                 for page in hidden {
-                    for (view, width) in widths(of: page, rig) {
+                    let now = widths(of: page, rig)
+                    XCTAssertFalse(now.isEmpty, "step \(step): hidden \(page) has a native view to read")
+                    for (view, width) in now {
                         XCTAssertEqual(width, before[view] ?? -1, accuracy: 0.5, "step \(step): hidden \(page) was laid out again")
                     }
                 }
@@ -1230,7 +1253,8 @@ extension HiddenPagesCountersTests {
             waitForTestOperation("the hidden pages take the final size") {
                 oneFrame(rig)
                 return hidden.allSatisfy { page in
-                    widths(of: page, rig).allSatisfy { abs($0.value - (before[$0.key] ?? -1) - grown) < 0.5 }
+                    let now = widths(of: page, rig)
+                    return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - grown) < 0.5 }
                 }
             }
             XCTAssertNil(rig.state.retainedPageSizeDuringLiveResize)
@@ -1244,13 +1268,17 @@ extension HiddenPagesCountersTests {
         try withRig { rig in
             let hidden = [PanelPage.notes, .calendar, .canvas]
             var before: [ObjectIdentifier: CGFloat] = [:]
-            for page in hidden { before.merge(widths(of: page, rig)) { first, _ in first } }
+            for page in hidden {
+                XCTAssertFalse(widths(of: page, rig).isEmpty, "harness: hidden \(page) has a native view to read")
+                before.merge(widths(of: page, rig)) { first, _ in first }
+            }
             let start = rig.state.panelSize
             resize(rig, to: CGSize(width: start.width + 24, height: start.height + 12))
             waitForTestOperation("the hidden pages take a size written outside a drag") {
                 oneFrame(rig)
                 return hidden.allSatisfy { page in
-                    widths(of: page, rig).allSatisfy { abs($0.value - (before[$0.key] ?? -1) - 24) < 0.5 }
+                    let now = widths(of: page, rig)
+                    return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - 24) < 0.5 }
                 }
             }
         }
@@ -1271,7 +1299,10 @@ extension HiddenPagesCountersTests {
             seen.layouts.removeAll()
             host.frame = CGRect(x: 0, y: 0, width: width, height: 560)
             host.layoutSubtreeIfNeeded()
-            let column = seen.layouts.last ?? layout
+            guard let column = seen.layouts.last else {
+                XCTFail("width \(width): the page was handed no layout at this width")
+                continue
+            }
             XCTAssertEqual(column, layout.readingColumn(panelWidth: width), "width \(width)")
             XCTAssertEqual(column.contentInsets.leading, layout.contentInsets.leading + extra, accuracy: 0.001, "width \(width)")
             XCTAssertEqual(column.chromeInsets.trailing, layout.chromeInsets.trailing + extra, accuracy: 0.001, "width \(width)")
