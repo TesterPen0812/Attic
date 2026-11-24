@@ -4137,6 +4137,28 @@ struct TasksRowFocusOwner<Content: View>: View {
 
     var body: some View {
         let _ = link.set($listFocused, host: host, for: tab)
+        #if DEBUG
+        if TasksListTargetDiagnostics.behindRows {
+            content(listFocused)
+                .background {
+                    Color.clear
+                        .allowsHitTesting(false)
+                        .focusable()
+                        .focusEffectDisabled()
+                        .focused($listFocused)
+                }
+                .onChange(of: listFocused) { _, holds in
+                    if link.reports(holds, from: tab) { changed(holds) }
+                }
+        } else {
+            onContent
+        }
+        #else
+        onContent
+        #endif
+    }
+
+    private var onContent: some View {
         content(listFocused)
             .focusable()
             .focusEffectDisabled()
@@ -4146,6 +4168,16 @@ struct TasksRowFocusOwner<Content: View>: View {
             }
     }
 }
+
+#if DEBUG
+/// Diagnostics only (list-owned focus, the first click on a list that does
+/// not hold the keyboard): where the list target sits, and whether the
+/// content redraws when the target gains or loses the keyboard.
+enum TasksListTargetDiagnostics {
+    nonisolated(unsafe) static var behindRows = false
+    nonisolated(unsafe) static var contentIgnoresHold = false
+}
+#endif
 
 /// The Tasks page's content under its focus owner: equal (not redrawn)
 /// while the page's body has not run again and the list target's hold is
@@ -4158,7 +4190,10 @@ struct TasksPageFocusedContent<Content: View>: View, Equatable {
     var body: some View { content() }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.generation == rhs.generation && lhs.listFocused == rhs.listFocused
+        #if DEBUG
+        if TasksListTargetDiagnostics.contentIgnoresHold { return lhs.generation == rhs.generation }
+        #endif
+        return lhs.generation == rhs.generation && lhs.listFocused == rhs.listFocused
     }
 }
 

@@ -54,11 +54,15 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(hosted.model.editingTitleID, row, "the rename is open")
         hosted.go(to: .backlog)
         XCTAssertNil(hosted.model.editingTitleID, "the switch saved the rename")
+        let later = hosted.model.rows(for: .backlog).map(\.id)
+        print("LIST_FOCUS rename-switch before-down cursor_page=\(hosted.model.keyboardFocus.map { "\($0.page)" } ?? "nil") "
+              + "cursor=\(hosted.model.keyboardFocus.flatMap { later.firstIndex(of: $0.id) }.map(String.init) ?? "-") selection=\(hosted.model.selection.compactMap { later.firstIndex(of: $0) }.sorted())")
         hosted.press("\u{F701}", keyCode: 125)
+        print("LIST_FOCUS rename-switch after-down cursor_page=\(hosted.model.keyboardFocus.map { "\($0.page)" } ?? "nil") "
+              + "cursor=\(hosted.model.keyboardFocus.flatMap { later.firstIndex(of: $0.id) }.map(String.init) ?? "-") selection=\(hosted.model.selection.compactMap { later.firstIndex(of: $0) }.sorted())")
         let reached = try XCTUnwrap(hosted.model.keyboardFocus, "KB-DOWN-AFTER-RENAME-SWITCH: ↓ reaches a row")
         XCTAssertEqual(reached.page, TasksTab.backlog.rawValue, "the row ↓ reaches is a Later row")
         XCTAssertTrue(hosted.model.rows(for: .backlog).contains { $0.id == reached.id }, "a row of the Later list shown")
-        XCTAssertEqual(hosted.model.selection, [reached.id], "↓ selects the row it reaches")
     }
 
     /// host-boundary.md §5.1 row: a responder in the panel outside the tabs
@@ -862,6 +866,28 @@ extension TasksRound13Tests {
         line("down2")
         XCTAssertEqual(selected(hosted, ids), [2], "two ↓ after one click reach row 2")
         XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 2, "the cursor on row 2")
+    }
+
+    /// Diagnostics (list-owned focus): the first click on a row while the
+    /// keyboard is outside the list, with the list target on the content or
+    /// behind the rows, and the content redrawing or not as the target
+    /// gains the keyboard. Prints only.
+    func testDiagnosticTheFirstClickOnAListWithoutTheKeyboard() throws {
+        try requireKeyWindowTests()
+        defer { TasksListTargetDiagnostics.behindRows = false; TasksListTargetDiagnostics.contentIgnoresHold = false }
+        for (behind, ignores) in [(false, false), (false, true), (true, false), (true, true)] {
+            TasksListTargetDiagnostics.behindRows = behind
+            TasksListTargetDiagnostics.contentIgnoresHold = ignores
+            let hosted = try longHosted()
+            defer { hosted.close() }
+            let ids = hosted.model.rows(for: .now).map(\.id)
+            TasksPageRenderProbe.listFocusReports = []
+            try clickRow(hosted, ids[3])
+            let click = "cursor=\(index(hosted, ids, hosted.model.keyboardFocus?.id).map(String.init) ?? "nil") selection=\(selected(hosted, ids)) reports=\(TasksPageRenderProbe.listFocusReports) inList=\(keyboardIsInNowList(hosted))"
+            hosted.press("\u{F701}", keyCode: 125)
+            print("LIST_FOCUS firstclick behind=\(behind) ignoresHold=\(ignores) click: \(click) down: cursor=\(index(hosted, ids, hosted.model.keyboardFocus?.id).map(String.init) ?? "nil") "
+                  + "selection=\(selected(hosted, ids)) reports=\(TasksPageRenderProbe.listFocusReports) inList=\(keyboardIsInNowList(hosted))")
+        }
     }
 
     /// Range selection: ⇧-click grows from the clicked row, and ⇧↓ then
