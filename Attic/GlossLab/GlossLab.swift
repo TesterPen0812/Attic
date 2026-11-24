@@ -254,6 +254,25 @@ final class GlossLab {
     /// The blur's starting strength: the lead's first value (24 Nov), kept
     /// until the measured match of the real Control Centre's ground is in.
     static let panelBlurRadiusStart: Double = 2
+    /// The calibration backdrop and the match sheet (24 Nov, the match
+    /// round; brief `ops/design/gloss-lab-match-brief-2026-11-24.md`): a
+    /// test pattern of our own over the screen under the menu bar and what
+    /// it shows (the tile, or flat white, grey or black); and a sheet of
+    /// our pieces in the real Control Centre's arrangement at its sizes,
+    /// what it shows as text (copies apart by "/", each a list of
+    /// `key=value`, or a walk through one setting's values), and where its
+    /// first pieces stand ("x,y" in pt from the screen's top left corner;
+    /// empty: a first guess). Both off to start with. The lab's own state:
+    /// no preset, All off or Reset sliders touches them, and they are not
+    /// part of `labLines`.
+    var calibration = false { didSet { save(calibration, "calibration") } }
+    var calibrationPattern: CalibrationPattern = .tile { didSet { save(calibrationPattern.rawValue, "calibrationPattern") } }
+    var match = false { didSet { save(match, "match") } }
+    var matchSpec = GlossLab.matchSpecStart { didSet { save(matchSpec, "matchSpec") } }
+    var matchOrigin = "" { didSet { save(matchOrigin, "matchOrigin") } }
+    /// The sheet's starting text: three copies at ground blurs round the
+    /// lead's first value of 2.
+    static let matchSpecStart = "radius=1 / radius=2 / radius=3"
     /// The fade curve's starting value, chosen from the Air's measured
     /// series at curves 1 to 4 (fade start 25, reach 60): the smallest
     /// largest step between neighbouring 4 pt of the walk out to the rim,
@@ -288,6 +307,20 @@ final class GlossLab {
             case .regular: "Regular glass"
             case .clear: "Clear glass"
             case .variable: "Apple's blur"
+            }
+        }
+    }
+
+    /// What the calibration backdrop shows: the tile, or one flat colour.
+    enum CalibrationPattern: String, CaseIterable, Identifiable {
+        case tile, white, grey, black
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .tile: "Tile"
+            case .white: "White"
+            case .grey: "Grey"
+            case .black: "Black"
             }
         }
     }
@@ -352,6 +385,12 @@ final class GlossLab {
         if let value = defaults.string(forKey: Self.prefix + "samplesGroundExtras") { samplesGroundExtras = value }
         bool("panelBlur", &panelBlur); double("panelBlurRadius", &panelBlurRadius)
         double("panelBlurSeeThrough", &panelBlurSeeThrough)
+        bool("calibration", &calibration); bool("match", &match)
+        if let raw = defaults.string(forKey: Self.prefix + "calibrationPattern"), let value = CalibrationPattern(rawValue: raw) {
+            calibrationPattern = value
+        }
+        if let value = defaults.string(forKey: Self.prefix + "matchSpec") { matchSpec = value }
+        if let value = defaults.string(forKey: Self.prefix + "matchOrigin") { matchOrigin = value }
         // A launch argument (`-GlossLab.preset <id>`) shows a preset for
         // one run. Still loading, so nothing of it is saved.
         if let id = defaults.string(forKey: Self.prefix + "preset"), let preset = Self.presets.first(where: { $0.id == id }) {
@@ -527,6 +566,7 @@ final class GlossLab {
         \(stackLine)
         \(fadeLine)
         \(panelBlurLine)
+        \(matchLine)
         Preset: \(currentPreset?.title ?? "none (own values)")
         \(labLines)
         """
@@ -557,6 +597,13 @@ final class GlossLab {
     var panelBlurLine: String {
         "Panel blur behind: \(panelBlur ? "on" : "off"), strength \(Self.fine(panelBlurRadius)), "
             + "see-through \(Int(panelBlurSeeThrough.rounded())) %"
+    }
+
+    /// The calibration backdrop and the match sheet as one line, for "Copy values".
+    var matchLine: String {
+        let corner = matchOrigin.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "Calibration backdrop: \(calibration ? "on" : "off") (\(calibrationPattern.title.lowercased())), "
+            + "match sheet: \(match ? "on" : "off"), showing \"\(matchSpec)\", first corner \(corner.isEmpty ? "by guess" : "\"\(corner)\"")"
     }
 
     /// A value settable to 0.1 as text: whole numbers plain, else one decimal.

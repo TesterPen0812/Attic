@@ -29,6 +29,7 @@ final class GlossLabWindows: NSObject, NSWindowDelegate {
         self.dockedPanel = dockedPanel
         observeBackdrop()
         GlossSamplesWindows.shared.configure()
+        GlossMatchWindows.shared.configure()
         if UserDefaults.standard.object(forKey: GlossLab.prefix + "openAtLaunch") == nil
             || UserDefaults.standard.bool(forKey: GlossLab.prefix + "openAtLaunch") {
             show()
@@ -220,6 +221,19 @@ struct GlossLabView: View {
                     if lab.samplesStack { stackControls }
                 }
 
+                section("Match")
+                row("Calibration backdrop", $lab.calibration,
+                    note: "A test pattern of our own over the whole screen under the menu bar: flat fields, hard edges, checkers and text, the same everywhere, so a screenshot with the real Control Centre open over it can be measured. It covers this window too: its Close button is in its bottom left corner.") {
+                    Picker("Pattern", selection: $lab.calibrationPattern) {
+                        ForEach(GlossLab.CalibrationPattern.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                row("Match sheet", $lab.match,
+                    note: "Our pieces in Control Centre's arrangement at its sizes, in a window of their own, with Apple's blur as the ground. Copies apart by \"/\", each with its own settings (radius=1 / radius=2, variant=7), or a walk through one setting (walk variant; walk radius 0.5 1 2 / dim=10). Settings: ground, radius, dim, hold, curve, smoke, tint, variant, lensing, scrim, subdued, adaptive, reduced. What a copy does not name is the stack test's value, below.") {
+                    matchControls
+                }
+
                 section("Presets")
                 presets
                 Text("A preset sets every switch and slider below. Pin the panel first if it hides when the pointer leaves it.")
@@ -392,6 +406,50 @@ struct GlossLabView: View {
         TextField("Subvariant (empty: not set)", text: $lab.samplesSubvariant)
             .textFieldStyle(.roundedBorder)
         Toggle("Key window (the cards window may take the keyboard)", isOn: $lab.samplesStackKey)
+    }
+
+    // MARK: Match sheet
+
+    /// The match sheet's controls: what it shows, where it stands, and the
+    /// stack test's values its copies start from (the same stored values;
+    /// shown here so the stack test need not be up to set them).
+    @ViewBuilder private var matchControls: some View {
+        TextField("Copies (radius=1 / radius=2) or a walk (walk variant)", text: $lab.matchSpec)
+            .textFieldStyle(.roundedBorder)
+        if let line = GlossMatch.ignoredLine(GlossMatch.sheet(for: lab)) {
+            Text(line).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        TextField("First corner x,y from the screen's top left (empty: by guess)", text: $lab.matchOrigin)
+            .textFieldStyle(.roundedBorder)
+        if !GlossBackdropGround.isAvailable {
+            Text("Apple's blur is not on this system: the ground is the public Blur.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        fineSlider("Blur radius", $lab.samplesGroundRadius, 0...40)
+        slider("Ground dim", $lab.samplesGroundDim, 0...30, unit: " %")
+        slider("Veil", $lab.samplesSmoke, 0...60, unit: " %")
+        Toggle("Veil as the glass's tint", isOn: $lab.samplesStackTint)
+        Stepper(value: $lab.samplesStackVariant, in: 0...23, step: 1) {
+            Text("Variant \(Int(lab.samplesStackVariant.rounded()))")
+        }
+        more {
+            Stepper(value: $lab.samplesLensing, in: 0...3, step: 1) {
+                Text("Lensing \(Int(lab.samplesLensing.rounded()))")
+            }
+            Stepper(value: $lab.samplesScrim, in: 0...3, step: 1) {
+                Text("Scrim \(Int(lab.samplesScrim.rounded()))")
+            }
+            Stepper(value: $lab.samplesSubdued, in: 0...3, step: 1) {
+                Text("Subdued \(Int(lab.samplesSubdued.rounded()))")
+            }
+            Stepper(value: $lab.samplesAdaptive, in: 0...3, step: 1) {
+                Text("Adaptive \(Int(lab.samplesAdaptive.rounded()))")
+            }
+            Toggle("Reduced tint opacity", isOn: $lab.samplesTintReduced)
+            slider("Fade start", $lab.samplesGroundHold, 0...60, unit: " pt")
+            slider("Fade curve", $lab.samplesGroundCurve, 1...4)
+        }
     }
 
     // MARK: Presets
@@ -2119,6 +2177,795 @@ struct GlossSamplesTextBackdrop: View {
             }
         }
         .clipped()
+    }
+}
+
+// MARK: Calibration backdrop and match sheet (24 Nov, the match round)
+
+/// The calibration backdrop's pattern (brief
+/// `ops/design/gloss-lab-match-brief-2026-11-24.md`, step 2): a tile of
+/// 6 x 4 cells of 64 pt, repeated from the window's top left corner, so a
+/// picture of the real Control Centre and of our pieces over it can be
+/// measured against the sharp pattern beside them in the same picture
+/// (`ops/reviews/gloss-lab-match-24nov/scripts/calib.py`). Flat white, black
+/// and mid grey, three colours, checkers of 2, 4, 8 and 16 pt squares (hard
+/// edges in both directions, at periods that tell a blur of 1 pt from one
+/// of 3 and one of 10), hard white to black edges both ways between the
+/// flat cells, and text at two sizes, black on white and white on black.
+/// The tile is 384 pt wide and the match sheet's copies stand 384 pt
+/// apart, so every copy lies over the same part of the pattern.
+enum GlossCalibration {
+    static let cell: CGFloat = 64
+    static let tileSize = CGSize(width: 384, height: 256)
+
+    enum Cell: Equatable {
+        case white, black, grey, red, green, blue
+        /// A checker of squares this many pt wide; its top left square is black.
+        case checker(Int)
+        /// Text of this size: black on white, or white on black.
+        case text(CGFloat, onBlack: Bool)
+    }
+
+    /// The tile's cells, top row first.
+    static let layout: [[Cell]] = [
+        [.white, .white, .black, .black, .checker(2), .text(11, onBlack: false)],
+        [.black, .checker(8), .text(17, onBlack: false), .white, .grey, .red],
+        [.checker(4), .text(11, onBlack: true), .white, .white, .black, .black],
+        [.green, .blue, .grey, .text(17, onBlack: true), .checker(16), .white],
+    ]
+
+    /// A flat cell's colour (sRGB bytes); nil for a checker or text.
+    static func colour(_ cell: Cell) -> (UInt8, UInt8, UInt8)? {
+        switch cell {
+        case .white: (255, 255, 255)
+        case .black: (0, 0, 0)
+        case .grey: (128, 128, 128)
+        case .red: (224, 48, 48)
+        case .green: (40, 168, 72)
+        case .blue: (40, 88, 224)
+        case .checker, .text: nil
+        }
+    }
+
+    /// A flat pattern's colour; nil for the tile.
+    static func colour(_ pattern: GlossLab.CalibrationPattern) -> (UInt8, UInt8, UInt8)? {
+        switch pattern {
+        case .tile: nil
+        case .white: colour(Cell.white)
+        case .grey: colour(Cell.grey)
+        case .black: colour(Cell.black)
+        }
+    }
+
+    static let textLine = "Hamburg 0123456789 quick brown fox jumps over"
+
+    /// The tile as pixels, top row first, `scale` px per pt (1 or 2 on our
+    /// displays), sRGB. Fields and checkers are written pixel by pixel, so
+    /// every edge is hard; the text is drawn over its cells.
+    static func tileImage(scale: Int) -> CGImage? {
+        let scale = max(1, scale)
+        let width = Int(tileSize.width) * scale, height = Int(tileSize.height) * scale, cellSide = Int(cell) * scale
+        var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        for (row, cells) in layout.enumerated() {
+            for (column, kind) in cells.enumerated() {
+                for y in 0..<cellSide {
+                    for x in 0..<cellSide {
+                        let rgb: (UInt8, UInt8, UInt8)
+                        if let flat = colour(kind) {
+                            rgb = flat
+                        } else if case .checker(let points) = kind {
+                            let square = points * scale
+                            rgb = ((x / square) + (y / square)).isMultiple(of: 2) ? (0, 0, 0) : (255, 255, 255)
+                        } else if case .text(_, let onBlack) = kind {
+                            rgb = onBlack ? (0, 0, 0) : (255, 255, 255)
+                        } else {
+                            rgb = (255, 255, 255)
+                        }
+                        let index = ((row * cellSide + y) * width + column * cellSide + x) * 4
+                        pixels[index] = rgb.0; pixels[index + 1] = rgb.1; pixels[index + 2] = rgb.2; pixels[index + 3] = 255
+                    }
+                }
+            }
+        }
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        return pixels.withUnsafeMutableBytes { buffer -> CGImage? in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                          space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+            // The buffer's first row is the picture's top row; the context's
+            // origin is its bottom left.
+            context.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
+            context.setShouldSmoothFonts(false)
+            for (row, cells) in layout.enumerated() {
+                for (column, kind) in cells.enumerated() {
+                    guard case .text(let size, let onBlack) = kind else { continue }
+                    let attributes: [NSAttributedString.Key: Any] = [
+                        .font: NSFont.systemFont(ofSize: size),
+                        NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
+                    ]
+                    let line = CTLineCreateWithAttributedString(NSAttributedString(string: textLine, attributes: attributes))
+                    let pitch = (size * 1.3).rounded()
+                    let top = CGFloat(row) * cell, left = CGFloat(column) * cell
+                    context.saveGState()
+                    context.clip(to: CGRect(x: left + 3, y: tileSize.height - top - cell + 2, width: cell - 6, height: cell - 4))
+                    context.setFillColor(gray: onBlack ? 1 : 0, alpha: 1)
+                    var baseline = top + 4 + size
+                    var shift: CGFloat = 0
+                    while baseline < top + cell - 3 {
+                        context.textPosition = CGPoint(x: left + 4 - shift, y: tileSize.height - baseline)
+                        CTLineDraw(line, context)
+                        baseline += pitch
+                        // Each line starts further into the sentence, so the lines differ.
+                        shift += size * 2.5
+                    }
+                    context.restoreGState()
+                }
+            }
+            return context.makeImage()
+        }
+    }
+}
+
+/// The calibration backdrop's view: the tile repeated from its top left
+/// corner, pixel for pixel (or one flat colour), and in its bottom left
+/// corner a Close button and the pattern's picker (the backdrop covers the
+/// lab window, so what is switched between two screenshots is here). It
+/// takes clicks and does nothing with them (it is not click-through, so
+/// nothing hidden under it is clicked by mistake).
+final class GlossCalibrationView: NSView {
+    var onClose: (() -> Void)?
+    var onPattern: ((GlossLab.CalibrationPattern) -> Void)?
+    var pattern: GlossLab.CalibrationPattern = .tile {
+        didSet {
+            guard pattern != oldValue else { return }
+            needsDisplay = true
+            patternPicker.selectedSegment = GlossLab.CalibrationPattern.allCases.firstIndex(of: pattern) ?? 0
+        }
+    }
+    let closeButton = NSButton(title: "Close calibration", target: nil, action: nil)
+    let patternPicker = NSSegmentedControl(labels: GlossLab.CalibrationPattern.allCases.map(\.title), trackingMode: .selectOne,
+                                           target: nil, action: nil)
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        closeButton.bezelStyle = .rounded
+        closeButton.target = self
+        closeButton.action = #selector(closeClicked)
+        closeButton.setAccessibilityLabel("Close calibration backdrop")
+        addSubview(closeButton)
+        patternPicker.selectedSegment = 0
+        patternPicker.target = self
+        patternPicker.action = #selector(patternPicked)
+        patternPicker.setAccessibilityLabel("Calibration pattern")
+        addSubview(patternPicker)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {}
+
+    @objc private func closeClicked() { onClose?() }
+
+    @objc private func patternPicked() {
+        let all = GlossLab.CalibrationPattern.allCases
+        guard all.indices.contains(patternPicker.selectedSegment) else { return }
+        onPattern?(all[patternPicker.selectedSegment])
+    }
+
+    override func layout() {
+        super.layout()
+        closeButton.sizeToFit()
+        closeButton.frame.origin = CGPoint(x: 12, y: bounds.height - closeButton.frame.height - 12)
+        patternPicker.sizeToFit()
+        patternPicker.frame.origin = CGPoint(x: closeButton.frame.maxX + 12, y: bounds.height - patternPicker.frame.height - 12)
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        if let flat = GlossCalibration.colour(pattern) {
+            NSColor(srgbRed: CGFloat(flat.0) / 255, green: CGFloat(flat.1) / 255, blue: CGFloat(flat.2) / 255, alpha: 1).setFill()
+            bounds.fill()
+            return
+        }
+        let scale = Int((window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2).rounded())
+        guard let image = GlossCalibration.tileImage(scale: scale) else {
+            NSColor.white.setFill(); bounds.fill(); return
+        }
+        context.interpolationQuality = .none
+        let tile = GlossCalibration.tileSize
+        var y: CGFloat = 0
+        while y < bounds.height {
+            var x: CGFloat = 0
+            while x < bounds.width {
+                if dirtyRect.intersects(CGRect(x: x, y: y, width: tile.width, height: tile.height)) {
+                    // A flipped view draws an image upside down: each tile is turned back.
+                    context.saveGState()
+                    context.translateBy(x: x, y: y + tile.height)
+                    context.scaleBy(x: 1, y: -1)
+                    context.draw(image, in: CGRect(origin: .zero, size: tile))
+                    context.restoreGState()
+                }
+                x += tile.width
+            }
+            y += tile.height
+        }
+    }
+}
+
+/// The match sheet: our pieces in the real Control Centre's arrangement at
+/// its sizes (read from the owner's screenshot of macOS 27 at 2 px per pt:
+/// capsules 141 x 64, the large tile 141 x 140 with 32 pt corners, round
+/// buttons 65 across, the pill 95 x 24, 12 pt between pieces), in up to
+/// four copies one tile width apart, each with its own overrides of the
+/// stack test's values, so one picture brackets the real one. Or a walk:
+/// one capsule and one round button per value of one setting, up to 24 to
+/// a picture. Shapes and plain labels only.
+@MainActor
+enum GlossMatch {
+    static let column: CGFloat = 141
+    static let row: CGFloat = 64
+    static let gap: CGFloat = 12
+    static let round: CGFloat = 65
+    static let largeTile = CGSize(width: 141, height: 140)
+    static let largeTileCorner: CGFloat = 32
+    static let pill = CGSize(width: 95, height: 24)
+    static let pillGap: CGFloat = 14
+    /// The pieces' bounding box.
+    static let group = CGSize(width: 294, height: 406)
+    /// From one copy to the next: the calibration tile's width.
+    static let pitch = GlossCalibration.tileSize.width
+    /// The clear room beside and above a copy's pieces, how far its ground
+    /// reaches beyond them, and the caption's row under it.
+    static let roomX = (pitch - group.width) / 2
+    static let roomY: CGFloat = 36
+    static let reach: CGFloat = 30
+    static let caption: CGFloat = 22
+    static let maxCopies = 4
+    /// A walk's piece pair (a capsule and a round button), its ground's
+    /// reach, the cell one pair stands in, and how many stand in a row.
+    static let walkPair = CGSize(width: column + gap + round, height: round)
+    static let walkReach: CGFloat = 20
+    static let walkCell = CGSize(width: walkPair.width + walkReach * 2, height: walkPair.height + walkReach * 2)
+    static let walkColumns = 4
+    static let maxWalk = 24
+
+    enum Kind: Equatable {
+        case toggle(String, String)
+        case media
+        case round
+        case slider(String)
+        case pill
+    }
+
+    struct Piece: Identifiable, Equatable {
+        let id: String
+        /// In the group, from its top left corner.
+        let rect: CGRect
+        let corner: CGFloat
+        let kind: Kind
+    }
+
+    static let pieces: [Piece] = {
+        let pitch = row + gap, right = column + gap
+        func capsule(_ id: String, _ x: CGFloat, _ index: CGFloat, _ kind: Kind) -> Piece {
+            Piece(id: id, rect: CGRect(x: x, y: index * pitch, width: column, height: row), corner: row / 2, kind: kind)
+        }
+        func circle(_ id: String, _ x: CGFloat, _ index: CGFloat) -> Piece {
+            Piece(id: id, rect: CGRect(x: x, y: index * pitch - (round - row) / 2, width: round, height: round), corner: round / 2, kind: .round)
+        }
+        return [
+            capsule("wifi", 0, 0, .toggle("Wi-Fi", "Home")),
+            capsule("bluetooth", 0, 1, .toggle("Bluetooth", "On")),
+            capsule("airdrop", 0, 2, .toggle("AirDrop", "Everyone")),
+            Piece(id: "media", rect: CGRect(origin: CGPoint(x: right, y: 0), size: largeTile), corner: largeTileCorner, kind: .media),
+            circle("round3", group.width - round, 2),
+            circle("round1", 0, 3),
+            circle("round2", column - round, 3),
+            capsule("focus", right, 3, .toggle("Focus", "")),
+            capsule("display", 0, 4, .slider("Display")),
+            capsule("sound", right, 4, .slider("Sound")),
+            Piece(id: "pill", rect: CGRect(x: ((group.width - pill.width) / 2).rounded(), y: 5 * row + 4 * gap + pillGap,
+                                           width: pill.width, height: pill.height),
+                  corner: pill.height / 2, kind: .pill),
+        ]
+    }()
+
+    /// One copy of the pieces and their ground.
+    struct Copy: Identifiable, Equatable {
+        var id = 0
+        /// What the copy's own text asked for, for its caption.
+        var label = "as set"
+        var ground = true
+        var radius: Double = 20
+        /// 0 to 30 %.
+        var dim: Double = 8
+        var hold: CGFloat = 25
+        var curve: CGFloat = 1
+        /// 0 to 60 %.
+        var smoke: Double = 25
+        var smokeAsTint = false
+        var extras = ""
+        var settings = GlossSystemGlass.PieceSettings()
+        /// The parts of the copy's text that were not understood.
+        var ignored: [String] = []
+    }
+
+    /// What the sheet shows: whole copies side by side, or a walk's pairs.
+    struct Sheet: Equatable {
+        var walk = false
+        var copies: [Copy] = []
+    }
+
+    /// The stack test's values as a copy.
+    @MainActor static func base(for lab: GlossLab) -> Copy {
+        Copy(radius: lab.samplesGroundRadius, dim: lab.samplesGroundDim, hold: CGFloat(lab.samplesGroundHold),
+             curve: CGFloat(lab.samplesGroundCurve), smoke: lab.samplesSmoke, smokeAsTint: lab.samplesStackTint,
+             extras: lab.samplesGroundExtras,
+             settings: GlossSystemGlass.PieceSettings(
+                variant: Int(lab.samplesStackVariant.rounded()), lensing: Int(lab.samplesLensing.rounded()),
+                scrim: Int(lab.samplesScrim.rounded()), subdued: Int(lab.samplesSubdued.rounded()),
+                adaptive: Int(lab.samplesAdaptive.rounded()), tintReduced: lab.samplesTintReduced,
+                subvariant: lab.samplesSubvariant))
+    }
+
+    /// The settings a copy's text may name, each with the range it is held in.
+    static let keys: [String: ClosedRange<Double>] = [
+        "ground": 0...1, "radius": 0...40, "dim": 0...30, "hold": 0...60, "curve": 1...4, "smoke": 0...60, "tint": 0...1,
+        "variant": 0...23, "lensing": 0...3, "scrim": 0...3, "subdued": 0...3, "adaptive": 0...3, "reduced": 0...1,
+    ]
+
+    /// Sets one named setting on a copy; false for a name that is not one.
+    static func set(_ key: String, _ value: Double, on copy: inout Copy) -> Bool {
+        guard let range = keys[key], value.isFinite else { return false }
+        let held = min(max(value, range.lowerBound), range.upperBound)
+        switch key {
+        case "ground": copy.ground = held >= 0.5
+        case "radius": copy.radius = held
+        case "dim": copy.dim = held
+        case "hold": copy.hold = CGFloat(held)
+        case "curve": copy.curve = CGFloat(held)
+        case "smoke": copy.smoke = held
+        case "tint": copy.smokeAsTint = held >= 0.5
+        case "variant": copy.settings.variant = Int(held.rounded())
+        case "lensing": copy.settings.lensing = Int(held.rounded())
+        case "scrim": copy.settings.scrim = Int(held.rounded())
+        case "subdued": copy.settings.subdued = Int(held.rounded())
+        case "adaptive": copy.settings.adaptive = Int(held.rounded())
+        case "reduced": copy.settings.tintReduced = held >= 0.5
+        default: return false
+        }
+        return true
+    }
+
+    /// Applies a list of `key=value` apart by "," to a copy; what was not
+    /// understood goes to its `ignored`.
+    static func apply(_ text: String, to copy: inout Copy) {
+        for pair in text.split(separator: ",") {
+            let whole = pair.trimmingCharacters(in: .whitespaces)
+            guard !whole.isEmpty else { continue }
+            let parts = pair.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2, let value = Double(parts[1]), set(parts[0], value, on: &copy) else {
+                copy.ignored.append(whole); continue
+            }
+        }
+    }
+
+    /// The sheet `spec` asks for, over `base`. Parts are apart by "/".
+    /// Copies: each part is one copy, a list of `key=value` apart by ","
+    /// (`radius=1 / radius=2 / radius=3`); an empty spec is one copy as
+    /// set; at most four. A walk: `walk <key> [values]`, one pair of
+    /// pieces per value (without values: every whole value of the key's
+    /// range), then, after a "/", settings for all of them
+    /// (`walk variant / lensing=1`, `walk radius 0.5 1 1.5 2 3 / dim=10`);
+    /// at most 24.
+    static func sheet(spec: String, base: Copy) -> Sheet {
+        let parts = spec.split(separator: "/", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let words = (parts.first ?? "").split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        if words.first == "walk" {
+            var common = base
+            for part in parts.dropFirst() { apply(part, to: &common) }
+            guard words.count >= 2, let range = keys[words[1]] else {
+                common.ignored.insert(words.count >= 2 ? "walk \(words[1])" : "walk", at: 0)
+                return Sheet(walk: false, copies: [common])
+            }
+            let key = words[1]
+            var values = words.dropFirst(2).compactMap { Double($0) }.filter(\.isFinite)
+            common.ignored.append(contentsOf: words.dropFirst(2).filter { Double($0) == nil })
+            if values.isEmpty { values = Array(stride(from: range.lowerBound, through: range.upperBound, by: 1)) }
+            let copies = values.prefix(maxWalk).enumerated().map { index, value in
+                var copy = common
+                copy.id = index
+                _ = set(key, value, on: &copy)
+                copy.label = "\(key) \(GlossLab.fine(min(max(value, range.lowerBound), range.upperBound)))"
+                return copy
+            }
+            return Sheet(walk: true, copies: copies)
+        }
+        let wanted = parts.allSatisfy(\.isEmpty) ? [""] : parts.filter { !$0.isEmpty }
+        let copies = wanted.prefix(maxCopies).enumerated().map { index, text in
+            var copy = base
+            copy.id = index
+            copy.label = text.isEmpty ? "as set" : text
+            apply(text, to: &copy)
+            return copy
+        }
+        return Sheet(walk: false, copies: copies)
+    }
+
+    @MainActor static func sheet(for lab: GlossLab) -> Sheet { sheet(spec: lab.matchSpec, base: base(for: lab)) }
+
+    /// The quiet line under the copies field: what was not understood; nil
+    /// when everything was.
+    static func ignoredLine(_ sheet: Sheet) -> String? {
+        var seen: [String] = []
+        for text in sheet.copies.flatMap(\.ignored) where !seen.contains(text) { seen.append(text) }
+        return seen.isEmpty ? nil : "Not understood: " + seen.joined(separator: ", ")
+    }
+
+    /// One copy's cell in the sheet.
+    static let cellSize = CGSize(width: pitch, height: group.height + roomY * 2 + caption)
+
+    static func sheetSize(_ sheet: Sheet) -> CGSize {
+        let count = max(1, sheet.copies.count)
+        if sheet.walk {
+            let columns = min(count, walkColumns), rows = (count + walkColumns - 1) / walkColumns
+            return CGSize(width: walkCell.width * CGFloat(columns), height: walkCell.height * CGFloat(rows))
+        }
+        return CGSize(width: cellSize.width * CGFloat(count), height: cellSize.height)
+    }
+
+    /// The ground in a copy's cell, from its top left corner.
+    static let groundRect = CGRect(x: roomX - reach, y: roomY - reach, width: group.width + reach * 2, height: group.height + reach * 2)
+
+    /// A corner given as text, "x,y" in pt from the screen's top left
+    /// corner; nil for anything else.
+    static func corner(_ text: String) -> CGPoint? {
+        let parts = text.split(separator: ",", omittingEmptySubsequences: false).map { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard parts.count == 2, let x = parts[0], let y = parts[1], x.isFinite, y.isFinite else { return nil }
+        return CGPoint(x: x, y: y)
+    }
+
+    /// From the sheet's top left corner to its first pieces' top left corner.
+    static func inset(_ sheet: Sheet) -> CGPoint {
+        sheet.walk ? CGPoint(x: walkReach, y: walkReach) : CGPoint(x: roomX, y: roomY)
+    }
+
+    /// Where the first copy's pieces (a walk: the first pair) have their
+    /// top left corner, in pt from the screen's top left corner: `corner`
+    /// when it is given. Else, for copies, as many tile widths to the left
+    /// of where Control Centre is taken to stand (its pieces 12 pt in from
+    /// the screen's right edge and 12 pt under the menu bar: a first guess,
+    /// replaced by the corner once a screenshot shows the real place), so
+    /// the copies and the real one lie over the same part of the pattern;
+    /// a walk starts near the top left corner.
+    static func firstCorner(_ sheet: Sheet, corner: CGPoint?, screen: CGRect, visible: CGRect) -> CGPoint {
+        if let corner { return corner }
+        let top = screen.maxY - visible.maxY
+        if sheet.walk { return CGPoint(x: visible.minX - screen.minX + 8 + walkReach, y: top + 8 + walkReach) }
+        let real = visible.maxX - screen.minX - 12 - group.width
+        let count = CGFloat(max(1, sheet.copies.count))
+        return CGPoint(x: max(roomX, real - pitch * count), y: top + 12)
+    }
+
+    /// The sheet's window frame, in AppKit's screen coordinates, on whole points.
+    static func sheetFrame(_ sheet: Sheet, corner: CGPoint?, screen: CGRect, visible: CGRect) -> CGRect {
+        let first = firstCorner(sheet, corner: corner, screen: screen, visible: visible)
+        let size = sheetSize(sheet), lead = inset(sheet)
+        return CGRect(x: (screen.minX + first.x - lead.x).rounded(), y: (screen.maxY - first.y + lead.y - size.height).rounded(),
+                      width: size.width, height: size.height)
+    }
+
+    /// A copy as one line, for the check file.
+    static func checkText(_ copy: Copy) -> String {
+        let s = copy.settings
+        return "\(copy.id + 1): \"\(copy.label)\" ground=\(copy.ground ? 1 : 0) radius=\(GlossLab.fine(copy.radius)) dim=\(GlossLab.fine(copy.dim)) "
+            + "hold=\(copy.hold) curve=\(copy.curve) smoke=\(GlossLab.fine(copy.smoke)) tint=\(copy.smokeAsTint ? 1 : 0) variant=\(s.variant) "
+            + "lensing=\(s.lensing) scrim=\(s.scrim) subdued=\(s.subdued) adaptive=\(s.adaptive) reduced=\(s.tintReduced ? 1 : 0) "
+            + "subvariant=\"\(s.subvariant)\" extras=\"\(copy.extras)\""
+            + (copy.ignored.isEmpty ? "" : " ignored=[\(copy.ignored.joined(separator: ","))]")
+    }
+
+    static var checkFileURL: URL { FileManager.default.temporaryDirectory.appendingPathComponent("gloss-match-check.txt") }
+}
+
+/// One copy: its ground (Apple's blur, `reach` beyond the pieces), its
+/// pieces, and a plain caption under them saying what it was given.
+struct GlossMatchCopyView: View {
+    let copy: GlossMatch.Copy
+
+    var body: some View {
+        let ground = GlossMatch.groundRect
+        ZStack(alignment: .topLeading) {
+            if copy.ground {
+                GlossStackGround(material: .variable, dim: copy.dim / 100, radius: copy.radius, reach: GlossMatch.reach,
+                                 hold: copy.hold, curve: copy.curve, extras: copy.extras)
+                    .frame(width: ground.width, height: ground.height)
+                    .padding(.leading, ground.minX)
+                    .padding(.top, ground.minY)
+            }
+            ForEach(GlossMatch.pieces) { piece in
+                GlossStackPiece(size: piece.rect.size, corner: piece.corner, settings: copy.settings, smoke: copy.smoke / 100,
+                                smokeAsTint: copy.smokeAsTint) { face(piece) }
+                    .padding(.leading, GlossMatch.roomX + piece.rect.minX)
+                    .padding(.top, GlossMatch.roomY + piece.rect.minY)
+            }
+            Text("\(copy.id + 1)  \(copy.label)")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .frame(height: 18)
+                .background(Color.black, in: Capsule())
+                .padding(.leading, GlossMatch.roomX)
+                .padding(.top, GlossMatch.cellSize.height - 20)
+        }
+        .frame(width: GlossMatch.cellSize.width, height: GlossMatch.cellSize.height, alignment: .topLeading)
+    }
+
+    @ViewBuilder private func face(_ piece: GlossMatch.Piece) -> some View {
+        switch piece.kind {
+        case .toggle(let title, let subtitle):
+            HStack(spacing: 9) {
+                Circle().fill(Color.white).frame(width: 36, height: 36)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.system(size: 13, weight: .semibold))
+                    if !subtitle.isEmpty { Text(subtitle).font(.system(size: 11)).opacity(0.6) }
+                }
+                .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 13)
+        case .media:
+            Text("Not Playing").font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .padding(14)
+                .frame(width: piece.rect.width, height: piece.rect.height, alignment: .topLeading)
+        case .round:
+            Color.clear
+        case .slider(let title):
+            VStack(alignment: .leading, spacing: 9) {
+                Text(title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Capsule().fill(Color.white.opacity(0.5)).frame(height: 4)
+            }
+            .padding(.horizontal, 18)
+        case .pill:
+            Text("Edit Controls").font(.system(size: 12, weight: .medium)).lineLimit(1)
+        }
+    }
+}
+
+/// A walk's pair: a capsule, labelled with its value, and a round button,
+/// over a ground of their own.
+struct GlossMatchPairView: View {
+    let copy: GlossMatch.Copy
+
+    var body: some View {
+        let reach = GlossMatch.walkReach
+        ZStack(alignment: .topLeading) {
+            if copy.ground {
+                GlossStackGround(material: .variable, dim: copy.dim / 100, radius: copy.radius, reach: reach,
+                                 hold: copy.hold, curve: copy.curve, extras: copy.extras)
+                    .frame(width: GlossMatch.walkCell.width, height: GlossMatch.walkCell.height)
+            }
+            GlossStackPiece(size: CGSize(width: GlossMatch.column, height: GlossMatch.row), corner: GlossMatch.row / 2, settings: copy.settings,
+                            smoke: copy.smoke / 100, smokeAsTint: copy.smokeAsTint) {
+                Text(copy.label).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+            }
+            .padding(.leading, reach)
+            .padding(.top, reach + (GlossMatch.round - GlossMatch.row) / 2)
+            GlossStackPiece(size: CGSize(width: GlossMatch.round, height: GlossMatch.round), corner: GlossMatch.round / 2, settings: copy.settings,
+                            smoke: copy.smoke / 100, smokeAsTint: copy.smokeAsTint) { Color.clear }
+                .padding(.leading, reach + GlossMatch.column + GlossMatch.gap)
+                .padding(.top, reach)
+        }
+        .frame(width: GlossMatch.walkCell.width, height: GlossMatch.walkCell.height, alignment: .topLeading)
+    }
+}
+
+struct GlossMatchView: View {
+    @Bindable var lab: GlossLab
+
+    var body: some View {
+        let sheet = GlossMatch.sheet(for: lab)
+        let size = GlossMatch.sheetSize(sheet)
+        Group {
+            if sheet.walk {
+                let rows = stride(from: 0, to: sheet.copies.count, by: GlossMatch.walkColumns).map {
+                    Array(sheet.copies[$0..<min($0 + GlossMatch.walkColumns, sheet.copies.count)])
+                }
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows.indices, id: \.self) { index in
+                        HStack(alignment: .top, spacing: 0) {
+                            ForEach(rows[index]) { GlossMatchPairView(copy: $0) }
+                        }
+                    }
+                }
+            } else {
+                HStack(alignment: .top, spacing: 0) {
+                    ForEach(sheet.copies) { GlossMatchCopyView(copy: $0) }
+                }
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Match sheet")
+    }
+}
+
+/// The calibration backdrop's window and the match sheet's: two windows of
+/// the lab's own, shown by their switches (launch arguments
+/// `-GlossLab.calibration YES`, `-GlossLab.calibrationPattern
+/// tile|white|grey|black`, `-GlossLab.match YES`, `-GlossLab.matchSpec
+/// "radius=1 / radius=2 / radius=3"`, `-GlossLab.matchOrigin "x,y"`). Off,
+/// neither exists.
+@MainActor
+final class GlossMatchWindows {
+    static let shared = GlossMatchWindows()
+
+    static let calibrationTitle = "Gloss calibration"
+    static let sheetTitle = "Gloss match"
+
+    private(set) var calibrationWindow: NSPanel?
+    private(set) var sheetWindow: NSPanel?
+    private var moveObserver: NSObjectProtocol?
+    /// What the sheet was last placed for: its size and the corner's text.
+    private var placedFor: String?
+    private var checkWritten: String?
+
+    func configure() {
+        withObservationTracking {
+            let lab = GlossLab.shared
+            _ = lab.calibration
+            _ = lab.calibrationPattern
+            _ = lab.match
+            _ = lab.matchSpec
+            _ = lab.matchOrigin
+            // The stack test's values the copies start from, for the check file.
+            _ = GlossMatch.base(for: lab)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.configure() }
+        }
+        apply()
+    }
+
+    /// The backdrop's window: opaque, right under the lab's floating
+    /// windows and over ordinary ones, never key, and not click-through.
+    static func makeCalibrationWindow() -> NSPanel {
+        let size = CGSize(width: GlossCalibration.tileSize.width * 2, height: GlossCalibration.tileSize.height * 2)
+        let panel = NSPanel(contentRect: CGRect(origin: .zero, size: size),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.title = calibrationTitle
+        panel.isReleasedWhenClosed = false
+        panel.isOpaque = true
+        panel.backgroundColor = .white
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue - 1)
+        panel.collectionBehavior = [.fullScreenAuxiliary]
+        panel.contentView = GlossCalibrationView(frame: CGRect(origin: .zero, size: size))
+        return panel
+    }
+
+    /// The sheet's window: clear, floating, never key, moved by its background.
+    static func makeSheetWindow() -> NSPanel {
+        let panel = NSPanel(contentRect: CGRect(origin: .zero, size: GlossMatch.cellSize),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.title = sheetTitle
+        panel.isReleasedWhenClosed = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.isMovableByWindowBackground = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.appearance = NSAppearance(named: .darkAqua)
+        let host = NSHostingView(rootView: GlossMatchView(lab: .shared))
+        host.sizingOptions = []
+        panel.contentView = host
+        return panel
+    }
+
+    /// The backdrop's frame on a screen: its visible part (under the menu
+    /// bar, clear of the Dock), on whole points.
+    static func calibrationFrame(visible: CGRect) -> CGRect { visible.integral }
+
+    private func apply() {
+        let lab = GlossLab.shared
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let screenFrame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let visible = screen?.visibleFrame ?? screenFrame
+        if lab.calibration {
+            let window = calibrationWindow ?? Self.makeCalibrationWindow()
+            if calibrationWindow == nil {
+                (window.contentView as? GlossCalibrationView)?.onClose = { GlossLab.shared.calibration = false }
+                (window.contentView as? GlossCalibrationView)?.onPattern = { GlossLab.shared.calibrationPattern = $0 }
+                calibrationWindow = window
+            }
+            (window.contentView as? GlossCalibrationView)?.pattern = lab.calibrationPattern
+            window.setFrame(Self.calibrationFrame(visible: visible), display: true)
+            window.orderFrontRegardless()
+        } else {
+            calibrationWindow?.orderOut(nil)
+            calibrationWindow = nil
+        }
+        if lab.match {
+            let window = sheetWindow ?? Self.makeSheetWindow()
+            if sheetWindow == nil {
+                sheetWindow = window
+                moveObserver = NotificationCenter.default.addObserver(
+                    forName: NSWindow.didMoveNotification, object: window, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.writeCheckFile(GlossLab.shared) }
+                }
+            }
+            let sheet = GlossMatch.sheet(for: lab)
+            let frame = GlossMatch.sheetFrame(sheet, corner: GlossMatch.corner(lab.matchOrigin), screen: screenFrame, visible: visible)
+            // Placed again only when its size or its corner's text changed,
+            // so a sheet dragged elsewhere stays there while values change.
+            let placing = "\(NSStringFromSize(frame.size)) \(lab.matchOrigin)"
+            if placedFor != placing {
+                placedFor = placing
+                window.setFrame(frame, display: true)
+            }
+            window.orderFrontRegardless()
+        } else {
+            if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
+            moveObserver = nil
+            placedFor = nil
+            sheetWindow?.orderOut(nil)
+            sheetWindow = nil
+        }
+        writeCheckFile(lab)
+    }
+
+    /// The two windows' state as text: whether each is up, its frame and
+    /// scale, where the first copy's pieces stand, and every copy as it
+    /// was understood.
+    func checkText(_ lab: GlossLab) -> String {
+        var lines: [String] = []
+        if let window = calibrationWindow {
+            lines.append("calibration=on pattern=\(lab.calibrationPattern.rawValue) frame=\(NSStringFromRect(window.frame)) "
+                         + "scale=\(window.backingScaleFactor) tile=\(NSStringFromSize(GlossCalibration.tileSize)) "
+                         + "cell=\(Int(GlossCalibration.cell)) level=\(window.level.rawValue)")
+        } else {
+            lines.append("calibration=off")
+        }
+        if let window = sheetWindow {
+            let sheet = GlossMatch.sheet(for: lab)
+            let screen = (window.screen ?? NSScreen.main)?.frame ?? .zero
+            let inset = GlossMatch.inset(sheet)
+            let first = CGPoint(x: window.frame.minX - screen.minX + inset.x, y: screen.maxY - window.frame.maxY + inset.y)
+            lines.append("match=on mode=\(sheet.walk ? "walk" : "copies") count=\(sheet.copies.count) frame=\(NSStringFromRect(window.frame)) "
+                         + "scale=\(window.backingScaleFactor) firstCornerFromScreenTopLeft=\(NSStringFromPoint(first)) "
+                         + "pitch=\(sheet.walk ? NSStringFromSize(GlossMatch.walkCell) : "\(GlossMatch.pitch)") "
+                         + "appleBlur=\(GlossBackdropGround.isAvailable)")
+            lines.append(contentsOf: sheet.copies.map(GlossMatch.checkText))
+        } else {
+            lines.append("match=off")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func writeCheckFile(_ lab: GlossLab) {
+        // Nothing is written while neither was ever shown.
+        guard calibrationWindow != nil || sheetWindow != nil || checkWritten != nil else { return }
+        let text = checkText(lab)
+        guard text != checkWritten else { return }
+        checkWritten = text
+        try? text.write(to: GlossMatch.checkFileURL, atomically: true, encoding: .utf8)
     }
 }
 #endif

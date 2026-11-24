@@ -651,6 +651,59 @@ final class GlossLabCountTests: XCTestCase {
         spin()
         XCTAssertTrue(blurViews(in: view).isEmpty, "a blur view without the private layer")
     }
+
+    // MARK: Match sheet (24 Nov, the match round)
+
+    private func descendants<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+        view.subviews.flatMap { (($0 as? T).map { [$0] } ?? []) + descendants(type, in: $0) }
+    }
+
+    /// The match sheet's view is the size its window is given, and holds
+    /// one ground per copy that has one (with that copy's own radius) and a
+    /// glass view per piece: eleven a copy, two a walk's pair.
+    func testMatchSheetHoldsAGroundAndElevenPiecesPerCopy() throws {
+        XCTAssertTrue(GlossBackdropGround.isAvailable, "this system lacks a piece of Apple's blur")
+        let lab = GlossLab(defaults: nil)
+        lab.matchSpec = "radius=1.5, variant=7 / ground=0"
+        var sheet = GlossMatch.sheet(for: lab)
+        XCTAssertEqual(NSHostingView(rootView: GlossMatchView(lab: lab)).fittingSize, GlossMatch.sheetSize(sheet))
+        let size = GlossMatch.sheetSize(sheet)
+        let panel = NSPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: GlossMatchView(lab: lab))
+        host.sizingOptions = []
+        panel.contentView = host
+        panel.orderFront(nil)
+        defer { panel.orderOut(nil); panel.close() }
+        func settle() { spin(0.3); host.layoutSubtreeIfNeeded(); panel.displayIfNeeded(); CATransaction.flush() }
+        settle()
+        var grounds = descendants(GlossStackGroundView.self, in: host)
+        XCTAssertEqual(grounds.count, 1, "one copy has a ground, the other asked for none")
+        XCTAssertEqual(grounds.first?.radius, 1.5); XCTAssertEqual(grounds.first?.material, .variable)
+        XCTAssertEqual(grounds.first?.reach, GlossMatch.reach)
+        XCTAssertEqual(grounds.first?.frame.size, GlossMatch.groundRect.size)
+        XCTAssertNotNil(grounds.first?.backdropLayer, "the ground is not Apple's blur")
+        var glass = descendants(NSGlassEffectView.self, in: host)
+        XCTAssertEqual(glass.count, GlossMatch.pieces.count * 2)
+        XCTAssertEqual(Set(glass.map { $0.frame.size.width }), [141, 65, 95], "the pieces' widths")
+        XCTAssertEqual(glass.filter { $0.cornerRadius == 32.5 }.count, 6, "three round buttons a copy")
+        XCTAssertEqual(host.frame.size, size, "the sheet's view resized its window")
+        // A walk: a capsule and a round button per value, each pair over
+        // a ground of its own.
+        lab.matchSpec = "walk radius 0.5 2"
+        sheet = GlossMatch.sheet(for: lab)
+        XCTAssertEqual(NSHostingView(rootView: GlossMatchView(lab: lab)).fittingSize, GlossMatch.sheetSize(sheet))
+        panel.setContentSize(GlossMatch.sheetSize(sheet))
+        settle()
+        grounds = descendants(GlossStackGroundView.self, in: host)
+        XCTAssertEqual(grounds.map(\.radius).sorted(), [0.5, 2])
+        XCTAssertEqual(Set(grounds.map(\.reach)), [GlossMatch.walkReach])
+        XCTAssertEqual(Set(grounds.map(\.frame.size.width)), [GlossMatch.walkCell.width])
+        glass = descendants(NSGlassEffectView.self, in: host)
+        XCTAssertEqual(glass.count, 4)
+        XCTAssertEqual(glass.map { $0.frame.size.width }.sorted(), [65, 65, 141, 141])
+    }
 }
 #endif
 
@@ -2017,6 +2070,418 @@ final class GlossLabValuesTests: XCTestCase {
         XCTAssertTrue(line.contains("radius=0.5") && line.contains("opacity=1.0"), line)
         view.writeOff()
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "panelBlur=off\n")
+    }
+
+    // MARK: Calibration backdrop and match sheet (24 Nov, the match round)
+
+    /// The calibration backdrop and the match sheet: off to start with,
+    /// loaded with their values, written by Copy values on a line of their
+    /// own, and no preset, All off or Reset sliders touches them.
+    func testMatchValuesLoadCopyAndStayOutOfPresets() throws {
+        let suite = "GlossLabValuesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(CountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fresh = GlossLab(defaults: nil)
+        XCTAssertFalse(fresh.calibration); XCTAssertFalse(fresh.match)
+        XCTAssertEqual(fresh.calibrationPattern, .tile); XCTAssertEqual(fresh.matchOrigin, "")
+        XCTAssertEqual(fresh.matchSpec, "radius=1 / radius=2 / radius=3"); XCTAssertEqual(GlossLab.matchSpecStart, fresh.matchSpec)
+        XCTAssertEqual(fresh.matchLine,
+                       "Calibration backdrop: off (tile), match sheet: off, showing \"radius=1 / radius=2 / radius=3\", first corner by guess")
+        XCTAssertTrue(fresh.valuesText(app: Self.app(mode: "Light")).contains("\n" + fresh.matchLine + "\n"), "not on a line of its own")
+        defaults.set(true, forKey: "GlossLab.calibration")
+        defaults.set("grey", forKey: "GlossLab.calibrationPattern")
+        defaults.set(true, forKey: "GlossLab.match")
+        defaults.set("walk variant / lensing=1", forKey: "GlossLab.matchSpec")
+        defaults.set("1206,49", forKey: "GlossLab.matchOrigin")
+        defaults.writes = []
+        let lab = GlossLab(defaults: defaults)
+        XCTAssertTrue(lab.calibration); XCTAssertTrue(lab.match); XCTAssertEqual(lab.calibrationPattern, .grey)
+        XCTAssertEqual(lab.matchSpec, "walk variant / lensing=1"); XCTAssertEqual(lab.matchOrigin, "1206,49")
+        XCTAssertEqual(defaults.writes, [], "loading wrote values back")
+        let line = "Calibration backdrop: on (grey), match sheet: on, showing \"walk variant / lensing=1\", first corner \"1206,49\""
+        XCTAssertTrue(lab.valuesText(app: Self.app(mode: "Dark")).contains(line))
+        lab.allOff(); lab.resetSliders()
+        XCTAssertTrue(lab.calibration && lab.match, "All off reached the match windows")
+        XCTAssertEqual(lab.matchLine, line, "Reset sliders reached the match values")
+        XCTAssertEqual(lab.currentPreset?.id, "today", "the match values broke Today's match")
+        lab.apply(try XCTUnwrap(GlossLab.presets.first { $0.id == "controlCentre" }))
+        XCTAssertEqual(lab.matchLine, line, "a preset moved the match values")
+        defaults.writes = []
+        lab.calibration = false; lab.calibrationPattern = .black; lab.match = false; lab.matchSpec = "radius=4"; lab.matchOrigin = ""
+        XCTAssertEqual(defaults.writes, ["GlossLab.calibration", "GlossLab.calibrationPattern", "GlossLab.match",
+                                         "GlossLab.matchSpec", "GlossLab.matchOrigin"])
+        XCTAssertEqual(lab.currentPreset?.id, "controlCentre", "a match value broke the preset's match")
+        let again = GlossLab(defaults: defaults)
+        XCTAssertFalse(again.calibration); XCTAssertFalse(again.match); XCTAssertEqual(again.calibrationPattern, .black)
+        XCTAssertEqual(again.matchSpec, "radius=4"); XCTAssertEqual(again.matchOrigin, "", "a change is kept")
+        // A pattern this build does not know leaves the tile.
+        defaults.set("plaid", forKey: "GlossLab.calibrationPattern")
+        XCTAssertEqual(GlossLab(defaults: defaults).calibrationPattern, .tile)
+        // The launch arguments the hand-over uses, with a preset.
+        defaults.set("controlCentre", forKey: "GlossLab.preset")
+        defaults.set(true, forKey: "GlossLab.calibration"); defaults.set(true, forKey: "GlossLab.match")
+        let shown = GlossLab(defaults: defaults)
+        XCTAssertTrue(shown.calibration && shown.match, "a preset shown by launch argument turned the match windows off")
+    }
+
+    /// The tile's bytes, top row first, four to a pixel.
+    private static func bytes(_ image: CGImage) throws -> (Data, Int) {
+        XCTAssertEqual(image.bitsPerPixel, 32); XCTAssertEqual(image.bitsPerComponent, 8)
+        let data = try XCTUnwrap(image.dataProvider?.data as Data?)
+        return (data, image.bytesPerRow)
+    }
+
+    /// The calibration tile holds what the measuring script expects of it,
+    /// pixel for pixel, at 1 and 2 px per pt: every flat field its colour
+    /// to its last pixel, every checker hard squares of its width with a
+    /// black one first and nothing but black and white, and the text inside
+    /// its cell, upright, on its ground.
+    func testCalibrationTileHoldsItsCellsPixelForPixel() throws {
+        XCTAssertEqual(GlossCalibration.tileSize, CGSize(width: 384, height: 256))
+        XCTAssertEqual(GlossCalibration.cell, 64)
+        XCTAssertEqual(GlossCalibration.layout.count, 4)
+        XCTAssertTrue(GlossCalibration.layout.allSatisfy { $0.count == 6 })
+        let all = GlossCalibration.layout.flatMap { $0 }
+        let wanted: [GlossCalibration.Cell] = [.white, .black, .grey, .red, .green, .blue, .checker(2), .checker(4), .checker(8), .checker(16),
+                                              .text(11, onBlack: false), .text(17, onBlack: false), .text(11, onBlack: true), .text(17, onBlack: true)]
+        for kind in wanted { XCTAssertTrue(all.contains(kind), "the tile lacks \(kind)") }
+        // Hard white to black edges both ways between flat cells.
+        XCTAssertEqual(Array(GlossCalibration.layout[0][1...2]), [.white, .black], "no upright white to black edge")
+        XCTAssertEqual([GlossCalibration.layout[0][0], GlossCalibration.layout[1][0]], [.white, .black], "no level white to black edge")
+        for scale in [1, 2] {
+            let image = try XCTUnwrap(GlossCalibration.tileImage(scale: scale))
+            XCTAssertEqual(image.width, 384 * scale); XCTAssertEqual(image.height, 256 * scale)
+            let (data, rowBytes) = try Self.bytes(image)
+            func at(_ x: Int, _ y: Int) -> [UInt8] { let i = y * rowBytes + x * 4; return [data[i], data[i + 1], data[i + 2]] }
+            let side = 64 * scale
+            for (row, cells) in GlossCalibration.layout.enumerated() {
+                for (column, kind) in cells.enumerated() {
+                    let left = column * side, top = row * side, name = "\(kind) at scale \(scale)"
+                    if let flat = GlossCalibration.colour(kind) {
+                        for (dx, dy) in [(0, 0), (side - 1, 0), (0, side - 1), (side - 1, side - 1), (side / 2, side / 2)] {
+                            XCTAssertEqual(at(left + dx, top + dy), [flat.0, flat.1, flat.2], name)
+                        }
+                    } else if case .checker(let points) = kind {
+                        let square = points * scale
+                        XCTAssertEqual(at(left, top), [0, 0, 0], name)
+                        XCTAssertEqual(at(left + square - 1, top + square - 1), [0, 0, 0], name)
+                        XCTAssertEqual(at(left + square, top), [255, 255, 255], name)
+                        XCTAssertEqual(at(left, top + square), [255, 255, 255], name)
+                        XCTAssertEqual(at(left + square, top + square), [0, 0, 0], name)
+                        var black = 0, other = 0
+                        for y in 0..<side { for x in 0..<side {
+                            let pixel = at(left + x, top + y)
+                            if pixel == [0, 0, 0] { black += 1 } else if pixel != [255, 255, 255] { other += 1 }
+                        } }
+                        XCTAssertEqual(other, 0, "a soft pixel in \(name)")
+                        XCTAssertEqual(black * 2, side * side, "\(name) is not half black")
+                    } else if case .text(let size, let onBlack) = kind {
+                        let ground: UInt8 = onBlack ? 0 : 255
+                        func ink(rows: Range<Int>) -> Int {
+                            var count = 0
+                            for y in rows { for x in 0..<side where abs(Int(at(left + x, top + y)[0]) - Int(ground)) > 128 { count += 1 } }
+                            return count
+                        }
+                        // Its rim is the bare ground: 2 pt at the top and bottom, 3 at the sides.
+                        XCTAssertEqual(ink(rows: 0..<(2 * scale)), 0, name); XCTAssertEqual(ink(rows: (side - 2 * scale)..<side), 0, name)
+                        for y in 0..<side { for x in [0, 3 * scale - 1, side - 3 * scale, side - 1] {
+                            XCTAssertEqual(at(left + x, top + y), [ground, ground, ground], name)
+                        } }
+                        let whole = ink(rows: 0..<side)
+                        XCTAssertGreaterThan(whole, side * side / 40, "\(name) holds too little text")
+                        XCTAssertLessThan(whole, side * side / 2, name)
+                        // Upright: the first line stands with its baseline
+                        // 4 pt + its size under the cell's top, so there is
+                        // ink right above that baseline and none in the
+                        // 3 pt above the first line's tallest letters.
+                        let baseline = Int(4 + size) * scale
+                        XCTAssertGreaterThan(ink(rows: (baseline - 5 * scale)..<baseline), 0, "\(name): no ink above the first baseline")
+                        XCTAssertEqual(ink(rows: 0..<(4 * scale)), 0, "\(name): ink above the first line")
+                        // The 17 pt cell holds two lines from its top (ink
+                        // down to 47 pt), so its last 10 pt above the rim
+                        // are bare; upside down they would hold the first line.
+                        if size == 17 { XCTAssertEqual(ink(rows: (52 * scale)..<(62 * scale)), 0, "\(name): upside down") }
+                    }
+                }
+            }
+        }
+        // The flat patterns have a colour, the tile none.
+        XCTAssertNil(GlossCalibration.colour(GlossLab.CalibrationPattern.tile))
+        XCTAssertEqual(GlossCalibration.colour(GlossLab.CalibrationPattern.grey).map { [$0.0, $0.1, $0.2] }, [128, 128, 128])
+        XCTAssertEqual(GlossCalibration.colour(GlossLab.CalibrationPattern.white).map { [$0.0, $0.1, $0.2] }, [255, 255, 255])
+        XCTAssertEqual(GlossCalibration.colour(GlossLab.CalibrationPattern.black).map { [$0.0, $0.1, $0.2] }, [0, 0, 0])
+    }
+
+    /// The backdrop's window is opaque, sits right under the lab's floating
+    /// windows, is never key and is not click-through; its view takes
+    /// clicks, and its Close button stands in the bottom left corner and
+    /// calls back.
+    func testCalibrationWindowIsOpaqueAndTakesClicks() throws {
+        let window = GlossMatchWindows.makeCalibrationWindow()
+        XCTAssertFalse(window.isVisible, "making the window showed it")
+        XCTAssertTrue(window.isOpaque); XCTAssertFalse(window.hasShadow)
+        XCTAssertFalse(window.ignoresMouseEvents, "the backdrop is click-through")
+        XCTAssertEqual(window.level.rawValue, NSWindow.Level.floating.rawValue - 1)
+        XCTAssertTrue(window.styleMask.contains(.nonactivatingPanel)); XCTAssertFalse(window.styleMask.contains(.titled))
+        XCTAssertFalse(window.canBecomeKey, "the backdrop could take the keyboard")
+        XCTAssertFalse(window.hidesOnDeactivate)
+        XCTAssertFalse(window.collectionBehavior.contains(.canJoinAllSpaces), "the backdrop would cover every Space")
+        XCTAssertEqual(window.title, "Gloss calibration")
+        let view = try XCTUnwrap(window.contentView as? GlossCalibrationView)
+        XCTAssertTrue(view.isOpaque); XCTAssertTrue(view.isFlipped); XCTAssertEqual(view.pattern, .tile)
+        view.layout()
+        XCTAssertEqual(view.closeButton.frame.minX, 12)
+        XCTAssertEqual(view.closeButton.frame.maxY, view.bounds.height - 12, "the Close button is not in the bottom left corner")
+        XCTAssertTrue(view.closeButton.superview === view)
+        var closed = 0
+        view.onClose = { closed += 1 }
+        XCTAssertTrue(view.closeButton.sendAction(view.closeButton.action, to: view.closeButton.target))
+        XCTAssertEqual(closed, 1)
+        // The pattern's picker stands beside it, shows the pattern set, and
+        // calls back with the one picked.
+        XCTAssertTrue(view.patternPicker.superview === view)
+        XCTAssertEqual(view.patternPicker.segmentCount, 4)
+        XCTAssertEqual((0..<4).map { view.patternPicker.label(forSegment: $0) }, ["Tile", "White", "Grey", "Black"])
+        XCTAssertEqual(view.patternPicker.selectedSegment, 0)
+        XCTAssertEqual(view.patternPicker.frame.minX, view.closeButton.frame.maxX + 12)
+        XCTAssertEqual(view.patternPicker.frame.maxY, view.bounds.height - 12)
+        view.pattern = .grey
+        XCTAssertEqual(view.patternPicker.selectedSegment, 2, "the picker does not show the pattern set")
+        var picked: [GlossLab.CalibrationPattern] = []
+        view.onPattern = { picked.append($0) }
+        view.patternPicker.selectedSegment = 3
+        XCTAssertTrue(view.patternPicker.sendAction(view.patternPicker.action, to: view.patternPicker.target))
+        XCTAssertEqual(picked, [.black])
+        let lone = GlossCalibrationView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        XCTAssertTrue(lone.hitTest(CGPoint(x: 200, y: 100)) === lone, "the backdrop's view passes clicks on")
+        XCTAssertTrue(lone.acceptsFirstMouse(for: nil))
+        // Under the menu bar and clear of the Dock, on whole points.
+        XCTAssertEqual(GlossMatchWindows.calibrationFrame(visible: CGRect(x: 0, y: 70.5, width: 1512, height: 874.5)),
+                       CGRect(x: 0, y: 70, width: 1512, height: 875))
+    }
+
+    /// The backdrop's view draws the tile from its top left corner, pixel
+    /// for pixel, and again one tile further on; a flat pattern is that
+    /// colour everywhere.
+    func testCalibrationViewDrawsTheTileFromItsTopLeftCorner() throws {
+        let window = GlossMatchWindows.makeCalibrationWindow()
+        let view = try XCTUnwrap(window.contentView as? GlossCalibrationView)
+        XCTAssertEqual(view.bounds.size, CGSize(width: 768, height: 512))
+        // Laid out first, so the Close button and the picker stand in the
+        // bottom left corner (y 468 pt and below), clear of every spot read.
+        view.layoutSubtreeIfNeeded()
+        view.layout()
+        XCTAssertGreaterThan(min(view.closeButton.frame.minY, view.patternPicker.frame.minY), 460)
+        let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let scale = rep.pixelsWide / 768
+        XCTAssertTrue(scale == 1 || scale == 2, "an odd scale: \(rep.pixelsWide) px for 768 pt")
+        func grey(_ x: Int, _ y: Int) throws -> Int {
+            let colour = try XCTUnwrap(rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+            return Int((colour.redComponent * 255).rounded())
+        }
+        func cell(_ column: Int, _ row: Int, tileX: Int = 0, tileY: Int = 0, dx: Int = 20, dy: Int = 20) -> (Int, Int) {
+            ((tileX * 384 + column * 64 + dx) * scale, (tileY * 256 + row * 64 + dy) * scale)
+        }
+        // The grey is read as the bitmap's own colour space gives it (146
+        // here for the tile's 128: the cached bitmap is not sRGB), so it is
+        // held to a mid grey, the same in every tile and in the flat
+        // pattern; the tile's own bytes are pinned by the tile's test.
+        var greys: Set<Int> = []
+        for (tileX, tileY) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let name = "tile \(tileX), \(tileY)"
+            var spot = cell(0, 0, tileX: tileX, tileY: tileY)
+            XCTAssertEqual(try grey(spot.0, spot.1), 255, "\(name): the top left cell is not white")
+            spot = cell(2, 0, tileX: tileX, tileY: tileY)
+            XCTAssertEqual(try grey(spot.0, spot.1), 0, "\(name): the third cell of the top row is not black")
+            spot = cell(0, 1, tileX: tileX, tileY: tileY)
+            XCTAssertEqual(try grey(spot.0, spot.1), 0, "\(name): the first cell of the second row is not black (upside down?)")
+            spot = cell(4, 1, tileX: tileX, tileY: tileY)
+            let mid = try grey(spot.0, spot.1)
+            XCTAssertTrue((100...160).contains(mid), "\(name): the grey cell reads \(mid)")
+            greys.insert(mid)
+            spot = cell(5, 3, tileX: tileX, tileY: tileY, dy: 4)
+            XCTAssertEqual(try grey(spot.0, spot.1), 255, "\(name): the last cell is not white")
+            // The 2 pt checker (fifth cell of the top row): hard squares on
+            // their own pixels, so the tile is drawn one to one.
+            for step in 0..<8 {
+                let x = (tileX * 384 + 4 * 64 + step) * scale, y = (tileY * 256 + 1) * scale
+                XCTAssertEqual(try grey(x, y), (step / 2).isMultiple(of: 2) ? 0 : 255, "\(name): the 2 pt checker at \(step) pt")
+            }
+        }
+        XCTAssertEqual(greys.count, 1, "the grey cell differs between tiles: \(greys)")
+        view.pattern = .grey
+        view.cacheDisplay(in: view.bounds, to: rep)
+        for spot in [(5, 5), (300, 200), (767, 511)] {
+            XCTAssertEqual(try grey(spot.0 * scale, spot.1 * scale), greys.first ?? -1, accuracy: 1, "the grey pattern at \(spot)")
+        }
+        view.pattern = .black
+        view.cacheDisplay(in: view.bounds, to: rep)
+        XCTAssertEqual(try grey(400 * scale, 300 * scale), 0)
+        view.pattern = .white
+        view.cacheDisplay(in: view.bounds, to: rep)
+        XCTAssertEqual(try grey(400 * scale, 300 * scale), 255)
+    }
+
+    /// The match sheet's pieces stand as the real Control Centre's do
+    /// (owner's screenshot of macOS 27): two columns of 141 pt 12 pt apart,
+    /// rows of 64 pt 12 pt apart, the large tile over two rows, three round
+    /// buttons of 65 pt, the pill under them; none overlaps another.
+    func testMatchPiecesStandAsControlCentresDo() throws {
+        let pieces = GlossMatch.pieces
+        XCTAssertEqual(pieces.count, 11); XCTAssertEqual(Set(pieces.map(\.id)).count, 11)
+        let box = pieces.dropFirst().reduce(pieces[0].rect) { $0.union($1.rect) }
+        XCTAssertEqual(box, CGRect(origin: .zero, size: GlossMatch.group), "the pieces' box is not 294 x 406")
+        func piece(_ id: String) throws -> GlossMatch.Piece { try XCTUnwrap(pieces.first { $0.id == id }) }
+        XCTAssertEqual(try piece("wifi").rect, CGRect(x: 0, y: 0, width: 141, height: 64)); XCTAssertEqual(try piece("wifi").corner, 32)
+        XCTAssertEqual(try piece("bluetooth").rect.minY, 76); XCTAssertEqual(try piece("airdrop").rect.minY, 152)
+        XCTAssertEqual(try piece("media").rect, CGRect(x: 153, y: 0, width: 141, height: 140)); XCTAssertEqual(try piece("media").corner, 32)
+        XCTAssertEqual(try piece("round3").rect, CGRect(x: 229, y: 151.5, width: 65, height: 65))
+        XCTAssertEqual(try piece("round1").rect, CGRect(x: 0, y: 227.5, width: 65, height: 65))
+        XCTAssertEqual(try piece("round2").rect, CGRect(x: 76, y: 227.5, width: 65, height: 65)); XCTAssertEqual(try piece("round2").corner, 32.5)
+        XCTAssertEqual(try piece("focus").rect, CGRect(x: 153, y: 228, width: 141, height: 64))
+        XCTAssertEqual(try piece("display").rect, CGRect(x: 0, y: 304, width: 141, height: 64))
+        XCTAssertEqual(try piece("sound").rect, CGRect(x: 153, y: 304, width: 141, height: 64))
+        XCTAssertEqual(try piece("pill").rect, CGRect(x: 100, y: 382, width: 95, height: 24)); XCTAssertEqual(try piece("pill").corner, 12)
+        for (index, first) in pieces.enumerated() {
+            for second in pieces[(index + 1)...] {
+                XCTAssertFalse(first.rect.insetBy(dx: -5, dy: -5).intersects(second.rect.insetBy(dx: -5, dy: -5)),
+                               "\(first.id) and \(second.id) are under 10 pt apart")
+            }
+        }
+        // Copies stand one tile width apart, so each lies over the same
+        // part of the pattern; a copy's ground stays inside its cell.
+        XCTAssertEqual(GlossMatch.pitch, GlossCalibration.tileSize.width); XCTAssertEqual(GlossMatch.cellSize, CGSize(width: 384, height: 500))
+        XCTAssertEqual(GlossMatch.roomX, 45); XCTAssertEqual(GlossMatch.groundRect, CGRect(x: 15, y: 6, width: 354, height: 466))
+        XCTAssertTrue(CGRect(origin: .zero, size: GlossMatch.cellSize).contains(GlossMatch.groundRect))
+        XCTAssertEqual(GlossMatch.walkCell, CGSize(width: 258, height: 105))
+    }
+
+    /// What the sheet's text asks for: copies apart by "/", each a list of
+    /// settings held in their ranges, what is not understood named; a walk
+    /// through one setting; never more than four copies or 24 pairs.
+    func testMatchSheetReadsCopiesAndWalks() {
+        let base = GlossMatch.Copy()
+        let three = GlossMatch.sheet(spec: GlossLab.matchSpecStart, base: base)
+        XCTAssertFalse(three.walk); XCTAssertEqual(three.copies.map(\.radius), [1, 2, 3]); XCTAssertEqual(three.copies.map(\.id), [0, 1, 2])
+        XCTAssertEqual(three.copies.map(\.label), ["radius=1", "radius=2", "radius=3"])
+        XCTAssertTrue(three.copies.allSatisfy { $0.dim == base.dim && $0.settings == base.settings && $0.ground })
+        XCTAssertNil(GlossMatch.ignoredLine(three))
+        for empty in ["", "   ", " / "] {
+            let one = GlossMatch.sheet(spec: empty, base: base)
+            XCTAssertEqual(one.copies, [base], "\"\(empty)\" is not one copy as set"); XCTAssertEqual(one.copies.first?.label, "as set")
+        }
+        let many = GlossMatch.sheet(
+            spec: "radius=0.5, dim=40, variant=7, ground=0 / lensing=9, colour=3, radius / smoke=10, tint=1, reduced=1 "
+                + "/ hold=12, curve=2.5, scrim=1, subdued=2, adaptive=0 / radius=9", base: base)
+        XCTAssertEqual(many.copies.count, 4, "more than four copies")
+        XCTAssertEqual(many.copies[0].radius, 0.5); XCTAssertEqual(many.copies[0].dim, 30, "dim is held to 30")
+        XCTAssertEqual(many.copies[0].settings.variant, 7); XCTAssertFalse(many.copies[0].ground); XCTAssertEqual(many.copies[0].ignored, [])
+        XCTAssertEqual(many.copies[1].settings.lensing, 3, "lensing is held to 3"); XCTAssertEqual(many.copies[1].ignored, ["colour=3", "radius"])
+        XCTAssertEqual(many.copies[1].radius, base.radius)
+        XCTAssertEqual(many.copies[2].smoke, 10); XCTAssertTrue(many.copies[2].smokeAsTint); XCTAssertTrue(many.copies[2].settings.tintReduced)
+        XCTAssertEqual(many.copies[3].hold, 12); XCTAssertEqual(many.copies[3].curve, 2.5); XCTAssertEqual(many.copies[3].settings.scrim, 1)
+        XCTAssertEqual(many.copies[3].settings.subdued, 2); XCTAssertEqual(many.copies[3].settings.adaptive, 0)
+        XCTAssertEqual(GlossMatch.ignoredLine(many), "Not understood: colour=3, radius")
+        let walk = GlossMatch.sheet(spec: "walk variant / lensing=1, radius=2", base: base)
+        XCTAssertTrue(walk.walk); XCTAssertEqual(walk.copies.map(\.settings.variant), Array(0...23))
+        XCTAssertTrue(walk.copies.allSatisfy { $0.settings.lensing == 1 && $0.radius == 2 })
+        XCTAssertEqual(walk.copies.first?.label, "variant 0"); XCTAssertEqual(walk.copies.last?.label, "variant 23")
+        XCTAssertEqual(walk.copies.map(\.id), Array(0..<24))
+        let radii = GlossMatch.sheet(spec: "walk radius 0.5 1 1.5 2 3 / dim=10", base: base)
+        XCTAssertTrue(radii.walk); XCTAssertEqual(radii.copies.map(\.radius), [0.5, 1, 1.5, 2, 3])
+        XCTAssertTrue(radii.copies.allSatisfy { $0.dim == 10 }); XCTAssertEqual(radii.copies.map(\.label).prefix(2), ["radius 0.5", "radius 1"])
+        XCTAssertEqual(GlossMatch.sheet(spec: "walk lensing", base: base).copies.map(\.settings.lensing), [0, 1, 2, 3])
+        XCTAssertEqual(GlossMatch.sheet(spec: "walk radius", base: base).copies.count, 24, "more than 24 pairs")
+        XCTAssertEqual(GlossMatch.sheet(spec: "walk ground", base: base).copies.map(\.ground), [false, true])
+        let unknown = GlossMatch.sheet(spec: "walk colour 1 2 / dim=5", base: base)
+        XCTAssertFalse(unknown.walk); XCTAssertEqual(unknown.copies.count, 1); XCTAssertEqual(unknown.copies[0].ignored, ["walk colour"])
+        XCTAssertEqual(unknown.copies[0].dim, 5)
+        XCTAssertEqual(GlossMatch.sheet(spec: "walk", base: base).copies.first?.ignored, ["walk"])
+        XCTAssertEqual(GlossMatch.sheet(spec: "walk variant 3 x 5", base: base).copies.map(\.settings.variant), [3, 5])
+        XCTAssertEqual(GlossMatch.ignoredLine(GlossMatch.sheet(spec: "walk variant 3 x 5", base: base)), "Not understood: x")
+        // The sheet's size: copies a tile width each, pairs four to a row.
+        XCTAssertEqual(GlossMatch.sheetSize(three), CGSize(width: 1152, height: 500))
+        XCTAssertEqual(GlossMatch.sheetSize(many), CGSize(width: 1536, height: 500))
+        XCTAssertEqual(GlossMatch.sheetSize(walk), CGSize(width: 1032, height: 630))
+        XCTAssertEqual(GlossMatch.sheetSize(radii), CGSize(width: 1032, height: 210))
+        XCTAssertEqual(GlossMatch.sheetSize(GlossMatch.sheet(spec: "walk radius 1 2", base: base)), CGSize(width: 516, height: 105))
+        // The check file's line names every setting of a copy.
+        let text = GlossMatch.checkText(many.copies[1])
+        XCTAssertEqual(text, "2: \"lensing=9, colour=3, radius\" ground=1 radius=20 dim=8 hold=25.0 curve=1.0 smoke=25 tint=0 variant=11 "
+                       + "lensing=3 scrim=0 subdued=0 adaptive=2 reduced=0 subvariant=\"\" extras=\"\" ignored=[colour=3,radius]")
+        XCTAssertEqual(GlossMatch.checkFileURL.lastPathComponent, "gloss-match-check.txt")
+    }
+
+    /// A copy that names nothing is the stack test's values, all of them.
+    func testMatchCopiesStartFromTheStackTestsValues() {
+        let lab = GlossLab(defaults: nil)
+        lab.samplesGroundRadius = 2.3; lab.samplesGroundDim = 12; lab.samplesSmoke = 30; lab.samplesStackTint = true
+        lab.samplesStackVariant = 7; lab.samplesLensing = 2; lab.samplesScrim = 1; lab.samplesSubdued = 3; lab.samplesAdaptive = 1
+        lab.samplesTintReduced = true; lab.samplesGroundHold = 10; lab.samplesGroundCurve = 2; lab.samplesGroundExtras = "inputX=1"
+        lab.samplesSubvariant = "x"
+        lab.matchSpec = " / variant=9, radius=1"
+        let sheet = GlossMatch.sheet(for: lab)
+        XCTAssertEqual(sheet.copies.count, 1, "an empty part is not a copy")
+        lab.matchSpec = "dim=12 / variant=9, radius=1"
+        let two = GlossMatch.sheet(for: lab).copies
+        XCTAssertEqual(two.count, 2)
+        let wanted = GlossSystemGlass.PieceSettings(variant: 7, lensing: 2, scrim: 1, subdued: 3, adaptive: 1, tintReduced: true, subvariant: "x")
+        XCTAssertEqual(two[0].settings, wanted)
+        XCTAssertEqual(two[0].radius, 2.3); XCTAssertEqual(two[0].dim, 12); XCTAssertEqual(two[0].smoke, 30); XCTAssertTrue(two[0].smokeAsTint)
+        XCTAssertEqual(two[0].hold, 10); XCTAssertEqual(two[0].curve, 2); XCTAssertEqual(two[0].extras, "inputX=1")
+        var nine = wanted
+        nine.variant = 9
+        XCTAssertEqual(two[1].settings, nine); XCTAssertEqual(two[1].radius, 1); XCTAssertEqual(two[1].dim, 12)
+    }
+
+    /// Where the sheet stands: by guess, its copies as many tile widths to
+    /// the left of where Control Centre is taken to be, so each copy and
+    /// the real one lie over the same part of the pattern; with a corner
+    /// given, its first pieces exactly there; a walk near the top left.
+    func testMatchSheetStandsTileWidthsFromControlCentre() {
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982), visible = CGRect(x: 0, y: 70, width: 1512, height: 875)
+        let base = GlossMatch.Copy()
+        let three = GlossMatch.sheet(spec: GlossLab.matchSpecStart, base: base)
+        // The real pieces are taken 12 pt in from the right edge (x 1206)
+        // and 12 pt under the 37 pt menu bar.
+        XCTAssertEqual(GlossMatch.firstCorner(three, corner: nil, screen: screen, visible: visible), CGPoint(x: 54, y: 49))
+        XCTAssertEqual((1206 - 54) % 384, 0)
+        XCTAssertEqual(GlossMatch.sheetFrame(three, corner: nil, screen: screen, visible: visible), CGRect(x: 9, y: 469, width: 1152, height: 500))
+        // Four copies do not fit to the left of it on this screen: the
+        // first keeps its room and the sheet runs under the real one.
+        let four = GlossMatch.sheet(spec: "radius=1 / radius=2 / radius=3 / radius=4", base: base)
+        XCTAssertEqual(GlossMatch.firstCorner(four, corner: nil, screen: screen, visible: visible).x, 45)
+        let given = GlossMatch.sheetFrame(three, corner: CGPoint(x: 62, y: 51), screen: screen, visible: visible)
+        XCTAssertEqual(given, CGRect(x: 17, y: 467, width: 1152, height: 500))
+        XCTAssertEqual(given.minX + GlossMatch.roomX, 62); XCTAssertEqual(screen.maxY - given.maxY + GlossMatch.roomY, 51)
+        // A second screen to the right, its own top left as the origin.
+        let second = CGRect(x: 1512, y: -98, width: 1920, height: 1080), secondVisible = CGRect(x: 1512, y: -98, width: 1920, height: 1055)
+        XCTAssertEqual(GlossMatch.firstCorner(three, corner: nil, screen: second, visible: secondVisible), CGPoint(x: 462, y: 37))
+        XCTAssertEqual(GlossMatch.sheetFrame(three, corner: nil, screen: second, visible: secondVisible).origin, CGPoint(x: 1929, y: 481))
+        let walk = GlossMatch.sheet(spec: "walk variant", base: base)
+        XCTAssertEqual(GlossMatch.firstCorner(walk, corner: nil, screen: screen, visible: visible), CGPoint(x: 28, y: 65))
+        XCTAssertEqual(GlossMatch.sheetFrame(walk, corner: nil, screen: screen, visible: visible), CGRect(x: 8, y: 307, width: 1032, height: 630))
+        XCTAssertEqual(GlossMatch.sheetFrame(walk, corner: CGPoint(x: 100, y: 80), screen: screen, visible: visible).origin, CGPoint(x: 80, y: 292))
+        XCTAssertEqual(GlossMatch.corner("1206,49"), CGPoint(x: 1206, y: 49)); XCTAssertEqual(GlossMatch.corner(" 12.5 , 3 "), CGPoint(x: 12.5, y: 3))
+        for bad in ["", "12", "a,b", "1,2,3", "1,", "inf,2"] { XCTAssertNil(GlossMatch.corner(bad), "\"\(bad)\" read as a corner") }
+    }
+
+    /// The sheet's window is clear, floats over the backdrop, is never key,
+    /// is moved by its background and is not resized by its content.
+    func testMatchSheetWindowIsClearFloatsAndKeepsItsSize() throws {
+        let window = GlossMatchWindows.makeSheetWindow()
+        XCTAssertFalse(window.isVisible, "making the window showed it")
+        XCTAssertFalse(window.isOpaque); XCTAssertEqual(window.backgroundColor?.alphaComponent, 0); XCTAssertFalse(window.hasShadow)
+        XCTAssertEqual(window.level, .floating)
+        XCTAssertGreaterThan(window.level.rawValue, GlossMatchWindows.makeCalibrationWindow().level.rawValue, "the sheet is not over the backdrop")
+        XCTAssertTrue(window.styleMask.contains(.nonactivatingPanel)); XCTAssertFalse(window.styleMask.contains(.titled))
+        XCTAssertFalse(window.canBecomeKey); XCTAssertFalse(window.hidesOnDeactivate)
+        XCTAssertTrue(window.isMovableByWindowBackground)
+        XCTAssertEqual(window.title, "Gloss match"); XCTAssertEqual(window.appearance?.name, .darkAqua)
+        let host = try XCTUnwrap(window.contentView as? NSHostingView<GlossMatchView>)
+        XCTAssertEqual(host.sizingOptions, [])
+        XCTAssertEqual(window.frame.size, GlossMatch.cellSize)
     }
 }
 #endif
