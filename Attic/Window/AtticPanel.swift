@@ -1354,10 +1354,17 @@ final class AtticPanelContentContainer: NSView {
     /// Whether the stand-in draws the island (in the caller's transaction).
     var isIslandStandInShown: Bool { (islandStandIn?.layer?.opacity ?? 0) > 0.5 }
 
+    /// Told as the stand-in shows or hides (its glass follows the panel's
+    /// size only while shown).
+    var onIslandStandInShown: ((Bool) -> Void)?
+
     func setIslandStandInShown(_ shown: Bool) {
         guard let layer = islandStandIn?.layer else { return }
         let opacity: Float = shown ? 1 : 0
         guard layer.opacity != opacity else { return }
+        onIslandStandInShown?(shown)
+        // Showing: its glass takes the panel's size before this frame.
+        if shown { islandStandIn?.layoutSubtreeIfNeeded() }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.opacity = opacity

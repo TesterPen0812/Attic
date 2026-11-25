@@ -24,6 +24,16 @@ import SwiftData
 }
 #endif
 
+/// A value a view measures on every layout step but draws nothing from
+/// directly (resize second pass, 25 Nov): kept out of view state, so a
+/// step that changes it starts no transaction and re-runs no body. The
+/// view keeps in state only what it draws (a Bool that flips at a
+/// threshold), or copies the value in when it starts to draw from it.
+final class AtticUnobserved<Value> {
+    var value: Value
+    init(_ value: Value) { self.value = value }
+}
+
 #if DEBUG
 /// Test seam (NotesUndoMirrorCountGuardTests): the view that pads the
 /// shell's notices above the page's bottom controls.

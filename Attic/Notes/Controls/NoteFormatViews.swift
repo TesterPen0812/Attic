@@ -622,8 +622,10 @@ struct NoteFormatRowView: View {
     var controlsOpacity: Double = 1
     let onClose: () -> Void
 
-    /// The row's width (the bottom row's).
-    @State private var width: CGFloat = 0
+    /// The row's width (the bottom row's), which moves on every step of a
+    /// resize: kept out of view state; only whether it is roomy is drawn.
+    @State private var width = AtticUnobserved<CGFloat>(0)
+    @State private var roomy = true
     @Environment(\.atticDesign) private var design
 
     /// Full-size cells fit (or the row is not measured yet).
@@ -632,7 +634,7 @@ struct NoteFormatRowView: View {
     var body: some View {
         // A long style name ("Subheading") in a narrow panel: 24 pt cells.
         let m = AtticNoteFormatMetrics.self
-        let roomy = width == 0 || Self.minimumWidth(snapshot: model.snapshot, toggleWidth: m.rowToggleWidth, compact: false) <= width
+        let need = Self.minimumWidth(snapshot: model.snapshot, toggleWidth: m.rowToggleWidth, compact: false)
         Group {
             if let table = model.snapshot.table {
                 tableRow(table, toggleWidth: m.rowToggleWidth)
@@ -641,13 +643,10 @@ struct NoteFormatRowView: View {
             }
         }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { new in
-                if abs(new - width) > 0.5 {
-                    #if ATTIC_LOCAL_ONLY
-                    PanelInvalidationProbe.stepWrite?("format-width")
-                    #endif
-                    width = new
-                }
+                width.value = new
+                settleRoomy(need: need)
             }
+            .onChange(of: need) { _, now in settleRoomy(need: now) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Format"))
         .accessibilityIdentifier("notes-format-row")
@@ -779,6 +778,15 @@ struct NoteFormatRowView: View {
         let label = stylePillNames.map { ceil(($0 as NSString).size(withAttributes: [.font: font]).width) }.max() ?? 0
         return label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
     }()
+    private func settleRoomy(need: CGFloat) {
+        let now = Self.isRoomy(width: width.value, need: need)
+        guard now != roomy else { return }
+        #if ATTIC_LOCAL_ONLY
+        PanelInvalidationProbe.stepWrite?("format-row-roomy")
+        #endif
+        roomy = now
+    }
+
 
     /// What the row needs before its flexible gap: the inset, the pill, two
     /// lines and the cells (the pill's width is the same for every style).
@@ -823,7 +831,12 @@ struct NoteFormatRowSwitch<Row: View>: View {
     @State private var shownModel: NoteFormatModel?
     @State private var geometry = NoteFormatRowGeometry()
     @State private var source: CGRect = .zero
+    /// The room the bottom row is given, drawn from only while the format
+    /// row is away from closed (its growth and Aa's place); while it is
+    /// closed a resize step keeps it here, out of view state, and opening
+    /// copies it in with the first frame of the motion.
     @State private var width: CGFloat = 0
+    @State private var measuredWidth = AtticUnobserved<CGFloat>(0)
     /// The current motion; pending neighbour changes of older ones lapse.
     @State private var motionToken = 0
     @State private var allNotesGone = false
@@ -845,12 +858,8 @@ struct NoteFormatRowSwitch<Row: View>: View {
         row
             // The room the bottom row is given, measured on the row itself.
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { new in
-                if abs(new - width) > 0.5 {
-                    #if ATTIC_LOCAL_ONLY
-                    PanelInvalidationProbe.stepWrite?("format-width")
-                    #endif
-                    width = new
-                }
+                measuredWidth.value = new
+                if phase != .closed { takeMeasuredWidth() }
             }
             .environment(\.noteFormatRowStage, NoteFormatRowStage(allNotes: channels.allNotes,
                                                                   newNoteAndStatus: channels.newNoteAndStatus,
@@ -883,12 +892,22 @@ struct NoteFormatRowSwitch<Row: View>: View {
         }
         .onAppear {
             guard state.isOpen, let model = model() else { return }
+            takeMeasuredWidth()
             shownModel = model
             source = sourceFrame
             phase = .open
             channels = .open
             statusHidden = true
         }
+    }
+
+    /// The row's measured room into view state, when it moved.
+    private func takeMeasuredWidth() {
+        guard abs(measuredWidth.value - width) > 0.5 else { return }
+        #if ATTIC_LOCAL_ONLY
+        PanelInvalidationProbe.stepWrite?("format-switch-width")
+        #endif
+        width = measuredWidth.value
     }
 
     /// Aa's frame in the row, or where it stands when it isn't measured.
@@ -903,6 +922,7 @@ struct NoteFormatRowSwitch<Row: View>: View {
         if design.reduceMotion {
             motionToken += 1
             instantly {
+                takeMeasuredWidth()
                 shownModel = model
                 source = sourceFrame
                 phase = .open
@@ -921,6 +941,7 @@ struct NoteFormatRowSwitch<Row: View>: View {
             motionToken += 1
             let mounted = surfaceMounted
             instantly {
+                takeMeasuredWidth()
                 shownModel = model
                 source = sourceFrame
                 channels.leading = 0

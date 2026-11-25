@@ -594,10 +594,12 @@ private struct PanelAgentSlot: View {
     let reach: CGFloat?
 
     @Environment(\.atticDesign) private var design
-    @State private var minX = CGFloat.infinity
+    /// Its laid-out place, which moves on every step of a resize: kept out
+    /// of view state; only whether it steps aside is drawn.
+    @State private var minX = AtticUnobserved(CGFloat.infinity)
+    @State private var aside = false
 
     var body: some View {
-        let aside = PanelSharedBottomBar.agentStepsAside(reach: reach, agentMinX: minX)
         let away = taken || aside
         PanelControlFold(folded: away, animation: { covered ? nil : PanelSharedBottomBar.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
             AgentChatBarButton(bar: agentChat.bar, action: agentChat.toggle)
@@ -608,14 +610,21 @@ private struct PanelAgentSlot: View {
         .accessibilityHidden(!shown || away)
         // Its laid-out place (the slide above is drawn, not laid out).
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(PanelSharedBottomBar.rowSpace)).minX } action: {
-            #if ATTIC_LOCAL_ONLY
-            PanelInvalidationProbe.stepWrite?("agent-minX")
-            #endif
-            minX = $0
+            minX.value = $0
+            settleAside()
         }
+        .onChange(of: reach) { settleAside() }
         #if DEBUG
         .onChange(of: aside, initial: true) { _, now in PanelAgentSlotProbe.stepsAside = now }
         #endif
+    }
+
+    private func settleAside() {
+        guard let now = PanelSharedBottomBar.agentAsideChange(current: aside, reach: reach, agentMinX: minX.value) else { return }
+        #if ATTIC_LOCAL_ONLY
+        PanelInvalidationProbe.stepWrite?("agent-aside")
+        #endif
+        aside = now
     }
 
 }
