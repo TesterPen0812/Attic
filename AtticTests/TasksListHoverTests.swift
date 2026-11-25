@@ -101,6 +101,32 @@ final class TasksListHoverTests: XCTestCase {
     /// The tint hold (owner, 17 Nov): while the list scrolls live, the row
     /// hovered when it began keeps its hover and no other row takes it;
     /// when the scroll ends, the row under the pointer is hovered at once.
+    /// Review P1-1: a tab change slides the new page in with no frame
+    /// report (rows are measured in the moving page). The look the tab
+    /// change queues runs while the page is still a page width off; the
+    /// row under a still pointer is lit once the slide comes to rest.
+    func testAStillPointerLandsOnTheRowUnderItWhenATabSlideSettles() {
+        let width: CGFloat = 300
+        let motion = TasksPagerMotion()
+        let list = list(point: { CGPoint(x: 40, y: 60) })
+        list.pointer.pageOffset = { [motion] tab in
+            (motion.place(of: TasksTab.allCases.firstIndex(of: tab) ?? 0) - motion.position) * width
+        }
+        list.pointer.follow(motion)
+        // On Backlog, then the shortcut for Now: the slide starts.
+        motion.show(1, width: width, reduced: false, animated: false)
+        motion.show(0, width: width, reduced: false)
+        list.pointer.scheduleHoverUpdate()
+        spin(0.001)
+        XCTAssertTrue(motion.isSettling, "the slide is still moving")
+        XCTAssertEqual(hovered(list), [false, false, false], "mid-slide, Now's rows are a page off")
+        let end = Date().addingTimeInterval(3)
+        while motion.isSettling, Date() < end { spin(0.02) }
+        XCTAssertFalse(motion.isSettling, "the slide ends")
+        spin()
+        XCTAssertEqual(hovered(list), [true, false, false], "the row under the still pointer, once the slide rests")
+    }
+
     func testTheTintHoldKeepsTheHoveredRowUntilTheScrollEnds() {
         let list = list(point: { CGPoint(x: 40, y: 60) })
         list.pointer.updateHover()

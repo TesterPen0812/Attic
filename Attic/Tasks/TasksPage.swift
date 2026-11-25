@@ -384,6 +384,7 @@ struct TasksPage: View {
         model.showPagerPage(animated: false)
         // The settle steps on this page's display (round 11).
         swipe.motion.clockView = { [pointer] in pointer.view }
+        pointer.follow(swipe.motion)
         // O17-13: a file dropped on a row settles into the row, on its
         // last line at the text column (where its tiles are).
         pointer.dropLandingSlot = { [weak model, weak pointer, $fileDropRow] point in
@@ -5423,6 +5424,15 @@ final class TasksPointer {
         guard !hoverUpdateQueued else { return }
         hoverUpdateQueued = true
         RunLoop.main.perform(inModes: [.common]) { [weak self] in self?.updateHover() }
+    }
+
+    /// Looks again each time the pager comes to rest: its travel moves the
+    /// rows without a frame report (they are measured in the moving page),
+    /// so the look a tab change queues runs while the new page is still
+    /// about a page width off, and a still pointer would get no hover
+    /// until it moved.
+    func follow(_ motion: TasksPagerMotion) {
+        MainActor.assumeIsolated { motion.onSettled = { [weak self] in self?.scheduleHoverUpdate() } }
     }
 
     /// Whether the pointer is over the page's view now, without an event
