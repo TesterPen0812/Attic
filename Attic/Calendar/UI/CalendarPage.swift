@@ -289,7 +289,10 @@ struct CalendarPage: View {
             }
         }
         .animation(CalendarDesign.searchAnimation(opening: searchOpen, reduceMotion: design.reduceMotion), value: searchOpen)
+        .onChange(of: model.snapshot.selected) { _, _ in rzCal() }
+        .onChange(of: taskFocus) { _, _ in rzCal() }
         .onChange(of: searchOpen) { _, open in
+            rzCal()
             withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
                 scrollPosition.scrollTo(y: open ? CalendarMonthMath.weekViewOffset(weekCount: gridWeekCount) : 0)
             }
@@ -379,6 +382,11 @@ struct CalendarPage: View {
                                       pageIsVisible: isReallyVisible) else { return }
         board.consumeDay(request.id)
         model.select(request.day)
+    }
+
+    private func rzCal() {
+        let s = model.snapshot
+        print(String(format: "RZCAL %.4f ", CACurrentMediaTime()) + "day=\(s.selected) today=\(s.selected == s.today ? 1 : 0) search=\(searchOpen ? 1 : 0) focus=\(taskFocus == nil ? 0 : 1)")
     }
 
     private func beginSearch() {
