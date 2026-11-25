@@ -165,6 +165,7 @@ struct AtticTokenField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> AtticTokenFieldView {
         let view = AtticTokenFieldView()
+        PanelPageKeyboard.tag(view, context.environment)
         view.textView.delegate = context.coordinator
         view.textView.owner = context.coordinator
         context.coordinator.view = view
@@ -230,7 +231,10 @@ struct AtticTokenField: NSViewRepresentable {
             // A field of a page that is not drawn (kept built, hidden) never
             // takes the keyboard (round 12).
             if wanted, !hasFocus, enabled, !view.isHiddenOrHasHiddenAncestor {
-                window.makeFirstResponder(view.textView)
+                // The panel refuses a field of a page that is not shown
+                // (`PanelPageKeyboard`): the binding then reads what is
+                // true, so the page does not read its field as focused.
+                if !window.makeFirstResponder(view.textView) { focusBinding.wrappedValue = false }
             } else if !wanted, hasFocus {
                 window.makeFirstResponder(nil)
             }
@@ -759,7 +763,9 @@ final class AtticTokenTextView: NSTextView {
     /// Set while the owner keeps the field built but out of reach.
     var refusesKeyboard = false
     override var acceptsFirstResponder: Bool { !refusesKeyboard && super.acceptsFirstResponder }
-    override var canBecomeKeyView: Bool { !refusesKeyboard && super.canBecomeKeyView }
+    override var canBecomeKeyView: Bool {
+        !refusesKeyboard && super.canBecomeKeyView && PanelPageKeyboard.mayTakeKeyboard(self)
+    }
     weak var owner: AtticTokenField.Coordinator?
     /// No undo manager at all (round 4): the text view can register
     /// nothing anywhere (not the window's, which outlives it); ⌘Z and the

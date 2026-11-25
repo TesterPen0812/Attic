@@ -179,13 +179,59 @@ final class AtticPanel: NSPanel {
     /// view has left the panel, when its registrations are removed.
     private var undoParticipants: [NSTextView] = []
 
+    /// Whether this panel shows `page`, answered by its owner from the state
+    /// the shell switches on (`PanelUIState.selectedSection`). Each panel
+    /// answers for its own pages, docked or pulled out, so a page is shown
+    /// if it is shown somewhere: in the panel that holds it.
+    var showsPageQuery: ((PanelPage) -> Bool)?
+
+    func showsPage(_ page: PanelPage) -> Bool { showsPageQuery?(page) ?? true }
+
+    /// A view under a page that is not shown, or under a kept host out of
+    /// use, never takes the keyboard (`PanelPageKeyboard`): the request is
+    /// refused and the keyboard stays where it was.
     override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        if let view = responder as? NSView, view.window === self, !PanelPageKeyboard.mayTakeKeyboard(view) {
+            return false
+        }
         let changed = super.makeFirstResponder(responder)
+        #if DEBUG
+        if changed, let view = firstResponder as? NSView { PanelPageKeyboard.assertKnown(view, in: self) }
+        #endif
         if let textView = firstResponder as? NSTextView, !undoParticipants.contains(where: { $0 === textView }) {
             undoParticipants.append(textView)
         }
         removeDepartedUndoParticipants()
         return changed
+    }
+
+    /// Tab and Shift-Tab: when AppKit's next key view is one the panel would
+    /// refuse (a SwiftUI field inside a kept host out of use, which cannot
+    /// answer `canBecomeKeyView` itself), selection moves on to the next one
+    /// that may take the keyboard, so the loop keeps cycling on the page in
+    /// use. Otherwise AppKit's own selection runs unchanged.
+    override func selectKeyView(following view: NSView) {
+        guard let next = view.nextValidKeyView, !PanelPageKeyboard.mayTakeKeyboard(next) else {
+            return super.selectKeyView(following: view)
+        }
+        if let allowed = allowedKeyView(after: next, forward: true, stop: view) { makeFirstResponder(allowed) }
+    }
+
+    override func selectKeyView(preceding view: NSView) {
+        guard let previous = view.previousValidKeyView, !PanelPageKeyboard.mayTakeKeyboard(previous) else {
+            return super.selectKeyView(preceding: view)
+        }
+        if let allowed = allowedKeyView(after: previous, forward: false, stop: view) { makeFirstResponder(allowed) }
+    }
+
+    private func allowedKeyView(after start: NSView, forward: Bool, stop: NSView) -> NSView? {
+        var seen: Set<ObjectIdentifier> = [ObjectIdentifier(start)]
+        var candidate = forward ? start.nextValidKeyView : start.previousValidKeyView
+        while let view = candidate, seen.insert(ObjectIdentifier(view)).inserted {
+            if view === stop || PanelPageKeyboard.mayTakeKeyboard(view) { return view }
+            candidate = forward ? view.nextValidKeyView : view.previousValidKeyView
+        }
+        return nil
     }
 
     /// Removes the undo registrations of text views that are no longer in
