@@ -1475,17 +1475,14 @@ extension HiddenPagesCountersTests {
         return try XCTUnwrap(found.first, "harness: the Tasks Now list is long enough to scroll")
     }
 
-    /// One scroll step of the Tasks list, then a few run-loop turns with a
-    /// layout and display pass each (the window's own cycle).
+    /// One scroll step of the Tasks list, then the file's pump: a couple of
+    /// run-loop turns, each with a layout and display pass (the window's own
+    /// cycle).
     private func scrollStep(_ list: NSScrollView, _ rig: Rig, step: Int) {
         let y = CGFloat(step) * 14
         list.contentView.scroll(to: CGPoint(x: 0, y: y))
         list.reflectScrolledClipView(list.contentView)
-        for _ in 0..<3 {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.008))
-            frame(rig)
-            CATransaction.flush()
-        }
+        pump(rig.content, rig.panel, seconds: 0.024)
         XCTAssertEqual(list.contentView.bounds.origin.y, y, accuracy: 0.6, "harness: step \(step) moved the list")
     }
 
