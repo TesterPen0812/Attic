@@ -446,6 +446,9 @@
       "runloop": 7,
       "skip": 1
     },
+    "AtticTests/TasksListHoverTests.swift": {
+      "runloop": 1
+    },
     "AtticTests/TasksNoPaperclipTests.swift": {
       "runloop": 1
     },
