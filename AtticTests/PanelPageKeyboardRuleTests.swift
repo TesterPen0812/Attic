@@ -144,10 +144,47 @@ final class PanelPageKeyboardRuleTests: XCTestCase {
         try tab(shift: true)
         XCTAssertTrue(holds(first), "Shift-Tab did not move past the refused field (responder \(name()))")
 
+        // With the window holding the keyboard, Tab is the window's own
+        // selectNextKeyView, where AppKit picks the candidate itself (here
+        // `initialFirstResponder`, the refused field). A key event reaches
+        // it only in a key window (run hb-tab: in the invisible host the
+        // panel is not key and the key changed nothing, on either code), so
+        // the call is made here and the key goes to CI's key-window lane.
         XCTAssertTrue(panel.makeFirstResponder(nil))
-        try tab()
-        XCTAssertFalse(holds(hidden))
-        XCTAssertTrue(holds(first) || holds(second), "Tab from the window stalled on the refused field (responder \(name()))")
+        panel.selectNextKeyView(nil)
+        XCTAssertTrue(holds(second), "Tab from the window stalled on the refused field (responder \(name()))")
+        XCTAssertTrue(panel.makeFirstResponder(nil))
+        panel.selectPreviousKeyView(nil)
+        XCTAssertFalse(holds(hidden), "Shift-Tab from the window landed on the refused field")
+        XCTAssertNotEqual(name(), "AtticPanel", "Shift-Tab from the window stalled on the refused field")
+    }
+
+    /// The same, with the Tab key itself, from the window of a key panel.
+    func testATabKeyFromAKeyPanelsWindowMovesPastARefusedField() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("the window's own Tab key needs a key panel: runs on CI only")
+        }
+        let panel = panel(showing: Shown([.calendar]))
+        defer { panel.close() }
+        let content = try XCTUnwrap(panel.contentView)
+        let first = NSTextField(frame: CGRect(x: 10, y: 10, width: 200, height: 22))
+        let hidden = NSTextField(frame: CGRect(x: 10, y: 50, width: 200, height: 22))
+        [first, hidden].forEach(content.addSubview)
+        PanelPageKeyboard.tag(first, .page(.calendar))
+        PanelPageKeyboard.tag(hidden, .page(.notes))
+        first.nextKeyView = hidden
+        hidden.nextKeyView = first
+        content.nextKeyView = hidden
+        panel.initialFirstResponder = hidden
+        panel.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(panel.makeFirstResponder(nil))
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                                   timestamp: ProcessInfo.processInfo.systemUptime,
+                                                   windowNumber: panel.windowNumber, context: nil, characters: "\t",
+                                                   charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48))
+        panel.sendEvent(event)
+        XCTAssertTrue((panel.firstResponder as? NSView)?.isDescendant(of: first) == true,
+                      "the Tab key from the window stalled on the refused field")
     }
 
     /// Views outside an AtticPanel are not the panel's to refuse.
