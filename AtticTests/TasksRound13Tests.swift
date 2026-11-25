@@ -1058,6 +1058,41 @@ extension TasksRound13Tests {
         XCTAssertNotNil(hosted.store.task(withID: ids[2]), "the survivor is kept")
     }
 
+    /// The cursor around a title edit: during it, when it ends by Escape or
+    /// by Return, and what the next two ↓ do.
+    func testTheCursorAroundATitleEditIsPinned() throws {
+        try requireKeyWindowTests()
+        for ending in ["esc", "return"] {
+            let hosted = try longHosted()
+            defer { hosted.close() }
+            let ids = hosted.model.rows(for: .now).map(\.id)
+            func at(_ id: UUID?) -> String { id.map { "\(ids.firstIndex(of: $0) ?? -1)" } ?? "nil" }
+            func line(_ step: String) {
+                print("LIST_FOCUS edit \(ending) \(step) cursor=\(at(hosted.model.keyboardFocus?.id)) "
+                      + "selection=\(hosted.model.selection.map { ids.firstIndex(of: $0) ?? -1 }.sorted()) "
+                      + "editing=\(at(hosted.model.editingTitleID)) "
+                      + "responder=\(hosted.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")")
+            }
+            try clickRow(hosted, ids[2])
+            line("clicked")
+            hosted.press("\r", keyCode: 36)
+            hosted.spin(0.4)
+            XCTAssertEqual(hosted.model.editingTitleID, ids[2], "harness: Return edits row 2's title")
+            line("editing")
+            XCTAssertNil(hosted.model.keyboardFocus, "during a title edit no row has the cursor (the trunk keeps it on the edited row; recorded difference, the lead 24 Nov 08:00, 4)")
+            if ending == "esc" { hosted.press("\u{1B}", keyCode: 53) } else { hosted.press("\r", keyCode: 36) }
+            hosted.spin(0.5)
+            XCTAssertNil(hosted.model.editingTitleID, "harness: the edit ended (\(ending))")
+            line("ended")
+            hosted.press("\u{F701}", keyCode: 125)
+            hosted.spin(0.3)
+            line("down1")
+            hosted.press("\u{F701}", keyCode: 125)
+            hosted.spin(0.3)
+            line("down2")
+        }
+    }
+
     /// Dispatch isolation: while a row's title is edited, Space and Delete
     /// are the editor's, never the row's (the list answers row keys only
     /// when its own target holds the keyboard).
