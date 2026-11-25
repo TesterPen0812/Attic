@@ -265,6 +265,110 @@ final class DrawBoardViewTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === before)
     }
 
+    /// A hidden page acts on no key (page-host runs, 25 Nov: the hidden
+    /// board stays first responder after Tab on Calendar, Esc after Search
+    /// or closing quick add). The shell hides Draw by `setShown(false)`
+    /// (`DrawPageView.updateShown`) and keeps the board in the window, so
+    /// the board here stays first responder in a window, as on screen.
+    func testHiddenBoardAsFirstResponderChangesNoDrawingAndNoHistory() throws {
+        let id = try XCTUnwrap(model.canvasID)
+        let kept = DrawObject(frame: DrawFrame(x: 50, y: 70), content: .shape(.rectangle))
+        let other = DrawObject(frame: DrawFrame(x: 150, y: 170), content: .shape(.ellipse))
+        XCTAssertTrue(store.perform(.put([kept]), on: id).isSaved)
+        model.open(id)
+        model.performAcknowledged(.put([other]))
+        // One step to undo and one to redo, so both stacks are under test.
+        model.performAcknowledged(.put([DrawObject(frame: DrawFrame(x: 20, y: 300), content: .shape(.rectangle))]))
+        model.undoAcknowledged()
+        /// The board's next responder: records the Edit actions the hidden
+        /// board passes on (the shown page's own handler, in the app).
+        final class Next: NSView {
+            var received: [Selector] = []
+            @objc func undo(_ sender: Any?) { received.append(#selector(undo(_:))) }
+            @objc func redo(_ sender: Any?) { received.append(#selector(redo(_:))) }
+            @objc override func selectAll(_ sender: Any?) { received.append(#selector(selectAll(_:))) }
+            @objc func copy(_ sender: Any?) { received.append(#selector(copy(_:))) }
+            @objc func cut(_ sender: Any?) { received.append(#selector(cut(_:))) }
+            @objc func paste(_ sender: Any?) { received.append(#selector(paste(_:))) }
+            @objc func delete(_ sender: Any?) { received.append(#selector(delete(_:))) }
+        }
+        let next = Next(frame: board.bounds)
+        next.addSubview(board)
+        let window = NSWindow(contentRect: board.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = next
+        defer { window.close() }
+        XCTAssertTrue(window.makeFirstResponder(board))
+        model.select([kept.id])
+        board.copy(nil)
+        let clipboard = model.pasteboard.changeCount
+
+        model.setShown(false)
+        XCTAssertTrue(window.firstResponder === board, "the premise: the hidden board still holds the keyboard")
+        let objects = try store.open(id).objects
+        let undoStep = store.undoStepID(on: id)
+        let redoStep = store.redoStepID(on: id)
+        XCTAssertNotNil(undoStep, "the premise: a step to undo")
+        XCTAssertNotNil(redoStep, "the premise: a step to redo")
+        let selection = model.selection
+
+        func command(_ characters: String, code: UInt16, shift: Bool = false) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? [.command, .shift] : [.command],
+                             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                             context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                             isARepeat: false, keyCode: code)!
+        }
+        func assertUnchanged(after what: String) throws {
+            XCTAssertEqual(try store.open(id).objects, objects, "\(what) changed the hidden drawing")
+            XCTAssertEqual(store.undoStepID(on: id), undoStep, "\(what) moved the hidden undo stack")
+            XCTAssertEqual(store.redoStepID(on: id), redoStep, "\(what) moved the hidden redo stack")
+            XCTAssertEqual(model.selection, selection, "\(what) changed the hidden selection")
+            XCTAssertEqual(model.pasteboard.changeCount, clipboard, "\(what) wrote the pasteboard")
+        }
+
+        board.keyDown(with: key(.keyDown, "\u{7F}", code: DrawKey.deleteCode)); try assertUnchanged(after: "Delete")
+        board.keyDown(with: key(.keyDown, "\u{F728}", code: DrawKey.forwardDeleteCode)); try assertUnchanged(after: "Forward Delete")
+        board.keyDown(with: command("x", code: 7)); try assertUnchanged(after: "⌘X")
+        board.keyDown(with: command("v", code: 9)); try assertUnchanged(after: "⌘V")
+        board.keyDown(with: command("d", code: 2)); try assertUnchanged(after: "⌘D")
+        board.keyDown(with: command("z", code: 6)); try assertUnchanged(after: "⌘Z")
+        board.keyDown(with: command("z", code: 6, shift: true)); try assertUnchanged(after: "⇧⌘Z")
+        board.keyDown(with: command("a", code: 0)); try assertUnchanged(after: "⌘A")
+        board.keyDown(with: command("c", code: 8)); try assertUnchanged(after: "⌘C")
+        board.delete(nil); try assertUnchanged(after: "Edit › Delete")
+        board.cut(nil); try assertUnchanged(after: "Edit › Cut")
+        board.paste(nil); try assertUnchanged(after: "Edit › Paste")
+        board.undo(nil); try assertUnchanged(after: "Edit › Undo")
+        board.redo(nil); try assertUnchanged(after: "Edit › Redo")
+        board.selectAll(nil); try assertUnchanged(after: "Edit › Select All")
+        board.copy(nil); try assertUnchanged(after: "Edit › Copy")
+        // The Edit menu's route: the hidden board does not answer the seven
+        // actions, so they go on to its next responder (the shown page's).
+        let actions: [Selector] = [#selector(DrawBoardView.undo(_:)), #selector(DrawBoardView.redo(_:)),
+                                   #selector(DrawBoardView.selectAll(_:)), #selector(DrawBoardView.copy(_:)),
+                                   #selector(DrawBoardView.cut(_:)), #selector(DrawBoardView.paste(_:)),
+                                   #selector(DrawBoardView.delete(_:))]
+        for action in actions {
+            XCTAssertFalse(board.responds(to: action), "hidden, the board does not answer \(action)")
+            XCTAssertTrue(board.tryToPerform(action, with: nil), "\(action) reached a responder")
+            try assertUnchanged(after: "the chain's \(action)")
+        }
+        XCTAssertEqual(next.received, actions, "each Edit action reached the next responder")
+        let tool = model.tool
+        board.keyDown(with: key(.keyDown, "p", code: 35))
+        XCTAssertEqual(model.tool, tool, "a tool letter changed the hidden board's tool")
+
+        // Shown again, the same keys act as before (Draw's own keys stay).
+        model.setShown(true)
+        XCTAssertTrue(actions.allSatisfy { board.responds(to: $0) }, "shown, the board answers the Edit actions")
+        board.keyDown(with: key(.keyDown, "\u{7F}", code: DrawKey.deleteCode))
+        XCTAssertFalse(try store.open(id).objects.contains { $0.id == kept.id && $0.deletedAt == nil },
+                       "shown, Delete deletes the selection")
+        board.undo(nil)
+        XCTAssertTrue(try store.open(id).objects.contains { $0.id == kept.id && $0.deletedAt == nil },
+                      "shown, Edit › Undo brings it back")
+    }
+
     /// Board points are y-down; AppKit's view points are y-up.
     private func mouse(_ type: NSEvent.EventType, _ point: CGPoint, clicks: Int = 1,
                        flags: NSEvent.ModifierFlags = []) -> NSEvent {
