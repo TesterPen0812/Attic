@@ -13,6 +13,8 @@ import SwiftUI
 /// takes the live size, gets no new root view while it is not shown, and
 /// takes no clicks and answers no accessibility queries while it is not.
 final class KeptContentHostingView: NSHostingView<AnyView> {
+    /// SCRATCH: a shell page host (stamped pl/plms/pu), not a Tasks tab host (kl/klms/ku).
+    var rzPageHost = false
     /// Whether the content takes part in input and accessibility: the tab
     /// selected on the active page (host-boundary.md §4.2, HB-01). Drawn is
     /// not enough: a swipe or a slide draws a neighbour, and a shell switch
@@ -60,9 +62,18 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     private var holdsLayout = false
     private var owesLayout = false
 
+    override var needsUpdateConstraints: Bool {
+        get { super.needsUpdateConstraints }
+        set {
+            if newValue, RZS.noCons { return }
+            super.needsUpdateConstraints = newValue
+        }
+    }
+
     override var needsLayout: Bool {
         get { super.needsLayout }
         set {
+            if newValue { RZS.noteInvalidate(isDrawn ? "kept" : "kepthidden") }
             if newValue, holdsLayout {
                 owesLayout = true
                 return
@@ -236,7 +247,9 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
             owesLayout = true
             return
         }
+        let rz0 = RZS.now(); if rzPageHost { RZS.pl += 1 } else { RZS.kl += 1 }; RZS.inKept += 1
         AtticOverlayHierarchy.layoutPass { super.layout() }
+        RZS.inKept -= 1; if rzPageHost { RZS.plNs += RZS.now() - rz0 } else { RZS.klNs += RZS.now() - rz0 }
         if !isDrawn, !bounds.isEmpty { holdsLayout = true }
     }
 
@@ -378,6 +391,8 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     /// it has any. A drawn root that changes them is laid out in the pass
     /// that sets it; any other root is left to AppKit's pass (`setRoot`).
     var rows: AnyHashable?
+    /// SCRATCH: stamp this host as a shell page host.
+    var rzPage = false
     @ViewBuilder let content: () -> Content
 
     @MainActor
@@ -399,6 +414,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         let container = KeptContentContainer()
         let host = KeptContentHostingView(rootView: root(context))
         context.coordinator.reference.host = host
+        host.rzPageHost = rzPage
         host.isDrawn = drawn
         host.isInteractive = interactive
         host.autoresizingMask = [.width, .height]
@@ -417,6 +433,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     func updateNSView(_ container: KeptContentContainer, context: Context) {
         guard let host = container.host else { return }
         let coordinator = context.coordinator
+        if host.rzPageHost { RZS.pu += 1 } else { RZS.ku += 1 }
         #if DEBUG
         KeptContentHostCounts.update(drawn: drawn)
         #endif

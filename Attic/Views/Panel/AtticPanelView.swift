@@ -221,18 +221,20 @@ struct AtticPanelView: View {
                 // "Tall island": pull a page out), never here as well.
                 ForEach(PanelPage.allCases) { page in
                     if page == currentPage
-                        || (uiState.builtPages.contains(page) && !uiState.pagesElsewhere.contains(page)) {
+                        || (uiState.builtPages.contains(page) && !uiState.pagesElsewhere.contains(page) && !RZS.hides(page.rawValue)) {
                         // Every page takes the same layout: it carries
                         // no size, so a resize hands no page a new value.
                         let layout = pageLayout
                         pageHost(page, layout: layout)
                             // A hidden page keeps the size outside the drag.
                             .modifier(PanelKeptPageFrame(isCurrent: page == currentPage, settled: uiState.settledPanelSize))
+                            .onDisappear { RZS.pg -= 1 }
                             .onAppear {
+                                RZS.pg += 1
                                 PerformanceSignposts.noteInput("page-mounted \(page.rawValue)")
                             }
                             .onChange(of: page == currentPage) { _, shown in
-                                if shown { PerformanceSignposts.noteInput("page-current \(page.rawValue)") }
+                                if shown { PerformanceSignposts.noteInput("page-current \(page.rawValue)"); RZS.pageStamp(page.rawValue) }
                             }
                             .modifier(PanelSearchDismissOnEmptyClick(state: topRowState, page: page))
                             .modifier(PanelKeptPageVisibility(

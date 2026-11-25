@@ -409,7 +409,7 @@ final class AtticPanel: NSPanel {
                 tracingIdlePress = false
             }
         }
-        if event.type == .scrollWheel { lastScrollEventTime = event.timestamp }
+        if event.type == .scrollWheel { lastScrollEventTime = event.timestamp; RZS.sc += 1 }
         // One click both activates the panel and acts (owner, 2026-10-01):
         // the panel becomes key before AppKit sees the press, so the press
         // is never spent on activation, whatever view is under it (SwiftUI's
@@ -2128,13 +2128,24 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     /// The page's SwiftUI update runs in this pass (a page's controls are
     /// made and dismantled here): overlay hierarchy changes from it wait
     /// for the next turn (`AtticOverlayHierarchy`, P1-01 hypothesis).
+    override var needsLayout: Bool {
+        get { super.needsLayout }
+        set {
+            if newValue { RZS.noteInvalidate("root") }
+            if newValue, RZS.noRoot, RZS.inKept > 0 { RZS.dropped += 1; return }
+            super.needsLayout = newValue
+        }
+    }
+
     override func layout() {
         #if DEBUG
         Self.layoutPasses += 1
         #endif
+        let rz0 = RZS.now(); RZS.hl += 1; RZS.inRoot += 1
         IdleLatencyTrace.span("panel_host_layout") {
             AtticOverlayHierarchy.layoutPass { super.layout() }
         }
+        RZS.inRoot -= 1; RZS.hlNs += RZS.now() - rz0
     }
 
     /// The accessibility hit test (VoiceOver's pointer, XCUITest's hit

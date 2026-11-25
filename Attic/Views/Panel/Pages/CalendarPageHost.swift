@@ -109,9 +109,13 @@ struct PanelPageKeptHost<Content: View>: View {
     }
 
     var body: some View {
-        KeptContentHost(drawn: isCurrent || (transit.sliding && transit.departingPage == page),
-                        interactive: isCurrent, space: PanelPageLayout.coordinateSpace, claimsKeyboard: false) {
+        if RZS.noPageHost {
             content
+        } else {
+            KeptContentHost(drawn: isCurrent || (transit.sliding && transit.departingPage == page),
+                            interactive: isCurrent, space: PanelPageLayout.coordinateSpace, claimsKeyboard: false, rzPage: true) {
+                content
+            }
         }
     }
 }
