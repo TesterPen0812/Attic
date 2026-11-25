@@ -2024,23 +2024,26 @@ final class NotesFormatControlsTests: XCTestCase {
             window.isReleasedWhenClosed = false
             window.contentView = hosting
             windows.append(window)
-            func settle(to width: CGFloat) {
+            func resize(to width: CGFloat) {
                 hosting.frame.size.width = width
-                for _ in 0..<3 {
-                    hosting.layoutSubtreeIfNeeded()
-                    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-                }
+                hosting.layoutSubtreeIfNeeded()
+                spin()
+                hosting.layoutSubtreeIfNeeded()
             }
-            settle(to: 388)
-            for width in [370, 350, 330, 310, 300] as [CGFloat] { settle(to: width) }
+            resize(to: 388)
+            for width in [370, 350, 330, 310, 300] as [CGFloat] { resize(to: width) }
             var drawn: [CGFloat] = []
             AtticFormatRowGrowthProbe.rowWidth = { drawn.append($0) }
             defer { AtticFormatRowGrowthProbe.rowWidth = nil }
             state.open(keyboard: false)
             hosting.layoutSubtreeIfNeeded()
             let first = drawn
-            RunLoop.main.run(until: Date().addingTimeInterval(0.6))
-            hosting.layoutSubtreeIfNeeded()
+            // The opening's next frames (a second at most).
+            settle { hosting.layoutSubtreeIfNeeded(); return drawn.count >= 2 }
+            for _ in 0..<5 {
+                spin()
+                hosting.layoutSubtreeIfNeeded()
+            }
             print("FORMAT_ROW_OPEN_AFTER_RESIZE reduceMotion=\(reduceMotion) first=\(first) all=\(Set(drawn).sorted())")
             XCTAssertFalse(drawn.isEmpty, "harness: the row drew as it opened (reduceMotion \(reduceMotion))")
             for width in drawn {
