@@ -1124,3 +1124,215 @@ extension TasksRound13Tests {
         XCTAssertEqual(hosted.model.editingTitleID, ids[1], "the editor stays open")
     }
 }
+
+// MARK: - The list's own hold and the press path (PR 71 review round, 25 Nov): pins from the trunk's run lines
+
+extension TasksRound13Tests {
+    @MainActor private struct RC {
+        let hosted: Hosted
+        let rows: [UUID]
+        let parent: UUID
+        let children: [UUID]
+
+        func name(_ id: UUID?) -> String {
+            guard let id else { return "nil" }
+            if let index = rows.firstIndex(of: id) { return "row\(index)" }
+            if let index = children.firstIndex(of: id) { return "sub\(index)" }
+            return "other"
+        }
+        func states() -> [UUID: String] {
+            var all: [UUID: String] = [:]
+            for id in rows + children { all[id] = hosted.store.task(withID: id).map { "\($0.status)" } ?? "gone" }
+            return all
+        }
+        func line(_ label: String) {
+            let model = hosted.model
+            print("RC \(label) cursor=\(name(model.keyboardFocus?.id)) selection=\(model.selection.map { name($0) }.sorted()) "
+                  + "subtask=\(name(model.focusedSubtaskID)) expanded=\(model.expanded.contains(parent)) newSubtask=\(name(model.newSubtaskParentID)) "
+                  + "responder=\(hosted.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil") parent=\(name(parent))")
+        }
+        /// Presses `key`, waits, prints what changed.
+        func act(_ label: String, _ key: String) {
+            let before = states()
+            if key == "space" { hosted.press(" ", keyCode: 49) } else { hosted.press("\u{7F}", keyCode: 51) }
+            var waited = 0.0
+            while waited < 2, states() == before { hosted.spin(0.1); waited += 0.1 }
+            hosted.spin(0.6)
+            let after = states()
+            let changed = (rows + children).compactMap { id in after[id] != before[id] ? "\(name(id)):\(before[id] ?? "?")->\(after[id] ?? "?")" : nil }
+            print("RC \(label) \(key) changed=\(changed.isEmpty ? ["none"] : changed)")
+            line("\(label) after-\(key)")
+        }
+    }
+
+    private func rcHosted() throws -> RC {
+        var services = TasksPageServices()
+        services.acknowledgementDelay = .milliseconds(50)
+        services.doneHold = .milliseconds(300)
+        let hosted = try Hosted(height: 520, services: services)
+        let parent = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.subtasks != nil }).id
+        hosted.model.setExpanded(parent, true)
+        hosted.spin(0.5)
+        let rows = hosted.model.rows(for: .now).map(\.id)
+        let children = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.id == parent }).subtasks.map(\.id)
+        return RC(hosted: hosted, rows: rows, parent: parent, children: children)
+    }
+
+    /// A single click on a subtask line of the open quick look (as
+    /// RoundO1Tests): the line takes the keyboard.
+    private func rcClickSubtaskLine(_ rc: RC) throws {
+        let hosted = rc.hosted
+        let row = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: rc.parent)])
+        var y = row.minY + AtticLayout.rowPitch + 2
+        while y < row.maxY, hosted.model.focusedSubtaskID == nil {
+            hosted.click(y: y, x: 150)
+            hosted.spin(0.3)
+            y += 4
+        }
+        XCTAssertNotNil(hosted.model.focusedSubtaskID, "harness: a click on a subtask line gave it the keyboard")
+    }
+
+
+    /// The date chips' centres (top-origin window points), read as
+    /// TasksTabHostTests' openTheDatePicker does, from every tab host and the content.
+    private func rcDateChips(_ hosted: Hosted) -> [CGPoint] {
+        var chips: [CGPoint] = []
+        func walk(_ element: AnyObject, depth: Int) {
+            let label = element.accessibilityLabel?() ?? ""
+            if label.hasPrefix("Due "), let rect: CGRect = element.accessibilityFrame?() {
+                let point = hosted.window.convertPoint(fromScreen: CGPoint(x: rect.midX, y: rect.midY))
+                let top = CGPoint(x: point.x.rounded(), y: (hosted.height - point.y).rounded())
+                if !chips.contains(top) { chips.append(top) }
+            }
+            guard depth > 0, let children = element.accessibilityChildren?() else { return }
+            for child in children { walk(child as AnyObject, depth: depth - 1) }
+        }
+        func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
+        guard let content = hosted.window.contentView else { return [] }
+        for root in [content] + all(content).filter({ $0 is KeptContentHostingView }) { walk(root, depth: 40) }
+        return chips
+    }
+
+    // MARK: A subtask line or the new-subtask field holds the keyboard inside the list
+
+    /// ↓ from a subtask line moves the keys with the cursor: the next ↓
+    /// moves on, and Space completes the row the cursor is on.
+    func testDownFromASubtaskLineTakesTheKeysToTheRow() throws {
+        try requireKeyWindowTests()
+        let rc = try rcHosted(); defer { rc.hosted.close() }
+        let model = rc.hosted.model
+        let at = try XCTUnwrap(rc.rows.firstIndex(of: rc.parent))
+        try rcClickSubtaskLine(rc)
+        let line = try XCTUnwrap(model.focusedSubtaskID)
+        XCTAssertNil(model.keyboardFocus, "a press on a subtask line leaves no cursor on its row (the list did not hold the keyboard)")
+        for _ in 1...2 { rc.hosted.press("\u{F701}", keyCode: 125); rc.hosted.spin(0.3) }
+        XCTAssertNil(model.focusedSubtaskID, "the subtask line gave up the keys")
+        XCTAssertEqual(model.keyboardFocus?.id, rc.rows[at + 2], "two ↓ moved the cursor two rows on")
+        rc.hosted.press(" ", keyCode: 49)
+        rc.hosted.spin(1.2)
+        XCTAssertEqual(rc.hosted.store.task(withID: rc.rows[at + 2])?.status, .done, "Space completed the row with the cursor")
+        XCTAssertEqual(rc.hosted.store.task(withID: line)?.status, .todo, "and left the subtask alone")
+    }
+
+    /// Tab on from the last subtask line reaches the next row, then the one
+    /// after; Delete deletes the row the cursor is on.
+    func testTabOnFromTheSubtaskLinesTakesTheKeysToTheRow() throws {
+        try requireKeyWindowTests()
+        let rc = try rcHosted(); defer { rc.hosted.close() }
+        let model = rc.hosted.model
+        let at = try XCTUnwrap(rc.rows.firstIndex(of: rc.parent))
+        try rcClickSubtaskLine(rc)
+        var onRow = 0
+        for _ in 1...(rc.children.count + 4) where onRow < 2 {
+            rc.hosted.press("\t", keyCode: 48); rc.hosted.spin(0.4)
+            if model.focusedSubtaskID == nil, model.keyboardFocus != nil { onRow += 1 }
+        }
+        XCTAssertNil(model.focusedSubtaskID, "the subtask lines gave up the keys")
+        XCTAssertEqual(model.keyboardFocus?.id, rc.rows[at + 2], "Tab went on to the next row, then the one after")
+        rc.hosted.press("\u{7F}", keyCode: 51)
+        rc.hosted.spin(1.2)
+        XCTAssertNil(rc.hosted.store.task(withID: rc.rows[at + 2]).flatMap { $0.deletedAt == nil ? $0 : nil }, "Delete deleted the row with the cursor")
+        for child in rc.children {
+            XCTAssertNotNil(rc.hosted.store.task(withID: child).flatMap { $0.deletedAt == nil ? $0 : nil }, "and left the subtasks alone")
+        }
+    }
+
+    /// Esc in the new-subtask field hands the keys back to its row.
+    func testEscInTheNewSubtaskFieldGivesTheKeysBackToItsRow() throws {
+        try requireKeyWindowTests()
+        let rc = try rcHosted(); defer { rc.hosted.close() }
+        let model = rc.hosted.model
+        model.selectOnly(rc.parent)
+        model.beginAddingSubtask(to: rc.parent)
+        rc.hosted.spin(0.6)
+        XCTAssertEqual(model.newSubtaskParentID, rc.parent, "harness: the new-subtask field is open")
+        rc.hosted.press("\u{1B}", keyCode: 53); rc.hosted.spin(0.5)
+        XCTAssertNil(model.newSubtaskParentID, "Esc closed the field")
+        XCTAssertEqual(model.keyboardFocus?.id, rc.parent, "the cursor is on the field's row")
+        rc.hosted.press(" ", keyCode: 49)
+        rc.hosted.spin(1.2)
+        XCTAssertEqual(rc.hosted.store.task(withID: rc.parent)?.status, .done, "Space completed that row")
+    }
+
+    // MARK: A press moves the cursor only where it reaches the row
+
+    /// A press on a choice of a row's Date list, where the list hangs over
+    /// another row, puts no cursor on the row beneath (the trunk, t10:
+    /// `F2a after-press cursor=nil selection=[]`).
+    func testAPressInARowsDateListPutsNoCursorOnTheRowBeneath() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let rows = hosted.model.rows(for: .now).map(\.id)
+        func frame(_ id: UUID) -> CGRect? { hosted.pointer.frames[TasksRowID(tab: .now, id: id)] }
+        let chip = try XCTUnwrap(rcDateChips(hosted).filter { point in rows.contains { frame($0)?.contains(point) == true } }.min { $0.y < $1.y },
+                                 "harness: a row's date chip")
+        let a = try XCTUnwrap(rows.first { frame($0)?.contains(chip) == true })
+        hosted.click(y: chip.y, x: chip.x)
+        var waited = 0.0
+        while waited < 2, AtticDropdownPresenter.openCount == 0 { hosted.spin(0.1); waited += 0.1 }
+        hosted.spin(0.8)
+        XCTAssertEqual(AtticDropdownPresenter.openCount, 1, "harness: the Date list is open")
+        func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let lists = all(content.superview ?? content).filter { $0 is AtticOverlayHostingView && !$0.isHidden && $0.window != nil }.map { view -> CGRect in
+            let inWindow = view.convert(view.bounds, to: nil)
+            return CGRect(x: inWindow.minX, y: hosted.height - inWindow.maxY, width: inWindow.width, height: inWindow.height)
+        }
+        var pressed: (row: UUID, point: CGPoint, area: CGFloat)?
+        for list in lists {
+            for id in rows where id != a {
+                guard let both = frame(id)?.intersection(list), !both.isNull, both.width > 20, both.height > 12,
+                      both.width * both.height > (pressed?.area ?? 0) else { continue }
+                pressed = (id, CGPoint(x: list.midX, y: both.midY), both.width * both.height)
+            }
+        }
+        let press = try XCTUnwrap(pressed, "harness: the Date list lies over another row")
+        let due = hosted.model.dueDay(of: a)
+        hosted.click(y: press.point.y, x: press.point.x)
+        hosted.spin(0.8)
+        XCTAssertNotEqual(hosted.model.dueDay(of: a), due, "harness: the press picked a date in the list")
+        XCTAssertNil(hosted.model.keyboardFocus, "no cursor on the row under the list")
+        XCTAssertEqual(hosted.model.selection, [], "and nothing selected")
+    }
+
+    /// A press on the blank part of an open quick look keeps its row: the
+    /// cursor stays and Space completes the row (the trunk, t10: `P34-left
+    /// after-press cursor=row0`, `space changed=["row0:inProgress->done", …]`).
+    func testAPressOnTheBlankPartOfAnOpenQuickLookKeepsItsRow() throws {
+        try requireKeyWindowTests()
+        let rc = try rcHosted(); defer { rc.hosted.close() }
+        let hosted = rc.hosted
+        let row = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: rc.parent)])
+        hosted.click(y: row.minY + AtticLayout.rowPitch / 2, x: 200)
+        hosted.spin(0.4)
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, rc.parent, "harness: a click on the row put the cursor on it")
+        hosted.click(y: (row.minY + AtticLayout.rowPitch + row.maxY) / 2, x: row.minX + 6)
+        hosted.spin(0.5)
+        XCTAssertNil(hosted.model.focusedSubtaskID, "harness: the press landed on no subtask line")
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, rc.parent, "the cursor stays on the row")
+        hosted.press(" ", keyCode: 49)
+        hosted.spin(1.2)
+        XCTAssertEqual(hosted.store.task(withID: rc.parent)?.status, .done, "Space completed the row")
+    }
+}
