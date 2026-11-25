@@ -2109,7 +2109,17 @@ struct TasksPage: View {
                     onAddSubtask: { model.beginAddingSubtask(to: id) },
                     commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
                     onFocusChange: { subtaskID, focused in
-                        if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
+                        if focused {
+                            model.focusedSubtaskID = subtaskID
+                            // One holder: a line that takes the keyboard takes it from its
+                            // row, as it took the row's focus. When the list target held it,
+                            // its letting go clears the cursor too; when a press claimed the
+                            // list in the same turn, the target never read true and nothing
+                            // else would.
+                            if model.keyboardFocus != nil { cursorMoved(nil, byMouse: true) }
+                        } else if model.focusedSubtaskID == subtaskID {
+                            model.focusedSubtaskID = nil
+                        }
                     },
                     renaming: (active ? subtasks.renamingID : nil).map { renaming in
                         (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
@@ -3041,16 +3051,19 @@ struct TasksPage: View {
         // subtask count, its date): the cursor goes to that row, and the
         // press selects nothing; a tap on the row itself then selects, as
         // before. A row that took focus took the keyboard from any press
-        // inside it; the list keeps that. No focus state is written: the
-        // press itself gives the list target the keyboard.
+        // inside it; the list keeps that: the press claims the list target
+        // (nothing under the press is focusable, so the press alone gives
+        // the target nothing).
         // A press in the quick look open under a row is not in the row: the
         // cursor leaves, as a row's focus left when the press landed there.
         if let press = pointer.pressedRow(event, tab: model.tab, top: viewportTop, bottomInset: bandTop,
                                           ownHeight: { id in rowOwnHeight(id, in: model.tab) }) {
             if !press.inOwnPart {
                 if focusedRow != nil { cursorMoved(nil, byMouse: true) }
-            } else if press.id != model.editingTitleID, press.id != focusedID {
-                cursorMoved(AtticRowFocusID(page: model.tab.rawValue, id: press.id), byMouse: true)
+            } else if press.id != model.editingTitleID {
+                let row = AtticRowFocusID(page: model.tab.rawValue, id: press.id)
+                if press.id != focusedID { cursorMoved(row, byMouse: true) }
+                rowFocus.setValue(row)
             }
         }
         // Only the rows' visible part: between the tabs' band and the
@@ -4063,9 +4076,10 @@ final class TasksRowFocusLink {
     }
 
     /// The one place the page writes a list target. A row of the tab in use
-    /// gives that tab's list the keyboard, unless it holds it already (so a
-    /// move from row to row writes nothing); nil takes it from the tab in
-    /// use. A row of another tab is refused. A nil is not written while a
+    /// gives that tab's list the keyboard, unless the list itself holds it
+    /// already (so a move from row to row writes nothing; a view inside the
+    /// list that holds it, a subtask line or a field, gives it up); nil
+    /// takes it from the tab in use. A row of another tab is refused. A nil is not written while a
     /// view outside that tab's host holds the keyboard (HB-09,
     /// `KeptContentHostingView.mayLetGo`): the list lost it already, and
     /// its focus state goes false by itself.
@@ -4108,12 +4122,21 @@ final class TasksRowFocusLink {
     }
 }
 
-/// Owns one tab's list target: a `FocusState<Bool>` on the tab's content,
-/// inside the tab's host. SwiftUI redraws a focus state's owner when the
-/// focus system's views change, so the owner is this small view: the
-/// content is redrawn only when it was built again or the target gained or
-/// lost the keyboard. A change the link says stands goes to the page's
-/// handler, held here and not in the link (HB-10).
+/// Owns one tab's list target: a `FocusState<Bool>` on a clear view behind
+/// the tab's content, inside the tab's host. The target is not the
+/// content's container: a focus state on a container reads true while any
+/// focusable view inside it holds the keyboard (a subtask line, the
+/// new-subtask field), so a claim for the list wrote nothing and the keys
+/// stayed where they were (PR 71 review F1; tk13-diag.log: `setValue
+/// want=true binding-reads=true -> SKIP`). Behind the content it reads true
+/// only while the list itself holds the keyboard, and a claim takes the
+/// keyboard from a view inside the list as a row's focus did. Its keys
+/// still reach the tab's handler, which sits above both.
+/// SwiftUI redraws a focus state's owner when the focus system's views
+/// change, so the owner is this small view: the content is redrawn only
+/// when it was built again or the target gained or lost the keyboard. A
+/// change the link says stands goes to the page's handler, held here and
+/// not in the link (HB-10).
 struct TasksRowFocusOwner<Content: View>: View {
     @FocusState private var listFocused: Bool
     @Environment(\.keptHost) private var host
@@ -4129,9 +4152,13 @@ struct TasksRowFocusOwner<Content: View>: View {
 
     private var onContent: some View {
         content(listFocused)
-            .focusable()
-            .focusEffectDisabled()
-            .focused($listFocused)
+            .background {
+                Color.clear
+                    .focusable()
+                    .focusEffectDisabled()
+                    .focused($listFocused)
+                    .accessibilityHidden(true)
+            }
             .onChange(of: listFocused) { _, holds in
                 if link.reports(holds, from: tab) { changed(holds) }
             }
