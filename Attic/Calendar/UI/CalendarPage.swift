@@ -291,6 +291,7 @@ struct CalendarPage: View {
         .animation(CalendarDesign.searchAnimation(opening: searchOpen, reduceMotion: design.reduceMotion), value: searchOpen)
         .onChange(of: model.snapshot.selected) { _, _ in rzCal() }
         .onChange(of: taskFocus) { _, _ in rzCal() }
+        .onChange(of: model.searchText) { _, _ in rzCal() }
         .onChange(of: searchOpen) { _, open in
             rzCal()
             withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
@@ -386,7 +387,7 @@ struct CalendarPage: View {
 
     private func rzCal() {
         let s = model.snapshot
-        print(String(format: "RZCAL %.4f ", CACurrentMediaTime()) + "day=\(s.selected) today=\(s.selected == s.today ? 1 : 0) search=\(searchOpen ? 1 : 0) focus=\(taskFocus == nil ? 0 : 1)")
+        print(String(format: "RZCAL %.4f ", CACurrentMediaTime()) + "day=\(s.selected) today=\(s.selected == s.today ? 1 : 0) search=\(searchOpen ? 1 : 0) q=\(model.searchText.count) focus=\(taskFocus == nil ? 0 : 1)")
     }
 
     private func beginSearch() {

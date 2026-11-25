@@ -10,7 +10,24 @@ enum RZS {
     static func hides(_ page: String) -> Bool { k.contains("nohidden") || k.contains("noh" + (page == "calendar" ? "cal" : page)) }
     static let noPageHost = k.contains("nopcal")
     /// The page that became current, when, and who held the keyboard then (the switch driver's positive check).
+    /// SCRATCH: every change of the panel's first responder (click rows): the class and the host kind.
+    nonisolated(unsafe) static var frObservation: NSKeyValueObservation?
+    @MainActor static func watchFirstResponder() {
+        guard frObservation == nil, let window = NSApp.keyWindow else { return }
+        frObservation = window.observe(\.firstResponder, options: [.new]) { window, _ in
+            MainActor.assumeIsolated {
+                let responder = window.firstResponder
+                var host = "none"
+                if let view = responder as? NSView,
+                   let kept = (view as? KeptContentHostingView) ?? KeptContentHostingView.enclosing(view) {
+                    host = (kept.rzPageHost ? "page" : "tab") + "(interactive=\(kept.isInteractive))"
+                }
+                print(String(format: "RZFR %.4f ", CACurrentMediaTime()) + "fr=\(responder.map { String(describing: type(of: $0)) } ?? "nil") host=\(host)")
+            }
+        }
+    }
     @MainActor static func pageStamp(_ page: String) {
+        watchFirstResponder()
         let fr = NSApp.keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "nokey"
         print(String(format: "RZPAGE %.4f ", CACurrentMediaTime()) + "\(page) fr=\(fr)")
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(400)) {

@@ -138,14 +138,18 @@ final class ComposerModel: ObservableObject {
     let tasks: TasksPageModel
     var services: ComposerServices
 
-    @Published private(set) var isOpen = false
+    @Published private(set) var isOpen = false {  // SCRATCH: RZQA open
+        didSet { if isOpen != oldValue { print(String(format: "RZQA %.4f ", ProcessInfo.processInfo.systemUptime) + "open=\(isOpen ? 1 : 0)") } }
+    }
     /// Bumped by every open, even on an open card: the keyboard goes back
     /// to the title (the hotkey pressed again after a click elsewhere).
     @Published private(set) var focusRequest = 0
     @Published private(set) var page: ComposerPage = .tasks(.now)
     @Published private(set) var kind: ComposerKind = .task
     /// The second line: the task's, event's or note's writing.
-    @Published var writing = ""
+    @Published var writing = "" {  // SCRATCH: RZQA, the quick-add card's text (click rows)
+        didSet { if writing.count != oldValue.count { print(String(format: "RZQA %.4f ", ProcessInfo.processInfo.systemUptime) + "len=\(writing.count)") } }
+    }
     @Published var pinned = false
     /// An event's length in minutes, for a timed event.
     @Published var eventLength = 60
