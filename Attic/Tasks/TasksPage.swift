@@ -313,7 +313,8 @@ struct TasksPage: View {
         }
         // The page's own view, so a press is placed from its event (its
         // window, its location), never from a remembered hover point.
-        .background(TasksPointerProbe(pointer: pointer).accessibilityHidden(true))
+        .background(TasksPointerProbe(pointer: pointer, hoverTop: viewportTop, bottomInset: bottomInset,
+                                      bottomStack: bottomStack).accessibilityHidden(true))
         #if DEBUG
         // UI tests read how many drags out began and ended.
         .overlay(alignment: .topLeading) {
@@ -371,6 +372,9 @@ struct TasksPage: View {
             return page * swipe.width
         }
         model.rowPointer = pointer
+        // The list's hover answers for the tab shown, through its gate
+        // (the tint hold), only while the page is shown in the panel.
+        pointer.hoverScope = TasksPointer.hoverScope(model: model) { [listProxies] in listProxies.hoverGate(for: $0) }
         #if DEBUG
         pointer.keyboardControl = { [focusRequests] in focusRequests.current }
         pointer.keyboardControlRequests = focusRequests
@@ -1786,6 +1790,7 @@ struct TasksPage: View {
                                         toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26))
                                     }
                                 }
+                                .modifier(TasksLineHover(pointer: pointer, key: "group:" + dateGroup.key, tab: tab))
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.slotSpace(tab)) } action: { [pointer, tab, key = dateGroup.key] frame in
                                     if tab == .now { pointer.setHeaderFrame(frame, for: key) }
                                 }
@@ -1804,6 +1809,7 @@ struct TasksPage: View {
                             // click opens that day on the Calendar page).
                             if dateGroup.kind == .today, !folded, let event = model.nextEvent(on: tab) {
                                 TasksNextEventRow(event: event, open: { model.openNextEvent() })
+                                    .modifier(TasksLineHover(pointer: pointer, key: "next-event", tab: tab))
                                     .id("next-event")
                         }
                         }
@@ -1836,6 +1842,7 @@ struct TasksPage: View {
                             }
                         }
                         .accessibilityIdentifier("tasks-completed-today")
+                        .modifier(TasksLineHover(pointer: pointer, key: "completed-today", tab: tab))
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.slotSpace(tab)) } action: { [pointer, tab] frame in
                             pointer.setCompletedTodayFrame(frame, for: tab)
                         }
@@ -3911,6 +3918,9 @@ final class TasksDrawnSearch {
 final class TasksCellReports {
     var frame: CGRect?
     var controls: [CGRect]?
+    /// The row's hover, told by the list (`TasksPointer`). Made on first
+    /// use: the state's initial value is built on every pass of the cell.
+    lazy var hover = AtticRowHover()
 }
 
 /// What a row's wrapper shows (slice 1a): a page pass that leaves it the
@@ -4933,6 +4943,9 @@ struct TasksReorderCell<Row: View, Below: View>: View, Equatable {
                 .simultaneousGesture(gesture, including: enabled ? .all : .subviews)
             below(live)
         }
+        // The list tells the row when the pointer is in it (`AtticRowHover`):
+        // the row's hovered parts hold no hover region of their own.
+        .environment(\.atticRowHover, reports.hover)
         // Lifted, the row is the card over the page (`TasksLiftedCard`):
         // its place here keeps the gesture alive and shows nothing, until
         // the card has landed in the gap.
@@ -5306,6 +5319,8 @@ final class TasksPointer {
     func setFrame(_ frame: CGRect, for row: TasksRowID, from cell: TasksCellReports) {
         localFrames[row] = frame
         frameOwners[row] = ObjectIdentifier(cell)
+        if rowHovers[row] !== cell.hover { addHover(cell.hover, for: row) }
+        scheduleHoverUpdate()
     }
 
     /// A cell now draws another task (`TasksDoneSlots`): its frame moves to
@@ -5322,6 +5337,156 @@ final class TasksPointer {
         guard frameOwners[row] == nil || frameOwners[row] == ObjectIdentifier(cell) else { return }
         localFrames[row] = nil
         frameOwners[row] = nil
+        removeHover(for: row)
+    }
+
+    // MARK: - Hover: the list hover tracker (25 Nov 2026)
+
+    /// The pointer moves over the page's own view (`TasksPointerProbeView`'s
+    /// tracking area), and the list finds the row under it from the frames
+    /// above: the rows hold no SwiftUI hover region, which SwiftUI
+    /// hit-tests again after every layout of the list. Only the row the
+    /// pointer enters or leaves is told (`AtticRowHover`).
+    private var rowHovers: [TasksRowID: AtticRowHover] = [:]
+    /// Hovered lines between the rows (a day's heading, the next event,
+    /// Completed today), by their own keys: each with its tab and its
+    /// local frame in the page.
+    private var lineHovers: [AnyHashable: (tab: TasksTab, frame: CGRect, hover: AtticRowHover)] = [:]
+    /// The row or line under the pointer, as last told.
+    private(set) var hovered: AnyHashable?
+    private weak var hoveredHover: AtticRowHover?
+    /// The tab whose rows answer and its gate (the tint hold); nil while
+    /// the page is not shown or the panel is hidden: nothing is hovered.
+    var hoverScope: () -> (tab: TasksTab, gate: AtticRowHoverGate?)? = { nil }
+
+    /// The page's scope: the tab shown, while Tasks is the page shown and
+    /// the panel is up.
+    static func hoverScope(model: TasksPageModel, gate: @escaping (TasksTab) -> AtticRowHoverGate?)
+        -> () -> (tab: TasksTab, gate: AtticRowHoverGate?)? {
+        { [weak model] in
+            MainActor.assumeIsolated {
+                guard let model, model.isPageShown, !model.isHidden else { return nil }
+                return (model.tab, gate(model.tab))
+            }
+        }
+    }
+    /// The rows' visible part: below the tabs' band, above the bottom
+    /// stack's (as a press, `press(_:tab:below:aboveBottom:)`).
+    var hoverBand: () -> (top: CGFloat, bottom: CGFloat) = { (0, 0) }
+    /// The pointer is over the page's view (its tracking area's last word).
+    private(set) var pointerInView = false
+    /// Tests: the pointer's point in the page, in place of the mouse.
+    var pointerLocation: (() -> CGPoint?)?
+    private var hoverUpdateQueued = false
+
+    private func addHover(_ hover: AtticRowHover, for row: TasksRowID) {
+        if let old = rowHovers[row], old !== hover, old === hoveredHover { dropHovered() }
+        hover.space = TasksPage.slotSpace(row.tab)
+        hover.onPartMoved = { [weak self] in self?.scheduleHoverUpdate() }
+        rowHovers[row] = hover
+    }
+
+    private func removeHover(for row: TasksRowID) {
+        guard let hover = rowHovers.removeValue(forKey: row) else { return }
+        if hover === hoveredHover { dropHovered() }
+    }
+
+    /// A line between the rows that the pointer can hover, measured in
+    /// `TasksPage.slotSpace(tab)`; nil: it went.
+    func setLineHover(_ hover: AtticRowHover?, frame: CGRect?, for line: AnyHashable, tab: TasksTab) {
+        // Each tab's copy is its own line (a page beside the one shown is
+        // kept built with the same headings).
+        let key = AnyHashable([AnyHashable(tab), line])
+        if let hover, let frame {
+            hover.space = TasksPage.slotSpace(tab)
+            hover.onPartMoved = { [weak self] in self?.scheduleHoverUpdate() }
+            lineHovers[key] = (tab, frame, hover)
+        } else if let gone = lineHovers.removeValue(forKey: key), gone.hover === hoveredHover {
+            dropHovered()
+        }
+        scheduleHoverUpdate()
+    }
+
+    /// The tracking area's word: the pointer moved over the page's view
+    /// (`inside`), or left it.
+    func pointerMoved(inside: Bool) {
+        pointerInView = inside
+        updateHover()
+    }
+
+    /// Looks again once this turn of the run loop is done (frames are
+    /// reported one row at a time). `now`: at once. `refreshingPointer`:
+    /// the page was shown under a pointer that has not moved.
+    func scheduleHoverUpdate(now: Bool = false, refreshingPointer: Bool = false) {
+        if refreshingPointer { refreshPointerInView() }
+        if now { return updateHover() }
+        guard !hoverUpdateQueued else { return }
+        hoverUpdateQueued = true
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in self?.updateHover() }
+    }
+
+    /// Whether the pointer is over the page's view now, without an event
+    /// (the page came up under it).
+    func refreshPointerInView() {
+        guard pointerLocation == nil, let view, let window = view.window else { return }
+        pointerInView = view.bounds.contains(view.convert(window.mouseLocationOutsideOfEventStream, from: nil))
+    }
+
+    /// Finds the row or line under the pointer and tells it, and tells the
+    /// one it left. While the tab's gate holds (a live scroll, the tint
+    /// hold) nothing changes: the look is kept for the gate's release.
+    func updateHover() {
+        hoverUpdateQueued = false
+        guard let scope = hoverScope() else { return setHovered(nil, nil, at: nil) }
+        if let gate = scope.gate {
+            let held = MainActor.assumeIsolated {
+                guard gate.isHolding else { return false }
+                gate.pointer(true, for: ObjectIdentifier(self)) { [weak self] _ in self?.updateHover() }
+                return true
+            }
+            if held { return }
+        }
+        guard let point = hoverPoint() else { return setHovered(nil, nil, at: nil) }
+        let local = CGPoint(x: point.x - pageOffset(scope.tab), y: point.y)
+        if let id = row(at: point, in: scope.tab) {
+            let row = TasksRowID(tab: scope.tab, id: id)
+            return setHovered(row, rowHovers[row], at: local)
+        }
+        if let line = lineHovers.first(where: { $0.value.tab == scope.tab && $0.value.frame.contains(local) }) {
+            return setHovered(line.key, line.value.hover, at: local)
+        }
+        setHovered(nil, nil, at: nil)
+    }
+
+    /// The pointer's point in the page, when it is over the rows' visible
+    /// part of the page's view.
+    private func hoverPoint() -> CGPoint? {
+        let point: CGPoint
+        if let pointerLocation {
+            guard let given = pointerLocation() else { return nil }
+            point = given
+        } else {
+            guard pointerInView, let view, let window = view.window, window.isVisible else { return nil }
+            point = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            guard view.bounds.contains(point) else { return nil }
+        }
+        let band = hoverBand()
+        let bottom = (view?.bounds.height ?? .greatestFiniteMagnitude) - band.bottom
+        return point.y >= band.top && point.y <= bottom ? point : nil
+    }
+
+    /// The row or line under the pointer went: it is told so.
+    private func dropHovered() {
+        hoveredHover?.pointer(at: nil)
+        hovered = nil
+        hoveredHover = nil
+    }
+
+    private func setHovered(_ key: AnyHashable?, _ hover: AtticRowHover?, at point: CGPoint?) {
+        if let old = hoveredHover, old !== hover { old.pointer(at: nil) }
+        hovered = hover == nil ? nil : key
+        hoveredHover = hover
+        hover?.pointer(at: point)
     }
 
     /// Whether the pointer is over one of `tab`'s rows now.
@@ -5372,19 +5537,86 @@ extension TasksPointer: AtticDropLandingSource {
 /// the page's, so an event's location converts straight into them.
 private struct TasksPointerProbe: NSViewRepresentable {
     let pointer: TasksPointer
+    /// The rows' visible part, for the hover (`TasksPointer.hoverBand`):
+    /// below the tabs' band, above the bottom stack's (read when asked).
+    var hoverTop: CGFloat = 0
+    var bottomInset: CGFloat = 0
+    var bottomStack: TasksBottomStackHeight?
 
-    func makeNSView(context: Context) -> ProbeView {
-        let view = ProbeView()
+    func makeNSView(context: Context) -> TasksPointerProbeView {
+        let view = TasksPointerProbeView()
+        view.pointer = pointer
         pointer.view = view
         return view
     }
 
-    func updateNSView(_ view: ProbeView, context: Context) { pointer.view = view }
-
-    final class ProbeView: NSView {
-        override var isFlipped: Bool { true }
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    func updateNSView(_ view: TasksPointerProbeView, context: Context) {
+        view.pointer = pointer
+        pointer.view = view
+        pointer.hoverBand = { [hoverTop, bottomInset, bottomStack] in
+            (hoverTop, bottomStack.map { TasksBottomBand.height(stack: $0.height, bottomInset: bottomInset) } ?? 0)
+        }
     }
+}
+
+/// The page's own view: flipped and click-through, the size of the page,
+/// so an event's location converts straight into the page. Its tracking
+/// area tells the list where the pointer is (`TasksPointer.updateHover`).
+/// A line between the rows that hovers (a day's heading, the next event,
+/// Completed today): the list tells it when the pointer is over it
+/// (`TasksPointer.setLineHover`), as it tells a row.
+struct TasksLineHover: ViewModifier {
+    let pointer: TasksPointer?
+    let key: AnyHashable
+    let tab: TasksTab
+    @State private var line = Line()
+
+    final class Line {
+        lazy var hover = AtticRowHover()
+        var frame: CGRect?
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.atticRowHover, pointer == nil ? nil : line.hover)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: TasksPage.slotSpace(tab)) } action: { [pointer, key, tab, line] frame in
+                line.frame = frame
+                pointer?.setLineHover(line.hover, frame: frame, for: key, tab: tab)
+            }
+            // A lazy line can come back at the same place, with no
+            // geometry change to say so.
+            .onAppear { [pointer, key, tab, line] in
+                if let frame = line.frame { pointer?.setLineHover(line.hover, frame: frame, for: key, tab: tab) }
+            }
+            .onDisappear { [pointer, key, tab] in pointer?.setLineHover(nil, frame: nil, for: key, tab: tab) }
+    }
+}
+
+final class TasksPointerProbeView: NSView {
+    weak var pointer: TasksPointer?
+
+    /// Moves and crossings, whether or not the app is active (the panel
+    /// takes hover without the keyboard), over the view's visible part.
+    static let hoverTracking: NSTrackingArea.Options = [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect]
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        guard !trackingAreas.contains(where: { $0.owner === self }) else { return }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: Self.hoverTracking, owner: self, userInfo: nil))
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateTrackingAreas()
+        pointer?.scheduleHoverUpdate(refreshingPointer: true)
+    }
+
+    override func mouseEntered(with event: NSEvent) { pointer?.pointerMoved(inside: true) }
+    override func mouseMoved(with event: NSEvent) { pointer?.pointerMoved(inside: true) }
+    override func mouseExited(with event: NSEvent) { pointer?.pointerMoved(inside: false) }
 }
 
 /// What a task row shows (round 11): a row whose key is unchanged is not
