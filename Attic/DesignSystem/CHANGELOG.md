@@ -17,6 +17,16 @@ going) lands on the row now under it. Leaving the list, hiding the panel or
 leaving Tasks clears it. Outside a tracked list (the gallery, cards, other
 pages, dropdown cards) `.atticHover` is SwiftUI's `onHover`, as before.
 
+## 2026-11-25 · Task rows in a list that owns the keyboard (list-owned focus)
+
+A task row's list focus (`AtticTaskComponents.swift`) takes an optional focus state. With one (the Calendar
+agenda) a row takes focus and answers its keys, as before. With none (the
+Tasks list) the row is not focusable: `isFocused` is the list's cursor
+while the list holds the keyboard, and the list's own handler acts on the
+cursor row. The ring, the selection fill and their motion are unchanged.
+`AtticKeyboardFocus.swift` gains DEBUG-only counters (`AtticFocusCheckProbe`,
+the panel's input phase) that the row-move tests read; nothing in Release.
+
 ## 2026-11-22 · A deleted row's exit plays only in an update that animates
 
 A row ticked or deleted while its tab was not drawn (from Done, say) was

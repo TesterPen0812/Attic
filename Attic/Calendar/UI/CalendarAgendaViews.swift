@@ -584,25 +584,67 @@ struct CalendarEventRow: View {
 
 /// The current time among today's timed events: a red dot where the rings
 /// sit, a red line, and the time.
+///
+/// Only the line of the current page holds the minute clock. A
+/// `TimelineView` reads the view graph's time, which every update of the
+/// panel's host sets anew, so in a Calendar kept built behind another page
+/// it was checked again on every step of that page's scroll.
 struct CalendarNowLine: View {
     @Environment(\.atticDesign) private var design
+    @Environment(\.calendarClockIsLive) private var isLive
+
+    #if DEBUG && ATTIC_UNIT_TEST_HOST
+    /// Test seams: the line's body runs, the minute clock's builds, and the
+    /// time its last build drew.
+    static var bodyEvaluations = 0
+    static var clockBuilds = 0
+    static var lastClockDate: Date?
+    #endif
 
     var body: some View {
-        let red = AtticSurfaceInk.vivid(CalendarDesign.nowRed, tokens: design.tokens).color
-        let ringCentre = AtticLayout.circleX + AtticControlSize.statusCircle / 2
-        TimelineView(.everyMinute) { context in
-            HStack(spacing: 5) {
-                Circle().fill(red).frame(width: CalendarDesign.nowDot, height: CalendarDesign.nowDot)
-                Capsule().fill(red).frame(height: CalendarDesign.nowLine)
-                Text(verbatim: AtticDateFormatting.template(context.date, template: "jmm", calendar: CalendarMonthMath.calendar(),
-                                                          locale: .current))
-                    .font(.system(size: CalendarDesign.nowFont, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(red)
+        #if DEBUG && ATTIC_UNIT_TEST_HOST
+        let _ = Self.bodyEvaluations += 1
+        #endif
+        Group {
+            if isLive {
+                TimelineView(.everyMinute) { context in
+                    #if DEBUG && ATTIC_UNIT_TEST_HOST
+                    let _ = Self.clockBuilds += 1
+                    let _ = Self.lastClockDate = context.date
+                    #endif
+                    line(at: context.date)
+                }
+            } else {
+                // Another page is shown: drawn once, at the time it is
+                // built. Current again, the line takes the clock in the same
+                // update.
+                line(at: Date())
             }
-            .padding(.leading, ringCentre - CalendarDesign.nowDot / 2)
-            .padding(.trailing, TasksDesignMetrics.rowPaddingX)
-            .padding(.vertical, CalendarDesign.nowPaddingY)
         }
+        // The swap happens with the page's switch: no fade between the two.
+        .transition(.identity)
         .accessibilityHidden(true)
     }
+
+    private func line(at date: Date) -> some View {
+        let red = AtticSurfaceInk.vivid(CalendarDesign.nowRed, tokens: design.tokens).color
+        let ringCentre = AtticLayout.circleX + AtticControlSize.statusCircle / 2
+        return HStack(spacing: 5) {
+            Circle().fill(red).frame(width: CalendarDesign.nowDot, height: CalendarDesign.nowDot)
+            Capsule().fill(red).frame(height: CalendarDesign.nowLine)
+            Text(verbatim: AtticDateFormatting.template(date, template: "jmm", calendar: CalendarMonthMath.calendar(),
+                                                      locale: .current))
+                .font(.system(size: CalendarDesign.nowFont, weight: .semibold).monospacedDigit())
+                .foregroundStyle(red)
+        }
+        .padding(.leading, ringCentre - CalendarDesign.nowDot / 2)
+        .padding(.trailing, TasksDesignMetrics.rowPaddingX)
+        .padding(.vertical, CalendarDesign.nowPaddingY)
+    }
+}
+
+extension EnvironmentValues {
+    /// The Calendar page is the panel's current page: only then does its
+    /// agenda's now line hold the minute clock. True outside the page.
+    @Entry var calendarClockIsLive = true
 }
