@@ -626,6 +626,9 @@ struct NoteFormatRowView: View {
     @State private var width: CGFloat = 0
     @Environment(\.atticDesign) private var design
 
+    /// Full-size cells fit (or the row is not measured yet).
+    static func isRoomy(width: CGFloat, need: CGFloat) -> Bool { width == 0 || need <= width }
+
     var body: some View {
         // A long style name ("Subheading") in a narrow panel: 24 pt cells.
         let m = AtticNoteFormatMetrics.self
@@ -638,7 +641,12 @@ struct NoteFormatRowView: View {
             }
         }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { new in
-                if abs(new - width) > 0.5 { width = new }
+                if abs(new - width) > 0.5 {
+                    #if ATTIC_LOCAL_ONLY
+                    PanelInvalidationProbe.stepWrite?("format-width")
+                    #endif
+                    width = new
+                }
             }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Format"))
@@ -837,7 +845,12 @@ struct NoteFormatRowSwitch<Row: View>: View {
         row
             // The room the bottom row is given, measured on the row itself.
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { new in
-                if abs(new - width) > 0.5 { width = new }
+                if abs(new - width) > 0.5 {
+                    #if ATTIC_LOCAL_ONLY
+                    PanelInvalidationProbe.stepWrite?("format-width")
+                    #endif
+                    width = new
+                }
             }
             .environment(\.noteFormatRowStage, NoteFormatRowStage(allNotes: channels.allNotes,
                                                                   newNoteAndStatus: channels.newNoteAndStatus,

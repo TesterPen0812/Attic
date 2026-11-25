@@ -144,6 +144,87 @@ final class PanelIntegrationTests: XCTestCase {
     }
 
     /// The native views of class `name` under `root` (a page's page-wide view).
+    /// Resize second pass (25 Nov): a step of a resize writes no view state
+    /// that draws nothing. The ✦'s place, the format row's room and a hidden
+    /// stand-in's glass size each moved on every step and started a second
+    /// transaction pass; only the shown island's glass takes each size.
+    func testAResizeStepWritesNoViewStateThatDrawsNothing() throws {
+        #if ATTIC_LOCAL_ONLY
+        var writes: [String: Int] = [:]
+        PanelInvalidationProbe.stepWrite = { writes[$0, default: 0] += 1 }
+        defer { PanelInvalidationProbe.stepWrite = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .notes, takesKeyboard: false), .shown)
+        panel.uiState.prepareBuiltPage(.tasks)
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
+        writes = [:]
+        for step in 1...6 {
+            var frame = window.visibleContentFrame
+            frame.size.width += 12
+            window.setVisibleContentFrame(frame, display: true)
+            panel.uiState.updatePanelSize(window.visibleContentFrame.size)
+            host.layoutSubtreeIfNeeded()
+            spin(0.05)
+            XCTAssertEqual(window.visibleContentFrame.width, frame.width, accuracy: 0.5, "harness: step \(step) took its width")
+        }
+        print("RESIZE_STEP_WRITES steps=6 \(writes.sorted { $0.key < $1.key })")
+        let drawsNothing = writes.filter { $0.key != "island-size" }
+        XCTAssertEqual(drawsNothing, [:], "a resize step wrote view state that draws nothing")
+        #endif
+    }
+
+    /// The ✦ steps aside at the same place as before (the reach plus the
+    /// bar's gap passes its leading edge), and a step that keeps the
+    /// answer writes nothing.
+    func testTheAgentButtonStepsAsideAtTheSamePlace() {
+        let gap = AtticPanelChromeMetrics.footerGap
+        XCTAssertNil(PanelSharedBottomBar.agentAsideChange(current: false, reach: 200, agentMinX: 400), "far: stays, no write")
+        XCTAssertNil(PanelSharedBottomBar.agentAsideChange(current: false, reach: 200, agentMinX: 200 + gap), "at the gap: stays")
+        XCTAssertEqual(PanelSharedBottomBar.agentAsideChange(current: false, reach: 200, agentMinX: 200 + gap - 0.5), true)
+        XCTAssertNil(PanelSharedBottomBar.agentAsideChange(current: true, reach: 200, agentMinX: 150), "still aside: no write")
+        XCTAssertEqual(PanelSharedBottomBar.agentAsideChange(current: true, reach: nil, agentMinX: 150), false, "nothing open: back")
+        XCTAssertNil(PanelSharedBottomBar.agentAsideChange(current: false, reach: 200, agentMinX: .infinity), "not measured yet")
+    }
+
+    /// The format row's cells shrink at the same width as before.
+    func testTheFormatRowTurnsCompactAtTheSameWidth() {
+        XCTAssertTrue(NoteFormatRowView.isRoomy(width: 0, need: 300), "not measured yet: full cells")
+        XCTAssertTrue(NoteFormatRowView.isRoomy(width: 300, need: 300))
+        XCTAssertFalse(NoteFormatRowView.isRoomy(width: 299.5, need: 300))
+    }
+
+    /// The stand-in is sent no size while hidden; shown after a resize, its
+    /// glass draws with the panel's size as it is, before that frame.
+    func testAStandInShownAfterAResizeDrawsWithTheCurrentSize() throws {
+        #if ATTIC_LOCAL_ONLY
+        var glass: [CGSize] = []
+        PanelInvalidationProbe.islandGlassSize = { glass.append($0) }
+        defer { PanelInvalidationProbe.islandGlassSize = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        let container = try XCTUnwrap(window.contentView as? AtticPanelContentContainer)
+        XCTAssertFalse(container.isIslandStandInShown, "harness: the stand-in is hidden at rest")
+        for step in 1...4 {
+            var frame = window.visibleContentFrame
+            frame.size.width += CGFloat(step) * 10
+            window.setVisibleContentFrame(frame, display: true)
+            panel.uiState.updatePanelSize(window.visibleContentFrame.size)
+            spin(0.05)
+        }
+        let size = panel.uiState.panelSize
+        glass = []
+        container.setIslandStandInShown(true)
+        defer { container.setIslandStandInShown(false) }
+        print("STAND_IN_SHOWN panel=\(size) glass=\(glass)")
+        XCTAssertFalse(glass.isEmpty, "the stand-in's glass did not draw as it showed")
+        XCTAssertTrue(glass.allSatisfy { $0 == size }, "the stand-in drew with a size the panel no longer has")
+        #endif
+    }
+
     private func pageWideViews(_ name: String, in root: NSView) -> [NSView] {
         (root.className.hasSuffix(name) ? [root] : []) + root.subviews.flatMap { pageWideViews(name, in: $0) }
     }

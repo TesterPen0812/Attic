@@ -1036,7 +1036,12 @@ private struct PanelIslandSurface: View {
         #endif
         surface(panelSize: panelSize)
             .onReceive(source?.panelSizeChanges.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) {
-                if sentSize != $0 { sentSize = $0 }
+                if sentSize != $0 {
+                    #if ATTIC_LOCAL_ONLY
+                    PanelInvalidationProbe.stepWrite?("island-size")
+                    #endif
+                    sentSize = $0
+                }
             }
     }
 

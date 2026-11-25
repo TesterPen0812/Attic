@@ -18,6 +18,9 @@ import SwiftData
     static var islandSurface: (() -> Void)?
     /// The panel size the island's glass drew with, on each of its runs.
     static var islandGlassSize: ((CGSize) -> Void)?
+    /// A view state written from a layout step (resize second pass): the
+    /// writer's name. A resize step should write none that draws nothing.
+    static var stepWrite: ((String) -> Void)?
 }
 #endif
 

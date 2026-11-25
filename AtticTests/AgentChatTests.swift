@@ -1771,6 +1771,36 @@ final class AgentChatHostedTests: XCTestCase {
         spin(0.05)
     }
 
+    /// Resize second pass (25 Nov): the ✦'s laid-out place moves on every
+    /// step of a resize; only whether it steps aside is view state. Across
+    /// a resize that narrows past the step-aside width and back, the only
+    /// writes are the two turns, and it turns at the same place.
+    func testAResizeAcrossTheStepAsideWidthWritesOnlyTheTurns() throws {
+        #if ATTIC_LOCAL_ONLY
+        chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus, leadingReach: 200),
+                      actions: PanelBottomBarActions(), for: .tasks)
+        spin(0.2)
+        XCTAssertTrue(PanelSharedBottomBar.drawsAgentChat, "harness: the ✦ is drawn")
+        let host = try XCTUnwrap(window.contentView)
+        var writes: [String: Int] = [:]
+        PanelInvalidationProbe.stepWrite = { writes[$0, default: 0] += 1 }
+        defer { PanelInvalidationProbe.stepWrite = nil }
+        var asideAt: [CGFloat: Bool] = [:]
+        let widths = Array(stride(from: 340, through: 230, by: -10)) + Array(stride(from: 240, through: 340, by: 10))
+        for width in widths {
+            window.setContentSize(CGSize(width: width, height: 560))
+            host.layoutSubtreeIfNeeded()
+            spin(0.03)
+            asideAt[CGFloat(width)] = PanelAgentSlotProbe.stepsAside
+        }
+        print("AGENT_STEP_WRITES steps=\(widths.count) \(writes.sorted { $0.key < $1.key }) aside=\(asideAt.sorted { $0.key < $1.key })")
+        XCTAssertEqual(asideAt[230], true, "narrow: the ✦ steps aside")
+        XCTAssertEqual(asideAt[340], false, "wide again: it comes back")
+        XCTAssertEqual(writes.filter { $0.key != "agent-aside" }, [:], "a resize step wrote the ✦'s place")
+        XCTAssertLessThanOrEqual(writes["agent-aside", default: 0], 2, "more writes than turns")
+        #endif
+    }
+
     func testTheBarDrawsTheStarOnlyWhenConnected() {
         XCTAssertTrue(PanelSharedBottomBar.drawsAgentChat)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
