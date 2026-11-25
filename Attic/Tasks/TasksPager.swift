@@ -645,7 +645,6 @@ struct TasksPagerPages<Page: View>: View {
     @ObservedObject var store: TaskStore
     let motion: TasksPagerMotion
     let count: Int
-    let size: CGSize
     /// The page shown: the model's tab, read here from the model this view
     /// observes. It was a value the page computed and passed in, and when
     /// the page's own pass did not run after a switch, the pager re-rendered
@@ -705,9 +704,11 @@ struct TasksPagerPages<Page: View>: View {
                         Color.clear
                     }
                 }
-                .frame(width: size.width, height: size.height)
+                // The slot takes the pager's size from layout, never as a
+                // value: a new size re-runs nothing here.
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .coordinateSpace(TasksPagerSlot.localSpace(index))
-                .modifier(TasksPagerSlot(motion: motion, index: index, width: size.width))
+                .modifier(TasksPagerSlot(motion: motion, index: index))
                 // Only the page shown takes clicks and is read.
                 .allowsHitTesting(index == shown)
                 .accessibilityHidden(index != shown)
@@ -756,7 +757,6 @@ struct TasksKeptPage<Content: View>: View, Equatable {
 struct TasksPagerSlot: ViewModifier {
     @ObservedObject var motion: TasksPagerMotion
     let index: Int
-    let width: CGFloat
 
     /// Inside the moving slot, coordinates are invariant as the pager slides.
     nonisolated static func localSpace(_ index: Int) -> NamedCoordinateSpace {
@@ -767,8 +767,24 @@ struct TasksPagerSlot: ViewModifier {
         let fadingOut = motion.fadingOut == index
         let fadingIn = motion.fadingOut != nil && CGFloat(index) == motion.position
         content
-            .offset(x: fadingOut ? 0 : (motion.place(of: index) - motion.position) * width)
+            .modifier(TasksPagerSlide(pages: fadingOut ? 0 : motion.place(of: index) - motion.position))
             .opacity(fadingOut ? 1 - motion.fade : fadingIn ? motion.fade : 1)
+    }
+}
+
+/// Moves a slot sideways by a number of its own widths, as `offset` does
+/// by points. The width comes from the slot's layout, so a resize moves
+/// the slots without anything above them running again.
+struct TasksPagerSlide: GeometryEffect {
+    var pages: CGFloat
+
+    var animatableData: CGFloat {
+        get { pages }
+        set { pages = newValue }
+    }
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        ProjectionTransform(CGAffineTransform(translationX: pages * size.width, y: 0))
     }
 }
 
