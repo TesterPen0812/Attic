@@ -254,50 +254,38 @@ final class GlossLab {
     /// The blur's starting strength: the lead's first value (24 Nov), kept
     /// until the measured match of the real Control Centre's ground is in.
     static let panelBlurRadiusStart: Double = 2
-    /// The calibration backdrop and the match sheet (24 Nov, the match
-    /// round; brief `ops/design/gloss-lab-match-brief-2026-11-24.md`): a
-    /// test pattern of our own over the screen under the menu bar and what
-    /// it shows (the tile, or flat white, grey or black); and a sheet of
-    /// our pieces in the real Control Centre's arrangement at its sizes,
-    /// what it shows as text (copies apart by "/", each a list of
-    /// `key=value`, or a walk through one setting's values), and where its
-    /// first pieces stand ("x,y" in pt from the screen's top left corner;
-    /// empty: a first guess). Both off to start with. The lab's own state:
-    /// no preset, All off or Reset sliders touches them, and they are not
-    /// part of `labLines`.
+    /// The test pattern window and the match sheet (24 Nov, the match
+    /// round; brief `ops/design/gloss-lab-match-brief-2026-11-24.md`): an
+    /// ordinary window of our own, "Attic Gloss test pattern", and what it
+    /// shows (the tile, or flat white, grey or black); and a sheet of our
+    /// pieces in the real Control Centre's arrangement at its sizes,
+    /// standing in that window over the pattern, what it shows as text
+    /// (copies apart by "/", each a list of `key=value`, or a walk through
+    /// one setting's values), and where its first pieces stand ("x,y" in
+    /// pt from the screen's top left corner; empty: a first guess). Both
+    /// off to start with. The lab's own state: no preset, All off or Reset
+    /// sliders touches them, and they are not part of `labLines`.
     ///
-    /// The backdrop covers the screen, so it is never brought back by a
-    /// stored value (on 24 Nov it stood on the owner's screen for two
-    /// hours): `calibration` is on only when `-GlossLab.calibration YES`
-    /// was passed on this launch or the lab's switch was set in this run,
-    /// and it is not saved. It takes itself down `calibrationTimeout`
-    /// seconds after the last click on it (`-GlossLab.calibrationTimeout`,
-    /// this launch only, not saved; 3 minutes to start with).
-    ///
-    /// The sheet has no close of its own, so `match` follows the same
-    /// rule: on only by `-GlossLab.match YES` on this launch or the lab's
-    /// switch in this run, never read from a stored value, never saved.
+    /// Twice on 24 Nov the pattern stood over the owner's whole screen and
+    /// would not go (a borderless window that took every click). It is an
+    /// ordinary window now, closed by its red button or Command-W, and
+    /// neither it nor the sheet is ever brought back by a stored value:
+    /// `calibration` and `match` are on only when `-GlossLab.calibration
+    /// YES` / `-GlossLab.match YES` was passed on this launch or the lab's
+    /// switch was set in this run, and they are not saved. The sheet shows
+    /// only in the pattern window.
     ///
     /// `calibrationKeyTest` is a check of our own, this launch only, not
-    /// saved and not in "Copy values": "window@5" or "queue@5" has the app
-    /// send one Escape key press to its own backdrop window (or put it in
-    /// its own event queue) that many seconds after the backdrop went up,
-    /// so Escape can be shown on a screen with no key pressed and nothing
-    /// posted to the system (`GlossMatchWindows.KeyTest`).
+    /// saved and not in "Copy values": "commandW@5", "commandQ@5",
+    /// "closeButton@5", "minimise@5" (and "restore", "shrink", "move",
+    /// "pictureSize", "nextPattern", "deactivate"; several apart by
+    /// commas) has the app put that key press in its own event queue, or
+    /// press that button of its own window, that many seconds after the
+    /// window came up, so closing it can be shown on a screen with no key
+    /// pressed and nothing posted to the system
+    /// (`GlossMatchWindows.KeyTest`).
     var calibration = false
     var calibrationKeyTest = ""
-    var calibrationTimeout: Double = GlossLab.calibrationTimeoutStart
-    static let calibrationTimeoutStart: Double = 180
-    /// Never shorter than a look at it, never longer than half an hour.
-    static let calibrationTimeoutRange: ClosedRange<Double> = 10...1800
-    /// A launch argument's time in seconds, held in the range; nothing
-    /// usable (no number, zero, negative) leaves the start value.
-    static func heldCalibrationTimeout(_ value: Any?) -> Double {
-        let number = (value as? NSNumber)?.doubleValue
-            ?? (value as? String).flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-        guard let number, number.isFinite, number > 0 else { return calibrationTimeoutStart }
-        return min(max(number, calibrationTimeoutRange.lowerBound), calibrationTimeoutRange.upperBound)
-    }
     /// A launch argument's switch: YES, true, 1 are on; anything else off.
     static func launchSwitch(_ value: Any?) -> Bool {
         if let number = value as? NSNumber { return number.boolValue }
@@ -349,7 +337,7 @@ final class GlossLab {
         }
     }
 
-    /// What the calibration backdrop shows: the tile, or one flat colour.
+    /// What the test pattern window shows: the tile, or one flat colour.
     enum CalibrationPattern: String, CaseIterable, Identifiable {
         case tile, white, grey, black
         var id: String { rawValue }
@@ -373,7 +361,6 @@ final class GlossLab {
         calibration = Self.launchSwitch(launch[Self.prefix + "calibration"])
         match = Self.launchSwitch(launch[Self.prefix + "match"])
         if let value = launch[Self.prefix + "calibrationKeyTest"] as? String { calibrationKeyTest = value }
-        if let value = launch[Self.prefix + "calibrationTimeout"] { calibrationTimeout = Self.heldCalibrationTimeout(value) }
         guard let defaults else { return }
         func bool(_ key: String, _ value: inout Bool) {
             if defaults.object(forKey: Self.prefix + key) != nil { value = defaults.bool(forKey: Self.prefix + key) }
@@ -646,11 +633,10 @@ final class GlossLab {
             + "see-through \(Int(panelBlurSeeThrough.rounded())) %"
     }
 
-    /// The calibration backdrop and the match sheet as one line, for "Copy values".
+    /// The test pattern window and the match sheet as one line, for "Copy values".
     var matchLine: String {
         let corner = matchOrigin.trimmingCharacters(in: .whitespacesAndNewlines)
-        return "Calibration backdrop: \(calibration ? "on" : "off") (\(calibrationPattern.title.lowercased())), "
-            + "closes itself after \(Int(calibrationTimeout.rounded())) s, "
+        return "Test pattern window: \(calibration ? "on" : "off") (\(calibrationPattern.title.lowercased())), "
             + "match sheet: \(match ? "on" : "off"), showing \"\(matchSpec)\", first corner \(corner.isEmpty ? "by guess" : "\"\(corner)\"")"
     }
 
