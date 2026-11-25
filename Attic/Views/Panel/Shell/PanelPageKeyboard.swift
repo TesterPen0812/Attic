@@ -71,22 +71,26 @@ enum PanelPageKeyboard {
     /// stopping the process.
     static var reportUnknownResponder: (String) -> Void = { assertionFailure($0) }
 
-    /// Guard rail (debug and test builds): one of our own views inside the
-    /// panel took the keyboard with no page tag and no host above it, so the
-    /// rule above cannot know its page. Tag its representable.
+    /// Guard rail (debug and test builds): in a real shell (a panel whose
+    /// owner answers which page is shown), one of our own views under the
+    /// shell's hosting view took the keyboard with no page tag and no kept
+    /// or overlay host between them, so the rule above cannot know its
+    /// page. Tag its representable. A panel with no shell (a test's bare
+    /// panel) has no pages, so nothing there is reported.
     static func assertKnown(_ view: NSView, in panel: AtticPanel) {
-        guard let root = panel.contentView, view !== root, view.isDescendant(of: root),
+        guard panel.showsPageQuery != nil, !(view is AtticPanelHostingView),
               Bundle(for: type(of: view)) == Bundle(for: AtticPanel.self) else { return }
         var current: NSView? = view
-        while let candidate = current, candidate !== root {
-            if membership(of: candidate) != nil || isHost(candidate) { return }
+        while let candidate = current {
+            if membership(of: candidate) != nil || candidate is KeptContentHostingView
+                || candidate is AtticOverlayHostingView { return }
+            if candidate is AtticPanelHostingView {
+                reportUnknownResponder("\(type(of: view)) took the panel's keyboard with no page tag and no host above it")
+                return
+            }
             current = candidate.superview
         }
-        reportUnknownResponder("\(type(of: view)) took the panel's keyboard with no page tag and no host above it")
-    }
-
-    private static func isHost(_ view: NSView) -> Bool {
-        view is KeptContentHostingView || view is AtticOverlayHostingView || view is AtticPanelHostingView
+        // Not under the shell's hosting view: the panel's own chrome layers.
     }
     #endif
 }

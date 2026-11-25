@@ -192,6 +192,7 @@ final class AtticPanel: NSPanel {
     /// refused and the keyboard stays where it was.
     override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
         if let view = responder as? NSView, view.window === self, !PanelPageKeyboard.mayTakeKeyboard(view) {
+            if selectingKeyView { refusedKeyView = view }
             return false
         }
         let changed = super.makeFirstResponder(responder)
@@ -222,6 +223,33 @@ final class AtticPanel: NSPanel {
             return super.selectKeyView(preceding: view)
         }
         if let allowed = allowedKeyView(after: previous, forward: false, stop: view) { makeFirstResponder(allowed) }
+    }
+
+    /// Tab and Shift-Tab when AppKit picks the candidate itself (the
+    /// window holds the keyboard: `initialFirstResponder` or the content
+    /// view's next key view): a refused candidate would stop every Tab on
+    /// it, so selection moves on from it to the next view that may.
+    override func selectNextKeyView(_ sender: Any?) {
+        selectAcrossRefusal(forward: true) { super.selectNextKeyView(sender) }
+    }
+
+    override func selectPreviousKeyView(_ sender: Any?) {
+        selectAcrossRefusal(forward: false) { super.selectPreviousKeyView(sender) }
+    }
+
+    private var selectingKeyView = false
+    private var refusedKeyView: NSView?
+
+    private func selectAcrossRefusal(forward: Bool, _ select: () -> Void) {
+        selectingKeyView = true
+        refusedKeyView = nil
+        select()
+        selectingKeyView = false
+        guard let refused = refusedKeyView else { return }
+        refusedKeyView = nil
+        if let allowed = allowedKeyView(after: refused, forward: forward, stop: refused), allowed !== refused {
+            makeFirstResponder(allowed)
+        }
     }
 
     private func allowedKeyView(after start: NSView, forward: Bool, stop: NSView) -> NSView? {
