@@ -277,9 +277,26 @@ final class DrawBoardViewTests: XCTestCase {
         XCTAssertTrue(store.perform(.put([kept]), on: id).isSaved)
         model.open(id)
         model.performAcknowledged(.put([other]))
+        // One step to undo and one to redo, so both stacks are under test.
+        model.performAcknowledged(.put([DrawObject(frame: DrawFrame(x: 20, y: 300), content: .shape(.rectangle))]))
+        model.undoAcknowledged()
+        /// The board's next responder: records the Edit actions the hidden
+        /// board passes on (the shown page's own handler, in the app).
+        final class Next: NSView {
+            var received: [Selector] = []
+            @objc func undo(_ sender: Any?) { received.append(#selector(undo(_:))) }
+            @objc func redo(_ sender: Any?) { received.append(#selector(redo(_:))) }
+            @objc override func selectAll(_ sender: Any?) { received.append(#selector(selectAll(_:))) }
+            @objc func copy(_ sender: Any?) { received.append(#selector(copy(_:))) }
+            @objc func cut(_ sender: Any?) { received.append(#selector(cut(_:))) }
+            @objc func paste(_ sender: Any?) { received.append(#selector(paste(_:))) }
+            @objc func delete(_ sender: Any?) { received.append(#selector(delete(_:))) }
+        }
+        let next = Next(frame: board.bounds)
+        next.addSubview(board)
         let window = NSWindow(contentRect: board.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = board
+        window.contentView = next
         defer { window.close() }
         XCTAssertTrue(window.makeFirstResponder(board))
         model.select([kept.id])
@@ -291,6 +308,8 @@ final class DrawBoardViewTests: XCTestCase {
         let objects = try store.open(id).objects
         let undoStep = store.undoStepID(on: id)
         let redoStep = store.redoStepID(on: id)
+        XCTAssertNotNil(undoStep, "the premise: a step to undo")
+        XCTAssertNotNil(redoStep, "the premise: a step to redo")
         let selection = model.selection
 
         func command(_ characters: String, code: UInt16, shift: Bool = false) -> NSEvent {
@@ -323,12 +342,25 @@ final class DrawBoardViewTests: XCTestCase {
         board.redo(nil); try assertUnchanged(after: "Edit › Redo")
         board.selectAll(nil); try assertUnchanged(after: "Edit › Select All")
         board.copy(nil); try assertUnchanged(after: "Edit › Copy")
+        // The Edit menu's route: the hidden board does not answer the seven
+        // actions, so they go on to its next responder (the shown page's).
+        let actions: [Selector] = [#selector(DrawBoardView.undo(_:)), #selector(DrawBoardView.redo(_:)),
+                                   #selector(DrawBoardView.selectAll(_:)), #selector(DrawBoardView.copy(_:)),
+                                   #selector(DrawBoardView.cut(_:)), #selector(DrawBoardView.paste(_:)),
+                                   #selector(DrawBoardView.delete(_:))]
+        for action in actions {
+            XCTAssertFalse(board.responds(to: action), "hidden, the board does not answer \(action)")
+            XCTAssertTrue(board.tryToPerform(action, with: nil), "\(action) reached a responder")
+            try assertUnchanged(after: "the chain's \(action)")
+        }
+        XCTAssertEqual(next.received, actions, "each Edit action reached the next responder")
         let tool = model.tool
         board.keyDown(with: key(.keyDown, "p", code: 35))
         XCTAssertEqual(model.tool, tool, "a tool letter changed the hidden board's tool")
 
         // Shown again, the same keys act as before (Draw's own keys stay).
         model.setShown(true)
+        XCTAssertTrue(actions.allSatisfy { board.responds(to: $0) }, "shown, the board answers the Edit actions")
         board.keyDown(with: key(.keyDown, "\u{7F}", code: DrawKey.deleteCode))
         XCTAssertFalse(try store.open(id).objects.contains { $0.id == kept.id && $0.deletedAt == nil },
                        "shown, Delete deletes the selection")

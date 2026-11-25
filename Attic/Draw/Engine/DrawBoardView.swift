@@ -695,6 +695,21 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         return true
     }
 
+    /// Hidden, the board does not answer its Edit actions at all, so the
+    /// menu's Undo, Cut or Paste goes on up the chain to whoever handles it
+    /// on the page in use, as a refused key does. Not by menu validation:
+    /// a disabled item would stop ⌘Z at the menu.
+    private static let editActions: Set<Selector> = [
+        #selector(undo(_:)), #selector(redo(_:)), #selector(selectAll(_:)), #selector(copy(_:)),
+        #selector(cut(_:)), #selector(paste(_:)), #selector(delete(_:)),
+    ]
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        if let selector, Thread.isMainThread,
+           MainActor.assumeIsolated({ !takesKeys && Self.editActions.contains(selector) }) { return false }
+        return super.responds(to: selector)
+    }
+
     @objc func undo(_ sender: Any?) { if takesKeys { model.undoAcknowledged() } }
     @objc func redo(_ sender: Any?) { if takesKeys { model.redoAcknowledged() } }
     @objc override func selectAll(_ sender: Any?) { if takesKeys { model.selectAll() } }
