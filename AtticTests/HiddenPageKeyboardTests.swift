@@ -370,7 +370,10 @@ final class HiddenPageKeyboardTests: XCTestCase {
 
         rig.panel.makeFirstResponder(nil)  // the controller's resign on a switch
         rig.state.selectSection(.calendar)
-        rig.panel.makeFirstResponder(field)  // the request queued before it
+        let interactiveAtSwitch = (ancestor as? KeptContentHostingView)?.isInteractive
+        let admitted = rig.panel.makeFirstResponder(field)  // the request queued before it
+        print("HIDDEN_TASKS_QUEUED hostInteractive=\(String(describing: interactiveAtSwitch)) admitted=\(admitted) "
+              + "tag=\(String(describing: PanelPageKeyboard.membership(of: field.superview ?? field)))")
         XCTAssertFalse(holds(rig.panel, field), "right after the switch, a hidden Tasks field took the keyboard")
         spin(0.5)
         XCTAssertFalse(holds(rig.panel, field), "after the switch settled, a hidden Tasks field holds the keyboard")
@@ -393,6 +396,7 @@ final class HiddenPageKeyboardTests: XCTestCase {
         bare.contentView?.addSubview(loose)
         XCTAssertTrue(bare.makeFirstResponder(loose.textView))
         XCTAssertEqual(reports, [], "the guard rail fired in a panel with no shell")
+        reports.removeAll()
 
         let rig = try makeHosted()
         defer { rig.close() }
@@ -401,6 +405,6 @@ final class HiddenPageKeyboardTests: XCTestCase {
         rig.host.addSubview(untagged)
         defer { untagged.removeFromSuperview() }
         XCTAssertTrue(rig.panel.makeFirstResponder(untagged.textView))
-        XCTAssertEqual(reports.count, 1, "an untagged view of ours under the shell took the keyboard unreported")
+        XCTAssertEqual(reports.count, 1, "an untagged view of ours under the shell took the keyboard unreported: \(reports)")
     }
 }
