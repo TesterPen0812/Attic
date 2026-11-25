@@ -1535,9 +1535,11 @@ extension HiddenPagesCountersTests {
     }
 
     /// The other half: Calendar shown after the scroll is current in its
-    /// first frame. The now line's clock is built in the first pass with
-    /// Calendar shown, at the minute of the switch; a task made due today
-    /// while it was hidden is in today's agenda day in that pass.
+    /// first frame. Read in the first pass with Calendar shown: the now
+    /// line's clock is built, at the minute of the switch; and the page
+    /// model's snapshot, which that pass draws from, has today's agenda day
+    /// with the task made due today while Calendar was hidden. The drawn
+    /// rows themselves are not read.
     func testC9BCalendarShownAfterATasksScrollIsCurrentInItsFirstFrame() throws {
         Self.scrollSeed = true
         defer { Self.scrollSeed = false }
@@ -1561,9 +1563,14 @@ extension HiddenPagesCountersTests {
             rig.state.switchPage(to: PanelPage.calendar.section, motion: .instant)
             var firstClock: Date?
             var firstHasLate = false
+            var recorded = false
             waitForTestOperation("the first frame with Calendar shown") {
+                // The helper calls this again once it has returned true:
+                // only the first frame with Calendar shown is recorded.
+                if recorded { return true }
                 frame(rig)
                 guard Self.shellRuns > shellBefore else { return false }
+                recorded = true
                 firstClock = CalendarNowLine.lastClockDate
                 firstHasLate = rig.calendarModel.snapshot.groups.first { $0.isToday }?.items.contains {
                     if case let .task(task) = $0 { return task.id == late } else { return false }

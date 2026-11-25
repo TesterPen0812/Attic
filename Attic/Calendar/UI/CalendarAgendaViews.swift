@@ -585,39 +585,39 @@ struct CalendarEventRow: View {
 /// The current time among today's timed events: a red dot where the rings
 /// sit, a red line, and the time.
 ///
-/// Only a line on screen holds the minute clock. A `TimelineView` reads the
-/// view graph's time, which every update of the panel's host sets anew, so
-/// in a Calendar kept built behind another page it was re-checked on every
-/// step of that page's scroll (scroll-takeover-notes.md, Opus build). The
-/// day view's timeline is gated the same way (`CalendarDayView.ticks`).
+/// Only the line of the current page holds the minute clock. A
+/// `TimelineView` reads the view graph's time, which every update of the
+/// panel's host sets anew, so in a Calendar kept built behind another page
+/// it was checked again on every step of that page's scroll.
 struct CalendarNowLine: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.calendarClockIsLive) private var isLive
 
-    #if DEBUG
-    /// Test seams (HiddenPagesCountersTests C9): the line's body runs, the
-    /// minute clock's builds, and the time its last build drew.
+    #if DEBUG && ATTIC_UNIT_TEST_HOST
+    /// Test seams: the line's body runs, the minute clock's builds, and the
+    /// time its last build drew.
     static var bodyEvaluations = 0
     static var clockBuilds = 0
     static var lastClockDate: Date?
     #endif
 
     var body: some View {
-        #if DEBUG
+        #if DEBUG && ATTIC_UNIT_TEST_HOST
         let _ = Self.bodyEvaluations += 1
         #endif
         Group {
             if isLive {
                 TimelineView(.everyMinute) { context in
-                    #if DEBUG
+                    #if DEBUG && ATTIC_UNIT_TEST_HOST
                     let _ = Self.clockBuilds += 1
                     let _ = Self.lastClockDate = context.date
                     #endif
                     line(at: context.date)
                 }
             } else {
-                // Not on screen: drawn once, at the time it is built. Shown
-                // again, the line takes the clock in the same update.
+                // Another page is shown: drawn once, at the time it is
+                // built. Current again, the line takes the clock in the same
+                // update.
                 line(at: Date())
             }
         }
@@ -644,8 +644,7 @@ struct CalendarNowLine: View {
 }
 
 extension EnvironmentValues {
-    /// The Calendar page is on screen (`CalendarPage.isReallyVisible`): only
-    /// then does its agenda's now line hold the minute clock. True outside
-    /// the page.
+    /// The Calendar page is the panel's current page: only then does its
+    /// agenda's now line hold the minute clock. True outside the page.
     @Entry var calendarClockIsLive = true
 }

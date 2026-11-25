@@ -107,8 +107,11 @@ struct CalendarPage: View {
             Task { await model.eventRows.close() }
         }))
         .atticDesignCorners()
-        // A page kept built behind another holds no minute clock.
-        .environment(\.calendarClockIsLive, isReallyVisible)
+        // A page kept built behind another holds no minute clock. Gated on
+        // the current page alone, not on the panel being on screen: the
+        // reveal marks the panel on screen only after its first frame is
+        // shown, so a gate on that would draw the minute of the hide there.
+        .environment(\.calendarClockIsLive, isCurrent)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             model.setVisible(isReallyVisible)
