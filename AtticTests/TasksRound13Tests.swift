@@ -1059,7 +1059,12 @@ extension TasksRound13Tests {
     }
 
     /// The cursor around a title edit: during it, when it ends by Escape or
-    /// by Return, and what the next two ↓ do.
+    /// by Return, and what the next two ↓ do (Air, 25 Nov, tk10-head.log on
+    /// 52bdce2 and tk10-trunk.log on the trunk 10dac862). One difference
+    /// from the trunk: during the edit the trunk keeps the cursor on the
+    /// edited row and this list has none. After the edit both are the same:
+    /// no cursor, the keyboard on the panel, and ↓ reaches no row (a trunk
+    /// defect, on the board; pinned here so a change to it is seen).
     func testTheCursorAroundATitleEditIsPinned() throws {
         try requireKeyWindowTests()
         for ending in ["esc", "return"] {
@@ -1084,12 +1089,16 @@ extension TasksRound13Tests {
             hosted.spin(0.5)
             XCTAssertNil(hosted.model.editingTitleID, "harness: the edit ended (\(ending))")
             line("ended")
+            XCTAssertNil(hosted.model.keyboardFocus, "\(ending): no row has the cursor after the edit, as on the trunk")
+            XCTAssertEqual(hosted.model.selection, [ids[2]], "\(ending): the edited row stays selected")
             hosted.press("\u{F701}", keyCode: 125)
             hosted.spin(0.3)
             line("down1")
             hosted.press("\u{F701}", keyCode: 125)
             hosted.spin(0.3)
             line("down2")
+            XCTAssertNil(hosted.model.keyboardFocus, "\(ending): ↓ after the edit reaches no row (pinned; the trunk is the same)")
+            XCTAssertEqual(hosted.model.selection, [ids[2]], "\(ending): and the selection stays")
         }
     }
 
