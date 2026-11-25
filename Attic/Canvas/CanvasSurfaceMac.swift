@@ -20,6 +20,7 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> CanvasNSView {
         let view = CanvasNSView()
         view.activateRepresentation()
+        PanelPageKeyboard.tag(view, context.environment)
         configure(view)
         return view
     }

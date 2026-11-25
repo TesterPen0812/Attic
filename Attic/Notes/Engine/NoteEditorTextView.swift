@@ -102,6 +102,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         didSet { if !isEditable { cancelCalloutIconSession(reason: "read only") } }
     }
 
+    /// Not a key view while its page is not shown (PanelPageKeyboard), so
+    /// AppKit's Tab loop passes it by and keeps cycling on the page in use.
+    override var canBecomeKeyView: Bool { super.canBecomeKeyView && PanelPageKeyboard.mayTakeKeyboard(self) }
+
     override func becomeFirstResponder() -> Bool {
         cancelCalloutIconSession(reason: "editor keyboard or accessibility entry")
         return super.becomeFirstResponder()
