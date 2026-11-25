@@ -47,6 +47,10 @@ import XCTest
 @MainActor
 final class HiddenPagesCountersTests: XCTestCase {
     private static let pumpSeconds: TimeInterval = 0.6
+    /// C9's seed: a scrollable Now list and a task due today (off for the rest).
+    private static var scrollSeed = false
+    private static let scrollRows = 60
+    private static let scrollSteps = 30
     private static let menuTag = "errand"
 
     private struct Seed {
@@ -161,6 +165,16 @@ final class HiddenPagesCountersTests: XCTestCase {
         }
         for index in 0..<2 {
             seed.owners.append(insert("Task with a note \(index + 1)", tags: ["work"], index: 6 + index))
+        }
+        // C9 only: a Now list long enough to scroll, and today's agenda day
+        // with a row on it, so the hidden Calendar draws its now line.
+        if Self.scrollSeed {
+            let tail = " and the long tail of words a tracker row carries about its pull request and its review"
+            for index in 0..<Self.scrollRows {
+                _ = insert("Tracker task \(index + 1)" + tail, tags: ["tag\(index % 7)"], index: 8 + index)
+            }
+            let due = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first { $0.id == seed.plain[0] })
+            due.dueDay = DueDay(date: now, calendar: CalendarMonthMath.calendar())
         }
         try context.save()
     }
@@ -1441,6 +1455,133 @@ extension HiddenPagesCountersTests {
             host.layoutSubtreeIfNeeded()
             if panel == 340 { XCTAssertEqual(seen.widths.last, 340, "harness: the reader ran") }
             XCTAssertEqual(seen.widths.filter { $0 != 340 }, [], "panel \(panel): a row 300 wide with 40 around it is in a page 340 wide")
+        }
+    }
+
+    // MARK: - C9: a Tasks scroll with Calendar built behind it
+
+    /// The Tasks Now list: the long list inside the kept host.
+    private func tasksList(_ rig: Rig) throws -> NSScrollView {
+        var found: [NSScrollView] = []
+        func walk(_ view: NSView) {
+            if let scroll = view as? NSScrollView, !scroll.isHiddenOrHasHiddenAncestor,
+               KeptContentHostingView.enclosing(scroll) != nil,
+               let document = scroll.documentView, document.bounds.height > scroll.contentView.bounds.height + 200 {
+                found.append(scroll)
+            }
+            view.subviews.forEach(walk)
+        }
+        walk(rig.content)
+        return try XCTUnwrap(found.first, "harness: the Tasks Now list is long enough to scroll")
+    }
+
+    /// One scroll step of the Tasks list, then the file's pump: a couple of
+    /// run-loop turns, each with a layout and display pass (the window's own
+    /// cycle).
+    private func scrollStep(_ list: NSScrollView, _ rig: Rig, step: Int) {
+        let y = CGFloat(step) * 14
+        list.contentView.scroll(to: CGPoint(x: 0, y: y))
+        list.reflectScrolledClipView(list.contentView)
+        pump(rig.content, rig.panel, seconds: 0.024)
+        XCTAssertEqual(list.contentView.bounds.origin.y, y, accuracy: 0.6, "harness: step \(step) moved the list")
+    }
+
+    /// Today's agenda day, with its row and its now line, in the hidden Calendar.
+    private func assertTodayHasItsNowLine(_ rig: Rig) {
+        let today = rig.calendarModel.snapshot.groups.first { $0.isToday }
+        XCTAssertEqual(today?.hasRows, true, "harness: today's agenda day has a row")
+        XCTAssertEqual(today?.items.contains(.now), true, "harness: today's agenda day has its now line")
+    }
+
+    /// The traces (Air, t446n439, 24-25 Nov): while the Tasks list scrolls,
+    /// the panel's host updates its graph on each step, and the Calendar
+    /// kept built behind Tasks costs most of it; its agenda most of all,
+    /// and the agenda's every-minute now line alone about two thirds of
+    /// that (scroll-takeover-notes.md, Opus build). With Calendar hidden
+    /// behind Tasks through its build and a scroll of the list: no agenda
+    /// day's body runs, and the now line holds no minute clock.
+    func testC9AHiddenCalendarDoesNoClockOrAgendaWorkThroughATasksScroll() throws {
+        Self.scrollSeed = true
+        defer { Self.scrollSeed = false }
+        let linesBefore = CalendarNowLine.bodyEvaluations
+        let clocksBefore = CalendarNowLine.clockBuilds
+        try withRig { rig in
+            // The panel is on screen, as in the app (the rig starts unrevealed).
+            rig.state.panelDidReveal()
+            pump(rig.content, rig.panel)
+            XCTAssertEqual(rig.state.selectedSection, PanelPage.tasks.section, "harness: Tasks is shown")
+            assertTodayHasItsNowLine(rig)
+            XCTAssertGreaterThan(CalendarNowLine.bodyEvaluations - linesBefore, 0,
+                                 "harness: the hidden Calendar built today's now line")
+            let list = try tasksList(rig)
+            let agendaBefore = CalendarAgendaDay.bodyEvaluationsByDay.values.reduce(0, +)
+            let linesAtScroll = CalendarNowLine.bodyEvaluations
+            let clocksAtScroll = CalendarNowLine.clockBuilds
+            let panelBefore = AtticPanelHostingView.layoutPasses
+            for step in 1...Self.scrollSteps { scrollStep(list, rig, step: step) }
+            let agenda = CalendarAgendaDay.bodyEvaluationsByDay.values.reduce(0, +) - agendaBefore
+            let panel = AtticPanelHostingView.layoutPasses - panelBefore
+            print("HIDDEN_COUNTS C9A steps=\(Self.scrollSteps) panelLayouts=\(panel) agendaDays=\(agenda) "
+                  + "nowLine=\(CalendarNowLine.bodyEvaluations - linesAtScroll) clockScroll=\(CalendarNowLine.clockBuilds - clocksAtScroll) "
+                  + "clockHidden=\(CalendarNowLine.clockBuilds - clocksBefore)")
+            XCTAssertGreaterThan(panel, 0, "harness: the panel's host laid out during the Tasks scroll")
+            XCTAssertEqual(agenda, 0, "C9: an agenda day's body ran during a Tasks scroll with Calendar hidden")
+            XCTAssertEqual(CalendarNowLine.clockBuilds - clocksBefore, 0,
+                           "C9: the hidden Calendar's now line built a minute clock (build and Tasks scroll, Calendar never shown)")
+        }
+    }
+
+    /// The other half: Calendar shown after the scroll is current in its
+    /// first frame. Read in the first pass with Calendar shown: the now
+    /// line's clock is built, at the minute of the switch; and the page
+    /// model's snapshot, which that pass draws from, has today's agenda day
+    /// with the task made due today while Calendar was hidden. The drawn
+    /// rows themselves are not read.
+    func testC9BCalendarShownAfterATasksScrollIsCurrentInItsFirstFrame() throws {
+        Self.scrollSeed = true
+        defer { Self.scrollSeed = false }
+        // Only a clock built in this rig counts: a hidden line draws no clock.
+        CalendarNowLine.lastClockDate = nil
+        try withRig { rig in
+            // The panel is on screen, as in the app (the rig starts unrevealed).
+            rig.state.panelDidReveal()
+            pump(rig.content, rig.panel)
+            assertTodayHasItsNowLine(rig)
+            // A change while hidden: a second task made due today.
+            let late = rig.seed.plain[1]
+            let lateTask = try XCTUnwrap(rig.tasks.task(withID: late), "harness: the second plain task")
+            XCTAssertTrue(rig.tasks.update(lateTask, dueDay: .some(DueDay(date: Date(), calendar: CalendarMonthMath.calendar()))),
+                          "harness: the second task is due today")
+            pump(rig.content, rig.panel)
+            let list = try tasksList(rig)
+            for step in 1...10 { scrollStep(list, rig, step: step) }
+            let shellBefore = Self.shellRuns
+            let switchedAt = Date()
+            rig.state.switchPage(to: PanelPage.calendar.section, motion: .instant)
+            var firstClock: Date?
+            var firstHasLate = false
+            var recorded = false
+            waitForTestOperation("the first frame with Calendar shown") {
+                // The helper calls this again once it has returned true:
+                // only the first frame with Calendar shown is recorded.
+                if recorded { return true }
+                frame(rig)
+                guard Self.shellRuns > shellBefore else { return false }
+                recorded = true
+                firstClock = CalendarNowLine.lastClockDate
+                firstHasLate = rig.calendarModel.snapshot.groups.first { $0.isToday }?.items.contains {
+                    if case let .task(task) = $0 { return task.id == late } else { return false }
+                } ?? false
+                return true
+            }
+            let after = Date()
+            XCTAssertEqual(rig.state.selectedSection, PanelPage.calendar.section, "harness: Calendar is shown")
+            let calendar = CalendarMonthMath.calendar()
+            let minute = { (date: Date) in calendar.dateInterval(of: .minute, for: date)?.start }
+            let shown = try XCTUnwrap(firstClock, "C9: no now-line clock was live in the first frame with Calendar shown")
+            XCTAssertTrue([minute(switchedAt), minute(after)].contains(minute(shown)),
+                          "C9: the first frame's now line shows \(shown), not the minute of the switch (\(switchedAt))")
+            XCTAssertTrue(firstHasLate, "C9: the task made due today while Calendar was hidden is missing from its first frame")
         }
     }
 }
