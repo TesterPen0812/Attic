@@ -657,7 +657,15 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
                        option: flags.contains(.option), control: flags.contains(.control))
     }
 
+    /// The board acts on keys and edit commands only while its page is
+    /// shown. The shell keeps a hidden page built and in the window, so the
+    /// board can still be first responder there (page-host runs, 25 Nov);
+    /// a key it gets then goes on up the chain, and an edit command does
+    /// nothing. The same rule as `performKeyEquivalent`.
+    private var takesKeys: Bool { model.isShown && !isHiddenOrHasHiddenAncestor }
+
     override func keyDown(with event: NSEvent) {
+        guard takesKeys else { return super.keyDown(with: event) }
         if event.charactersIgnoringModifiers == " " {
             model.spaceHeld = true
             return
@@ -679,7 +687,7 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard let window, window.firstResponder === self, model.isShown, !isHiddenOrHasHiddenAncestor else {
+        guard let window, window.firstResponder === self, takesKeys else {
             return super.performKeyEquivalent(with: event)
         }
         let key = Self.key(event)
@@ -687,13 +695,28 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
         return true
     }
 
-    @objc func undo(_ sender: Any?) { model.undoAcknowledged() }
-    @objc func redo(_ sender: Any?) { model.redoAcknowledged() }
-    @objc override func selectAll(_ sender: Any?) { model.selectAll() }
-    @objc func copy(_ sender: Any?) { model.copySelection() }
-    @objc func cut(_ sender: Any?) { model.cutSelection() }
-    @objc func paste(_ sender: Any?) { model.paste() }
-    @objc func delete(_ sender: Any?) { model.deleteSelection() }
+    /// Hidden, the board does not answer its Edit actions at all, so the
+    /// menu's Undo, Cut or Paste goes on up the chain to whoever handles it
+    /// on the page in use, as a refused key does. Not by menu validation:
+    /// a disabled item would stop ⌘Z at the menu.
+    private static let editActions: Set<Selector> = [
+        #selector(undo(_:)), #selector(redo(_:)), #selector(selectAll(_:)), #selector(copy(_:)),
+        #selector(cut(_:)), #selector(paste(_:)), #selector(delete(_:)),
+    ]
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        if let selector, Thread.isMainThread,
+           MainActor.assumeIsolated({ !takesKeys && Self.editActions.contains(selector) }) { return false }
+        return super.responds(to: selector)
+    }
+
+    @objc func undo(_ sender: Any?) { if takesKeys { model.undoAcknowledged() } }
+    @objc func redo(_ sender: Any?) { if takesKeys { model.redoAcknowledged() } }
+    @objc override func selectAll(_ sender: Any?) { if takesKeys { model.selectAll() } }
+    @objc func copy(_ sender: Any?) { if takesKeys { model.copySelection() } }
+    @objc func cut(_ sender: Any?) { if takesKeys { model.cutSelection() } }
+    @objc func paste(_ sender: Any?) { if takesKeys { model.paste() } }
+    @objc func delete(_ sender: Any?) { if takesKeys { model.deleteSelection() } }
 
     // MARK: Cursor and accessibility
 
