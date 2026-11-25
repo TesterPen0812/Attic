@@ -154,6 +154,10 @@
     "AtticTests/GlassLiftToggleTests.swift": {
       "runloop": 3
     },
+    "AtticTests/HiddenPageKeyboardTests.swift": {
+      "runloop": 1,
+      "skip": 1
+    },
     "AtticTests/HiddenPagesCountersTests.swift": {
       "runloop": 3
     },
