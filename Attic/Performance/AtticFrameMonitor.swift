@@ -13,6 +13,33 @@ enum RZS {
     @MainActor static func pageStamp(_ page: String) {
         let fr = NSApp.keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "nokey"
         print(String(format: "RZPAGE %.4f ", CACurrentMediaTime()) + "\(page) fr=\(fr)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(400)) {
+            MainActor.assumeIsolated {
+                let window = NSApp.keyWindow
+                let responder = window?.firstResponder
+                var host = "none"
+                if let view = responder as? NSView,
+                   let kept = (view as? KeptContentHostingView) ?? KeptContentHostingView.enclosing(view) {
+                    host = (kept.rzPageHost ? "page" : "tab") + "(interactive=\(kept.isInteractive))"
+                }
+                let fr = responder.map { String(describing: type(of: $0)) } ?? "nil"
+                print(String(format: "RZKB %.4f ", CACurrentMediaTime()) + "\(page) key=\(window != nil) fr=\(fr) host=\(host)")
+            }
+        }
+    }
+    static let hiddenChangeMs = Int(ProcessInfo.processInfo.environment["RZ_HIDDEN_CHANGE_MS"] ?? "")
+    nonisolated(unsafe) static var hiddenChanges = 0
+    @MainActor static func calendarHidden(_ store: TaskStore) {
+        guard let ms = hiddenChangeMs else { return }
+        hiddenChanges += 1
+        let n = hiddenChanges
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) { [weak store] in
+            MainActor.assumeIsolated {
+                let draft = TaskDraft(title: "rzprobe \(n)", dueDay: DueDay(date: Date(), calendar: .current))
+                let ok = store?.commandLibrary?.createTasks([draft]) != nil
+                print(String(format: "RZCHANGE %.4f ", CACurrentMediaTime()) + "n=\(n) ok=\(ok)")
+            }
+        }
     }
     nonisolated(unsafe) static var hlNs: UInt64 = 0, klNs: UInt64 = 0, evNs: UInt64 = 0
     nonisolated(unsafe) static var last = ""
