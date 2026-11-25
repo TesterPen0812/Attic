@@ -542,6 +542,31 @@ final class PanelIntegrationTests: XCTestCase {
     /// Runs last in the suite (alphabetical): every test reveals its own panel,
     /// and hiding is animated, so the panels used to stay ordered in with the
     /// first one key and the application active for the rest of the P-Z shard.
+    /// The Calendar page sits in a kept host of its own (page-host-tech-note.md,
+    /// Way 1) that claims no keyboard, in use while Calendar is shown and
+    /// out of use while it is hidden.
+    func testCalendarSitsInAKeptHostThatClaimsNoKeyboard() throws {
+        let panel = try makePanel()
+        let window = panel.controller.panelForTesting
+        func hosts(_ view: NSView) -> [KeptContentHostingView] {
+            ((view as? KeptContentHostingView).map { [$0] } ?? []) + view.subviews.flatMap(hosts)
+        }
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .calendar, takesKeyboard: true), .shown)
+        spin(until: { panel.uiState.selectedSection == .calendar })
+        spin(0.5)
+        let pageHosts = window.contentView.map { hosts($0).filter { !$0.claimsKeyboard } } ?? []
+        XCTAssertEqual(pageHosts.count, 1, "one kept host claims no keyboard: Calendar's")
+        let calendarHost = try XCTUnwrap(pageHosts.first)
+        XCTAssertTrue(calendarHost.isInteractive, "shown, it is in use")
+        XCTAssertFalse((window.firstResponder as? NSView).map { $0 === calendarHost || $0.isDescendant(of: calendarHost) } ?? false,
+                       "shown, it does not take the keyboard")
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: true), .shown)
+        spin(until: { panel.uiState.selectedSection == .tasks })
+        spin(0.5)
+        XCTAssertFalse(calendarHost.isInteractive, "hidden, it is out of use")
+        XCTAssertFalse(calendarHost.canBecomeKeyView, "and out of the key-view loop")
+    }
+
     @MainActor
     func testZZRevealedPanelsDoNotOutliveTheSuite() {
         XCTAssertEqual(PanelLeakGuard.leaked(since: "PanelIntegrationTests"), [])
