@@ -107,6 +107,8 @@ struct CalendarPage: View {
             Task { await model.eventRows.close() }
         }))
         .atticDesignCorners()
+        // A page kept built behind another holds no minute clock.
+        .environment(\.calendarClockIsLive, isReallyVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             model.setVisible(isReallyVisible)
