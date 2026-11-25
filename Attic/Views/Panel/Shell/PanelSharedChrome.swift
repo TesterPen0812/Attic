@@ -621,7 +621,7 @@ private struct PanelAgentSlot: View {
 
     private func settleAside() {
         guard let now = PanelSharedBottomBar.agentAsideChange(current: aside, reach: reach, agentMinX: minX.value) else { return }
-        #if ATTIC_LOCAL_ONLY
+        #if DEBUG && ATTIC_LOCAL_ONLY
         PanelInvalidationProbe.stepWrite?("agent-aside")
         #endif
         aside = now

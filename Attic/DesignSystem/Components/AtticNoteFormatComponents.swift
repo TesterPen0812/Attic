@@ -245,6 +245,9 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
         Group {
             if let growth {
                 let extent = growth.extent
+                #if DEBUG
+                let _ = AtticFormatRowGrowthProbe.rowWidth?(growth.rowWidth)
+                #endif
                 Color.clear
                     .frame(width: extent.width, height: height)
                     .overlay(alignment: .leading) {
@@ -273,6 +276,13 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
                               expectedRadius: AtticRadius.control(height: AtticControlSize.panelButton.height))
     }
 }
+#if DEBUG
+/// Test seam: the row width each run of the format row's growth drew with.
+@MainActor enum AtticFormatRowGrowthProbe {
+    static var rowWidth: ((CGFloat) -> Void)?
+}
+#endif
+
 
 /// Where the format row's glass is while it grows out of a button (p2-37
 /// draft 1): the button's frame and the row's width in the row's own space,

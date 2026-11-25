@@ -781,7 +781,7 @@ struct NoteFormatRowView: View {
     private func settleRoomy(need: CGFloat) {
         let now = Self.isRoomy(width: width.value, need: need)
         guard now != roomy else { return }
-        #if ATTIC_LOCAL_ONLY
+        #if DEBUG && ATTIC_LOCAL_ONLY
         PanelInvalidationProbe.stepWrite?("format-row-roomy")
         #endif
         roomy = now
@@ -904,7 +904,7 @@ struct NoteFormatRowSwitch<Row: View>: View {
     /// The row's measured room into view state, when it moved.
     private func takeMeasuredWidth() {
         guard abs(measuredWidth.value - width) > 0.5 else { return }
-        #if ATTIC_LOCAL_ONLY
+        #if DEBUG && ATTIC_LOCAL_ONLY
         PanelInvalidationProbe.stepWrite?("format-switch-width")
         #endif
         width = measuredWidth.value

@@ -20,7 +20,10 @@ import SwiftData
     static var islandGlassSize: ((CGSize) -> Void)?
     /// A view state written from a layout step (resize second pass): the
     /// writer's name. A resize step should write none that draws nothing.
+    /// Tests only: compiled out of Release.
+    #if DEBUG
     static var stepWrite: ((String) -> Void)?
+    #endif
 }
 #endif
 

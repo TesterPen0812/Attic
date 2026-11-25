@@ -1997,6 +1997,59 @@ final class NotesFormatControlsTests: XCTestCase {
         }
     }
 
+    /// Resize second pass (25 Nov): while the format row is closed its
+    /// room is kept out of view state. A row opened after a resize grows
+    /// at the width the bottom row has now from its first laid-out frame,
+    /// never at the width it had before the resize (with motion and
+    /// under Reduce Motion).
+    func testAFormatRowOpenedAfterAResizeTakesTheCurrentWidthOnItsFirstFrame() {
+        #if DEBUG
+        for reduceMotion in [false, true] {
+            let (controls, _, _) = make()
+            let state = NoteFormatRowState()
+            var design = AtticDesignContext(mode: .light)
+            design.reduceMotion = reduceMotion
+            let view = NoteFormatRowSwitch(state: state, model: { controls.formatModel }) {
+                HStack(spacing: 0) {
+                    Color.clear.frame(width: 36, height: 32)
+                    Spacer(minLength: 12)
+                    Color.clear.frame(width: 36, height: 32)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .environment(\.atticDesign, design)
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(x: 0, y: 0, width: 388, height: 40)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            windows.append(window)
+            func settle(to width: CGFloat) {
+                hosting.frame.size.width = width
+                for _ in 0..<3 {
+                    hosting.layoutSubtreeIfNeeded()
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+                }
+            }
+            settle(to: 388)
+            for width in [370, 350, 330, 310, 300] as [CGFloat] { settle(to: width) }
+            var drawn: [CGFloat] = []
+            AtticFormatRowGrowthProbe.rowWidth = { drawn.append($0) }
+            defer { AtticFormatRowGrowthProbe.rowWidth = nil }
+            state.open(keyboard: false)
+            hosting.layoutSubtreeIfNeeded()
+            let first = drawn
+            RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+            hosting.layoutSubtreeIfNeeded()
+            print("FORMAT_ROW_OPEN_AFTER_RESIZE reduceMotion=\(reduceMotion) first=\(first) all=\(Set(drawn).sorted())")
+            XCTAssertFalse(drawn.isEmpty, "harness: the row drew as it opened (reduceMotion \(reduceMotion))")
+            for width in drawn {
+                XCTAssertEqual(width, 300, accuracy: 0.5, "the opening row drew at a width the bottom row no longer has (reduceMotion \(reduceMotion))")
+            }
+        }
+        #endif
+    }
+
     /// ⌃Tab reaches the open row; ← → Tab ⇧Tab move round it, Return
     /// presses, and any other key goes back to writing. The text keeps the
     /// caret throughout.

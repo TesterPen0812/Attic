@@ -1042,7 +1042,7 @@ private struct PanelIslandSurface: View {
             .onReceive(source?.panelSizeChanges.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) {
                 // A hidden stand-in draws nothing: no size, no transaction.
                 guard standIn?.isShown ?? true, sentSize != $0 else { return }
-                #if ATTIC_LOCAL_ONLY
+                #if DEBUG && ATTIC_LOCAL_ONLY
                 PanelInvalidationProbe.stepWrite?(standIn == nil ? "island-size" : "stand-in-size")
                 #endif
                 sentSize = $0

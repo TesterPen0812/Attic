@@ -149,7 +149,7 @@ final class PanelIntegrationTests: XCTestCase {
     /// stand-in's glass size each moved on every step and started a second
     /// transaction pass; only the shown island's glass takes each size.
     func testAResizeStepWritesNoViewStateThatDrawsNothing() throws {
-        #if ATTIC_LOCAL_ONLY
+        #if DEBUG && ATTIC_LOCAL_ONLY
         var writes: [String: Int] = [:]
         PanelInvalidationProbe.stepWrite = { writes[$0, default: 0] += 1 }
         defer { PanelInvalidationProbe.stepWrite = nil }

@@ -1776,7 +1776,7 @@ final class AgentChatHostedTests: XCTestCase {
     /// a resize that narrows past the step-aside width and back, the only
     /// writes are the two turns, and it turns at the same place.
     func testAResizeAcrossTheStepAsideWidthWritesOnlyTheTurns() throws {
-        #if ATTIC_LOCAL_ONLY
+        #if DEBUG && ATTIC_LOCAL_ONLY
         chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus, leadingReach: 200),
                       actions: PanelBottomBarActions(), for: .tasks)
         spin(0.2)
