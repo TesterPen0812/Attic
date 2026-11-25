@@ -296,4 +296,111 @@ final class HiddenPageKeyboardTests: XCTestCase {
         XCTAssertFalse(holds(rig.panel, editor), "Notes hid with the keyboard on its editor")
 
     }
+
+    // MARK: The shell hosted directly (review round, 25 Nov)
+
+    /// The panel's own shell (an `AtticPanelHostingView` in an `AtticPanel`
+    /// whose page query reads the shell's state, as the controller sets it),
+    /// with the Tasks page state in reach.
+    private struct Hosted {
+        let panel: AtticPanel
+        let host: AtticPanelHostingView
+        let state: PanelUIState
+        let store: TaskStore
+        let tasksState: TasksPageState
+        let close: () -> Void
+    }
+
+    private func makeHosted() throws -> Hosted {
+        let suite = "HiddenPageKeyboardHosted.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try TasksPagePreview.seedDemo(in: container)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 340, height: 560)
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let tasksState = TasksPageState()
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes,
+                                     canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     chromeInteractionState: chrome, uiState: state,
+                                     settings: AppSettings(defaults: defaults), tasksPageState: tasksState),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
+        let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = content
+        panel.showsPageQuery = { [weak state] page in state.map { PanelPage($0.selectedSection) == page } ?? true }
+        panel.orderFront(nil)
+        return Hosted(panel: panel, host: host, state: state, store: store, tasksState: tasksState) {
+            host.cancelActiveInteraction(reason: .lostWindow)
+            state.releasePageContent()
+            panel.close()
+            defaults.removePersistentDomain(forName: suite)
+        }
+    }
+
+    /// Review P2 (both): a focus request queued before a switch away from
+    /// Tasks (the title editor's async claim, a dropdown's give-back) runs
+    /// right after the switch, before the Tasks tab host stops being
+    /// interactive. The field is the Tasks page's, so it is refused.
+    func testASwitchAwayFromTasksRefusesAQueuedFocusRequestToATasksField() throws {
+        let rig = try makeHosted()
+        defer { rig.close() }
+        rig.state.selectSection(.tasks)
+        spin(1.5)
+        let model = rig.tasksState.model(for: rig.store, toasts: nil)
+        let id = try XCTUnwrap(model.rows(for: .now).first?.id, "the seed has a task on Now")
+        model.beginEditingTitle(id)
+        func titleField() -> AtticTokenTextView? {
+            views(AtticTokenTextView.self, in: rig.panel).first { $0.accessibilityIdentifier() == "AtticTitleField" }
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while titleField() == nil, Date() < deadline { spin(0.05) }
+        let field = try XCTUnwrap(titleField(), "the row's title editor is built")
+        var ancestor = field.superview
+        while let view = ancestor, !(view is KeptContentHostingView) { ancestor = view.superview }
+        XCTAssertNotNil(ancestor, "the title editor sits in a Tasks tab host")
+
+        rig.panel.makeFirstResponder(nil)  // the controller's resign on a switch
+        rig.state.selectSection(.calendar)
+        rig.panel.makeFirstResponder(field)  // the request queued before it
+        XCTAssertFalse(holds(rig.panel, field), "right after the switch, a hidden Tasks field took the keyboard")
+        spin(0.5)
+        XCTAssertFalse(holds(rig.panel, field), "after the switch settled, a hidden Tasks field holds the keyboard")
+    }
+
+    /// Review P1 (opus2) and P2-1 (opus1): the guard rail never fires
+    /// without a real shell, and inside one it fires for an untagged view
+    /// of ours under the panel's hosting view.
+    func testTheGuardRailFiresOnlyInAShellAndThereForAnUntaggedView() throws {
+        let previous = PanelPageKeyboard.reportUnknownResponder
+        var reports: [String] = []
+        PanelPageKeyboard.reportUnknownResponder = { reports.append($0) }
+        defer { PanelPageKeyboard.reportUnknownResponder = previous }
+
+        let bare = AtticPanel(contentRect: CGRect(x: -5_000, y: -5_000, width: 300, height: 100),
+                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        bare.isReleasedWhenClosed = false
+        defer { bare.close() }
+        let loose = AtticTokenFieldView(frame: NSRect(x: 0, y: 0, width: 280, height: 20))
+        bare.contentView?.addSubview(loose)
+        XCTAssertTrue(bare.makeFirstResponder(loose.textView))
+        XCTAssertEqual(reports, [], "the guard rail fired in a panel with no shell")
+
+        let rig = try makeHosted()
+        defer { rig.close() }
+        spin(0.4)
+        let untagged = AtticTokenFieldView(frame: NSRect(x: 0, y: 0, width: 280, height: 20))
+        rig.host.addSubview(untagged)
+        defer { untagged.removeFromSuperview() }
+        XCTAssertTrue(rig.panel.makeFirstResponder(untagged.textView))
+        XCTAssertEqual(reports.count, 1, "an untagged view of ours under the shell took the keyboard unreported")
+    }
 }

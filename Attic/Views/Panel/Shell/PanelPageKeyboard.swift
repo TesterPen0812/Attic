@@ -67,6 +67,10 @@ enum PanelPageKeyboard {
     }
 
     #if DEBUG
+    /// Where the guard rail reports; a test swaps it to record instead of
+    /// stopping the process.
+    static var reportUnknownResponder: (String) -> Void = { assertionFailure($0) }
+
     /// Guard rail (debug and test builds): one of our own views inside the
     /// panel took the keyboard with no page tag and no host above it, so the
     /// rule above cannot know its page. Tag its representable.
@@ -78,7 +82,7 @@ enum PanelPageKeyboard {
             if membership(of: candidate) != nil || isHost(candidate) { return }
             current = candidate.superview
         }
-        assertionFailure("\(type(of: view)) took the panel's keyboard with no page tag and no host above it")
+        reportUnknownResponder("\(type(of: view)) took the panel's keyboard with no page tag and no host above it")
     }
 
     private static func isHost(_ view: NSView) -> Bool {

@@ -104,6 +104,52 @@ final class PanelPageKeyboardRuleTests: XCTestCase {
         XCTAssertTrue(panel.firstResponder === second, "Shift-Tab cycled back")
     }
 
+    /// Review P2 (opus2): a real Tab, sent as a key event through the
+    /// window, moves past a refused field that AppKit still counts as a
+    /// key view (an AppKit text field here, like a tagged field without a
+    /// `canBecomeKeyView` answer of its own), from a field and from the
+    /// window itself, and Shift-Tab does the same.
+    func testATabKeyThroughTheWindowMovesPastARefusedField() throws {
+        let panel = panel(showing: Shown([.calendar]))
+        defer { panel.close() }
+        let content = try XCTUnwrap(panel.contentView)
+        func field(_ membership: PanelKeyboardMembership, y: CGFloat) -> NSTextField {
+            let field = NSTextField(frame: CGRect(x: 10, y: y, width: 200, height: 22))
+            content.addSubview(field)
+            PanelPageKeyboard.tag(field, membership)
+            return field
+        }
+        let first = field(.page(.calendar), y: 10)
+        let hidden = field(.page(.notes), y: 50)
+        let second = field(.chrome, y: 90)
+        first.nextKeyView = hidden
+        hidden.nextKeyView = second
+        second.nextKeyView = first
+        content.nextKeyView = hidden
+        panel.initialFirstResponder = hidden
+        func holds(_ view: NSView) -> Bool { (panel.firstResponder as? NSView)?.isDescendant(of: view) == true }
+        func name() -> String { panel.firstResponder.map { String(describing: type(of: $0)) } ?? "nil" }
+        func tab(shift: Bool = false) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? [.shift] : [],
+                                                       timestamp: ProcessInfo.processInfo.systemUptime,
+                                                       windowNumber: panel.windowNumber, context: nil,
+                                                       characters: shift ? "\u{19}" : "\t", charactersIgnoringModifiers: "\t",
+                                                       isARepeat: false, keyCode: 48))
+            panel.sendEvent(event)
+        }
+
+        XCTAssertTrue(panel.makeFirstResponder(first))
+        try tab()
+        XCTAssertTrue(holds(second), "Tab from a field stopped on or before the refused field (responder \(name()))")
+        try tab(shift: true)
+        XCTAssertTrue(holds(first), "Shift-Tab did not move past the refused field (responder \(name()))")
+
+        XCTAssertTrue(panel.makeFirstResponder(nil))
+        try tab()
+        XCTAssertFalse(holds(hidden))
+        XCTAssertTrue(holds(first) || holds(second), "Tab from the window stalled on the refused field (responder \(name()))")
+    }
+
     /// Views outside an AtticPanel are not the panel's to refuse.
     func testViewsOutsideAPanelAreNotRefused() {
         let window = NSWindow(contentRect: CGRect(x: -5_000, y: -5_000, width: 200, height: 200), styleMask: [.borderless],
