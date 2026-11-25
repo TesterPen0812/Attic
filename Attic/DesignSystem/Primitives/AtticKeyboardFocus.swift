@@ -194,10 +194,67 @@ enum AtticFocusReaderCensus {
         if records { notesRowActions[id] = focused }
     }
 
+    /// Focus checks per panel region, counted by `AtticFocusCheckProbe`
+    /// (one sentinel reader per page). Counted whether or not `records` is on;
+    /// read as deltas.
+    static var focusChecks: [String: Int] = [:]
+
+    static func noteFocusCheck(_ region: String) {
+        focusChecks[region, default: 0] += 1
+        // The input phase the check ran in (`AtticPanel.sendEvent`).
+        phaseChecks["\(region)@\(phase)", default: 0] += 1
+    }
+    /// The panel's input phase, set by `AtticPanel.sendEvent` (DEBUG): "md"
+    /// while a mouse-down is handled, "after-md" until the next input, and
+    /// the same for mouse-up and key-down. A check in "after-md" ran in the
+    /// pass after the mouse-down's handler.
+    static var phase = "idle"
+    static var phaseChecks: [String: Int] = [:]
+
     static func reset() {
+        phaseChecks = [:]
         rings = [:]
         notesRows = []
         notesRowActions = [:]
+        focusChecks = [:]
+    }
+}
+
+/// DEBUG sentinel focus reader for one panel region (SPEED-FOCUS-HIDDEN-PAGES).
+/// It holds an unbound `@FocusState`, as SwiftUI's own focus readers in a
+/// page do (a Button's `OnCommandModifier`, a ring's focus state): each
+/// focus change in the window's graph re-checks it, which runs its dynamic
+/// property's `update()` even when its body is skipped. So its count is the
+/// number of times a focus change reached that region's part of the graph.
+struct AtticFocusCheckProbe: View {
+    let region: String
+    private let check: Check
+
+    init(region: String) {
+        self.region = region
+        check = Check(region: region)
+    }
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
+    }
+
+    struct Check: DynamicProperty {
+        @FocusState private var focused: Bool
+        let region: String
+        func update() { MainActor.assumeIsolated { AtticFocusReaderCensus.noteFocusCheck(region) } }
     }
 }
 #endif
+
+extension View {
+    /// DEBUG only: a sentinel focus reader for the region (`AtticFocusCheckProbe`).
+    @ViewBuilder
+    func atticFocusCheckProbe(_ region: String) -> some View {
+        #if DEBUG
+        background(AtticFocusCheckProbe(region: region))
+        #else
+        self
+        #endif
+    }
+}

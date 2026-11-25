@@ -177,13 +177,12 @@ final class TasksBreadthGuardTests: XCTestCase {
     /// runs only the old and the new row's wrappers, and the new row's last
     /// run draws the tint and the ring together.
     ///
-    /// Pinned value, board row TASKS-CLICK-SELECTION-FOCUS-FOLD: a click and
-    /// ↓ are two updates (the selection, then the focus state's change a
-    /// later update), so each of the two rows runs exactly twice; Tab is one
-    /// update. The trunk is the same (57aa530d, Air, key window: click and ↓
-    /// old=2 new=2, Tab 1, though every built row runs there). Folding the
-    /// selection and the focus into one update is measured first; this pin
-    /// is deleted when that fold lands, and the counts go back to once each.
+    /// Board row TASKS-CLICK-SELECTION-FOCUS-FOLD: on the trunk a click and
+    /// ↓ were two updates (the selection, then the row's focus state a later
+    /// update), so each of the two rows ran twice (57aa530d, Air, key
+    /// window). With the list owning the keyboard the cursor is model state
+    /// written with the selection, so they are one update and each row runs
+    /// once (2f919cb, Air, tk5-classes.log: click, ↓ and Tab `rows=2 runs=2`).
     func testARealClickArrowAndTabRunOnlyTheOldAndNewRows() throws {
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
@@ -209,12 +208,12 @@ final class TasksBreadthGuardTests: XCTestCase {
         func drawn(_ id: UUID) -> (isSelected: Bool, isFocused: Bool)? { TasksCellBodyCounts.leafStates[TasksRowID(tab: .now, id: id)] }
 
         let click = try runs("click") { try hosted.clickRow(b, tab: .now) }
-        XCTAssertEqual(click, [a: 2, b: 2], "a click: the old and the new row, exactly twice each (pinned, TASKS-CLICK-SELECTION-FOCUS-FOLD)")
+        XCTAssertEqual(click, [a: 1, b: 1], "a click: the old and the new row, once each")
         XCTAssertTrue(drawn(b).map { $0.isSelected && $0.isFocused } == true, "B draws the tint and the ring")
         XCTAssertTrue(drawn(a).map { !$0.isSelected && !$0.isFocused } == true, "A draws neither")
 
         let arrow = runs("arrow") { hosted.press(String(UnicodeScalar(NSDownArrowFunctionKey)!), keyCode: 125) }
-        XCTAssertEqual(arrow, [b: 2, c: 2], "↓: the old and the new row, exactly twice each (pinned, TASKS-CLICK-SELECTION-FOCUS-FOLD)")
+        XCTAssertEqual(arrow, [b: 1, c: 1], "↓: the old and the new row, once each")
         XCTAssertTrue(drawn(c).map { $0.isSelected && $0.isFocused } == true, "C draws the tint and the ring")
 
         let tab = runs("tab") { hosted.press("\t", keyCode: 48) }

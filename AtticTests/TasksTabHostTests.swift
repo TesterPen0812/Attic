@@ -936,15 +936,21 @@ final class TasksTabHostTests: XCTestCase {
         TasksPageRenderProbe.heldReads = (0, 0)
         TasksPageRenderProbe.staleHeldReads = (0, 0)
         var staleBy: [String] = []
+        func focusRow(_ row: AtticRowFocusID) {
+            hosted.model.receiveKeyboardFocus(row, keyboardDriving: false)
+            link.setValue(row)
+        }
         for (n, id) in finished.enumerated() {
             let before = TasksPageRenderProbe.staleHeldReads
             let other = stays[n % stays.count]
             switch n % 4 {
-            case 0: link.setValue(AtticRowFocusID(page: TasksTab.backlog.rawValue, id: other))
+            // The cursor and the list's keyboard, as the page's `focusedRow`
+            // writes them (list-owned-focus: the link holds no row).
+            case 0: focusRow(AtticRowFocusID(page: TasksTab.backlog.rawValue, id: other))
             case 1: hosted.model.selectOnly(other)
             case 2:
                 hosted.model.selectOnly(other)
-                link.setValue(AtticRowFocusID(page: TasksTab.backlog.rawValue, id: other))
+                focusRow(AtticRowFocusID(page: TasksTab.backlog.rawValue, id: other))
             default: break
             }
             hosted.model.releaseHold(id)

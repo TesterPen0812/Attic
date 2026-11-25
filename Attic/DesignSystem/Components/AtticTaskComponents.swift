@@ -364,7 +364,11 @@ struct AtticRowFocusID: Hashable {
 /// `FocusState<AtticRowFocusID?>` for all its rows, so ↑ ↓ and a click can
 /// move focus from row to row (Phase 1).
 struct AtticRowFocus {
-    let binding: FocusState<AtticRowFocusID?>.Binding
+    /// The list's focus state, for a list whose rows take focus (the
+    /// Calendar agenda). nil for a list that owns the keyboard itself (the
+    /// Tasks list, list-owned-focus.md §2.1): its rows are not focusable
+    /// and answer no key; the list's own handler acts on its cursor row.
+    let binding: FocusState<AtticRowFocusID?>.Binding?
     let id: AtticRowFocusID
     /// Read when the list builds the row, as a value: the row redraws its
     /// ring the moment focus moves (a binding alone let it lag a row
@@ -389,6 +393,15 @@ struct AtticRowFocus {
         self.isActive = isActive
         self.isFocused = isFocused
     }
+
+    /// A row of a list that owns the keyboard: `isFocused` is the list's
+    /// cursor while the list holds the keyboard.
+    init(listOwned id: AtticRowFocusID, isFocused: Bool) {
+        binding = nil
+        self.id = id
+        isActive = { false }
+        self.isFocused = isFocused
+    }
 }
 
 /// The same keys as `AtticTaskFocusModifier`, with focus held by the list.
@@ -402,18 +415,25 @@ private struct AtticListTaskFocusModifier: ViewModifier {
     let listCommands: Bool
     let focus: AtticRowFocus
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .focusable(enabled)
-            .focused(focus.binding, equals: focus.id)
-            .focusEffectDisabled()
-            .onKeyPress(phases: .down) { press in
-                guard enabled, focus.isActive(), answersKeys, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
-                    key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
-                ), AtticTaskKeys.offers(command, actions) else { return .ignored }
-                AtticTaskKeys.perform(command, actions)
-                return .handled
-            }
+        if let binding = focus.binding {
+            content
+                .focusable(enabled)
+                .focused(binding, equals: focus.id)
+                .focusEffectDisabled()
+                .onKeyPress(phases: .down) { press in
+                    guard enabled, focus.isActive(), answersKeys, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
+                        key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
+                    ), AtticTaskKeys.offers(command, actions) else { return .ignored }
+                    AtticTaskKeys.perform(command, actions)
+                    return .handled
+                }
+        } else {
+            // The list owns the keyboard: the row takes no focus, so a move
+            // from row to row is no focus move (list-owned-focus.md §2.1).
+            content.focusEffectDisabled()
+        }
     }
 }
 

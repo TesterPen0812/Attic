@@ -356,6 +356,7 @@ struct AtticPanelView: View {
                     openCalendarDay: openCalendarDay
                 )
             }
+            .atticFocusCheckProbe("tasks")
             .transition(pageTransition(.tasks))
         case .canvas:
             PanelCanvasNoticeAwareHost(
@@ -367,6 +368,7 @@ struct AtticPanelView: View {
                 headerControlRects: headerControlRects,
                 headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
             )
+            .atticFocusCheckProbe("canvas")
             .transition(pageTransition(.canvas))
         case .notes:
             NotesPageHost(
@@ -377,6 +379,7 @@ struct AtticPanelView: View {
                 layout: layout,
                 hasRestoredSession: hasRestoredNoteSession
             )
+            .atticFocusCheckProbe("notes")
             .transition(pageTransition(.notes))
         case .calendar:
             // Handed over with no closure, so the shell's re-runs (a size
@@ -385,6 +388,7 @@ struct AtticPanelView: View {
                              calendarPageState: calendarPageState, tasksPageState: tasksPageState,
                              composerState: composerState, toasts: toasts, layout: layout,
                              isReady: hasRestoredNoteSession)
+            .atticFocusCheckProbe("calendar")
             .transition(pageTransition(.calendar))
         }
     }

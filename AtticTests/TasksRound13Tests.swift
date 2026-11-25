@@ -632,3 +632,717 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(dark, 0, "the backdrop shows through \(dark) of \(total) sampled pixels")
     }
 }
+
+// MARK: - Keys on a row outside the lazy list's built range (list-owned-focus.md §2.3; lead, LOG 24 Nov 17:01)
+
+/// The trunk's behaviour, pinned on 5fe27e46 before the list-owned focus
+/// change and kept by it: when the list scrolls the cursor row out of the
+/// lazy list's built range, Space, Delete and ⌘B still act, on the rows
+/// the trunk acts on. Each case starts from a fresh page; before the key
+/// the test checks, apart from the key's effect, that the row's cell is
+/// gone (it reports no frame), what is selected, and that the keyboard is
+/// in the Now list.
+@MainActor
+extension TasksRound13Tests {
+    private func longHosted(reduceMotion: Bool = false) throws -> Hosted {
+        var services = TasksPageServices()
+        services.acknowledgementDelay = .milliseconds(50)
+        services.doneHold = .milliseconds(300)
+        let hosted = try Hosted(height: 520, services: services, design: AtticDesignContext(mode: .light, reduceMotion: reduceMotion))
+        let context = ModelContext(hosted.store.container)
+        let now = Date()
+        for index in 0..<80 {
+            let item = TaskItem(title: "Long list task \(index + 1)", status: .todo, priority: .none,
+                                createdAt: now.addingTimeInterval(Double(-(20 + index) * 60)),
+                                manualOrder: -2_000_000 - Int64(index) * 1_024, parentID: nil)
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(item)
+        }
+        try context.save()
+        hosted.store.refresh()
+        hosted.spin(0.8)
+        return hosted
+    }
+
+    /// The Now list on the page: the shown, tallest list.
+    private func nowList(_ hosted: Hosted) -> NSScrollView? {
+        guard let content = hosted.window.contentView else { return nil }
+        content.layoutSubtreeIfNeeded()
+        return hosted.lists(in: content).filter { list in
+            let frame = list.convert(list.bounds, to: nil)
+            return !list.isHiddenOrHasHiddenAncestor && frame.minX > -1 && frame.minX < content.bounds.width / 2
+        }.max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+    }
+
+    private func scrollNow(_ hosted: Hosted, toEnd: Bool) throws {
+        let list = try XCTUnwrap(nowList(hosted), "harness: the Now list")
+        let document = list.documentView?.frame.height ?? 0, visible = list.contentView.bounds.height
+        list.contentView.scroll(to: NSPoint(x: 0, y: toEnd ? max(0, document - visible) : 0))
+        list.reflectScrolledClipView(list.contentView)
+        hosted.spin(0.6)
+    }
+
+    /// Whether the row's cell is built: its frame is set in the cell's
+    /// `onAppear` and removed in its `onDisappear` (TasksPage's cell), so
+    /// false after a scroll is the lazy list's teardown of that cell, seen.
+    private func isBuilt(_ hosted: Hosted, _ id: UUID) -> Bool {
+        hosted.pointer.frame(for: TasksRowID(tab: .now, id: id)) != nil
+    }
+
+    /// The keyboard is in the Now list: its first responder is the view
+    /// that holds the list (the tab's host), not a field.
+    private func keyboardIsInNowList(_ hosted: Hosted) -> Bool {
+        guard let view = hosted.window.firstResponder as? NSView, !(view is NSTextView), let list = nowList(hosted) else { return false }
+        return list.isDescendant(of: view)
+    }
+
+    private func clickRow(_ hosted: Hosted, _ id: UUID, modifiers: NSEvent.ModifierFlags = []) throws {
+        let frame = try XCTUnwrap(hosted.pointer.frame(for: TasksRowID(tab: .now, id: id)), "harness: the row is built")
+        let view = try XCTUnwrap(hosted.pointer.view)
+        let inWindow = view.convert(frame, to: nil)
+        hosted.click(y: hosted.height - inWindow.midY, x: inWindow.minX + min(110, inWindow.width / 2), modifiers: modifiers)
+        hosted.spin(0.3)
+    }
+
+    /// What each Now row is: its status, or gone.
+    private func states(_ hosted: Hosted, _ ids: [UUID]) -> [UUID: String] {
+        Dictionary(uniqueKeysWithValues: ids.map { id in (id, hosted.store.task(withID: id).map { "\($0.status)" } ?? "gone") })
+    }
+
+    private enum Selected { case one, several, cursorOutside }
+
+    private static let rowKeys: [(name: String, characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags, after: String)] = [
+        ("Space", " ", 49, [], "done"), ("Delete", "\u{7F}", 51, [], "gone"), ("⌘B", "b", 11, .command, "backlog"),
+    ]
+
+    /// Sets up `selected` near the top of the long list, scrolls the list to
+    /// its end, checks the state before the key, presses it, and returns the
+    /// rows whose state changed, with what they became.
+    private func keyOutOfRange(_ selected: Selected, key: (name: String, characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags, after: String),
+                               _ hosted: Hosted) throws -> (acted: [Int: String], selection: [Int], cursorBefore: Int?) {
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        func index(_ id: UUID) -> Int { ids.firstIndex(of: id) ?? -1 }
+        try clickRow(hosted, ids[0])
+        switch selected {
+        case .one:
+            hosted.press("\u{F701}", keyCode: 125)  // cursor and selection on row 1
+        case .several:
+            hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)
+            hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)  // rows 0-2, cursor on 2
+        case .cursorOutside:
+            // Two ⌘-clicks on row 2 leave the cursor on row 2 and nothing
+            // selected (the trunk, lt-trunk.log 24 Nov 20:2x, Air).
+            try clickRow(hosted, ids[2], modifiers: .command)
+            try clickRow(hosted, ids[2], modifiers: .command)
+        }
+        let cursorBefore = hosted.model.keyboardFocus.map { index($0.id) }
+        let selection = hosted.model.selection.map(index).sorted()
+        try scrollNow(hosted, toEnd: true)
+        for row in 0...2 { XCTAssertFalse(isBuilt(hosted, ids[row]), "harness: row \(row) is still built after the scroll") }
+        XCTAssertTrue(keyboardIsInNowList(hosted), "harness: the keyboard is not in the Now list before \(key.name)")
+        XCTAssertEqual(hosted.model.selection.map(index).sorted(), selection, "harness: the scroll changed the selection")
+        let before = states(hosted, ids)
+        hosted.press(key.characters, keyCode: key.code, modifiers: key.modifiers)
+        var waited = 0.0
+        while waited < 3, states(hosted, ids) == before { hosted.spin(0.1); waited += 0.1 }
+        hosted.spin(0.5)
+        let after = states(hosted, ids)
+        let acted = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { offset, id in
+            after[id] != before[id] ? (offset, after[id] ?? "?") : nil
+        })
+        print("OUT_OF_RANGE \(selected) \(key.name) cursor_before=\(cursorBefore.map(String.init) ?? "nil") selection=\(selection) acted=\(acted.sorted { $0.key < $1.key })")
+        return (acted, selection, cursorBefore)
+    }
+
+    /// Condition 1, one selected row: the key acts on that row only.
+    func testKeysOnAnOutOfRangeCursorRowActOnTheOneSelectedRow() throws {
+        try requireKeyWindowTests()
+        for key in Self.rowKeys {
+            let hosted = try longHosted()
+            defer { hosted.close() }
+            let result = try keyOutOfRange(.one, key: key, hosted)
+            XCTAssertEqual(result.selection, [1], "harness: ↓ selected row 1")
+            XCTAssertEqual(result.acted, [1: key.after], "\(key.name) out of the built range")
+        }
+    }
+
+    /// Condition 1, several selected rows with the cursor row among them:
+    /// the key acts on every selected row.
+    func testKeysOnAnOutOfRangeCursorRowActOnEverySelectedRow() throws {
+        try requireKeyWindowTests()
+        for key in Self.rowKeys {
+            let hosted = try longHosted()
+            defer { hosted.close() }
+            let result = try keyOutOfRange(.several, key: key, hosted)
+            XCTAssertEqual(result.selection, [0, 1, 2], "harness: ⇧↓ twice selected rows 0-2")
+            XCTAssertEqual(result.cursorBefore, 2, "harness: the cursor was on row 2")
+            XCTAssertEqual(result.acted, [0: key.after, 1: key.after, 2: key.after], "\(key.name) out of the built range")
+        }
+    }
+
+    /// Condition 1, the cursor on a row that is not selected (two ⌘-clicks
+    /// on row 2 leave the cursor there and the selection empty): the key
+    /// acts on the cursor row, as the trunk does.
+    func testKeysOnAnOutOfRangeCursorRowOutsideTheSelection() throws {
+        try requireKeyWindowTests()
+        for key in Self.rowKeys {
+            let hosted = try longHosted()
+            defer { hosted.close() }
+            let result = try keyOutOfRange(.cursorOutside, key: key, hosted)
+            XCTAssertEqual(result.selection, [], "harness: nothing is selected")
+            XCTAssertEqual(result.cursorBefore, 2, "harness: the cursor stayed on row 2")
+            XCTAssertEqual(result.acted, [2: key.after], "\(key.name) out of the built range")
+        }
+    }
+
+    /// Condition 4: the same state, scrolled back. The trunk keeps the
+    /// cursor on the row and draws its ring again, and the first ↓ after it
+    /// goes on to the next row (lt-trunk.log, 24 Nov 20:2x, Air).
+    func testAnOutOfRangeCursorRowScrolledBackAndTheFirstDownAfter() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[0])
+        hosted.press("\u{F701}", keyCode: 125)
+        try scrollNow(hosted, toEnd: true)
+        XCTAssertFalse(isBuilt(hosted, ids[1]), "harness: row 1 is still built after the scroll")
+        try scrollNow(hosted, toEnd: false)
+        XCTAssertTrue(isBuilt(hosted, ids[1]), "harness: row 1 is built again")
+        let ring = hosted.pointer.drawnFocus.contains(TasksRowID(tab: .now, id: ids[1]))
+        let cursor = hosted.model.keyboardFocus.map { ids.firstIndex(of: $0.id) ?? -1 }
+        hosted.press("\u{F701}", keyCode: 125)
+        let next = hosted.model.keyboardFocus.map { ids.firstIndex(of: $0.id) ?? -1 }
+        print("OUT_OF_RANGE back ring=\(ring) cursor=\(cursor.map(String.init) ?? "nil") first_down=\(next.map(String.init) ?? "nil") selection=\(hosted.model.selection.map { ids.firstIndex(of: $0) ?? -1 }.sorted())")
+        XCTAssertTrue(ring, "the row draws the keyboard's ring when it scrolls back")
+        XCTAssertEqual(cursor, 1, "the cursor stays on the row while it is torn down")
+        XCTAssertEqual(next, 2, "the first ↓ after goes on from the selected row")
+        XCTAssertEqual(hosted.model.selection, [ids[2]], "the first ↓ selects the row it reaches")
+    }
+}
+
+// MARK: - List-owned focus guards (list-owned-focus.md §5, Guards)
+
+@MainActor
+extension TasksRound13Tests {
+    private func index(_ hosted: Hosted, _ ids: [UUID], _ id: UUID?) -> Int? {
+        id.map { ids.firstIndex(of: $0) ?? -1 }
+    }
+
+    private func selected(_ hosted: Hosted, _ ids: [UUID]) -> [Int] {
+        hosted.model.selection.map { ids.firstIndex(of: $0) ?? -1 }.sorted()
+    }
+
+    /// A press on a control inside a row, then ↓ (the trunk, Air tk-trunk.log
+    /// 24 Nov 22:0x, `TK_CLICK first row=0`): row 0's subtask count is under
+    /// the point `clickRow` presses, so the press opens its quick look and
+    /// never reaches the row's own tap. The trunk's focusable row took the
+    /// keyboard from that press: the cursor on row 0, nothing selected, and
+    /// the next ↓ moves from it. The list keeps that: a press inside a row
+    /// puts the cursor there. A click on a row's own part selects it.
+    func testTheFirstDownAfterOneClickMovesTheCursor() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        XCTAssertFalse(hosted.model.expanded.contains(ids[0]), "harness: row 0's quick look is shut")
+        try clickRow(hosted, ids[0])
+        XCTAssertTrue(hosted.model.expanded.contains(ids[0]), "harness: the press landed on row 0's subtask count and opened its quick look")
+        XCTAssertEqual(selected(hosted, ids), [], "a press on a control inside a row selects nothing")
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 0, "the cursor is on the row the press was in")
+        XCTAssertTrue(keyboardIsInNowList(hosted), "the keyboard is in the Now list")
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 1, "the first ↓ moves from that row")
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertEqual(selected(hosted, ids), [2], "two ↓ after the press reach row 2")
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 2, "the cursor on row 2")
+        // From a selected row, on a fresh page (row 0's quick look shut):
+        // a click on a row's own part selects it and takes the cursor; the
+        // press on row 0's control then moves the cursor and leaves the
+        // selection (the trunk: `third-other row=0`).
+        let second = try longHosted()
+        defer { second.close() }
+        let others = second.model.rows(for: .now).map(\.id)
+        try clickRow(second, others[5])
+        XCTAssertEqual(selected(second, others), [5], "a click on a row selects it")
+        XCTAssertEqual(index(second, others, second.model.keyboardFocus?.id), 5, "and takes the cursor")
+        try clickRow(second, others[0])
+        XCTAssertEqual(selected(second, others), [5], "the press leaves the selection")
+        XCTAssertEqual(index(second, others, second.model.keyboardFocus?.id), 0, "and moves the cursor to its row")
+        // A second press at the same point lands in the quick look the
+        // first one opened, below the row's own part: the cursor leaves the
+        // row (the trunk: `second row=0 after cursor=nil selection=[]`).
+        let third = try longHosted()
+        defer { third.close() }
+        let rows = third.model.rows(for: .now).map(\.id)
+        try clickRow(third, rows[0])
+        XCTAssertEqual(index(third, rows, third.model.keyboardFocus?.id), 0, "harness: the first press put the cursor on row 0")
+        try clickRow(third, rows[0])
+        print("LIST_FOCUS quicklook-press cursor=\(index(third, rows, third.model.keyboardFocus?.id).map(String.init) ?? "nil") "
+              + "selection=\(selected(third, rows)) holds=\(TasksRowFocusLink.current?.holds(.now) ?? false) "
+              + "responder=\(third.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")")
+        XCTAssertNil(third.model.keyboardFocus, "a press in the open quick look takes the cursor off the row")
+        XCTAssertEqual(selected(third, rows), [], "and selects nothing")
+    }
+
+    /// A row key right after a press on a control inside the row: Space
+    /// completes that row. Read from the trunk's source, not run there: the
+    /// focused row answers its own keys (AtticTaskComponents.swift,
+    /// `AtticListTaskFocusModifier`). A difference here goes to the lead
+    /// (LOG 24 Nov 17:0x, e), not to a patch.
+    func testSpaceAfterAPressOnARowsControlCompletesThatRow() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[0])
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 0, "harness: the press put the cursor on row 0")
+        let before = states(hosted, ids)
+        print("LIST_FOCUS key-after-press before holds=\(TasksRowFocusLink.current?.holds(.now) ?? false) inList=\(keyboardIsInNowList(hosted))")
+        hosted.press(" ", keyCode: 49)
+        var waited = 0.0
+        while waited < 3, states(hosted, ids) == before { hosted.spin(0.1); waited += 0.1 }
+        hosted.spin(0.5)
+        let after = states(hosted, ids)
+        let acted = ids.enumerated().compactMap { offset, id in after[id] != before[id] ? "\(offset):\(after[id] ?? "?")" : nil }
+        print("LIST_FOCUS key-after-press acted=\(acted) holds=\(TasksRowFocusLink.current?.holds(.now) ?? false)")
+        XCTAssertEqual(acted, ["0:done"], "Space after a press on row 0's control completes row 0")
+    }
+
+    /// The lead's ruling (LOG 24 Nov 21:28): after a tab switch a row has
+    /// the cursor exactly where the trunk has one. Four switches, each from
+    /// ↓ on Now: one that saved a rename, one made while the panel was not
+    /// key, a plain one, and one back to the tab that had the cursor. The
+    /// trunk (Air tk-trunk.log 24 Nov 22:0x, `TK_SWITCH … after-switch`):
+    /// no row has the cursor after any of them; the ↓ that follows reaches
+    /// a row after the plain switch and the switch back, and none after
+    /// the other two (the two §5.1 pins).
+    func testNoRowHasTheCursorAfterATabSwitchAsOnTheTrunk() throws {
+        try requireKeyWindowTests()
+        func start() throws -> Hosted {
+            let hosted = try Hosted(height: 520)
+            hosted.spin(1.5)
+            hosted.press("\u{F701}", keyCode: 125)
+            XCTAssertEqual(hosted.model.keyboardFocus?.page, TasksTab.now.rawValue, "harness: ↓ on Now reaches a Now row")
+            return hosted
+        }
+        func check(_ name: String, _ hosted: Hosted, tab: TasksTab, downReachesARow: Bool) {
+            XCTAssertEqual(hosted.model.tab, tab, "harness: \(name): the switch landed")
+            XCTAssertNil(hosted.model.keyboardFocus, "\(name): no row has the cursor after the switch")
+            let holding = TasksRowFocusLink.current?.tabsHoldingFocus(besides: tab) ?? []
+            print("LIST_FOCUS switch \(name) holding_besides=\(holding.map(\.rawValue)) holds=\(TasksRowFocusLink.current?.holds(tab) ?? false)")
+            XCTAssertEqual(holding, [], "\(name): no list target of a tab that is not shown holds the keyboard")
+            hosted.press("\u{F701}", keyCode: 125)
+            XCTAssertEqual(hosted.model.keyboardFocus?.page, downReachesARow ? tab.rawValue : nil,
+                           "\(name): the ↓ after the switch")
+        }
+        do {
+            let hosted = try start()
+            defer { hosted.close() }
+            let row = try XCTUnwrap(hosted.model.keyboardFocus?.id)
+            hosted.model.beginEditingTitle(row)
+            hosted.spin(0.4)
+            XCTAssertEqual(hosted.model.editingTitleID, row, "harness: the rename is open")
+            hosted.go(to: .backlog)
+            XCTAssertNil(hosted.model.editingTitleID, "harness: the switch saved the rename")
+            check("a switch that saved a rename", hosted, tab: .backlog, downReachesARow: false)
+        }
+        do {
+            let hosted = try start()
+            defer { hosted.close() }
+            let other = NSWindow(contentRect: CGRect(x: -3_000, y: -3_000, width: 80, height: 80),
+                                 styleMask: [.titled], backing: .buffered, defer: false)
+            other.isReleasedWhenClosed = false
+            defer { other.close() }
+            other.makeKeyAndOrderFront(nil)
+            hosted.spin(0.2)
+            XCTAssertFalse(hosted.window.isKeyWindow, "harness: another window is key")
+            hosted.go(to: .backlog)
+            hosted.window.makeKey()
+            hosted.spin(0.3)
+            check("a switch while the panel was not key", hosted, tab: .backlog, downReachesARow: false)
+        }
+        do {
+            let hosted = try start()
+            defer { hosted.close() }
+            hosted.go(to: .backlog)
+            check("a plain switch", hosted, tab: .backlog, downReachesARow: true)
+        }
+        do {
+            let hosted = try start()
+            defer { hosted.close() }
+            hosted.go(to: .backlog)
+            hosted.go(to: .now)
+            check("a switch back to the tab that had the cursor", hosted, tab: .now, downReachesARow: true)
+        }
+    }
+
+    /// Range selection: ⇧-click grows from the clicked row, and ⇧↓ then
+    /// grows the same range from that anchor, the cursor on its far end.
+    func testShiftClickAndShiftDownGrowFromAClickAnchor() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[1])
+        try clickRow(hosted, ids[3], modifiers: .shift)
+        XCTAssertEqual(selected(hosted, ids), [1, 2, 3], "⇧-click grows from the clicked row")
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 3, "the cursor on the ⇧-clicked row")
+        hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)
+        XCTAssertEqual(selected(hosted, ids), [1, 2, 3, 4], "⇧↓ grows the range from the click anchor")
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 4, "the cursor on the range's far end")
+        XCTAssertTrue(hosted.pointer.drawnFocus.contains(TasksRowID(tab: .now, id: ids[4])), "the ring on the cursor row")
+        XCTAssertTrue(keyboardIsInNowList(hosted), "the keyboard stays in the Now list")
+    }
+
+    /// Lazy-row reveal: ↓ onto a row the lazy list has not built yet brings
+    /// it into view, with the cursor and the selection on it.
+    func testDownOntoARowTheLazyListHasNotBuiltRevealsIt() throws {
+        try requireKeyWindowTests()
+        // Reduce Motion on: the reveal then scrolls at once. With it off
+        // the reveal glides, and in this window, placed off every screen,
+        // the glide starts and the list never moves (Air, 25 Nov,
+        // tk6-head.log: `glide delta=12.0 offset=-49.0`; the trunk's list
+        // does not move here either, tk7-trunk.log). Inferred, not run: the
+        // glide steps on the scroll view's display link, which does not
+        // tick for a window off every screen. Tab's reveal does not glide
+        // (`settleKeyboard`), so its test passes here. The glide itself is
+        // an on-screen check.
+        let hosted = try longHosted(reduceMotion: true)
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        // Row 1, whose press selects it. A press at row 0's point lands on
+        // a control and opens its quick look, and with that open neither
+        // the trunk nor this list scrolls on ↓ (Air, 25 Nov, tk6-trunk.log
+        // and tk6-head.log: the same frames to ↓ 6, no row built after).
+        try clickRow(hosted, ids[1])
+        XCTAssertTrue(hosted.model.expanded.isEmpty, "harness: no quick look open")
+        // Built before the walk: the list builds a row or two ahead as it
+        // follows, so "not built just before its ↓" finds none once the
+        // reveal works (Air, 25 Nov, tk8-head.log: unbuilt_reached=0).
+        let builtAtStart = Set(ids.filter { isBuilt(hosted, $0) })
+        var unbuiltReached = 0
+        for step in 2...31 {
+            let wasBuilt = builtAtStart.contains(ids[step])
+            hosted.press("\u{F701}", keyCode: 125)
+            hosted.spin(0.2)
+            XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), step, "↓ \(step): the cursor")
+            XCTAssertEqual(selected(hosted, ids), [step], "↓ \(step): the selection")
+            XCTAssertTrue(isBuilt(hosted, ids[step]), "↓ \(step): the row is built")
+            if let frame = hosted.pointer.frame(for: TasksRowID(tab: .now, id: ids[step])), let view = hosted.pointer.view {
+                let inWindow = view.convert(frame, to: nil)
+                XCTAssertTrue(inWindow.minY >= 0 && inWindow.maxY <= hosted.height, "↓ \(step): the row is in view (\(inWindow))")
+            }
+            if !wasBuilt { unbuiltReached += 1 }
+        }
+        print("LIST_FOCUS lazy_reveal unbuilt_reached=\(unbuiltReached)")
+        XCTAssertGreaterThan(unbuiltReached, 0, "harness: ↓ reached at least one row the list had not built at the start")
+    }
+
+    /// Deletion succession: Delete on the cursor row moves the cursor and
+    /// the selection to the row that took its place, once the row is gone
+    /// from the store.
+    func testDeleteMovesTheCursorToTheRowThatTookItsPlaceAfterTheSave() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[0])
+        hosted.press("\u{F701}", keyCode: 125)
+        XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), 1, "harness: the cursor on row 1")
+        hosted.press("\u{7F}", keyCode: 51)
+        var waited = 0.0
+        while waited < 3, hosted.store.task(withID: ids[1]) != nil { hosted.spin(0.1); waited += 0.1 }
+        hosted.spin(0.4)
+        XCTAssertNil(hosted.store.task(withID: ids[1]), "Delete deleted row 1")
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, ids[2], "the cursor went to the row that took its place")
+        XCTAssertEqual(hosted.model.selection, [ids[2]], "the selection went with it")
+        XCTAssertTrue(keyboardIsInNowList(hosted), "the keyboard stays in the Now list")
+        XCTAssertNotNil(hosted.store.task(withID: ids[2]), "the survivor is kept")
+    }
+
+    /// The cursor around a title edit: during it, when it ends by Escape or
+    /// by Return, and what Space and Delete do next (each in its own run).
+    /// During the edit no row has the cursor (the trunk keeps it on the
+    /// edited row; recorded difference, the lead 24 Nov 08:00, 4). When the
+    /// edit ends, the edited row alone has the cursor, with its ring, and
+    /// the list has the keyboard, as the editor's commit and cancel ask
+    /// (`setFocus(id)`); Space and Delete act on that row alone (the lead,
+    /// 25 Nov 04:41). The trunk 10dac862 and f22cb802 ended the edit with no
+    /// cursor and the keyboard on the panel, so the keys reached no row
+    /// (Air, 25 Nov, tk10-trunk.log, tk12-head.log): the list's target read
+    /// true while the editor inside it held the keyboard, and the write
+    /// that gives the list the keyboard was skipped.
+    func testTheCursorAroundATitleEditIsPinned() throws {
+        try requireKeyWindowTests()
+        for (ending, key) in [("esc", "space"), ("esc", "delete"), ("return", "space"), ("return", "delete")] {
+            let hosted = try longHosted()
+            defer { hosted.close() }
+            let ids = hosted.model.rows(for: .now).map(\.id)
+            let name = "\(ending), \(key)"
+            func at(_ id: UUID?) -> String { id.map { "\(ids.firstIndex(of: $0) ?? -1)" } ?? "nil" }
+            func rings() -> [Int] { hosted.pointer.drawnFocus.compactMap { ids.firstIndex(of: $0.id) }.sorted() }
+            func line(_ step: String) {
+                print("LIST_FOCUS edit \(ending) \(key) \(step) cursor=\(at(hosted.model.keyboardFocus?.id)) rings=\(rings()) "
+                      + "selection=\(hosted.model.selection.map { ids.firstIndex(of: $0) ?? -1 }.sorted()) "
+                      + "editing=\(at(hosted.model.editingTitleID)) "
+                      + "responder=\(hosted.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")")
+            }
+            try clickRow(hosted, ids[2])
+            line("clicked")
+            hosted.press("\r", keyCode: 36)
+            hosted.spin(0.4)
+            XCTAssertEqual(hosted.model.editingTitleID, ids[2], "harness: Return edits row 2's title")
+            line("editing")
+            XCTAssertNil(hosted.model.keyboardFocus, "during a title edit no row has the cursor (the trunk keeps it on the edited row; recorded difference, the lead 24 Nov 08:00, 4)")
+            if ending == "esc" { hosted.press("\u{1B}", keyCode: 53) } else { hosted.press("\r", keyCode: 36) }
+            hosted.spin(0.5)
+            XCTAssertNil(hosted.model.editingTitleID, "harness: the edit ended (\(name))")
+            line("ended")
+            XCTAssertEqual(hosted.model.keyboardFocus?.id, ids[2], "\(name): the edited row has the cursor after the edit")
+            XCTAssertEqual(rings(), [2], "\(name): the keyboard's ring is drawn on the edited row and on no other")
+            XCTAssertEqual(hosted.model.selection, [ids[2]], "\(name): the edited row stays selected")
+            XCTAssertTrue(keyboardIsInNowList(hosted), "\(name): the keyboard is in the Now list after the edit")
+            let before = states(hosted, ids)
+            if key == "space" { hosted.press(" ", keyCode: 49) } else { hosted.press("\u{7F}", keyCode: 51) }
+            var waited = 0.0
+            while waited < 3, states(hosted, ids) == before { hosted.spin(0.1); waited += 0.1 }
+            hosted.spin(0.5)
+            let after = states(hosted, ids)
+            let acted = ids.enumerated().compactMap { offset, id in after[id] != before[id] ? "\(offset):\(after[id] ?? "?")" : nil }
+            print("LIST_FOCUS edit \(ending) \(key) acted=\(acted)")
+            XCTAssertEqual(acted, [key == "space" ? "2:done" : "2:gone"], "\(name): the key after the edit acts on the edited row and on no other")
+        }
+    }
+
+    /// Dispatch isolation: while a row's title is edited, Space and Delete
+    /// are the editor's, never the row's (the list answers row keys only
+    /// when its own target holds the keyboard).
+    func testTheTitleEditorKeepsSpaceAndDelete() throws {
+        try requireKeyWindowTests()
+        let hosted = try longHosted()
+        defer { hosted.close() }
+        let ids = hosted.model.rows(for: .now).map(\.id)
+        try clickRow(hosted, ids[1])
+        hosted.press("\r", keyCode: 36)
+        XCTAssertEqual(hosted.model.editingTitleID, ids[1], "harness: Return edits row 1's title")
+        let before = states(hosted, ids)
+        hosted.press(" ", keyCode: 49)
+        hosted.press("\u{7F}", keyCode: 51)
+        hosted.spin(0.5)
+        XCTAssertEqual(states(hosted, ids), before, "Space and Delete in the title editor act on no row")
+        XCTAssertEqual(hosted.model.editingTitleID, ids[1], "the editor stays open")
+    }
+}
+
+// MARK: - The list's own hold and the press path (PR 71 review round, 25 Nov): pins from the trunk's run lines
+
+extension TasksRound13Tests {
+    @MainActor private struct RC {
+        let hosted: Hosted
+        let rows: [UUID]
+        let parent: UUID
+        let children: [UUID]
+
+        func name(_ id: UUID?) -> String {
+            guard let id else { return "nil" }
+            if let index = rows.firstIndex(of: id) { return "row\(index)" }
+            if let index = children.firstIndex(of: id) { return "sub\(index)" }
+            return "other"
+        }
+        func states() -> [UUID: String] {
+            var all: [UUID: String] = [:]
+            for id in rows + children { all[id] = hosted.store.task(withID: id).map { "\($0.status)" } ?? "gone" }
+            return all
+        }
+        func line(_ label: String) {
+            let model = hosted.model
+            print("RC \(label) cursor=\(name(model.keyboardFocus?.id)) selection=\(model.selection.map { name($0) }.sorted()) "
+                  + "subtask=\(name(model.focusedSubtaskID)) expanded=\(model.expanded.contains(parent)) newSubtask=\(name(model.newSubtaskParentID)) "
+                  + "responder=\(hosted.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil") parent=\(name(parent))")
+        }
+        /// Presses `key`, waits, prints what changed.
+        func act(_ label: String, _ key: String) {
+            let before = states()
+            if key == "space" { hosted.press(" ", keyCode: 49) } else { hosted.press("\u{7F}", keyCode: 51) }
+            var waited = 0.0
+            while waited < 2, states() == before { hosted.spin(0.1); waited += 0.1 }
+            hosted.spin(0.6)
+            let after = states()
+            let changed = (rows + children).compactMap { id in after[id] != before[id] ? "\(name(id)):\(before[id] ?? "?")->\(after[id] ?? "?")" : nil }
+            print("RC \(label) \(key) changed=\(changed.isEmpty ? ["none"] : changed)")
+            line("\(label) after-\(key)")
+        }
+    }
+
+    private func rcHosted() throws -> RC {
+        var services = TasksPageServices()
+        services.acknowledgementDelay = .milliseconds(50)
+        services.doneHold = .milliseconds(300)
+        let hosted = try Hosted(height: 520, services: services)
+        let parent = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.subtasks != nil }).id
+        hosted.model.setExpanded(parent, true)
+        hosted.spin(0.5)
+        let rows = hosted.model.rows(for: .now).map(\.id)
+        let children = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.id == parent }).subtasks.map(\.id)
+        return RC(hosted: hosted, rows: rows, parent: parent, children: children)
+    }
+
+    /// A single click on a subtask line of the open quick look (as
+    /// RoundO1Tests): the line takes the keyboard.
+    private func rcClickSubtaskLine(_ rc: RC) throws {
+        let hosted = rc.hosted
+        let row = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: rc.parent)])
+        var y = row.minY + AtticLayout.rowPitch + 2
+        while y < row.maxY, hosted.model.focusedSubtaskID == nil {
+            hosted.click(y: y, x: 150)
+            hosted.spin(0.3)
+            y += 4
+        }
+        XCTAssertNotNil(hosted.model.focusedSubtaskID, "harness: a click on a subtask line gave it the keyboard")
+    }
+
+
+    /// The date chips' centres (top-origin window points), read as
+    /// TasksTabHostTests' openTheDatePicker does, from every tab host and the content.
+    private func rcDateChips(_ hosted: Hosted) -> [CGPoint] {
+        var chips: [CGPoint] = []
+        func walk(_ element: AnyObject, depth: Int) {
+            let label = element.accessibilityLabel?() ?? ""
+            if label.hasPrefix("Due "), let rect: CGRect = element.accessibilityFrame?() {
+                let point = hosted.window.convertPoint(fromScreen: CGPoint(x: rect.midX, y: rect.midY))
+                let top = CGPoint(x: point.x.rounded(), y: (hosted.height - point.y).rounded())
+                if !chips.contains(top) { chips.append(top) }
+            }
+            guard depth > 0, let children = element.accessibilityChildren?() else { return }
+            for child in children { walk(child as AnyObject, depth: depth - 1) }
+        }
+        func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
+        guard let content = hosted.window.contentView else { return [] }
+        for root in [content] + all(content).filter({ $0 is KeptContentHostingView }) { walk(root, depth: 40) }
+        return chips
+    }
+
+    // MARK: A subtask line or the new-subtask field holds the keyboard inside the list
+
+    /// ↓ from a subtask line moves the keys with the cursor: the next ↓
+    /// moves on, and Space completes the row the cursor is on.
+    func testDownFromASubtaskLineTakesTheKeysToTheRow() throws {
+        try requireKeyWindowTests()
+        let rc = try rcHosted(); defer { rc.hosted.close() }
+        let model = rc.hosted.model
+        let at = try XCTUnwrap(rc.rows.firstIndex(of: rc.parent))
+        try rcClickSubtaskLine(rc)
+        let line = try XCTUnwrap(model.focusedSubtaskID)
+        XCTAssertNil(model.keyboardFocus, "a press on a subtask line leaves no cursor on its row (the list did not hold the keyboard)")
+        for _ in 1...2 { rc.hosted.press("\u{F701}", keyCode: 125); rc.hosted.spin(0.3) }
+        XCTAssertNil(model.focusedSubtaskID, "the subtask line gave up the keys")
+        XCTAssertEqual(model.keyboardFocus?.id, rc.rows[at + 2], "two ↓ moved the cursor two rows on")
+        rc.hosted.press(" ", keyCode: 49)
+        rc.hosted.spin(1.2)
+        XCTAssertEqual(rc.hosted.store.task(withID: rc.rows[at + 2])?.status, .done, "Space completed the row with the cursor")
+        XCTAssertEqual(rc.hosted.store.task(withID: line)?.status, .todo, "and left the subtask alone")
+    }
+
+    /// Tab on from the last subtask line reaches the next row, then the one
+    /// after; Delete deletes the row the cursor is on.
+    func testTabOnFromTheSubtaskLinesTakesTheKeysToTheRow() throws {
+        try requireKeyWindowTests()
+        let rc = try rcHosted(); defer { rc.hosted.close() }
+        let model = rc.hosted.model
+        let at = try XCTUnwrap(rc.rows.firstIndex(of: rc.parent))
+        try rcClickSubtaskLine(rc)
+        var onRow = 0
+        for _ in 1...(rc.children.count + 4) where onRow < 2 {
+            rc.hosted.press("\t", keyCode: 48); rc.hosted.spin(0.4)
+            if model.focusedSubtaskID == nil, model.keyboardFocus != nil { onRow += 1 }
+        }
+        XCTAssertNil(model.focusedSubtaskID, "the subtask lines gave up the keys")
+        XCTAssertEqual(model.keyboardFocus?.id, rc.rows[at + 2], "Tab went on to the next row, then the one after")
+        rc.hosted.press("\u{7F}", keyCode: 51)
+        rc.hosted.spin(1.2)
+        XCTAssertNil(rc.hosted.store.task(withID: rc.rows[at + 2]).flatMap { $0.deletedAt == nil ? $0 : nil }, "Delete deleted the row with the cursor")
+        for child in rc.children {
+            XCTAssertNotNil(rc.hosted.store.task(withID: child).flatMap { $0.deletedAt == nil ? $0 : nil }, "and left the subtasks alone")
+        }
+    }
+
+    /// Esc in the new-subtask field hands the keys back to its row.
+    func testEscInTheNewSubtaskFieldGivesTheKeysBackToItsRow() throws {
+        try requireKeyWindowTests()
+        let rc = try rcHosted(); defer { rc.hosted.close() }
+        let model = rc.hosted.model
+        model.selectOnly(rc.parent)
+        model.beginAddingSubtask(to: rc.parent)
+        rc.hosted.spin(0.6)
+        XCTAssertEqual(model.newSubtaskParentID, rc.parent, "harness: the new-subtask field is open")
+        rc.hosted.press("\u{1B}", keyCode: 53); rc.hosted.spin(0.5)
+        XCTAssertNil(model.newSubtaskParentID, "Esc closed the field")
+        XCTAssertEqual(model.keyboardFocus?.id, rc.parent, "the cursor is on the field's row")
+        rc.hosted.press(" ", keyCode: 49)
+        rc.hosted.spin(1.2)
+        XCTAssertEqual(rc.hosted.store.task(withID: rc.parent)?.status, .done, "Space completed that row")
+    }
+
+    // MARK: A press moves the cursor only where it reaches the row
+
+    /// A press on a choice of a row's Date list, where the list hangs over
+    /// another row, puts no cursor on the row beneath (the trunk, t10:
+    /// `F2a after-press cursor=nil selection=[]`).
+    func testAPressInARowsDateListPutsNoCursorOnTheRowBeneath() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let rows = hosted.model.rows(for: .now).map(\.id)
+        func frame(_ id: UUID) -> CGRect? { hosted.pointer.frames[TasksRowID(tab: .now, id: id)] }
+        let chip = try XCTUnwrap(rcDateChips(hosted).filter { point in rows.contains { frame($0)?.contains(point) == true } }.min { $0.y < $1.y },
+                                 "harness: a row's date chip")
+        let a = try XCTUnwrap(rows.first { frame($0)?.contains(chip) == true })
+        hosted.click(y: chip.y, x: chip.x)
+        var waited = 0.0
+        while waited < 2, AtticDropdownPresenter.openCount == 0 { hosted.spin(0.1); waited += 0.1 }
+        hosted.spin(0.8)
+        XCTAssertEqual(AtticDropdownPresenter.openCount, 1, "harness: the Date list is open")
+        func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let lists = all(content.superview ?? content).filter { $0 is AtticOverlayHostingView && !$0.isHidden && $0.window != nil }.map { view -> CGRect in
+            let inWindow = view.convert(view.bounds, to: nil)
+            return CGRect(x: inWindow.minX, y: hosted.height - inWindow.maxY, width: inWindow.width, height: inWindow.height)
+        }
+        var pressed: (row: UUID, point: CGPoint, area: CGFloat)?
+        for list in lists {
+            for id in rows where id != a {
+                guard let both = frame(id)?.intersection(list), !both.isNull, both.width > 20, both.height > 12,
+                      both.width * both.height > (pressed?.area ?? 0) else { continue }
+                pressed = (id, CGPoint(x: list.midX, y: both.midY), both.width * both.height)
+            }
+        }
+        let press = try XCTUnwrap(pressed, "harness: the Date list lies over another row")
+        let due = hosted.model.dueDay(of: a)
+        hosted.click(y: press.point.y, x: press.point.x)
+        hosted.spin(0.8)
+        XCTAssertNotEqual(hosted.model.dueDay(of: a), due, "harness: the press picked a date in the list")
+        XCTAssertNil(hosted.model.keyboardFocus, "no cursor on the row under the list")
+        XCTAssertEqual(hosted.model.selection, [], "and nothing selected")
+    }
+
+    /// A press on the blank part of an open quick look keeps its row: the
+    /// cursor stays and Space completes the row (the trunk, t10: `P34-left
+    /// after-press cursor=row0`, `space changed=["row0:inProgress->done", …]`).
+    func testAPressOnTheBlankPartOfAnOpenQuickLookKeepsItsRow() throws {
+        try requireKeyWindowTests()
+        let rc = try rcHosted(); defer { rc.hosted.close() }
+        let hosted = rc.hosted
+        let row = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: rc.parent)])
+        hosted.click(y: row.minY + AtticLayout.rowPitch / 2, x: 200)
+        hosted.spin(0.4)
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, rc.parent, "harness: a click on the row put the cursor on it")
+        hosted.click(y: (row.minY + AtticLayout.rowPitch + row.maxY) / 2, x: row.minX + 6)
+        hosted.spin(0.5)
+        XCTAssertNil(hosted.model.focusedSubtaskID, "harness: the press landed on no subtask line")
+        XCTAssertEqual(hosted.model.keyboardFocus?.id, rc.parent, "the cursor stays on the row")
+        hosted.press(" ", keyCode: 49)
+        hosted.spin(1.2)
+        XCTAssertEqual(hosted.store.task(withID: rc.parent)?.status, .done, "Space completed the row")
+    }
+}
