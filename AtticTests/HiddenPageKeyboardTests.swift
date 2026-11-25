@@ -371,12 +371,45 @@ final class HiddenPageKeyboardTests: XCTestCase {
         rig.panel.makeFirstResponder(nil)  // the controller's resign on a switch
         rig.state.selectSection(.calendar)
         let interactiveAtSwitch = (ancestor as? KeptContentHostingView)?.isInteractive
+        var tokenView = field.superview
+        while let view = tokenView, !(view is AtticTokenFieldView) { tokenView = view.superview }
+        print("HIDDEN_TASKS_FIELD accepts=\(field.acceptsFirstResponder) editable=\(field.isEditable) "
+              + "refuses=\(field.refusesKeyboard) inWindow=\(field.window === rig.panel) "
+              + "tag=\(String(describing: tokenView.flatMap(PanelPageKeyboard.membership(of:))))")
         let admitted = rig.panel.makeFirstResponder(field)  // the request queued before it
         print("HIDDEN_TASKS_QUEUED hostInteractive=\(String(describing: interactiveAtSwitch)) admitted=\(admitted) "
               + "tag=\(String(describing: PanelPageKeyboard.membership(of: field.superview ?? field)))")
         XCTAssertFalse(holds(rig.panel, field), "right after the switch, a hidden Tasks field took the keyboard")
         spin(0.5)
         XCTAssertFalse(holds(rig.panel, field), "after the switch settled, a hidden Tasks field holds the keyboard")
+    }
+
+    /// Review P2 (both), at its cause: a kept host hands its content the
+    /// panel's values by name, and the page was not one of them, so a view
+    /// made inside a Tasks tab host could not be tagged with its page.
+    func testAKeptHostHandsItsContentThePage() {
+        final class Seen { var read = false; var page: PanelPage? }
+        struct Probe: NSViewRepresentable {
+            let seen: Seen
+            func makeNSView(context: Context) -> NSView { record(context); return NSView() }
+            func updateNSView(_ view: NSView, context: Context) { record(context) }
+            private func record(_ context: Context) { seen.read = true; seen.page = context.environment.atticPanelPage }
+        }
+        let seen = Seen()
+        let window = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 100, height: 100),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: KeptContentHost(drawn: true, interactive: true) { Probe(seen: seen) }
+            .environment(\.atticPanelPage, .tasks)
+            .frame(width: 100, height: 100))
+        window.orderFront(nil)
+        waitForTestOperation("the probe inside the host read its environment") {
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            return seen.read
+        }
+        XCTAssertEqual(seen.page, .tasks, "a view made inside a kept host does not know its page")
     }
 
     /// Review P1 (opus2) and P2-1 (opus1): the guard rail never fires
