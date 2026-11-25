@@ -111,6 +111,11 @@ final class TasksPagerMotion: ObservableObject {
     private let driver = TasksDisplayClock()
     /// The page's own view, whose display steps the settle.
     var clockView: () -> NSView? = { nil }
+    /// A move came to rest (slide, release spring, crossfade, or a show
+    /// without travel). The list's hover looks again here: the pager's
+    /// travel moves the rows without a frame report, so a still pointer
+    /// is otherwise not looked up again once the page lands.
+    var onSettled: (() -> Void)?
     private var generation = 0
     /// The pages drawn (the swipe owns it and gives it here).
     weak var span: TasksPagerSpan?
@@ -398,6 +403,7 @@ final class TasksPagerMotion: ObservableObject {
 
     private func settled() {
         endJump()
+        onSettled?()
         guard Self.tracing else { return }
         settledAt = ProcessInfo.processInfo.systemUptime
         let lead = switchedAt.flatMap { switched in settledAt.map { $0 - switched } } ?? -1

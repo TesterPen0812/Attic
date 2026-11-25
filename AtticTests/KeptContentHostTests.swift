@@ -326,7 +326,10 @@ final class KeptContentHostTests: XCTestCase {
         // Declared fileprivate and set where they are read; and the DEBUG
         // context-menu count tag, which `tasksCountTag` sets on each cell
         // inside the host (`TasksReorderCell`), above the menus that read it.
-        let setInside: Set<String> = ["atticMenuEntranceTime", "atticMaterialProbeID", "atticContextMenuCountTag"]
+        // The list's hover for a row or line (`AtticRowHover`), set on each
+        // cell and line inside the host.
+        let setInside: Set<String> = ["atticMenuEntranceTime", "atticMaterialProbeID", "atticContextMenuCountTag",
+                                      "atticRowHover"]
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Attic")
         let folders = ["Tasks", "DesignSystem", "Design"].map { root.appendingPathComponent($0) }

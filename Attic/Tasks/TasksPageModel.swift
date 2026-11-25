@@ -333,7 +333,12 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         }
         didSet {
             // Remembered across relaunch (L7), where the page has a memory.
-            if tab != oldValue { memory?.savePage(tab) }
+            if tab != oldValue {
+                memory?.savePage(tab)
+                // Another page's rows: the list looks again for the row
+                // under the pointer (`TasksPointer.updateHover`).
+                rowPointer?.scheduleHoverUpdate()
+            }
             #if DEBUG
             TasksPageRenderProbe.settingTab = nil
             #endif
@@ -2038,6 +2043,7 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     /// Retry", and the page stays where that row is.
     func resetForReveal() {
         isHidden = false
+        rowPointer?.scheduleHoverUpdate(refreshingPointer: true)
         // The page is on its tab at once, never sliding in (round 10); the
         // pages beside it are built once it is idle (round 11).
         defer {
@@ -2088,6 +2094,7 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
 
     func pageDidReturn() {
         isHidden = false
+        rowPointer?.scheduleHoverUpdate(refreshingPointer: true)
         defer {
             showPagerPage(animated: false)
             warmPager()
@@ -2143,6 +2150,8 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         revealTab = nil
         releaseFilterStay()
         isHidden = true
+        // Nothing is hovered while the panel is hidden.
+        rowPointer?.updateHover()
         suspendPager()
         hides &+= 1
     }
@@ -2278,6 +2287,8 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         willSet { if newValue, !isPageShown { syncRowStates(arriving: tab) } }
         didSet {
             guard isPageShown != oldValue else { return }
+            // No row is hovered while Tasks is not the page shown.
+            rowPointer?.scheduleHoverUpdate(now: !isPageShown)
             // Left for Notes or Canvas: the pager lets go (round 10); back
             // on Tasks, the page is on its tab without travel.
             if isPageShown {
