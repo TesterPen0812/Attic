@@ -3048,23 +3048,22 @@ struct TasksPage: View {
             if focusedRow != nil { focusedRow = nil }
         }
         // A press inside a row, a control in it too (its circle, its
-        // subtask count, its date): the cursor goes to that row, and the
-        // press selects nothing; a tap on the row itself then selects, as
-        // before. A row that took focus took the keyboard from any press
-        // inside it; the list keeps that: the press claims the list target
-        // (nothing under the press is focusable, so the press alone gives
-        // the target nothing).
-        // A press in the quick look open under a row is not in the row: the
-        // cursor leaves, as a row's focus left when the press landed there.
-        if let press = pointer.pressedRow(event, tab: model.tab, top: viewportTop, bottomInset: bandTop,
-                                          ownHeight: { id in rowOwnHeight(id, in: model.tab) }) {
-            if !press.inOwnPart {
-                if focusedRow != nil { cursorMoved(nil, byMouse: true) }
-            } else if press.id != model.editingTitleID {
-                let row = AtticRowFocusID(page: model.tab.rawValue, id: press.id)
-                if press.id != focusedID { cursorMoved(row, byMouse: true) }
-                rowFocus.setValue(row)
-            }
+        // subtask count, its date), or in the quick look open under it: the
+        // cursor goes to that row, and the press selects nothing; a tap on
+        // the row itself then selects, as before. A row that took focus
+        // took the keyboard from any press inside it; the list keeps that:
+        // the press claims the list target (nothing under the press is
+        // focusable, so the press alone gives the target nothing). A
+        // subtask line the press lands on takes the keyboard for itself,
+        // and the cursor with it (`onFocusChange`).
+        // Only a press that reaches the list: one on a view drawn over the
+        // row (the shell's toast, the "+" card, a dropdown) is not the
+        // row's, whatever frame lies under it (PR 71 review F2, P2-1).
+        if let id = pointer.pressedRow(event, tab: model.tab, top: viewportTop, bottomInset: bandTop),
+           rowFocus.reaches(event, tab: model.tab), id != model.editingTitleID {
+            let row = AtticRowFocusID(page: model.tab.rawValue, id: id)
+            if id != focusedID { cursorMoved(row, byMouse: true) }
+            rowFocus.setValue(row)
         }
         // Only the rows' visible part: between the tabs' band and the
         // bottom stack's band (round 7, R4).
@@ -3253,17 +3252,6 @@ struct TasksPage: View {
         if let measured = pointer.frame(for: TasksRowID(tab: tab, id: id))?.height, measured > 0 { return measured }
         guard let row = model.rows(for: tab).first(where: { Self.dragHeightLookupVisits += 1; return $0.id == id }) else { return AtticLayout.rowPitch }
         return estimatedHeight(row)
-    }
-
-    /// The height of a row's own part: the row without its quick look.
-    /// nil for a row the list does not hold.
-    private func rowOwnHeight(_ id: UUID, in tab: TasksTab) -> CGFloat? {
-        // A row with nothing open under it is its own part whole.
-        if !model.expanded.contains(id), let measured = pointer.frame(for: TasksRowID(tab: tab, id: id))?.height { return measured }
-        let rows = tab == .done ? model.doneDays().flatMap(\.rows) : model.rows(for: tab)
-        return rows.first { $0.id == id }.map { row in
-            TasksRowDesign.height(twoLine: row.model.hasDetails, tiles: !row.model.tileFiles.isEmpty && row.status != .done)
-        }
     }
 
     private func estimatedHeight(_ row: TasksListRow) -> CGFloat {
@@ -4098,6 +4086,18 @@ final class TasksRowFocusLink {
         focusWrites += 1
         #endif
         binding.wrappedValue = holds
+    }
+
+    /// Whether a press reaches `tab`'s list: the view the window gives the
+    /// press to is the tab's host or inside it. A view drawn over the list
+    /// in the panel's own host or in an overlay's (a toast, the "+" card,
+    /// a dropdown) takes the press for itself. A list outside a kept host
+    /// has no such view over it that the page knows of: its presses reach it.
+    func reaches(_ event: NSEvent, tab: TasksTab) -> Bool {
+        guard let host = hosts[tab]?.host else { return true }
+        guard let window = host.window, event.window === window, let top = window.contentView?.superview ?? window.contentView,
+              let hit = top.hitTest(top.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow) else { return false }
+        return hit === host || hit.isDescendant(of: host)
     }
 
     #if DEBUG
@@ -5445,15 +5445,13 @@ final class TasksPointer {
     }
 
     /// A left press (not a Control-click, which opens the row's menu) in
-    /// the list's space, inside a row's own part: that row. `ownHeight` is
-    /// the row's height without its quick look, whose lines take the
-    /// keyboard themselves.
-    func pressedRow(_ event: NSEvent, tab: TasksTab, top: CGFloat, bottomInset: CGFloat, ownHeight: (UUID) -> CGFloat?) -> (id: UUID, inOwnPart: Bool)? {
+    /// the list's space, inside a row's frame (the row and its quick
+    /// look): that row. Frames alone: whether the press reached the list
+    /// is the caller's question (`TasksRowFocusLink.reaches`).
+    func pressedRow(_ event: NSEvent, tab: TasksTab, top: CGFloat, bottomInset: CGFloat) -> UUID? {
         guard event.type == .leftMouseDown, MenuPress(type: event.type, modifiers: event.modifierFlags) == .none,
-              let view, let point = location(of: event), point.y >= top, point.y <= view.bounds.height - bottomInset,
-              let id = row(at: point, in: tab), let frame = frame(for: TasksRowID(tab: tab, id: id)),
-              let height = ownHeight(id) else { return nil }
-        return (id, point.y - frame.minY <= height)
+              let view, let point = location(of: event), point.y >= top, point.y <= view.bounds.height - bottomInset else { return nil }
+        return row(at: point, in: tab)
     }
 
     /// The row under `point` on page `tab`: the one whose frame holds it
