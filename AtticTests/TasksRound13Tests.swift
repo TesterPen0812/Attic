@@ -1002,9 +1002,14 @@ extension TasksRound13Tests {
         let hosted = try longHosted()
         defer { hosted.close() }
         let ids = hosted.model.rows(for: .now).map(\.id)
-        try clickRow(hosted, ids[0])
+        // Row 1, whose press selects it. A press at row 0's point lands on
+        // a control and opens its quick look, and with that open neither
+        // the trunk nor this list scrolls on ↓ (Air, 25 Nov, tk6-trunk.log
+        // and tk6-head.log: the same frames to ↓ 6, no row built after).
+        try clickRow(hosted, ids[1])
+        XCTAssertTrue(hosted.model.expanded.isEmpty, "harness: no quick look open")
         var unbuiltReached = 0
-        for step in 1...30 {
+        for step in 2...31 {
             let wasBuilt = isBuilt(hosted, ids[step])
             hosted.press("\u{F701}", keyCode: 125)
             hosted.spin(0.2)
