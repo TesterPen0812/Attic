@@ -3199,13 +3199,25 @@ final class GlossMatchWindows: NSObject, NSWindowDelegate {
         writeCheckFile()
     }
 
-    /// An ordinary window coming up: in front, with the keyboard, so
-    /// Command-W and Command-Q are its own from the start. Never in the
-    /// invisible unit test host, where no window of the app's shows.
+    /// An ordinary window coming up as a launched app's window does: once, in
+    /// front of the other apps' windows and with the keyboard, so its buttons
+    /// are in colour and Command-W and Command-Q are its own from the start.
+    /// The lab app is started with a launch argument by another process, so
+    /// the system does not hand it the front, and `activate()`, which waits
+    /// for the front app to give way, is refused: on macOS 26.4.1 the window
+    /// then came up behind another app's window and without the keyboard
+    /// (25 Nov, with and without `orderFrontRegardless`, and with
+    /// `NSRunningApplication.activate`). Only the older call that does not
+    /// wait brought it forward, so it is used here, this once, when the window
+    /// first shows; after that the window is ordered like any other and other
+    /// apps' windows can come in front of it. Never in the invisible unit test
+    /// host, where no window of the app's shows.
     private func show(_ window: NSWindow) {
         guard !TestPresentationPolicy.isInvisible else { return }
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     /// The sheet over its part of the pattern; shown only while the window
