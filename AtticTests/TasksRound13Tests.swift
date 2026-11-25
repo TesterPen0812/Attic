@@ -1062,21 +1062,28 @@ extension TasksRound13Tests {
     }
 
     /// The cursor around a title edit: during it, when it ends by Escape or
-    /// by Return, and what the next two ↓ do (Air, 25 Nov, tk10-head.log on
-    /// 52bdce2 and tk10-trunk.log on the trunk 10dac862). One difference
-    /// from the trunk: during the edit the trunk keeps the cursor on the
-    /// edited row and this list has none. After the edit both are the same:
-    /// no cursor, the keyboard on the panel, and ↓ reaches no row (a trunk
-    /// defect, on the board; pinned here so a change to it is seen).
+    /// by Return, and what Space and Delete do next (each in its own run).
+    /// During the edit no row has the cursor (the trunk keeps it on the
+    /// edited row; recorded difference, the lead 24 Nov 08:00, 4). When the
+    /// edit ends, the edited row alone has the cursor, with its ring, and
+    /// the list has the keyboard, as the editor's commit and cancel ask
+    /// (`setFocus(id)`); Space and Delete act on that row alone (the lead,
+    /// 25 Nov 04:41). The trunk 10dac862 and f22cb802 ended the edit with no
+    /// cursor and the keyboard on the panel, so the keys reached no row
+    /// (Air, 25 Nov, tk10-trunk.log, tk12-head.log): the list's target read
+    /// true while the editor inside it held the keyboard, and the write
+    /// that gives the list the keyboard was skipped.
     func testTheCursorAroundATitleEditIsPinned() throws {
         try requireKeyWindowTests()
-        for ending in ["esc", "return"] {
+        for (ending, key) in [("esc", "space"), ("esc", "delete"), ("return", "space"), ("return", "delete")] {
             let hosted = try longHosted()
             defer { hosted.close() }
             let ids = hosted.model.rows(for: .now).map(\.id)
+            let name = "\(ending), \(key)"
             func at(_ id: UUID?) -> String { id.map { "\(ids.firstIndex(of: $0) ?? -1)" } ?? "nil" }
+            func rings() -> [Int] { hosted.pointer.drawnFocus.compactMap { ids.firstIndex(of: $0.id) }.sorted() }
             func line(_ step: String) {
-                print("LIST_FOCUS edit \(ending) \(step) cursor=\(at(hosted.model.keyboardFocus?.id)) "
+                print("LIST_FOCUS edit \(ending) \(key) \(step) cursor=\(at(hosted.model.keyboardFocus?.id)) rings=\(rings()) "
                       + "selection=\(hosted.model.selection.map { ids.firstIndex(of: $0) ?? -1 }.sorted()) "
                       + "editing=\(at(hosted.model.editingTitleID)) "
                       + "responder=\(hosted.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")")
@@ -1090,18 +1097,21 @@ extension TasksRound13Tests {
             XCTAssertNil(hosted.model.keyboardFocus, "during a title edit no row has the cursor (the trunk keeps it on the edited row; recorded difference, the lead 24 Nov 08:00, 4)")
             if ending == "esc" { hosted.press("\u{1B}", keyCode: 53) } else { hosted.press("\r", keyCode: 36) }
             hosted.spin(0.5)
-            XCTAssertNil(hosted.model.editingTitleID, "harness: the edit ended (\(ending))")
+            XCTAssertNil(hosted.model.editingTitleID, "harness: the edit ended (\(name))")
             line("ended")
-            XCTAssertNil(hosted.model.keyboardFocus, "\(ending): no row has the cursor after the edit, as on the trunk")
-            XCTAssertEqual(hosted.model.selection, [ids[2]], "\(ending): the edited row stays selected")
-            hosted.press("\u{F701}", keyCode: 125)
-            hosted.spin(0.3)
-            line("down1")
-            hosted.press("\u{F701}", keyCode: 125)
-            hosted.spin(0.3)
-            line("down2")
-            XCTAssertNil(hosted.model.keyboardFocus, "\(ending): ↓ after the edit reaches no row (pinned; the trunk is the same)")
-            XCTAssertEqual(hosted.model.selection, [ids[2]], "\(ending): and the selection stays")
+            XCTAssertEqual(hosted.model.keyboardFocus?.id, ids[2], "\(name): the edited row has the cursor after the edit")
+            XCTAssertEqual(rings(), [2], "\(name): the keyboard's ring is drawn on the edited row and on no other")
+            XCTAssertEqual(hosted.model.selection, [ids[2]], "\(name): the edited row stays selected")
+            XCTAssertTrue(keyboardIsInNowList(hosted), "\(name): the keyboard is in the Now list after the edit")
+            let before = states(hosted, ids)
+            if key == "space" { hosted.press(" ", keyCode: 49) } else { hosted.press("\u{7F}", keyCode: 51) }
+            var waited = 0.0
+            while waited < 3, states(hosted, ids) == before { hosted.spin(0.1); waited += 0.1 }
+            hosted.spin(0.5)
+            let after = states(hosted, ids)
+            let acted = ids.enumerated().compactMap { offset, id in after[id] != before[id] ? "\(offset):\(after[id] ?? "?")" : nil }
+            print("LIST_FOCUS edit \(ending) \(key) acted=\(acted)")
+            XCTAssertEqual(acted, [key == "space" ? "2:done" : "2:gone"], "\(name): the key after the edit acts on the edited row and on no other")
         }
     }
 
