@@ -1210,6 +1210,135 @@ final class HiddenPagesCountersTests: XCTestCase {
             pump(rig.content, rig.panel)
         }
     }
+
+    // MARK: - A row move is not a focus move (list-owned-focus.md §5)
+
+    /// Posts events through the app's queue one at a time, each pumped, so
+    /// a mouse-down's pass and the mouse-up's stay apart.
+    @MainActor private func post(_ rig: Rig, _ events: [NSEvent]) {
+        for event in events {
+            NSApp.postEvent(event, atStart: false)
+            Hosted.pumpEvents()
+            pump(rig.content, rig.panel)
+        }
+    }
+
+    @MainActor private func rowClick(_ rig: Rig, _ id: UUID, modifiers: NSEvent.ModifierFlags = []) throws {
+        let frame = try XCTUnwrap(rig.page.agentRowFrames([id]).first?.frame, "harness: the row \(id) is on the page")
+        let point = CGPoint(x: frame.minX + min(120, frame.width / 2), y: frame.midY)
+        post(rig, try [NSEvent.EventType.leftMouseDown, .leftMouseUp].map { type in
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: rig.panel.windowNumber, context: nil, eventNumber: 1, clickCount: 1,
+                pressure: type == .leftMouseDown ? 1 : 0))
+        })
+    }
+
+    @MainActor private func rowKey(_ rig: Rig, _ code: UInt16, _ characters: String, _ modifiers: NSEvent.ModifierFlags = []) throws {
+        var flags = modifiers
+        if [123, 124, 125, 126].contains(code) { flags.formUnion([.numericPad, .function]) }
+        post(rig, try [NSEvent.EventType.keyDown, .keyUp].map { type in
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: rig.panel.windowNumber, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+        })
+    }
+
+    /// The sentinel checks since the last call, by "region@phase"; resets.
+    @MainActor private func takePhaseChecks() -> [String: Int] {
+        let checks = AtticFocusReaderCensus.phaseChecks
+        AtticFocusReaderCensus.reset()
+        return checks
+    }
+
+    private static let regions = ["tasks", "calendar", "notes", "canvas"]
+
+    /// list-owned-focus.md §5, "Red, then green": the Tasks list owns the
+    /// keyboard, so a move from row to row writes the selection and the
+    /// cursor but no SwiftUI focus.
+    /// - A MOVE click checks no focus reader in any region, in the
+    ///   mouse-down's pass or the one after it. Red on the trunk 5fe27e46:
+    ///   `after-md` 1/1/1/1 (Air, stage 1, s1-base.log).
+    /// - ↓, ↑, ⇧↓ and Tab from row to row write no focus state through the
+    ///   link (the trunk writes one per move), and check no more readers than
+    ///   the trunk's 2 per region and step (stage 1: ↓ 2 then 2 on the trunk;
+    ///   a key the panel's monitor takes is counted under the phase before
+    ///   it, so each step's phases are summed).
+    /// - Observed apart from the new code: the first responder is the same
+    ///   object before and after each move, and the selection, the cursor
+    ///   and (for a key) the drawn ring land on the row.
+    /// - The control: a click on the row that has the keyboard (STAY)
+    ///   checks nothing.
+    func testARowMoveIsNotAFocusMove() throws {
+        try requireKeyWindowTests()
+        try withRig { rig in
+            rig.panel.makeKey()
+            pump(rig.content, rig.panel)
+            XCTAssertTrue(rig.panel.isKeyWindow, "harness: the panel is the key window")
+            let ids = rig.page.rows(for: .now).map(\.id)
+            XCTAssertGreaterThan(ids.count, 6, "harness: Now has rows to move between")
+            let link = try XCTUnwrap(TasksRowFocusLink.current, "harness: the page's focus link")
+
+            try rowClick(rig, ids[2])  // the list takes the keyboard once
+            pump(rig.content, rig.panel)
+            XCTAssertEqual(rig.page.keyboardFocus?.id, ids[2], "harness: the first click gave row 2 the keyboard")
+            _ = takePhaseChecks()
+            let responder = try XCTUnwrap(rig.panel.firstResponder, "harness: something holds the keyboard")
+
+            // MOVE click.
+            var writes = link.focusWrites
+            var environments = TasksPageRenderProbe.environmentsBelowKeys
+            var tabEnvironments = TasksPageRenderProbe.environmentsBelowTabKeys
+            try rowClick(rig, ids[4])
+            let move = takePhaseChecks()
+            print("LIST_FOCUS env move-click page=\(TasksPageRenderProbe.environmentsBelowKeys - environments) tab=\(TasksPageRenderProbe.environmentsBelowTabKeys - tabEnvironments)")
+            XCTAssertEqual(rig.page.selection, [ids[4]], "the click selected row 4")
+            XCTAssertEqual(rig.page.keyboardFocus?.id, ids[4], "the click gave row 4 the cursor")
+            XCTAssertTrue(rig.panel.firstResponder === responder, "the first responder changed on a row click")
+            XCTAssertEqual(link.focusWrites - writes, 0, "a row click wrote a focus state")
+            for region in Self.regions {
+                for phase in ["md", "after-md"] {
+                    XCTAssertEqual(move["\(region)@\(phase)", default: 0], 0,
+                                   "a MOVE click checked a focus reader in \(region) at \(phase) (\(move))")
+                }
+            }
+
+            // STAY: the row that has the keyboard, clicked again.
+            try rowClick(rig, ids[4])
+            let stay = takePhaseChecks()
+            XCTAssertEqual(stay.values.reduce(0, +), 0, "control: a click that moves nothing checked a focus reader (\(stay))")
+
+            // Keys from row to row.
+            let keys: [(name: String, code: UInt16, characters: String, modifiers: NSEvent.ModifierFlags, row: Int, selection: [Int])] = [
+                ("↓", 125, "\u{F701}", [], 5, [5]),
+                ("↓ again", 125, "\u{F701}", [], 6, [6]),
+                ("↑", 126, "\u{F700}", [], 5, [5]),
+                ("⇧↓", 125, "\u{F701}", .shift, 6, [5, 6]),
+                ("Tab", 48, "\t", [], 7, [5, 6]),
+            ]
+            for key in keys {
+                writes = link.focusWrites
+                environments = TasksPageRenderProbe.environmentsBelowKeys
+                tabEnvironments = TasksPageRenderProbe.environmentsBelowTabKeys
+                try rowKey(rig, key.code, key.characters, key.modifiers)
+                pump(rig.content, rig.panel)
+                print("LIST_FOCUS env \(key.name) page=\(TasksPageRenderProbe.environmentsBelowKeys - environments) tab=\(TasksPageRenderProbe.environmentsBelowTabKeys - tabEnvironments)")
+                let checks = takePhaseChecks()
+                let row = ids[key.row]
+                XCTAssertEqual(rig.page.keyboardFocus?.id, row, "\(key.name): the cursor is not on row \(key.row)")
+                XCTAssertEqual(rig.page.selection, Set(key.selection.map { ids[$0] }), "\(key.name): the selection")
+                XCTAssertTrue(rig.page.rowPointer?.drawnFocus.contains(TasksRowID(tab: .now, id: row)) ?? false,
+                              "\(key.name): no ring was drawn on row \(key.row)")
+                XCTAssertTrue(rig.panel.firstResponder === responder, "\(key.name): the first responder changed")
+                XCTAssertEqual(link.focusWrites - writes, 0, "\(key.name) wrote a focus state")
+                for region in Self.regions {
+                    let total = checks.filter { $0.key.hasPrefix(region + "@") }.values.reduce(0, +)
+                    XCTAssertLessThanOrEqual(total, 2, "\(key.name) checked \(total) focus readers in \(region), more than the trunk (\(checks))")
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Resize: the size is a layout input (ops/design/resize-cause.md, cause 1)
@@ -1582,6 +1711,153 @@ extension HiddenPagesCountersTests {
             XCTAssertTrue([minute(switchedAt), minute(after)].contains(minute(shown)),
                           "C9: the first frame's now line shows \(shown), not the minute of the switch (\(switchedAt))")
             XCTAssertTrue(firstHasLate, "C9: the task made due today while Calendar was hidden is missing from its first frame")
+        }
+    }
+}
+
+// MARK: - A press on something drawn over a row (PR 71 review round, 25 Nov): pins from the trunk's run lines
+
+extension HiddenPagesCountersTests {
+    @MainActor private func rcbPost(_ rig: Rig, _ events: [NSEvent]) {
+        for event in events {
+            NSApp.postEvent(event, atStart: false)
+            Hosted.pumpEvents()
+            pump(rig.content, rig.panel)
+        }
+    }
+
+    /// The press and the release queued together before anything is pumped, as `Hosted.click` does: a view
+    /// that tracks the mouse from its press (a text view) reads the release from the queue itself.
+    @MainActor private func rcbClick(_ rig: Rig, at point: CGPoint) throws {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            NSApp.postEvent(try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: rig.panel.windowNumber, context: nil, eventNumber: 1, clickCount: 1,
+                pressure: type == .leftMouseDown ? 1 : 0)), atStart: false)
+        }
+        Hosted.pumpEvents()
+        pump(rig.content, rig.panel)
+    }
+
+    @MainActor private func rcbKey(_ rig: Rig, _ code: UInt16, _ characters: String, _ flags: NSEvent.ModifierFlags = []) throws {
+        rcbPost(rig, try [NSEvent.EventType.keyDown, .keyUp].map { type in
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: rig.panel.windowNumber, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+        })
+    }
+
+    /// More rows than the panel shows, so rows reach the bottom of the list's viewport.
+    @MainActor private func rcbFill(_ rig: Rig) {
+        let context = ModelContext(rig.container)
+        let now = Date()
+        for index in 0..<18 {
+            let item = TaskItem(title: "Filler \(index)", status: .todo, priority: .none,
+                                createdAt: now.addingTimeInterval(Double(-(100 + index) * 60)),
+                                manualOrder: 9_000_000 + Int64(index) * 1_024, parentID: nil)
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(item)
+        }
+        try? context.save()
+        rig.tasks.refresh()
+        pump(rig.content, rig.panel, seconds: 0.8)
+    }
+
+    /// Accessibility elements whose label or identifier matches, with their frames in window points (bottom origin).
+    @MainActor private func rcbAX(_ rig: Rig, _ wanted: (_ label: String, _ identifier: String) -> Bool) -> [(what: String, frame: CGRect)] {
+        var found: [(what: String, frame: CGRect)] = []
+        func walk(_ element: AnyObject, depth: Int) {
+            let label = element.accessibilityLabel?() ?? ""
+            let identifier = element.accessibilityIdentifier?() ?? ""
+            if wanted(label, identifier), let rect: CGRect = element.accessibilityFrame?(), rect.width > 1 {
+                let origin = rig.panel.convertPoint(fromScreen: rect.origin)
+                let entry = (what: "\(identifier.isEmpty ? "" : identifier + ":")\(label.prefix(28))", frame: CGRect(origin: origin, size: rect.size))
+                if !found.contains(where: { $0.what == entry.what && $0.frame == entry.frame }) { found.append(entry) }
+            }
+            guard depth > 0, let children = element.accessibilityChildren?() else { return }
+            for child in children { walk(child as AnyObject, depth: depth - 1) }
+        }
+        func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
+        for root in [rig.content] + all(rig.content).filter({ $0 is NSHostingView<AnyView> || String(describing: type(of: $0)).contains("Hosting") }) { walk(root, depth: 50) }
+        return found
+    }
+
+    @MainActor private func rcbToastParts(_ rig: Rig) -> [(what: String, frame: CGRect)] {
+        let message = rig.page.toasts.current?.message ?? "\u{0}"
+        return rcbAX(rig) { label, identifier in identifier == "panel-undo-toast" || label.contains(message) || label.hasPrefix("Undo") }
+    }
+
+    @MainActor private func rcbShow(_ frame: CGRect) -> String { "x\(Int(frame.minX))-\(Int(frame.maxX)) y\(Int(frame.minY))-\(Int(frame.maxY))" }
+
+
+    /// A press inside the open "+" card, where the card stands over a row,
+    /// puts no cursor on the row beneath, then or after the card closes
+    /// (the trunk, t10: `F2b after-press cursor=nil`, `F2b card-closed cursor=nil`).
+    func testAPressInTheOpenCardPutsNoCursorOnTheRowBeneath() throws {
+        try requireKeyWindowTests()
+        try withRig { rig in
+            rig.panel.makeKey()
+            pump(rig.content, rig.panel)
+            rcbFill(rig)
+            let ids = rig.page.rows(for: .now).map(\.id)
+            let first = try XCTUnwrap(rig.page.agentRowFrames([ids[1]]).first?.frame, "harness: row 1 is on the page")
+            try rcbClick(rig, at: CGPoint(x: first.minX + min(120, first.width / 2), y: first.midY))
+            pump(rig.content, rig.panel, seconds: 0.3)
+            XCTAssertEqual(rig.page.selection, [ids[1]], "harness: a click selected row 1")
+            openCard(rig)
+            pump(rig.content, rig.panel, seconds: 1.5)
+            let field = try XCTUnwrap((rig.panel.firstResponder as? NSView).map { $0.convert($0.bounds, to: nil) }, "harness: the card's field holds the keyboard")
+            let frames = rig.page.agentRowFrames(nil)
+            var point: CGPoint?
+            for y in stride(from: field.maxY - 3, through: field.minY + 3, by: -3) where point == nil {
+                if frames.contains(where: { $0.frame.contains(CGPoint(x: field.midX, y: y)) }) { point = CGPoint(x: field.midX, y: y) }
+            }
+            try rcbClick(rig, at: try XCTUnwrap(point, "harness: a row lies under the card's field"))
+            pump(rig.content, rig.panel, seconds: 0.5)
+            XCTAssertNil(rig.page.keyboardFocus, "no cursor on the row under the card")
+            closeCard(rig)
+            pump(rig.content, rig.panel, seconds: 0.5)
+            XCTAssertNil(rig.page.keyboardFocus, "nor after the card closed")
+            XCTAssertEqual(rig.page.selection, [ids[1]], "the selection is as it was")
+        }
+    }
+
+    /// Nothing selected and the keyboard on the panel: a press on the Undo
+    /// toast's words, where the toast lies over a row, puts no cursor on
+    /// that row, and ⌘D then duplicates nothing (the trunk, t10: `P21-body
+    /// after-press cursor=nil selection=[]`, `cmdD tasks=25->25 new=["none"]`).
+    func testAPressOnTheToastPutsNoCursorOnTheRowBeneath() throws {
+        try requireKeyWindowTests()
+        try withRig { rig in
+            rig.panel.makeKey()
+            pump(rig.content, rig.panel)
+            rcbFill(rig)
+            let ids = rig.page.rows(for: .now).map(\.id)
+            rig.page.toasts.holdDuration = 60
+            _ = rig.page.delete([ids[0]])
+            pump(rig.content, rig.panel, seconds: 1)
+            rig.page.clearSelection()
+            rig.panel.makeFirstResponder(nil)
+            pump(rig.content, rig.panel, seconds: 0.3)
+            XCTAssertNotNil(rig.page.toasts.current, "harness: the Undo toast is up")
+            XCTAssertNil(rig.page.keyboardFocus, "harness: no cursor before the press")
+            // The toast by accessibility when it answers; else by geometry: it hugs its words, centred,
+            // `toastHeight` high, standing on the notices' bottom padding.
+            let middle = rig.panel.frame.width / 2
+            let toast = rcbToastParts(rig).first { $0.what.hasPrefix("panel-undo-toast") }?.frame
+                ?? CGRect(x: middle - 40, y: PanelNoticeClearanceProbe.lastBottomPadding, width: 80, height: AtticControlSize.toastHeight)
+            let point = CGPoint(x: middle - 30, y: toast.midY)
+            XCTAssertTrue(toast.contains(point), "harness: the press is on the toast")
+            XCTAssertTrue(rig.page.agentRowFrames(nil).contains { $0.frame.contains(point) }, "harness: a row lies under the toast there")
+            try rcbClick(rig, at: point)
+            pump(rig.content, rig.panel, seconds: 0.6)
+            XCTAssertNil(rig.page.keyboardFocus, "no cursor on the row under the toast")
+            XCTAssertEqual(rig.page.selection, [], "and nothing selected")
+            let before = rig.tasks.tasks.filter { $0.deletedAt == nil }.count
+            try rcbKey(rig, 2, "d", .command)
+            pump(rig.content, rig.panel, seconds: 1.2)
+            XCTAssertEqual(rig.tasks.tasks.filter { $0.deletedAt == nil }.count, before, "⌘D duplicated nothing")
         }
     }
 }

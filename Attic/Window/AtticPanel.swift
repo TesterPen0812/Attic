@@ -371,6 +371,17 @@ final class AtticPanel: NSPanel {
     private(set) var lastScrollEventTime: TimeInterval = 0
 
     override func sendEvent(_ event: NSEvent) {
+        #if DEBUG
+        // Tags the focus checks with the input phase (`AtticFocusReaderCensus.phase`).
+        let inputPhase: String? = switch event.type {
+        case .leftMouseDown: "md"
+        case .leftMouseUp: "mu"
+        case .keyDown: "key"
+        default: nil
+        }
+        if let inputPhase { AtticFocusReaderCensus.phase = inputPhase }
+        defer { if let inputPhase { AtticFocusReaderCensus.phase = "after-" + inputPhase } }
+        #endif
         if Self.takesFirstPress(event.type) {
             tracingIdlePress = false
             if IdleLatencyTrace.shouldTracePanelPress, let context = onIdleTraceContext?() {
