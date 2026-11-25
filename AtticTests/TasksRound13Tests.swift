@@ -1000,11 +1000,14 @@ extension TasksRound13Tests {
     func testDownOntoARowTheLazyListHasNotBuiltRevealsIt() throws {
         try requireKeyWindowTests()
         // Reduce Motion on: the reveal then scrolls at once. With it off
-        // the reveal glides on the scroll view's display link, which does
-        // not tick for this window, placed off every screen (Air, 25 Nov,
-        // tk6-head.log: `glide delta=12.0 offset=-49.0`, the offset never
-        // moves; the trunk's list does not move here either, tk7-trunk.log).
-        // The glide itself is an on-screen check.
+        // the reveal glides, and in this window, placed off every screen,
+        // the glide starts and the list never moves (Air, 25 Nov,
+        // tk6-head.log: `glide delta=12.0 offset=-49.0`; the trunk's list
+        // does not move here either, tk7-trunk.log). Inferred, not run: the
+        // glide steps on the scroll view's display link, which does not
+        // tick for a window off every screen. Tab's reveal does not glide
+        // (`settleKeyboard`), so its test passes here. The glide itself is
+        // an on-screen check.
         let hosted = try longHosted(reduceMotion: true)
         defer { hosted.close() }
         let ids = hosted.model.rows(for: .now).map(\.id)
