@@ -1397,7 +1397,22 @@ struct PanelIslandPullTracker {
 }
 
 /// A click on the island works on its first press, whichever app is active.
+/// Its window is sized by `PanelIslandWindows.layout` alone, so nothing
+/// flows from SwiftUI to AppKit (as the panel's root, `AtticPanelHostingView`,
+/// and `KeptContentHostingView`): with the sizing options on, every island
+/// update, each resize step's glass size among them, asked SwiftUI for the
+/// root's whole size to set window content-size limits nothing reads.
 private final class PanelIslandHostingView<Root: View>: NSHostingView<Root> {
+    required init(rootView: Root) {
+        super.init(rootView: rootView)
+        sizingOptions = []
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     #if DEBUG
     override func updateConstraints() {
@@ -1418,8 +1433,19 @@ private final class PanelIslandHostingView<Root: View>: NSHostingView<Root> {
 
 /// The island's stand-in in the panel's motion layer: never hit, never an
 /// accessibility element, so at rest the island windows stay the live
-/// island.
+/// island. Placed by `AtticPanelContentContainer.placeIslandStandIn`, so,
+/// like the island's own, it sends no size to AppKit.
 private final class PanelIslandStandInHostingView<Root: View>: NSHostingView<Root> {
+    required init(rootView: Root) {
+        super.init(rootView: rootView)
+        sizingOptions = []
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func isAccessibilityElement() -> Bool { false }
     override func accessibilityChildren() -> [Any]? { [] }
