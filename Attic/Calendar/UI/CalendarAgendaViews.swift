@@ -587,10 +587,25 @@ struct CalendarEventRow: View {
 struct CalendarNowLine: View {
     @Environment(\.atticDesign) private var design
 
+    #if DEBUG
+    /// Test seams (HiddenPagesCountersTests C9): the line's body runs, the
+    /// minute clock's builds, and the time its last build drew.
+    static var bodyEvaluations = 0
+    static var clockBuilds = 0
+    static var lastClockDate: Date?
+    #endif
+
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let red = AtticSurfaceInk.vivid(CalendarDesign.nowRed, tokens: design.tokens).color
         let ringCentre = AtticLayout.circleX + AtticControlSize.statusCircle / 2
         TimelineView(.everyMinute) { context in
+            #if DEBUG
+            let _ = Self.clockBuilds += 1
+            let _ = Self.lastClockDate = context.date
+            #endif
             HStack(spacing: 5) {
                 Circle().fill(red).frame(width: CalendarDesign.nowDot, height: CalendarDesign.nowDot)
                 Capsule().fill(red).frame(height: CalendarDesign.nowLine)
