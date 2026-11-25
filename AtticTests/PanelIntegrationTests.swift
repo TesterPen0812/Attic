@@ -556,13 +556,15 @@ final class PanelIntegrationTests: XCTestCase {
             if !shown { _ = panel.controller.requestHide { _ in }; spin(0.8) }
             let before = fr()
             XCTAssertEqual(panel.monitor.revealProgrammatically(openComposer: true, section: .tasks), .shown)
-            spin(until: { panel.uiState.isComposerPresented && panel.uiState.selectedSection == .tasks })
+            // The shell's adding state ends at once by design: the Tasks host hands the keyboard to the
+            // "+" card and closes it (`TasksPageHost.swift:298, 318-324`). What the key does is the page and
+            // where the keyboard lands, so those are what both arms must match.
+            spin(until: { panel.uiState.selectedSection == .tasks })
             spin(0.5)
             print("RZHOTKEY arm=\(RZS.noPageHost ? "B" : "P") from=\(shown ? "calendar-shown" : "calendar-hidden") before=\(before) "
                   + "page=\(panel.uiState.selectedSection) composer=\(panel.uiState.isComposerPresented) key=\(window.isKeyWindow) fr=\(fr())")
             XCTAssertEqual(panel.uiState.selectedSection, .tasks)
-            XCTAssertTrue(panel.uiState.isComposerPresented)
-            panel.uiState.endAdding()
+            XCTAssertEqual(fr(), "AtticTokenTextView", "the keyboard lands in the new-task text view")
             spin(0.3)
         }
     }
