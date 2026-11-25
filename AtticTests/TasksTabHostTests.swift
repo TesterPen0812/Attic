@@ -219,12 +219,14 @@ final class TasksTabHostTests: XCTestCase {
                              "the shown host's content still takes a new environment on clicks (the counter counts)")
         XCTAssertGreaterThan(clicks.map(\.updates.off).reduce(0, +), 0,
                              "the hidden hosts were updated on clicks, so their zero means something")
-        // Size writes: this host's size writes replaced no hidden
-        // environment on the trunk either (a3829c89), so this half guards
-        // nothing yet; the preview's 2 a size write is not reproduced here.
+        // Size writes: the pager takes its size from layout (resize cause
+        // 2), so a size write updates no tab host, shown or hidden, and
+        // hands no content a new environment. The write still reaches the
+        // shown host, by layout (the control).
         for write in reaches.filter({ $0.label.hasPrefix("size-write") }) {
-            XCTAssertGreaterThan(write.environments.on, 0, "\(write.label): the shown host's content took no new environment")
-            XCTAssertGreaterThan(write.updates.off, 0, "\(write.label): the hidden hosts were not updated")
+            XCTAssertEqual(write.environments.on, 0, "\(write.label): a size write handed the shown host's content a new environment")
+            XCTAssertEqual(write.updates.on + write.updates.off, 0, "\(write.label): a size write updated a tab host")
+            XCTAssertGreaterThan(write.layouts[0], 0, "\(write.label): the size write did not reach the shown host's layout")
         }
     }
 
@@ -275,6 +277,45 @@ final class TasksTabHostTests: XCTestCase {
         resize(hosted)
         switchTo(.backlog, "after-resize-to-later")
         switchTo(.now, "after-resize-to-now")
+    }
+
+    /// Resize cause 2: the slots take the pager's width from layout and
+    /// slide by their own width (`TasksPagerSlide`). After a resize with
+    /// Later and Done hidden, each slot is as wide as the pager and sits
+    /// whole pager widths from the one shown; and a tab shown after the
+    /// resize is at the new width where the shown one was.
+    func testSlotsFollowAResizeAndStayAWidthApart() throws {
+        let hosted = try warmed(followsWindow: true)
+        defer { hosted.close() }
+        hosted.spin(0.5)
+        let tabHosts = hosts(hosted)
+        XCTAssertEqual(tabHosts.count, 3, "harness: the three tabs are built")
+        guard tabHosts.count == 3 else { return }
+        func frames() -> [CGRect] { tabHosts.map { $0.convert($0.bounds, to: nil) } }
+        func assertSlots(_ label: String, shown: Int) {
+            hosted.window.contentView?.layoutSubtreeIfNeeded()
+            let slots = frames()
+            let width = slots[shown].width
+            print("PAGER_SLOTS \(label) shown=\(shown) x=\(slots.map(\.minX)) w=\(slots.map(\.width)) pager=\(hosted.model.pagerSwipe.width)")
+            XCTAssertEqual(hosted.model.pagerSwipe.width, width, accuracy: 0.5, "\(label): the swipe's width is the shown slot's")
+            for index in slots.indices {
+                XCTAssertEqual(slots[index].width, width, accuracy: 0.5, "\(label): slot \(index) is not as wide as the pager")
+                XCTAssertEqual(slots[index].minX - slots[shown].minX, CGFloat(index - shown) * width, accuracy: 0.5,
+                               "\(label): slot \(index) is not \(index - shown) widths from the one shown")
+            }
+        }
+        assertSlots("at rest", shown: 0)
+        let before = frames()[0]
+        resize(hosted)
+        let after = frames()[0]
+        XCTAssertEqual(after.width - before.width, 48, accuracy: 0.5, "harness: the resize widened the pager by its 8 steps of 6")
+        assertSlots("after a resize", shown: 0)
+        hosted.go(to: .backlog)
+        hosted.spin(0.6)
+        XCTAssertEqual(tabHosts.map(\.isInteractive), [false, true, false], "harness: Later is shown")
+        assertSlots("Later shown after the resize", shown: 1)
+        XCTAssertEqual(frames()[1].minX, after.minX, accuracy: 0.5, "Later sits where Now was")
+        XCTAssertEqual(frames()[1].width, after.width, accuracy: 0.5, "Later is at the new width")
     }
 
     /// Records what warming builds in the hidden hosts, and what the first

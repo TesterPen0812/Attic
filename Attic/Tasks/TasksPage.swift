@@ -1632,19 +1632,23 @@ struct TasksPage: View {
     /// shown is built, and the pages beside it only while a swipe or a
     /// slide shows them (`TasksPagerSpan`); only the page shown takes
     /// clicks and is read by VoiceOver.
+    ///
+    /// The pager's size is a layout input: nothing here reads it as a value.
+    /// A reader around the pages handed them each new size, and every step
+    /// of a resize then re-made the pages, with a new root for the shown
+    /// tab's host and an update of each hidden one (resize-cause.md, cause
+    /// 2). The slots fill what they are offered and slide by their own
+    /// width (`TasksPagerSlide`); the swipe hears the width as it changes.
     private var pager: some View {
-        GeometryReader { proxy in
-            let width = proxy.size.width
-            ZStack(alignment: .topLeading) {
-                TasksPagerPages(span: swipe.span, model: model, store: store, motion: swipe.motion, count: TasksTab.allCases.count,
-                                size: proxy.size,
-                                page: { index, drawn in page(TasksTab.allCases[index], drawn: drawn) })
-                if TasksPagerMotion.tracing {
-                    TasksPagerTrace(motion: swipe.motion)
-                }
+        ZStack(alignment: .topLeading) {
+            TasksPagerPages(span: swipe.span, model: model, store: store, motion: swipe.motion, count: TasksTab.allCases.count,
+                            page: { index, drawn in page(TasksTab.allCases[index], drawn: drawn) })
+            if TasksPagerMotion.tracing {
+                TasksPagerTrace(motion: swipe.motion)
             }
-            .onChange(of: width, initial: true) { _, width in swipe.width = width }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { swipe.width = $0 }
     }
 
     /// A page; `drawn` false: kept built but hidden (its list's scroll

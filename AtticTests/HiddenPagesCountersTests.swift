@@ -923,6 +923,70 @@ final class HiddenPagesCountersTests: XCTestCase {
         return found
     }
 
+    /// Resize cause 2 (resize-cause.md; the trigger named 24 Nov): the pager
+    /// sat in a geometry reader and was handed each new size as a value, so
+    /// every size step re-made the pages: one pager pass, an update of each
+    /// tab's host, a new root and a new environment for the shown one. The
+    /// pager's size is a layout input: a size step, in a drag or outside
+    /// one, runs no pager pass, updates no tab host and sets no root, and
+    /// the shown tab is at the new width in the step's own frame; the swipe
+    /// hears the width.
+    func testRZ7ASizeStepRunsNoPagerPassAndUpdatesNoTabHost() throws {
+        try withRig { rig in
+            XCTAssertEqual(rig.state.selectedSection, .tasks, "harness: Tasks is shown")
+            let start = rig.state.panelSize
+            pump(rig.content, rig.panel)
+            XCTAssertEqual(rig.page.pagerSwipe.width, drawnTasksHostWidths(rig).first ?? -1, accuracy: 0.5,
+                           "the swipe knows the pager's width before any resize")
+            var sizes = (1...Self.dragSteps).map { dragSize(start, step: $0) }
+            // A height-only step, then (after the release) a write that is no drag.
+            sizes.append(CGSize(width: sizes[sizes.count - 1].width, height: sizes[sizes.count - 1].height + 10))
+            let outsideADrag = dragSize(start, step: Self.dragSteps + 2)
+            rig.state.setInteractionLock(.windowResize, isActive: true)
+            pump(rig.content, rig.panel)
+            for (index, size) in (sizes + [outsideADrag]).enumerated() {
+                let label = size == outsideADrag ? "outside a drag" : "step \(index + 1)"
+                if size == outsideADrag {
+                    release(rig)
+                    pump(rig.content, rig.panel)
+                }
+                let before = (TasksPagerPassCount.passes, KeptContentHostCounts.updates, KeptContentHostCounts.roots,
+                              KeptContentHostCounts.environments, AtticPanelHostingView.layoutPasses)
+                resize(rig, to: size)
+                var first: [CGFloat] = []
+                waitForTestOperation("the first frame after the size write (\(label))") {
+                    frame(rig)
+                    guard PanelRootLayout.lastPlacedSize == size else { return false }
+                    first = drawnTasksHostWidths(rig)
+                    return true
+                }
+                pump(rig.content, rig.panel)
+                let passes = TasksPagerPassCount.passes - before.0
+                let updates = (KeptContentHostCounts.updates.on - before.1.on, KeptContentHostCounts.updates.off - before.1.off)
+                let roots = (KeptContentHostCounts.roots.on - before.2.on, KeptContentHostCounts.roots.off - before.2.off)
+                let environments = KeptContentHostCounts.environments.on - before.3.on
+                print("PAGER_SIZE_STEP \(label) width=\(size.width) pager=\(passes) updates=\(updates.0)/\(updates.1) roots=\(roots.0)/\(roots.1) "
+                      + "envs=\(environments) panel_layouts=\(AtticPanelHostingView.layoutPasses - before.4) first=\(first) swipe=\(rig.page.pagerSwipe.width)")
+                XCTAssertEqual(passes, 0, "\(label): a size write ran the pager's pages again")
+                XCTAssertEqual(updates.0, 0, "\(label): a size write updated the shown tab's host")
+                XCTAssertEqual(updates.1, 0, "\(label): a size write updated a hidden tab's host")
+                XCTAssertEqual(roots.0 + roots.1, 0, "\(label): a size write set a tab host's root")
+                XCTAssertEqual(environments, 0, "\(label): a size write handed the shown tab a new environment")
+                XCTAssertEqual(first.count, 1, "harness: one Tasks tab is drawn")
+                XCTAssertEqual(first.first ?? -1, size.width, accuracy: 0.5,
+                               "\(label): the shown tab's first frame after the size write is not at the new width")
+                XCTAssertEqual(rig.page.pagerSwipe.width, size.width, accuracy: 0.5, "\(label): the swipe did not hear the new width")
+            }
+            // The counters count: a tick sets the shown host's root.
+            let roots = KeptContentHostCounts.roots.on, passes = TasksPagerPassCount.passes
+            let row = try XCTUnwrap(rig.page.rows(for: .now).first { $0.status != .done }, "harness: Now holds an open row")
+            rig.page.completeAcknowledged(row.id) { _ in }
+            pump(rig.content, rig.panel, seconds: 0.6)
+            XCTAssertGreaterThan(KeptContentHostCounts.roots.on, roots, "harness: a tick still sets the shown host's root")
+            XCTAssertGreaterThan(TasksPagerPassCount.passes, passes, "harness: a tick still runs the pager")
+        }
+    }
+
     /// SPEED-TASKSPAGE-BODY-ON-WRITE (rows-rerun-fable.md §4): on each size
     /// write of a drag on Tasks, `TasksPage.body` ran (`@self changed`): its
     /// equality compared the whole layout, the panel's size included, though
