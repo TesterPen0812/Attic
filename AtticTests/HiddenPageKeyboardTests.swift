@@ -105,13 +105,8 @@ final class HiddenPageKeyboardTests: XCTestCase {
         return try XCTUnwrap(views(DrawBoardView.self, in: rig.panel).first, "the Draw page's board is built")
     }
 
-    private func addBar(_ rig: Rig) throws -> AtticTokenTextView {
-        let deadline = Date().addingTimeInterval(5)
-        func find() -> AtticTokenTextView? {
-            views(AtticTokenTextView.self, in: rig.panel).first { $0.accessibilityLabel() == String(localized: "Add a task") }
-        }
-        while find() == nil, Date() < deadline { spin(0.05) }
-        return try XCTUnwrap(find(), "the Tasks add bar is built")
+    private func addBarIfBuilt(_ rig: Rig) -> AtticTokenTextView? {
+        views(AtticTokenTextView.self, in: rig.panel).first { $0.accessibilityLabel() == String(localized: "Add a task") }
     }
 
     /// Opens a note of `blocks` on Notes and returns its editor.
@@ -154,8 +149,12 @@ final class HiddenPageKeyboardTests: XCTestCase {
 
     // MARK: Writes into a hidden page (red first on the trunk)
 
-    /// Notes: a stray hand-back to the hidden editor, then Delete (with or
-    /// without the block marquee kept from when Notes was shown) and typing.
+    /// Notes: a stray hand-back to the hidden editor, then Delete (the
+    /// block marquee from when Notes was shown is kept) and typing. On the
+    /// trunk the editor takes the keyboard (red), but the keys write
+    /// nothing: a hidden editor is suspended and not editable
+    /// (NoteEditorHost.swift, `isEditable = current && ...`), so the write
+    /// row is not reachable and stays pinned here.
     func testHiddenNotesEditorRefusesTheKeyboardAndTakesNoDeleteOrTyping() throws {
         let rig = try makeRig()
         defer { close(rig) }
@@ -184,28 +183,15 @@ final class HiddenPageKeyboardTests: XCTestCase {
         XCTAssertEqual(editor.string, text, "a key wrote into the hidden Notes editor")
     }
 
-    /// Tasks: a stray hand-back to the hidden add bar, then typing and
-    /// Return (which adds the typed task when the bar has the keyboard).
-    func testHiddenTasksAddBarRefusesTheKeyboardAndAddsNoTask() throws {
+    /// Tasks: the add-bar row is not reachable in the panel. The panel's
+    /// Composer card replaces the page's add bar there, so the bar is
+    /// never built (TasksPanelDesignViews.swift, `if !shared`), and the
+    /// card is chrome, shown on every page. This pins that reason.
+    func testTasksAddBarIsNotBuiltInThePanel() throws {
         let rig = try makeRig()
         defer { close(rig) }
         show(.tasks, rig, settle: 0.8)
-        let field = try addBar(rig)
-        show(.calendar, rig)
-        XCTAssertFalse(holds(rig.panel, field), "on Calendar the add bar does not hold the keyboard")
-        let before = rig.store.tasks.count
-
-        rig.panel.makeFirstResponder(field)
-        spin(0.2)
-        print("HIDDEN_TASKS responder=\(responderName(rig.panel))")
-        XCTAssertFalse(holds(rig.panel, field), "a hidden Tasks add bar took the keyboard")
-        XCTAssertFalse(rig.uiState.interactionLockReasons.contains(.quickEntryFocus),
-                       "the hidden Tasks page reads its add bar as focused")
-        for character in "Hidden" { try press(String(character), code: 0, rig) }
-        XCTAssertEqual(field.string, "", "typing reached the hidden add bar")
-        try press("\r", code: 36, rig)
-        spin(0.5)
-        XCTAssertEqual(rig.store.tasks.count, before, "Return added a task from the hidden add bar")
+        XCTAssertNil(addBarIfBuilt(rig), "the panel builds the Tasks add bar: its typing and Return row is reachable")
     }
 
     /// Draw (A guards the board's own keys; B refuses the keyboard itself).
@@ -232,15 +218,13 @@ final class HiddenPageKeyboardTests: XCTestCase {
         show(.canvas, rig)
         let board = try board(rig)
         let editor = try openNote(rig, [.text("Tab title"), .text("Tab body")])
-        show(.tasks, rig)
-        let field = try addBar(rig)
         show(.calendar, rig)
         rig.panel.makeFirstResponder(nil)
         var landed: [String] = []
         for step in 0..<24 {
             if step < 12 { rig.panel.selectNextKeyView(nil) } else { rig.panel.selectPreviousKeyView(nil) }
             landed.append(responderName(rig.panel))
-            for (name, view) in [("Draw board", board as NSView), ("Notes editor", editor), ("Tasks add bar", field)] {
+            for (name, view) in [("Draw board", board as NSView), ("Notes editor", editor)] {
                 XCTAssertFalse(holds(rig.panel, view), "step \(step): Tab landed on the hidden \(name)")
             }
         }
@@ -287,16 +271,12 @@ final class HiddenPageKeyboardTests: XCTestCase {
         let rig = try makeRig()
         defer { close(rig) }
         show(.tasks, rig, settle: 0.8)
-        let field = try addBar(rig)
         rig.panel.makeKeyAndOrderFront(nil)
         show(.calendar, rig)
         show(.tasks, rig, settle: 0.8)
         let hosts = views(KeptContentHostingView.self, in: rig.panel).filter(\.isInteractive)
         XCTAssertTrue(hosts.contains { holds(rig.panel, $0) },
                       "the Tasks host's claim on show landed (responder \(responderName(rig.panel)))")
-        XCTAssertTrue(rig.panel.makeFirstResponder(field), "shown, the add bar takes the keyboard")
-        for character in "Shown" { try press(String(character), code: 0, rig) }
-        XCTAssertEqual(field.string, "Shown", "typing after the switch reached the add bar")
     }
 
     // MARK: Hide path: a responder on a page that hides ends with the window
@@ -315,11 +295,5 @@ final class HiddenPageKeyboardTests: XCTestCase {
         show(.tasks, rig)
         XCTAssertFalse(holds(rig.panel, editor), "Notes hid with the keyboard on its editor")
 
-        let field = try addBar(rig)
-        XCTAssertTrue(rig.panel.makeFirstResponder(field))
-        show(.calendar, rig)
-        XCTAssertFalse(holds(rig.panel, field), "Tasks hid with the keyboard on its add bar")
-        XCTAssertFalse(rig.uiState.interactionLockReasons.contains(.quickEntryFocus),
-                       "hidden, the Tasks page still reads its add bar as focused")
     }
 }
