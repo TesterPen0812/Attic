@@ -559,6 +559,77 @@ final class PanelIntegrationTests: XCTestCase {
         retireRevealedPanels()
     }
 
+    /// Island sizing (26 Nov): the island's windows are sized by
+    /// `PanelIslandWindows.layout` alone. An island update (resize steps, a
+    /// page change) runs no AppKit constraint pass on its hosting views,
+    /// which asked SwiftUI for the island root's whole size each time only
+    /// to set window content-size limits nothing reads.
+    func testAnIslandUpdateRunsNoWindowSizingPass() throws {
+        #if DEBUG
+        let rig = try makePanel()
+        XCTAssertEqual(rig.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        let window = rig.controller.panelForTesting
+        PanelIslandSizingProbe.constraintPasses = 0
+        for _ in 1...4 { resizeStep(rig, by: 12) }
+        let afterSteps = PanelIslandSizingProbe.constraintPasses
+        rig.uiState.selectSection(.notes)
+        spin(0.4)
+        let afterPage = PanelIslandSizingProbe.constraintPasses - afterSteps
+        print("ISLAND_SIZING_PASSES steps=4 passes=\(afterSteps) page=\(afterPage) panel=\(window.visibleContentFrame.size)")
+        XCTAssertEqual(afterSteps, 0, "a resize step ran a sizing pass on the island's hosting views")
+        XCTAssertEqual(afterPage, 0, "a page change ran a sizing pass on the island's hosting views")
+        #endif
+    }
+
+    /// The island's windows keep the frames `PanelIslandWindows.layout`
+    /// gives them (from the panel's frame) after the reveal, after each
+    /// step of a resize, after it settles and after a page change, and
+    /// their content-size limits stay the window's own (SwiftUI sets none).
+    func testTheIslandWindowsKeepTheirLaidOutFrames() throws {
+        let rig = try makePanel()
+        XCTAssertEqual(rig.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        let windows = rig.controller.islandWindowsForTesting
+        let plain = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        func check(_ moment: String) {
+            let panelFrame = rig.controller.panelVisibleFrameForTesting
+            let capsule = PanelIslandLayout.islandFrame(panelFrame: panelFrame, corner: windows.corner, spot: windows.spot)
+            XCTAssertEqual(windows.islandFrame, capsule, "\(moment): the island was not laid out from the panel's frame")
+            XCTAssertEqual(windows.island.frame,
+                           capsule.insetBy(dx: -PanelIslandLayout.windowMargin, dy: -PanelIslandLayout.windowMargin),
+                           "\(moment): the island window left its laid-out frame")
+            XCTAssertEqual(windows.label.frame,
+                           PanelIslandLayout.labelWindowFrame(island: capsule, corner: windows.corner, spot: windows.spot),
+                           "\(moment): the label window left its laid-out frame")
+            for window in [windows.island, windows.label] {
+                XCTAssertEqual(window.contentMinSize, plain.contentMinSize, "\(moment): SwiftUI set a window's minimum size")
+                XCTAssertEqual(window.contentMaxSize, plain.contentMaxSize, "\(moment): SwiftUI set a window's maximum size")
+            }
+        }
+        check("shown")
+        for step in 1...4 {
+            resizeStep(rig, by: 12)
+            check("step \(step)")
+        }
+        spin(0.4)
+        check("settled")
+        rig.uiState.selectSection(.notes)
+        spin(0.4)
+        check("page change")
+    }
+
+    /// One step of a window resize, as the panel's own resize takes it.
+    private func resizeStep(_ rig: Panel, by width: CGFloat) {
+        let window = rig.controller.panelForTesting
+        var frame = window.visibleContentFrame
+        frame.size.width += width
+        window.setVisibleContentFrame(frame, display: true)
+        rig.uiState.updatePanelSize(window.visibleContentFrame.size)
+        (window.contentView as? AtticPanelContentContainer)?.hostingView.layoutSubtreeIfNeeded()
+        spin(0.05)
+    }
+
     private func makePanel() throws -> Panel {
         let suite = "PanelIntegrationTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

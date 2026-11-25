@@ -1399,7 +1399,22 @@ struct PanelIslandPullTracker {
 /// A click on the island works on its first press, whichever app is active.
 private final class PanelIslandHostingView<Root: View>: NSHostingView<Root> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    #if DEBUG
+    override func updateConstraints() {
+        PanelIslandSizingProbe.constraintPasses += 1
+        super.updateConstraints()
+    }
+    #endif
 }
+
+#if DEBUG
+/// Test seam: AppKit constraint passes on the island's hosting views (with
+/// NSHostingView's sizing options on, each asks SwiftUI for the island
+/// root's size to set its window's content-size limits).
+@MainActor enum PanelIslandSizingProbe {
+    static var constraintPasses = 0
+}
+#endif
 
 /// The island's stand-in in the panel's motion layer: never hit, never an
 /// accessibility element, so at rest the island windows stay the live
@@ -1411,6 +1426,12 @@ private final class PanelIslandStandInHostingView<Root: View>: NSHostingView<Roo
     override func accessibilityHitTest(_ point: NSPoint) -> Any? { nil }
     override var acceptsFirstResponder: Bool { false }
     override var canBecomeKeyView: Bool { false }
+    #if DEBUG
+    override func updateConstraints() {
+        PanelIslandSizingProbe.constraintPasses += 1
+        super.updateConstraints()
+    }
+    #endif
 }
 
 /// The island and its label, child windows of the Attic panel (Accepted
