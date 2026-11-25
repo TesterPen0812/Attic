@@ -380,6 +380,9 @@ struct ComposerCard: View {
                 acceptsKeyboard: model.isOpen
             )
             .frame(height: titleLineHeight, alignment: .top)
+            .onChange(of: title.text.text) { _, now in  // SCRATCH: RZQA, the card's typed title
+                print(String(format: "RZQA %.4f ", ProcessInfo.processInfo.systemUptime) + "len=\(now.count)")
+            }
             .overlay(alignment: .leading) {
                 if title.text.text.isEmpty {
                     AtticText(verbatim: kind.placeholder, style: .composerTitle, ink: .placeholder)

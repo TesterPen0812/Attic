@@ -50,6 +50,8 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// together.
     var isDrawn = true {
         didSet {
+            // SCRATCH (trace arm phide): the hidden page host's layer is hidden, so its tree leaves the render.
+            if rzPageHost, RZS.k.contains("phide") { layer?.isHidden = !isDrawn }
             guard isDrawn != oldValue, isDrawn else { return }
             holdsLayout = false
             if owesLayout {
@@ -157,6 +159,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// gave first responder that no key reached; hb-step1/pr41-c).
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if rzPageHost, RZS.k.contains("phide") { layer?.isHidden = !isDrawn }  // SCRATCH (phide)
         if window == nil, joinLink != nil {
             stopJoining()
             isAccessible = isInteractive
