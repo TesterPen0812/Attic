@@ -1509,6 +1509,9 @@ extension HiddenPagesCountersTests {
         let linesBefore = CalendarNowLine.bodyEvaluations
         let clocksBefore = CalendarNowLine.clockBuilds
         try withRig { rig in
+            // The panel is on screen, as in the app (the rig starts unrevealed).
+            rig.state.panelDidReveal()
+            pump(rig.content, rig.panel)
             XCTAssertEqual(rig.state.selectedSection, PanelPage.tasks.section, "harness: Tasks is shown")
             assertTodayHasItsNowLine(rig)
             XCTAssertGreaterThan(CalendarNowLine.bodyEvaluations - linesBefore, 0,
@@ -1541,15 +1544,18 @@ extension HiddenPagesCountersTests {
         // Only a clock built in this rig counts: a hidden line draws no clock.
         CalendarNowLine.lastClockDate = nil
         try withRig { rig in
+            // The panel is on screen, as in the app (the rig starts unrevealed).
+            rig.state.panelDidReveal()
+            pump(rig.content, rig.panel)
             assertTodayHasItsNowLine(rig)
-            let list = try tasksList(rig)
-            for step in 1...5 { scrollStep(list, rig, step: step) }
             // A change while hidden: a second task made due today.
             let late = rig.seed.plain[1]
             let lateTask = try XCTUnwrap(rig.tasks.task(withID: late), "harness: the second plain task")
             XCTAssertTrue(rig.tasks.update(lateTask, dueDay: .some(DueDay(date: Date(), calendar: CalendarMonthMath.calendar()))),
                           "harness: the second task is due today")
-            for step in 6...10 { scrollStep(list, rig, step: step) }
+            pump(rig.content, rig.panel)
+            let list = try tasksList(rig)
+            for step in 1...10 { scrollStep(list, rig, step: step) }
             let shellBefore = Self.shellRuns
             let switchedAt = Date()
             rig.state.switchPage(to: PanelPage.calendar.section, motion: .instant)
