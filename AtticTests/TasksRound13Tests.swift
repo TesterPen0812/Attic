@@ -644,11 +644,11 @@ final class TasksRound13Tests: XCTestCase {
 /// in the Now list.
 @MainActor
 extension TasksRound13Tests {
-    private func longHosted() throws -> Hosted {
+    private func longHosted(reduceMotion: Bool = false) throws -> Hosted {
         var services = TasksPageServices()
         services.acknowledgementDelay = .milliseconds(50)
         services.doneHold = .milliseconds(300)
-        let hosted = try Hosted(height: 520, services: services)
+        let hosted = try Hosted(height: 520, services: services, design: AtticDesignContext(mode: .light, reduceMotion: reduceMotion))
         let context = ModelContext(hosted.store.container)
         let now = Date()
         for index in 0..<80 {
@@ -999,7 +999,13 @@ extension TasksRound13Tests {
     /// it into view, with the cursor and the selection on it.
     func testDownOntoARowTheLazyListHasNotBuiltRevealsIt() throws {
         try requireKeyWindowTests()
-        let hosted = try longHosted()
+        // Reduce Motion on: the reveal then scrolls at once. With it off
+        // the reveal glides on the scroll view's display link, which does
+        // not tick for this window, placed off every screen (Air, 25 Nov,
+        // tk6-head.log: `glide delta=12.0 offset=-49.0`, the offset never
+        // moves; the trunk's list does not move here either, tk7-trunk.log).
+        // The glide itself is an on-screen check.
+        let hosted = try longHosted(reduceMotion: true)
         defer { hosted.close() }
         let ids = hosted.model.rows(for: .now).map(\.id)
         // Row 1, whose press selects it. A press at row 0's point lands on
