@@ -1014,9 +1014,13 @@ extension TasksRound13Tests {
         // and tk6-head.log: the same frames to ↓ 6, no row built after).
         try clickRow(hosted, ids[1])
         XCTAssertTrue(hosted.model.expanded.isEmpty, "harness: no quick look open")
+        // Built before the walk: the list builds a row or two ahead as it
+        // follows, so "not built just before its ↓" finds none once the
+        // reveal works (Air, 25 Nov, tk8-head.log: unbuilt_reached=0).
+        let builtAtStart = Set(ids.filter { isBuilt(hosted, $0) })
         var unbuiltReached = 0
         for step in 2...31 {
-            let wasBuilt = isBuilt(hosted, ids[step])
+            let wasBuilt = builtAtStart.contains(ids[step])
             hosted.press("\u{F701}", keyCode: 125)
             hosted.spin(0.2)
             XCTAssertEqual(index(hosted, ids, hosted.model.keyboardFocus?.id), step, "↓ \(step): the cursor")
@@ -1029,7 +1033,7 @@ extension TasksRound13Tests {
             if !wasBuilt { unbuiltReached += 1 }
         }
         print("LIST_FOCUS lazy_reveal unbuilt_reached=\(unbuiltReached)")
-        XCTAssertGreaterThan(unbuiltReached, 0, "harness: ↓ reached at least one row the list had not built")
+        XCTAssertGreaterThan(unbuiltReached, 0, "harness: ↓ reached at least one row the list had not built at the start")
     }
 
     /// Deletion succession: Delete on the cursor row moves the cursor and
