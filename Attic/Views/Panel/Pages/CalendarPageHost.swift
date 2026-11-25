@@ -83,6 +83,39 @@ final class CalendarPageState: ObservableObject {
     }
 }
 
+/// A shell page in a kept host of its own (page-host-tech-note.md, Way 1;
+/// host-boundary.md §10 step 2). Drawn while it is the page shown or the
+/// page a switch's slide is carrying out; in use (clicks, keys, reads) only
+/// while shown. Hidden, its graph keeps its state and is not run, laid out
+/// or walked by the shell's updates; the update that draws it again takes
+/// the current root, size and environment before the slide's first frame.
+/// It observes only the slide's start and end. The page is held as a value,
+/// not a closure, so the shell's re-runs compare it equal and skip it.
+/// It never claims the keyboard: shown, the window keeps it, as when the
+/// page sat in the panel's own host, so Tab, Esc and ⌘Z take the trunk's
+/// path. Calendar has no list that owns keys, unlike the Tasks tab hosts;
+/// a click into Search or a field takes the keyboard the ordinary way.
+struct PanelPageKeptHost<Content: View>: View {
+    let page: PanelPage
+    let isCurrent: Bool
+    @ObservedObject var transit: PanelPageTransit
+    let content: Content
+
+    init(page: PanelPage, isCurrent: Bool, transit: PanelPageTransit, @ViewBuilder content: () -> Content) {
+        self.page = page
+        self.isCurrent = isCurrent
+        self.transit = transit
+        self.content = content()
+    }
+
+    var body: some View {
+        KeptContentHost(drawn: isCurrent || (transit.sliding && transit.departingPage == page),
+                        interactive: isCurrent, space: PanelPageLayout.coordinateSpace, claimsKeyboard: false) {
+            content
+        }
+    }
+}
+
 /// The Calendar page as the shell hands it over: references and values
 /// only, no closure, so the shell's re-runs (each size write of a resize
 /// on another page) compare it equal and skip it while it is hidden. It

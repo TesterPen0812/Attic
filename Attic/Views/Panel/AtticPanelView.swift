@@ -376,12 +376,16 @@ struct AtticPanelView: View {
             )
             .transition(pageTransition(.notes))
         case .calendar:
-            // Handed over with no closure, so the shell's re-runs (a size
-            // write on each step of a resize) skip it while it is hidden.
-            CalendarPageSlot(store: store, noteStore: noteStore, noteDraft: noteDraft, uiState: uiState,
-                             calendarPageState: calendarPageState, tasksPageState: tasksPageState,
-                             composerState: composerState, toasts: toasts, layout: layout,
-                             isReady: hasRestoredNoteSession)
+            // In a host of its own (page-host-tech-note.md, Way 1): hidden,
+            // its graph is not run, laid out or walked by the shell's
+            // updates. Handed over with no closure, so the shell's re-runs
+            // (a size write on each step of a resize) skip it while shown.
+            PanelPageKeptHost(page: .calendar, isCurrent: page == currentPage, transit: uiState.pageTransit) {
+                CalendarPageSlot(store: store, noteStore: noteStore, noteDraft: noteDraft, uiState: uiState,
+                                 calendarPageState: calendarPageState, tasksPageState: tasksPageState,
+                                 composerState: composerState, toasts: toasts, layout: layout,
+                                 isReady: hasRestoredNoteSession)
+            }
             .transition(pageTransition(.calendar))
         }
     }

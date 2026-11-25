@@ -270,8 +270,12 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         isInteractive && super.acceptsFirstResponder
     }
 
+    /// A host that does not claim the keyboard is a key view only under full
+    /// keyboard access, as AppKit's own buttons are: with it off, Tab passes
+    /// the host by and stays where the window had it; with it on, Tab
+    /// reaches the content's controls. A click still hands it the keyboard.
     override var canBecomeKeyView: Bool {
-        isInteractive && super.canBecomeKeyView
+        isInteractive && (claimsKeyboard || NSApp.isFullKeyboardAccessEnabled) && super.canBecomeKeyView
     }
 
     override func isAccessibilityElement() -> Bool {
@@ -292,6 +296,12 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         return isInteractive && isAccessible ? super.accessibilityHitTest(point) : nil
     }
 
+    /// Whether this host claims the keyboard when it comes into use. A host
+    /// whose content owns no keys of its own (the Calendar page) leaves it
+    /// with the window, where it was before the content had a host, and is
+    /// in the key-view loop only under full keyboard access (`canBecomeKeyView`).
+    var claimsKeyboard = true
+
     /// The keyboard belongs to the tab host in use (host-boundary.md §5.1,
     /// the lead's decision of 19 Nov 08:22): a host claims it when it comes
     /// into use, but only from no one (the window itself) or from a tab
@@ -299,7 +309,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// dropdown or menu, the panel's own host (its tab bar's ←/→), or while
     /// the panel is not key. A refusal is left alone.
     private func claimKeyboard() {
-        guard let window, window.isKeyWindow else { return }
+        guard claimsKeyboard, let window, window.isKeyWindow else { return }
         let responder = window.firstResponder
         let fromNoOne = responder == nil || responder === window
         let fromATabHost = (responder as? NSView).map { view in
@@ -361,6 +371,9 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     /// (the host fills the slot that declares it outside, so the origins
     /// are the same).
     var space: NamedCoordinateSpace?
+    /// Whether the host claims the keyboard when it comes into use
+    /// (`KeptContentHostingView.claimsKeyboard`).
+    var claimsKeyboard = true
     /// The rows the content animates between by itself (a list's ids), if
     /// it has any. A drawn root that changes them is laid out in the pass
     /// that sets it; any other root is left to AppKit's pass (`setRoot`).
@@ -390,6 +403,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         host.isInteractive = interactive
         host.autoresizingMask = [.width, .height]
         host.frame = container.bounds
+        host.claimsKeyboard = claimsKeyboard
         container.host = host
         container.addSubview(host)
         context.coordinator.hiddenRootSet = !drawn
