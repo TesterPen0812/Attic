@@ -56,12 +56,14 @@ final class AtticKeyWindowUITests: XCTestCase {
         let selected = NSPredicate(format: "selected == true")
         XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: selected, evaluatedWith: email)], timeout: 3), .completed,
                        "the click selects the task")
-        let focused = NSPredicate { _, _ in (email.value(forKey: "hasKeyboardFocus") as? Bool) == true }
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 3), .completed,
-                       "and the task has the keyboard")
+        // The keyboard is proved by the key acting. A Tasks row takes no
+        // focus of its own (list-owned-focus.md §2.1: the list holds the
+        // keyboard, the row has the cursor), so the row never reads
+        // "hasKeyboardFocus", which this test waited on before.
         email.typeKey(.downArrow, modifierFlags: [])
         XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: selected, evaluatedWith: next)], timeout: 3), .completed,
-                       "↓ moves to the next task at once")
+                       "and the panel has the keyboard: ↓ moves to the next task at once")
+        XCTAssertFalse(email.isSelected, "↓ moved the selection off the clicked task")
     }
 
     /// An explicit open on Tasks (quick capture, Show Attic) puts the
