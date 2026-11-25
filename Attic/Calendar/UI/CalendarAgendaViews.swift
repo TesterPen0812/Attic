@@ -313,6 +313,7 @@ struct CalendarEventRow: View {
                         return .handled
                     }
                     .accessibilityValue(isOpen ? String(localized: "Expanded") : String(localized: "Collapsed"))
+                    .onChange(of: headFocused) { _, f in print(String(format: "RZEVFOCUS %.4f ", ProcessInfo.processInfo.systemUptime) + "focused=\(f ? 1 : 0)") }
                     .accessibilityIdentifier("calendar-event-\(event.id)")
                 if isOpen, rows.canEdit {
                     editableHead
@@ -345,7 +346,10 @@ struct CalendarEventRow: View {
 
     private func toggleRow() {
         IdleLatencyTrace.controlDispatched(.calendarEvent)
-        Task { await rows.toggle(event, on: day) }
+        Task {
+            await rows.toggle(event, on: day)
+            print(String(format: "RZEVROW %.4f ", ProcessInfo.processInfo.systemUptime) + "open=\(rows.rowID == event.id ? 1 : 0)")
+        }
     }
 
     private var isPast: Bool {

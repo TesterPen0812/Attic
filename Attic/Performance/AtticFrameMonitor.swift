@@ -29,6 +29,28 @@ enum RZS {
     }
     static let hiddenChangeMs = Int(ProcessInfo.processInfo.environment["RZ_HIDDEN_CHANGE_MS"] ?? "")
     nonisolated(unsafe) static var hiddenChanges = 0
+    nonisolated(unsafe) static var lastProbe: UUID?
+    nonisolated(unsafe) static var editLast = ""
+    static let calEditMs = Int(ProcessInfo.processInfo.environment["RZ_CAL_EDIT_MS"] ?? "")
+    @MainActor static func calendarShown(_ store: TaskStore) {
+        guard let ms = calEditMs else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) { [weak store] in
+            MainActor.assumeIsolated {
+                guard let store, let id = lastProbe else { print("RZEDIT none"); return }
+                CalendarAgendaCommands.toggleDone(id, store: store)
+                editLast = store.listedTask(withID: id)?.status.rawValue ?? "gone"
+                print(String(format: "RZEDIT %.4f ", CACurrentMediaTime()) + "status=\(editLast)")
+                for k in 1...16 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(500 * k)) {
+                        MainActor.assumeIsolated {
+                            let now = store.listedTask(withID: id)?.status.rawValue ?? "gone"
+                            if now != editLast { editLast = now; print(String(format: "RZEDITCHK %.4f ", CACurrentMediaTime()) + "status=\(now)") }
+                        }
+                    }
+                }
+            }
+        }
+    }
     @MainActor static func calendarHidden(_ store: TaskStore) {
         guard let ms = hiddenChangeMs else { return }
         hiddenChanges += 1
@@ -36,7 +58,9 @@ enum RZS {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) { [weak store] in
             MainActor.assumeIsolated {
                 let draft = TaskDraft(title: "rzprobe \(n)", dueDay: DueDay(date: Date(), calendar: .current))
-                let ok = store?.commandLibrary?.createTasks([draft]) != nil
+                let made = store?.commandLibrary?.createTasks([draft])
+                if let id = made?.first?.id { lastProbe = id }
+                let ok = made != nil
                 print(String(format: "RZCHANGE %.4f ", CACurrentMediaTime()) + "n=\(n) ok=\(ok)")
             }
         }

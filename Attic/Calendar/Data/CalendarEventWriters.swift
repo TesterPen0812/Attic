@@ -13,7 +13,8 @@ enum CalendarEventWriters {
                                                undoRoute: undoRoute)
         }
         #endif
-        if environment.isRunningTests || environment.isUITesting || runtime.isRunningTests || runtime.isUITesting {
+        if environment.isRunningTests || environment.isUITesting || runtime.isRunningTests || runtime.isUITesting
+            || ProcessInfo.processInfo.environment["RZ_FAKE_EVENTS"] == "1" {
             return EventKitCalendarEventWriter(store: FakeCalendarEventWriteStore(),
                                                record: try CalendarOwnershipRecord(), undoRoute: undoRoute)
         }

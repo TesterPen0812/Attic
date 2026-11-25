@@ -236,6 +236,7 @@ struct AtticPanelView: View {
                             .onChange(of: page == currentPage) { _, shown in
                                 if shown { PerformanceSignposts.noteInput("page-current \(page.rawValue)"); RZS.pageStamp(page.rawValue) }
                                 else if page == .calendar { RZS.calendarHidden(store) }
+                                if shown, page == .calendar { RZS.calendarShown(store) }
                             }
                             .modifier(PanelSearchDismissOnEmptyClick(state: topRowState, page: page))
                             .modifier(PanelKeptPageVisibility(

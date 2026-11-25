@@ -6,7 +6,8 @@ enum CalendarEventSources {
     /// `ATTIC_UI_TESTING`, so tests never meet a permission prompt.
     @MainActor
     static func makeDefault(environment: AppRuntimeEnvironment = AppRuntimeEnvironment()) -> CalendarEventSource {
-        if environment.isUITesting, environment.environment["ATTIC_PERF_PROFILE"] == "clicklag4" {
+        if (environment.isUITesting && environment.environment["ATTIC_PERF_PROFILE"] == "clicklag4")
+            || ProcessInfo.processInfo.environment["RZ_FAKE_EVENTS"] == "1" {
             // An isolated, read-only busy week; no EventKit access or real writes.
             let calendar = Calendar.current
             let monday = calendar.dateInterval(of: .weekOfYear, for: Date())!.start

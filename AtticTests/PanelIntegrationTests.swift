@@ -542,6 +542,31 @@ final class PanelIntegrationTests: XCTestCase {
     /// Runs last in the suite (alphabetical): every test reveals its own panel,
     /// and hiding is animated, so the panels used to stay ordered in with the
     /// first one key and the application active for the rest of the P-Z shard.
+    /// SCRATCH (page host, lead 25 Nov): the global shortcut's handler, `AppCoordinator.showNewTask`
+    /// (`AppCoordinator.swift:874, 1407-1409`: `revealProgrammatically(openComposer: true, section: .tasks)`), from
+    /// Calendar shown and from Calendar hidden, on both arms (`TEST_RUNNER_RZK=nopcal` is B).
+    func testRZHotKeyHandlerFromCalendar() throws {
+        let panel = try makePanel()
+        let window = panel.controller.panelForTesting
+        func fr() -> String { window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil" }
+        for shown in [true, false] {
+            XCTAssertEqual(panel.monitor.revealProgrammatically(section: .calendar, takesKeyboard: true), .shown)
+            spin(until: { panel.uiState.selectedSection == .calendar })
+            spin(0.5)
+            if !shown { _ = panel.controller.requestHide { _ in }; spin(0.8) }
+            let before = fr()
+            XCTAssertEqual(panel.monitor.revealProgrammatically(openComposer: true, section: .tasks), .shown)
+            spin(until: { panel.uiState.isComposerPresented && panel.uiState.selectedSection == .tasks })
+            spin(0.5)
+            print("RZHOTKEY arm=\(RZS.noPageHost ? "B" : "P") from=\(shown ? "calendar-shown" : "calendar-hidden") before=\(before) "
+                  + "page=\(panel.uiState.selectedSection) composer=\(panel.uiState.isComposerPresented) key=\(window.isKeyWindow) fr=\(fr())")
+            XCTAssertEqual(panel.uiState.selectedSection, .tasks)
+            XCTAssertTrue(panel.uiState.isComposerPresented)
+            panel.uiState.endAdding()
+            spin(0.3)
+        }
+    }
+
     @MainActor
     func testZZRevealedPanelsDoNotOutliveTheSuite() {
         XCTAssertEqual(PanelLeakGuard.leaked(since: "PanelIntegrationTests"), [])
