@@ -122,10 +122,11 @@ final class PanelPageKeyboardRuleTests: XCTestCase {
         let first = field(.page(.calendar), y: 10)
         let hidden = field(.page(.notes), y: 50)
         let second = field(.chrome, y: 90)
-        first.nextKeyView = hidden
-        hidden.nextKeyView = second
-        second.nextKeyView = first
-        content.nextKeyView = hidden
+        // A closed loop through the content view, as AppKit builds it.
+        content.nextKeyView = first
+        first.nextKeyView = second
+        second.nextKeyView = hidden
+        hidden.nextKeyView = content
         panel.initialFirstResponder = hidden
         func holds(_ view: NSView) -> Bool { (panel.firstResponder as? NSView)?.isDescendant(of: view) == true }
         func name() -> String { panel.firstResponder.map { String(describing: type(of: $0)) } ?? "nil" }
@@ -138,11 +139,11 @@ final class PanelPageKeyboardRuleTests: XCTestCase {
             panel.sendEvent(event)
         }
 
-        XCTAssertTrue(panel.makeFirstResponder(first))
+        XCTAssertTrue(panel.makeFirstResponder(second))
         try tab()
-        XCTAssertTrue(holds(second), "Tab from a field stopped on or before the refused field (responder \(name()))")
+        XCTAssertTrue(holds(first), "Tab from a field did not move past the refused field (responder \(name()))")
         try tab(shift: true)
-        XCTAssertTrue(holds(first), "Shift-Tab did not move past the refused field (responder \(name()))")
+        XCTAssertTrue(holds(second), "Shift-Tab did not move past the refused field (responder \(name()))")
 
         // With the window holding the keyboard, Tab is the window's own
         // selectNextKeyView, where AppKit picks the candidate itself (here
@@ -152,11 +153,10 @@ final class PanelPageKeyboardRuleTests: XCTestCase {
         // the call is made here and the key goes to CI's key-window lane.
         XCTAssertTrue(panel.makeFirstResponder(nil))
         panel.selectNextKeyView(nil)
-        XCTAssertTrue(holds(second), "Tab from the window stalled on the refused field (responder \(name()))")
+        XCTAssertTrue(holds(first), "Tab from the window stalled on the refused field (responder \(name()))")
         XCTAssertTrue(panel.makeFirstResponder(nil))
         panel.selectPreviousKeyView(nil)
-        XCTAssertFalse(holds(hidden), "Shift-Tab from the window landed on the refused field")
-        XCTAssertNotEqual(name(), "AtticPanel", "Shift-Tab from the window stalled on the refused field")
+        XCTAssertTrue(holds(second), "Shift-Tab from the window stalled on the refused field (responder \(name()))")
     }
 
     /// The same, with the Tab key itself, from the window of a key panel.
