@@ -222,6 +222,11 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
     @State private var probeID = UUID()
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
+    #if DEBUG
+    /// For the growth probe only: whether its glass is dropped (the raised
+    /// material draws nothing while gone).
+    @Environment(\.atticControlGone) private var gone
+    #endif
 
     private var dark: Bool { design.tokens.context.mode == .dark }
 
@@ -246,7 +251,7 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
             if let growth {
                 let extent = growth.extent
                 #if DEBUG
-                let _ = AtticFormatRowGrowthProbe.rowWidth?(growth.rowWidth)
+                let _ = AtticFormatRowGrowthProbe.rowWidth?(growth.rowWidth, gone)
                 #endif
                 Color.clear
                     .frame(width: extent.width, height: height)
@@ -277,9 +282,10 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
     }
 }
 #if DEBUG
-/// Test seam: the row width each run of the format row's growth drew with.
+/// Test seam: the row width each run of the format row's growth drew
+/// with, and whether its glass was gone (dropped: nothing drawn) then.
 @MainActor enum AtticFormatRowGrowthProbe {
-    static var rowWidth: ((CGFloat) -> Void)?
+    static var rowWidth: ((_ width: CGFloat, _ gone: Bool) -> Void)?
 }
 #endif
 

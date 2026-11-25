@@ -1777,11 +1777,22 @@ final class AgentChatHostedTests: XCTestCase {
     /// writes are the two turns, and it turns at the same place.
     func testAResizeAcrossTheStepAsideWidthWritesOnlyTheTurns() throws {
         #if DEBUG && ATTIC_LOCAL_ONLY
+        // The shared root is fixed at 340 pt; this one follows the window,
+        // so the bar narrows with it as a panel's does.
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
+        let host = NSHostingView(rootView: VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            PanelSharedBottomBar(chrome: chrome, page: .tasks, layout: layout, agentChat: model)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .environment(\.panelSharedChrome, chrome)
+        .environment(\.panelTopRowState, topRow)
+        .atticDesign(.default))
+        window.contentView = host
         chrome.setBar(PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus, leadingReach: 200),
                       actions: PanelBottomBarActions(), for: .tasks)
         spin(0.2)
         XCTAssertTrue(PanelSharedBottomBar.drawsAgentChat, "harness: the ✦ is drawn")
-        let host = try XCTUnwrap(window.contentView)
         var writes: [String: Int] = [:]
         PanelInvalidationProbe.stepWrite = { writes[$0, default: 0] += 1 }
         defer { PanelInvalidationProbe.stepWrite = nil }

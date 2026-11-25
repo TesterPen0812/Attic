@@ -2032,22 +2032,31 @@ final class NotesFormatControlsTests: XCTestCase {
             }
             resize(to: 388)
             for width in [370, 350, 330, 310, 300] as [CGFloat] { resize(to: width) }
-            var drawn: [CGFloat] = []
-            AtticFormatRowGrowthProbe.rowWidth = { drawn.append($0) }
+            // Each run of the row's growth: its width, and whether its glass
+            // was gone (the closed row, dormant: the raised material draws
+            // nothing then).
+            var runs: [(width: CGFloat, gone: Bool)] = []
+            AtticFormatRowGrowthProbe.rowWidth = { runs.append(($0, $1)) }
             defer { AtticFormatRowGrowthProbe.rowWidth = nil }
             state.open(keyboard: false)
             hosting.layoutSubtreeIfNeeded()
-            let first = drawn
+            let first = runs
             // The opening's next frames (a second at most).
-            settle { hosting.layoutSubtreeIfNeeded(); return drawn.count >= 2 }
+            settle { hosting.layoutSubtreeIfNeeded(); return runs.contains { !$0.gone } }
             for _ in 0..<5 {
                 spin()
                 hosting.layoutSubtreeIfNeeded()
             }
-            print("FORMAT_ROW_OPEN_AFTER_RESIZE reduceMotion=\(reduceMotion) first=\(first) all=\(Set(drawn).sorted())")
-            XCTAssertFalse(drawn.isEmpty, "harness: the row drew as it opened (reduceMotion \(reduceMotion))")
-            for width in drawn {
-                XCTAssertEqual(width, 300, accuracy: 0.5, "the opening row drew at a width the bottom row no longer has (reduceMotion \(reduceMotion))")
+            let shown = runs.filter { !$0.gone }
+            print("FORMAT_ROW_OPEN_AFTER_RESIZE reduceMotion=\(reduceMotion) first=\(first) shown=\(Set(shown.map(\.width)).sorted()) gone=\(Set(runs.filter(\.gone).map(\.width)).sorted())")
+            XCTAssertFalse(shown.isEmpty, "harness: the row drew as it opened (reduceMotion \(reduceMotion))")
+            for run in shown {
+                XCTAssertEqual(run.width, 300, accuracy: 0.5, "the opening row drew at a width the bottom row no longer has (reduceMotion \(reduceMotion))")
+            }
+            // A run at another width is only ever the closed row's, whose
+            // glass is gone: nothing of it is drawn.
+            for run in runs where abs(run.width - 300) > 0.5 {
+                XCTAssertTrue(run.gone, "a run at a stale width was not the closed row's (reduceMotion \(reduceMotion))")
             }
         }
         #endif
