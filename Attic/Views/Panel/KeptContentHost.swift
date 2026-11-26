@@ -277,12 +277,11 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// the loop when they end. A click still hands it the keyboard.
     ///
     /// Such a host answers for itself, not through `super`: NSHostingView
-    /// accepts no first responder and stands its content's controls in with
-    /// `KeyViewProxy` views it adds only once it has held the keyboard, so a
-    /// host that never claims it had no stop at all, and the loop wrapped to
-    /// the panel's tab bar (fka lane run 45808976473, `canKey=false` on the
-    /// shown Calendar host; page-host-tech-note.md, "FKA entry into the
-    /// Calendar host").
+    /// accepts no first responder, so `super.canBecomeKeyView` is false, and
+    /// a host that never claims the keyboard was no stop at all; the loop
+    /// wrapped to the panel's tab bar (fka lane run 45808976473: the shown
+    /// Calendar host `canKey=false`, no `KeyViewProxy` child;
+    /// page-host-tech-note.md, "FKA entry into the Calendar host").
     override var canBecomeKeyView: Bool {
         guard isInteractive else { return false }
         if claimsKeyboard { return super.canBecomeKeyView }
