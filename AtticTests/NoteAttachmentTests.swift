@@ -21,6 +21,17 @@ final class NoteAttachmentTests: XCTestCase {
                       "the notice shown to the owner must remain useful")
     }
 
+    // AUDIT-N-15: size errors read as sizes, not byte counts, and a file
+    // just over the limit never reads as the limit.
+    func testAuditN15AttachmentErrorsGiveSizesPeopleRead() {
+        let url = URL(fileURLWithPath: "/tmp/photo.heic")
+        XCTAssertEqual(AttachmentFileStoreError.attachmentTooLarge(url, 18_874_368).errorDescription,
+                       "photo.heic is 18 MB. A file can be up to 15 MB.")
+        XCTAssertEqual(AttachmentFileStoreError.attachmentTooLarge(url, 15 * 1_048_576 + 1).errorDescription,
+                       "photo.heic is 15.1 MB. A file can be up to 15 MB.")
+        XCTAssertEqual(AttachmentFileStoreError.noteTooLarge.errorDescription, "A note’s files can add up to 100 MB.")
+    }
+
     func testAttachmentLimitHelpersSaturateBytesAndRejectSortIndexOverflow() {
         XCTAssertEqual(
             AttachmentLimits.cappedByteCount([Int64.max, Int64.max]),

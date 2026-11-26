@@ -4570,9 +4570,8 @@ extension NotesPageController {
         return nil
     }
 
-    func copyMarkdown(noteID: UUID) {
+    func copyMarkdown(noteID: UUID, to pasteboard: NSPasteboard = .general) {
         guard let text = markdown(noteID: noteID) else { return }
-        let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
     }

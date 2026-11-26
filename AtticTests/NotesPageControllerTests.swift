@@ -192,6 +192,19 @@ final class NotesPageControllerTests: XCTestCase {
         withExtendedLifetime(scroll) {}
     }
 
+    // AUDIT-N-38: Copy as Markdown says that it copied.
+    func testAuditN38CopyAsMarkdownSaysItCopied() async throws {
+        let controller = makeController()
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        XCTAssertNil(session.noticeValue)
+        controller.copyMarkdown(noteID: session.noteID, to: board)
+        XCTAssertNotNil(board.string(forType: .string), "the Markdown is on the pasteboard")
+        XCTAssertEqual(session.noticeValue?.kind.headline, "Markdown copied")
+        XCTAssertEqual(session.noticeValue?.severity, .information)
+    }
+
     #if !ATTIC_GENERATED_TESTS
     func testU05OversizedClipboardImageNeverCreatesAFileOrImport() async throws {
         let controller = makeController()

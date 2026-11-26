@@ -612,6 +612,68 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(loaded.blocks[1].marks.first { $0.kind == .highlight }?.colour, "future-amber")
     }
 
+    // AUDIT-N-22: a caret moved (→) to the end of a link, a highlight or
+    // inline code types plain text; inside the run the mark carries on.
+    func testAuditN22TypingAfterALinkHighlightOrCodeIsPlain() throws {
+        for kind in [NoteMark.Kind.link, .highlight, .code] {
+            var body = NoteBlock.text("go here now")
+            body.marks = [NoteMark(kind, offset: 3, length: 4, url: kind == .link ? "https://example.com" : nil)]
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), body]), window: true)
+            defer { engine.detachView() }
+            // "T\n" is 2: the run "here" is 5..<9.
+            view.setSelectedRange(NSRange(location: 8, length: 0))
+            view.moveRight(nil)
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 9, length: 0))
+            type("X", view)
+            var block = engine.document().blocks[1]
+            XCTAssertEqual(block.text, "go hereX now")
+            XCTAssertEqual(block.marks.filter { $0.kind == kind }.map { NSRange(location: $0.offset, length: $0.length) },
+                           [NSRange(location: 3, length: 4)], "\(kind): text typed after the run is plain")
+            // Inside the run, the mark carries on.
+            view.setSelectedRange(NSRange(location: 7, length: 0))
+            type("Y", view)
+            block = engine.document().blocks[1]
+            XCTAssertEqual(block.text, "go heYreX now")
+            XCTAssertEqual(block.marks.filter { $0.kind == kind }.map { NSRange(location: $0.offset, length: $0.length) },
+                           [NSRange(location: 3, length: 5)], "\(kind): text typed inside the run joins it")
+        }
+    }
+
+    // AUDIT-N-02: Copy's plain text reads like the note: numbers count, a
+    // heading is its words, a checklist item is "- [ ] text". Search text
+    // and the saved body keep their own form.
+    func testAuditN02PlainTextCopyCountsNumbersAndReadsLikeTheNote() throws {
+        var heading = NoteBlock.text("Plan", style: "heading")
+        heading.level = 2
+        let blocks: [NoteBlock] = [.text("T"), heading, .text("first", style: "number"), .text("second", style: "number"),
+                                   .text("third", style: "number"), .checklist("buy milk"), .checklist("eggs", checked: true)]
+        let (engine, _) = makeEngine(NoteDocument(blocks: blocks))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        XCTAssertTrue(engine.writeSelection(NSRange(location: 2, length: engine.textStorage.length - 2), to: board, types: [.string]))
+        XCTAssertEqual(board.string(forType: .string), "Plan\n1. first\n2. second\n3. third\n- [ ] buy milk\n- [x] eggs")
+        // A copy from inside the list starts at the number the note shows.
+        let second = (engine.textStorage.string as NSString).range(of: "second")
+        board.clearContents()
+        XCTAssertTrue(engine.writeSelection(NSRange(location: second.location, length: engine.textStorage.length - second.location),
+                                            to: board, types: [.string]))
+        XCTAssertEqual(board.string(forType: .string), "2. second\n3. third\n- [ ] buy milk\n- [x] eggs")
+        XCTAssertEqual(NoteTextExport.plainText(engine.document()),
+                       "T\n## Plan\n1. first\n1. second\n1. third\n[ ] buy milk\n[x] eggs", "search text is unchanged")
+    }
+
+    // AUDIT-N-22 guard: a highlight turned on at the caret keeps on while
+    // typing, past the first character.
+    func testAuditN22HighlightTurnedOnKeepsOnWhileTyping() throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("body")]), window: true)
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 6, length: 0))
+        XCTAssertTrue(engine.setHighlight(.yellow))
+        type("xyz", view)
+        let marks = engine.document().blocks[1].marks.filter { $0.kind == .highlight }
+        XCTAssertEqual(marks.map { NSRange(location: $0.offset, length: $0.length) }, [NSRange(location: 4, length: 3)])
+    }
+
     // Owner decision 2026-10-16: the palette owns a visible input client.
     // Selection notifications and native palette focus handoff do not cancel it.
     func testG05NativePaletteFocusHandoffKeepsTheRequestAndText() throws {
@@ -2016,6 +2078,25 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual((engine.attributes(forParagraphAt: 8)[.font] as? NSFont)?.pointSize, engine.style.bodyFont.pointSize)
         // R14 visible pass: the callout draws its box and icon.
         XCTAssertEqual(engine.decoration(forParagraphAt: 8), .callout(icon: "💡", starts: true, ends: true, exitsAtEnd: false))
+    }
+
+    // AUDIT-N-16: typed ==text== highlights, as pasted and imported Markdown
+    // does; Backspace right after gives the typed text back; prose with
+    // "==" between spaced words stays as typed.
+    func testAuditN16TypedDoubleEqualsHighlights() {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 2, length: 0)); type("==marked==", view)
+        XCTAssertEqual(engine.document().blocks[1].text, "marked")
+        XCTAssertEqual(engine.document().blocks[1].marks.map(\.kind), [.highlight])
+        view.deleteBackward(nil)
+        XCTAssertEqual(engine.document().blocks[1].text, "==marked==")
+        XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
+        let (prose, proseView) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        defer { prose.detachView() }
+        proseView.setSelectedRange(NSRange(location: 2, length: 0)); type("if a == b == c", proseView)
+        XCTAssertEqual(prose.document().blocks[1].text, "if a == b == c")
+        XCTAssertTrue(prose.document().blocks[1].marks.isEmpty)
     }
 
     func testR14BackspaceImmediatelyAfterInlineRuleRestoresTypedText() {
