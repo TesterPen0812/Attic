@@ -59,7 +59,7 @@ struct TasksGroupHeader: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .onHover { hovered = $0 }
+        .atticHover { hovered = $0 }
         .animation(design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.2), value: folded)
         .animation(design.reduceMotion ? AtticMotionScale.reducedChange : .easeOut(duration: 0.15), value: lit)
         .frame(maxWidth: .infinity, alignment: .leading)
