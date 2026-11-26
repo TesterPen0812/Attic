@@ -4452,7 +4452,7 @@ extension NoteEditorEngine {
             if slashSession != nil { slashSession = nil; return }
             if convertParagraphHabit(line: line) { return }
             linkURLBeforeCaret()
-        } else if text == "*" || text == "_" || text == "`" || text == "~" {
+        } else if text == "*" || text == "_" || text == "`" || text == "~" || text == "=" {
             if convertInlineHabit(line: line, caret: caret) { return }
         }
         updateSlashSession(caret: caret, typed: text)
@@ -4522,7 +4522,8 @@ extension NoteEditorEngine {
     private func convertInlineHabit(line: NSRange, caret: Int) -> Bool {
         guard conversionEligible(line: line) else { return false }
         let before = (textStorage.string as NSString).substring(with: NSRange(location: line.location, length: caret - line.location))
-        let patterns: [(String, NoteMark.Kind)] = [("**", .bold), ("~~", .strikethrough), ("*", .italic), ("_", .italic), ("`", .code)]
+        // AUDIT-N-16: `==` as pasted and imported Markdown reads it.
+        let patterns: [(String, NoteMark.Kind)] = [("**", .bold), ("~~", .strikethrough), ("==", .highlight), ("*", .italic), ("_", .italic), ("`", .code)]
         for (delimiter, kind) in patterns {
             guard before.hasSuffix(delimiter) else { continue }
             if delimiter.count == 1, let last = before.dropLast().last, String(last) == delimiter { continue }
@@ -4534,6 +4535,11 @@ extension NoteEditorEngine {
             }
             let content = String(before[open.upperBound..<end])
             guard !content.isEmpty, !content.contains("\n") else { continue }
+            // Prose such as "a == b ==" stays as typed: the marks hug words.
+            if kind == .highlight {
+                guard !content.contains("="), content.first?.isWhitespace == false, content.last?.isWhitespace == false,
+                      before[..<open.lowerBound].last != "=" else { continue }
+            }
             let start = line.location + (String(before[..<open.lowerBound]) as NSString).length
             let range = NSRange(location: start, length: (delimiter as NSString).length * 2 + (content as NSString).length)
             let interior = NSRange(location: start + (delimiter as NSString).length, length: (content as NSString).length)

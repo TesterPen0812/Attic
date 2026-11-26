@@ -2081,6 +2081,25 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.decoration(forParagraphAt: 8), .callout(icon: "💡", starts: true, ends: true, exitsAtEnd: false))
     }
 
+    // AUDIT-N-16: typed ==text== highlights, as pasted and imported Markdown
+    // does; Backspace right after gives the typed text back; prose with
+    // "==" between spaced words stays as typed.
+    func testAuditN16TypedDoubleEqualsHighlights() {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 2, length: 0)); type("==marked==", view)
+        XCTAssertEqual(engine.document().blocks[1].text, "marked")
+        XCTAssertEqual(engine.document().blocks[1].marks.map(\.kind), [.highlight])
+        view.deleteBackward(nil)
+        XCTAssertEqual(engine.document().blocks[1].text, "==marked==")
+        XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
+        let (prose, proseView) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        defer { prose.detachView() }
+        proseView.setSelectedRange(NSRange(location: 2, length: 0)); type("if a == b == c", proseView)
+        XCTAssertEqual(prose.document().blocks[1].text, "if a == b == c")
+        XCTAssertTrue(prose.document().blocks[1].marks.isEmpty)
+    }
+
     func testR14BackspaceImmediatelyAfterInlineRuleRestoresTypedText() {
         for literal in ["**bold**", "*italic*", "_italic_", "`code`", "~~strike~~"] {
             let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
