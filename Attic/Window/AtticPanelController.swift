@@ -310,6 +310,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     #endif
     /// Tests: the panel's window, to send it a swipe as the system does.
     var panelForTesting: AtticPanel { panel }
+    #if DEBUG
+    /// Tests: the Tasks page's model, once the page is built.
+    var tasksModelForTesting: TasksPageModel? { tasksPageStateForTesting?.builtModel }
+    private weak var tasksPageStateForTesting: TasksPageState?
+    #endif
     private(set) var performanceVisibilityChanges = 0
     private let hostingView: AtticPanelHostingView
     private let cornerFirstTouch = PanelFirstTouchApproach()
@@ -454,6 +459,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         self.toasts = toasts
         // The Tasks page remembers its page and views (L7).
         let tasksPageState = TasksPageState(memory: tasksMemory)
+        #if DEBUG
+        tasksPageStateForTesting = tasksPageState
+        #endif
         // The chat's page chip carries the open note, the one selected task
         // or the canvas on show.
         uiState.agentChat.currentItem = { [weak uiState, weak tasksPageState, weak store, weak noteStore,

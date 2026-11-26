@@ -1759,6 +1759,9 @@ struct AtticTaskRow: View {
                               isEmphasised: showsFocusRing, onToggle: actions.toggleDone)
                 .atticForcedState(nil)
                 .atticRowControl()
+                // Opening into its page in one piece: the circle travels to
+                // the head's as it fades (identity on every other row).
+                .modifier(TaskPageRowPart(kind: .circle))
                 .padding(.leading, AtticLayout.circleX + AtticControlSize.statusCircle / 2 - AtticControlSize.minimumHitTarget / 2)
                 .padding(.top, d.paddingY + d.line / 2 - AtticControlSize.minimumHitTarget / 2)
 
@@ -1793,13 +1796,16 @@ struct AtticTaskRow: View {
                             // The title gives way first (review 13).
                             .layoutPriority(-1)
                             .help(model.title)
+                            .modifier(TaskPageRowPart(kind: .title))
                             if !done {
                                 AtticPriorityMark(priority: model.priority, disabled: disabled)
+                                    .modifier(TaskPageRowPart(kind: .rest))
                             }
                         }
                     }
                     Spacer(minLength: m.trailingMinGap)
                     trailing(disabled: disabled, onSelectedRow: onSelectedRow)
+                        .modifier(TaskPageRowPart(kind: .rest))
                     if let onActions, capture == nil, !disabled, titleEditing == nil,
                        AtticTaskRow.showsActionsButton(forced: forced, keyboardFocused: showsFocusRing) {
                         // Only for the row the keyboard is on (round 10).
@@ -1809,6 +1815,7 @@ struct AtticTaskRow: View {
                     }
                     if onOpenPage != nil {
                         openButton(shown: showsOpen, disabled: disabled)
+                            .modifier(TaskPageRowPart(kind: .rest))
                     }
                 }
                 .frame(height: d.line)
@@ -1827,6 +1834,7 @@ struct AtticTaskRow: View {
                         .frame(height: d.line)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, d.metaTop)
+                        .modifier(TaskPageRowPart(kind: .rest))
                 }
                 if hasTiles, let attachmentTiles {
                     attachmentTiles

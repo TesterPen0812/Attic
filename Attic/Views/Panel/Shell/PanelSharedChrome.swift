@@ -24,6 +24,13 @@ final class PanelSharedChrome: ObservableObject {
     @Published private(set) var filteredPages: Set<PanelPage> = []
     /// The pages a task's page covers (its own bars replace the shared ones).
     @Published private(set) var covered: Set<PanelPage> = []
+    /// Pages a task's page is opening over in one piece (Accepted
+    /// 2026-11-25): their bars give way on the click and come back on Back,
+    /// on that motion, instead of at once. Read with `covered`.
+    private(set) var onePieceCover: Set<PanelPage> = []
+    /// That motion's progress per page (0 at the row, 1 at the page): the
+    /// tag bar, "+" and the agent's opener drop 12 pt as they go.
+    @Published private(set) var givingWay: [PanelPage: CGFloat] = [:]
     /// The "+" card has the bar's row (Accepted 2026-11-03, P4): the bar's
     /// middle (the tag pills, Today) and "+" fade out under it as it opens
     /// and come back as it folds.
@@ -107,7 +114,33 @@ final class PanelSharedChrome: ObservableObject {
 
     // MARK: Covering
 
-    func setCovered(_ isCovered: Bool, page: PanelPage) {
+    /// The one-piece motion's progress (set inside its animation).
+    func setGivingWay(_ progress: CGFloat, page: PanelPage) {
+        guard onePieceCover.contains(page), givingWay[page] != progress else { return }
+        givingWay[page] = progress
+    }
+
+    /// The one-piece opening is over: coverings are instant again.
+    func endOnePiece(page: PanelPage) {
+        onePieceCover.remove(page)
+        if givingWay[page] != nil { givingWay[page] = nil }
+    }
+
+    /// How the bars fold while `page` is covered (or uncovered) by a task
+    /// page opening in one piece: away in the motion's first part (by about
+    /// 0.45 of it), back in its last part. Nil: at once.
+    func coverAnimation(_ page: PanelPage, folding: Bool, reduceMotion: Bool) -> Animation? {
+        guard onePieceCover.contains(page), !reduceMotion else { return nil }
+        return folding ? .spring(duration: 0.13, bounce: 0) : .spring(duration: 0.16, bounce: 0).delay(0.12)
+    }
+
+    /// `onePiece`: the bars give way (and come back) on a task page's
+    /// one-piece motion; otherwise at once, as every other covering.
+    func setCovered(_ isCovered: Bool, page: PanelPage, onePiece: Bool = false) {
+        if onePiece { onePieceCover.insert(page) } else if onePieceCover.contains(page) {
+            onePieceCover.remove(page)
+            if givingWay[page] != nil { givingWay[page] = nil }
+        }
         if isCovered, !covered.contains(page) { covered.insert(page) }
         if !isCovered, covered.contains(page) { covered.remove(page) }
     }
@@ -297,6 +330,9 @@ struct PanelSharedBottomBar: View {
         // leave at once too; opacity outside a glass group cannot hide it.
         let covered = chrome.covered.contains(page)
         let taken = chrome.plusHandedOver || covered
+        // A task page opening in one piece moves the bars on its motion.
+        let onePiece = chrome.onePieceCover.contains(page)
+        let coverMotion = { (folding: Bool) in chrome.coverAnimation(page, folding: folding, reduceMotion: design.reduceMotion) }
         #if DEBUG
         let _ = Self.drawsPlus = look.plus != nil && !folded && !taken
         let _ = Self.drawsAgentChat = look.plus != nil && !folded && agentChat?.isConnected == true
@@ -306,7 +342,7 @@ struct PanelSharedBottomBar: View {
             // bar's start as they fade (the design's 12 px). Their glass
             // goes too (a glass group ignores an opacity), so nothing
             // peeks out under the card's corners (Accepted 2026-11-04).
-            PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) },
+            PanelControlFold(folded: taken, animation: { covered || onePiece ? coverMotion($0) : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) },
                              preservesUnfoldedAccessibility: page == .canvas) {
                 HStack(spacing: gap) {
                     // Accessibility state goes on each control, never on this
@@ -315,14 +351,14 @@ struct PanelSharedBottomBar: View {
                     middle(look.middle, actions: actions, hidden: folded || !look.shown || taken)
                 }
             }
-            .offset(x: taken ? -Self.takenSlide : 0)
-            .animation(covered ? nil : Self.rowAnimation(taken: taken, reduceMotion: design.reduceMotion), value: taken)
+            .offset(x: taken && !onePiece ? -Self.takenSlide : 0)
+            .animation(covered || onePiece ? nil : Self.rowAnimation(taken: taken, reduceMotion: design.reduceMotion), value: taken)
             .frame(maxWidth: folded ? 0 : .infinity, alignment: .leading)
             .opacity(folded ? 0 : 1)
             .padding(.trailing, folded || look.plus == nil ? 0 : gap)
             .allowsHitTesting(!folded && !taken)
             if look.plus != nil, !folded, let agentChat, agentChat.isConnected {
-                PanelAgentSlot(agentChat: agentChat, taken: taken, covered: covered, shown: look.shown,
+                PanelAgentSlot(agentChat: agentChat, taken: taken, covered: covered, coverMotion: onePiece ? coverMotion : nil, shown: look.shown,
                                reach: look.leadingReach)
                     .padding(.trailing, gap)
                     .transition(.opacity)
@@ -330,7 +366,7 @@ struct PanelSharedBottomBar: View {
             if let plus = look.plus {
                 ZStack(alignment: .bottomTrailing) {
                     if !folded {
-                        PanelControlFold(folded: taken, animation: { covered ? nil : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) },
+                        PanelControlFold(folded: taken, animation: { covered || onePiece ? coverMotion($0) : Self.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) },
                                          preservesUnfoldedAccessibility: page == .canvas) {
                             AtticRaisedButton(systemName: "plus", label: String.LocalizationValue(stringLiteral: plus.label), size: CGSize(width: side, height: side),
                                               help: plus.help, emphasisedGlyph: true,
@@ -358,7 +394,8 @@ struct PanelSharedBottomBar: View {
         .padding(.bottom, Self.plusInsets(layout: layout).bottom)
         .opacity(look.shown ? 1 : 0)
         .allowsHitTesting(look.shown)
-        .animation(covered ? nil : PanelTopRowLayout.searchAnimation(shown: look.shown, reduceMotion: design.reduceMotion), value: look.shown)
+        .animation(onePiece ? coverMotion(!look.shown) : covered ? nil : PanelTopRowLayout.searchAnimation(shown: look.shown, reduceMotion: design.reduceMotion), value: look.shown)
+        .modifier(TaskPageBarDrop(progress: chrome.givingWay[page] ?? 0))
     }
 
     /// How far the pills move as the card takes the row (12 design px).
@@ -451,12 +488,15 @@ private struct PanelSharedTopControlsObserver: View {
         let look = chrome.topRow(for: page)
         let searching = state.isAway(page)
         let covered = chrome.covered.contains(page)
+        let onePiece = chrome.onePieceCover.contains(page)
+        let coverMotion: ((Bool) -> Animation?)? = onePiece ? { chrome.coverAnimation(page, folding: $0, reduceMotion: false) }
+            : covered ? { _ in nil } : nil
         HStack(spacing: PanelTopRowLayout.gap) {
-            PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil,
+            PanelControlFold(folded: searching || !look.shown, animation: coverMotion,
                              preservesUnfoldedAccessibility: page == .canvas) {
                 PanelTopRowMoreButton(shared: true, page: page, filtered: look.filtered) { chrome.more(on: page) }
             }
-            PanelControlFold(folded: searching || !look.shown, animation: covered ? { _ in nil } : nil,
+            PanelControlFold(folded: searching || !look.shown, animation: coverMotion,
                              preservesUnfoldedAccessibility: page == .canvas) {
                 PanelTopRowSearchButton(label: look.searchLabel, identifier: look.searchIdentifier, shared: true) {
                     chrome.search(on: page)
@@ -583,6 +623,8 @@ private struct PanelAgentSlot: View {
     let agentChat: AgentChatModel
     let taken: Bool
     let covered: Bool
+    /// A task page opening in one piece: the opener goes on its motion.
+    var coverMotion: ((Bool) -> Animation?)? = nil
     let shown: Bool
     let reach: CGFloat?
 
@@ -592,7 +634,7 @@ private struct PanelAgentSlot: View {
     var body: some View {
         let aside = PanelSharedBottomBar.agentStepsAside(reach: reach, agentMinX: minX)
         let away = taken || aside
-        PanelControlFold(folded: away, animation: { covered ? nil : PanelSharedBottomBar.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
+        PanelControlFold(folded: away, animation: { coverMotion?($0) ?? (covered ? nil : PanelSharedBottomBar.rowAnimation(taken: $0, reduceMotion: design.reduceMotion)) }) {
             AgentChatBarButton(bar: agentChat.bar, action: agentChat.toggle)
         }
         .offset(x: aside && !design.reduceMotion ? PanelSharedBottomBar.takenSlide : 0)

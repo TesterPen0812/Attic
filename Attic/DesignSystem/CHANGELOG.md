@@ -1,3 +1,24 @@
+## 2026-11-26 · A task's page opens from its row in one piece
+
+Opening a Tasks row (Now, Later, Done, a search's results) runs the
+drawing's motion (`TaskPageOnePiece.swift`): one size spring
+(`.spring(duration: 0.28, bounce: 0.12)`), every part a keyframe track on its
+one progress. The row's title travels to the head and grows to it while the
+head's title cross-fades in by 0.45; the circles cross over the travel; the
+row's rest, its highlight and Tasks' top row fade by 0.35–0.4; the rows above
+rise with it and the rows below are pushed, all gone by 0.55; the details
+line, the subtasks and the note's first lines come in under the head; the tag
+bar, "+" and the agent's opener drop 12 pt and fade; Back and Aa rise in.
+Every part is an offset, scale, opacity or mask on the list's own views, so
+the list is never laid out again and tab, scroll and selection are as they
+were after Back. A stand-in drawn from the task's data is the page from the
+click's first frame; the real page is built once the spring has settled,
+under it, and takes over in one frame at the same places. Back and Escape
+run every part back from where it is; a second click turns it round again.
+`PanelSharedChrome` gains `onePieceCover`, `givingWay` and `coverAnimation`
+for the bars. Reduce Motion: the page opens at once, as before. Calendar's
+and Notes' task pages keep the grow.
+
 ## 2026-11-25 · Hover in the Tasks list comes from the list, not from each row
 
 A row in the Tasks list no longer carries a SwiftUI hover region for itself,

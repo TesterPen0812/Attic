@@ -37,6 +37,10 @@ struct TaskNoteRouteHost<Origin: View>: View {
     /// 2026-11-13): it starts on the click, while the page builds behind.
     @State private var grow = AtticGrowState()
     @State private var growStartedAt: CFTimeInterval = 0
+    /// Opening from a Tasks row, in one piece (Accepted 2026-11-25): the
+    /// row becomes the page's head on the size spring (`TaskPageOnePiece`).
+    @State private var onePiece = TaskPageMotion()
+    @State private var onePieceProbe = TaskPageOnePieceProbe.Box()
 
     /// The route this page serves: only a page opened from here.
     private var requestedID: UUID? { uiState.taskNoteOrigin == page ? uiState.openTaskNoteID : nil }
@@ -53,6 +57,9 @@ struct TaskNoteRouteHost<Origin: View>: View {
         let _ = routeStateRevision
         let shown = isReady ? displayedTaskID : nil
         let looks = Self.looks(grow, shown: shown != nil)
+        // One piece: the built page shows once the stand-in gives way to it.
+        let onePieceOn = onePiece.isActive
+        let pageShows = onePieceOn ? onePiece.handedOver : looks.destinationShows
         ZStack {
             if page == .notes {
                 // Notes: the page replaces the editor (one live editor).
@@ -66,10 +73,13 @@ struct TaskNoteRouteHost<Origin: View>: View {
                 }
             } else {
                 origin(shown != nil)
-                    .modifier(PanelPageVisibility(isCurrent: looks.originCurrent, restingOffset: 0, disablesWhenHidden: false,
-                                                  opacityOverride: grow.style == .instant ? nil
+                    .modifier(PanelPageVisibility(isCurrent: onePieceOn ? !onePiece.handedOver : looks.originCurrent,
+                                                  restingOffset: 0, disablesWhenHidden: false,
+                                                  opacityOverride: onePieceOn ? .init(shows: !onePiece.handedOver, animation: nil)
+                                                    : grow.style == .instant ? nil
                                                     : .init(shows: looks.originShows,
                                                             animation: grow.originAnimation(showing: looks.originShows))))
+                    .environment(\.taskPageMotion, page == .tasks ? onePiece : nil)
             }
             if let taskID = shown {
                 TaskNotePageContainer(taskID: taskID, tasks: taskStore, controller: noteDraft.pages,
@@ -81,29 +91,53 @@ struct TaskNoteRouteHost<Origin: View>: View {
                 }
                 // The page's own top row is this page's (its Find takes it, N4 B).
                 .environment(\.panelTopRowPage, page)
-                .opacity(looks.destinationShows ? 1 : 0)
-                .animation(grow.destinationAnimation(showing: looks.destinationShows), value: looks.destinationShows)
-                .allowsHitTesting(looks.destinationShows)
-                .accessibilityHidden(!looks.destinationShows)
-                .transition(.asymmetric(insertion: .opacity.animation(pageArrival), removal: .identity))
+                .opacity(pageShows ? 1 : 0)
+                .animation(onePieceOn ? nil : grow.destinationAnimation(showing: pageShows), value: pageShows)
+                .allowsHitTesting(pageShows)
+                .accessibilityHidden(!pageShows)
+                .transition(.asymmetric(insertion: onePieceOn ? .identity : .opacity.animation(pageArrival), removal: .identity))
                 .id("\(taskID)-\(taskRouteGeneration)")
+            }
+            if page == .tasks {
+                // The head and first lines from the task's data, from the
+                // click's first frame, until the built page takes over.
+                TaskPageOnePieceLayer(motion: onePiece, layout: layout, backTitle: uiState.taskNoteBackTitle,
+                                      onAppear: onePieceStandInAppeared) {
+                    if let id = onePiece.taskID { Self.closeRoute(id, uiState: uiState, controller: noteDraft.pages) }
+                }
+                .zIndex(3)
             }
             AtticGrowLayer(state: grow, onFinish: { $grow.finish($0) })
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
                 .zIndex(2)
         }
+        .coordinateSpace(.named(TaskPageOnePiece.space))
+        .background(TaskPageOnePieceProbe(box: onePieceProbe).accessibilityHidden(true))
         .onChange(of: requestedID, initial: true) { old, new in growRoute(from: old, to: new) }
-        .onChange(of: shown != nil, initial: true) { _, covered in sharedChrome?.setCovered(covered, page: page) }
-        .onDisappear { sharedChrome?.setCovered(false, page: page) }
+        .onChange(of: shown != nil, initial: true) { _, covered in
+            // One piece moves the bars itself, on its own spring.
+            if !onePiece.isActive { sharedChrome?.setCovered(covered, page: page) }
+        }
+        .onChange(of: shown == nil) { _, gone in if gone, onePiece.landedBack { endOnePiece() } }
+        .onDisappear {
+            endOnePiece()
+            sharedChrome?.setCovered(false, page: page)
+        }
         .onReceive(uiState.$openTaskNoteID.dropFirst()) { _ in routeStateRevision &+= 1 }
         .onReceive(uiState.$taskNoteOrigin.dropFirst()) { _ in routeStateRevision &+= 1 }
         .task(id: requestedID) {
             let requested = requestedID
             // Not this page's route, and none shown here: nothing to hand off.
             guard requested != nil || presentedTaskID != nil else { return }
-            // The click's first frame goes out before the page is built.
-            await AtticGrowDriver.yieldFirstFrame(grow.style)
+            if requested != nil, onePiece.taskID == requested {
+                // One piece: the motion runs on a free main thread; the page
+                // is built once the spring has settled, under the stand-in.
+                guard await onePiece.waitForLanding() else { return }
+            } else {
+                // The click's first frame goes out before the page is built.
+                await AtticGrowDriver.yieldFirstFrame(grow.style)
+            }
             guard !Task.isCancelled else { return }
             let previous = noteDraft.pages.taskNotePresenter
             let previousID = displayedTaskID
@@ -121,6 +155,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
             // editors on screen, OD-1).
             presentedTaskID = requested
             if requested != nil { grow.destinationArrived() }
+            if let requested, onePiece.taskID == requested { handOverOnePiece() }
             #if DEBUG
             AtticGrowTrace.mark("presented", style: grow.style)
             #endif
@@ -159,16 +194,29 @@ struct TaskNoteRouteHost<Origin: View>: View {
     /// The route asked for changed: a page opening grows from its row; one
     /// closed without Back (a refused handoff, a purge) shrinks back.
     private func growRoute(from old: UUID?, to new: UUID?) {
-        if new != nil {
+        if let new {
+            if onePiece.isActive {
+                if onePiece.taskID == new {
+                    // A second click while it goes back turns it round.
+                    uiState.taskNoteGrowOrigin = nil
+                    if !onePiece.open { turnOnePiece(open: true) }
+                    return
+                }
+                endOnePiece()
+            }
             guard grow.phase == .idle || grow.phase == .closing else { return }
             let origin = uiState.taskNoteGrowOrigin
             uiState.taskNoteGrowOrigin = nil
+            if old != new, startOnePiece(new, origin: origin) { return }
             growStartedAt = CACurrentMediaTime()
             grow.open(from: origin, reduceMotion: design.reduceMotion, reducedStyle: reducedStyle)
             #if DEBUG
             AtticGrowTrace.mark("open", style: grow.style)
             #endif
             AtticGrowDriver.settleWithoutShell($grow)
+        } else if onePiece.isActive {
+            // Back or Escape from the stand-in, or a refused hand-off.
+            if onePiece.open, let id = onePiece.taskID { reverseOnePiece(id) }
         } else if grow.phase == .opening || grow.phase == .open {
             let back = old.flatMap { uiState.taskNoteGrowOrigin(for: $0, on: page) }
             grow.close(to: back, reduceMotion: design.reduceMotion, reducedStyle: reducedStyle)
@@ -180,6 +228,11 @@ struct TaskNoteRouteHost<Origin: View>: View {
     /// go (false): the shrink starts on the click and turns round on a
     /// refusal.
     private func growBack(_ taskID: UUID, leaving: Bool) {
+        if onePiece.taskID == taskID {
+            // Back runs it backwards; a refusal turns it round again.
+            if leaving { reverseOnePiece(taskID) } else { turnOnePiece(open: true) }
+            return
+        }
         if leaving {
             grow.close(to: uiState.taskNoteGrowOrigin(for: taskID, on: page),
                        reduceMotion: design.reduceMotion, reducedStyle: reducedStyle)
@@ -190,6 +243,135 @@ struct TaskNoteRouteHost<Origin: View>: View {
             grow.refuseClose()
         }
         AtticGrowDriver.settleWithoutShell($grow)
+    }
+
+    // MARK: One piece
+
+    /// Starts the one-piece opening from a Tasks row. False: not a row (or
+    /// Reduce Motion: instant), so the page opens as before.
+    private func startOnePiece(_ id: UUID, origin: AtticGrowOrigin?) -> Bool {
+        #if DEBUG
+        if AtticGrowTrace.disabled { return false }
+        #endif
+        guard page == .tasks, !design.reduceMotion, presentedTaskID == nil, let origin,
+              let view = onePieceProbe.view,
+              let pose = TaskPagePose.make(origin, in: view, layout: layout),
+              let content = TaskPageStandInContent.make(id, store: taskStore)
+        else { return false }
+        grow.reset()
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) { onePiece.begin(id, content: content, pose: pose) }
+        onePiece.open = true
+        onePiece.landingPending = true
+        // The bars give way on the click, not when the page shows.
+        sharedChrome?.setCovered(true, page: page, onePiece: true)
+        // Escape goes Back while the stand-in is the page.
+        onePieceProbe.watchEscape { [uiState, pages = noteDraft.pages] in
+            guard onePiece.isActive, onePiece.open, !onePiece.handedOver, let id = onePiece.taskID else { return false }
+            Self.closeRoute(id, uiState: uiState, controller: pages)
+            return true
+        }
+        // The spring starts once the stand-in is in, at the row's place
+        // (`onePieceStandInAppeared`).
+        return true
+    }
+
+    /// The stand-in came in (the click, or Back from the built page): the
+    /// spring runs from where everything is now.
+    private func onePieceStandInAppeared() {
+        guard onePiece.isActive else { return }
+        if onePiece.open, onePiece.progress < 1 { turnOnePiece(open: true) }
+        if !onePiece.open, onePiece.progress > 0 { turnOnePiece(open: false) }
+    }
+
+    /// Runs the motion towards the page (true) or back into the row, from
+    /// wherever it is (the spring keeps its speed as it turns).
+    private func turnOnePiece(open: Bool) {
+        guard onePiece.isActive else { return }
+        onePiece.open = open
+        onePiece.landedBack = false
+        onePiece.generation &+= 1
+        let generation = onePiece.generation
+        if open { onePiece.landingPending = true } else { onePiece.landed(false) }
+        let target: CGFloat = open ? 1 : 0
+        withAnimation(TaskPageOnePiece.spring, completionCriteria: .removed) {
+            onePiece.progress = target
+            sharedChrome?.setGivingWay(target, page: page)
+        } completion: {
+            landedOnePiece(generation)
+        }
+    }
+
+    private func landedOnePiece(_ generation: Int) {
+        guard onePiece.isActive, onePiece.generation == generation else { return }
+        if onePiece.open {
+            onePiece.landed(true)
+            // Turned round after the page was built (a refused Back).
+            if presentedTaskID == onePiece.taskID { handOverOnePiece() }
+        } else if displayedTaskID == nil {
+            endOnePiece()
+        } else {
+            onePiece.landedBack = true
+        }
+    }
+
+    /// The built page is there and laid out: the stand-in gives way to it in
+    /// one frame. The page's editor mounts a turn after the route shows it
+    /// (its presenter is made on appear), so this waits for the mount, then
+    /// one turn more for its first layout.
+    private func handOverOnePiece(waits: Int = 0) {
+        guard onePiece.isActive, onePiece.open, !onePiece.handedOver, !onePiece.landingPending,
+              let id = onePiece.taskID, presentedTaskID == id else { return }
+        if waits < 12, TaskNotePresenter.open(for: id)?.isMounted != true {
+            DispatchQueue.main.async { handOverOnePiece(waits: waits + 1) }
+            return
+        }
+        if waits < 100 {
+            DispatchQueue.main.async { handOverOnePiece(waits: 100) }
+            return
+        }
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) { onePiece.handedOver = true }
+        onePieceProbe.stopWatchingEscape()
+    }
+
+    /// Back: the stand-in takes the page's place again (the same places) and
+    /// runs into the row as it is now, or fades when the row is gone.
+    private func reverseOnePiece(_ taskID: UUID) {
+        guard onePiece.taskID == taskID, onePiece.open else { return }
+        onePieceProbe.stopWatchingEscape()
+        let origin = uiState.taskNoteGrowOrigin(for: taskID, on: page)
+        let pose = origin.flatMap { origin in onePieceProbe.view.flatMap { TaskPagePose.make(origin, in: $0, layout: layout) } }
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) {
+            onePiece.retarget(content: TaskPageStandInContent.make(taskID, store: taskStore), pose: pose)
+            onePiece.rowGone = pose == nil
+        }
+        // The bars come back on the way down.
+        sharedChrome?.setCovered(false, page: page, onePiece: true)
+        if onePiece.handedOver {
+            // The stand-in comes back in at the page's places; it starts the
+            // spring once it is in (`onePieceStandInAppeared`).
+            onePiece.open = false
+            withTransaction(still) { onePiece.handedOver = false }
+            onePiece.landed(false)
+        } else {
+            turnOnePiece(open: false)
+        }
+    }
+
+    private func endOnePiece() {
+        onePieceProbe.stopWatchingEscape()
+        guard onePiece.isActive else { return }
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) {
+            onePiece.end()
+            sharedChrome?.endOnePiece(page: page)
+        }
     }
 
     /// Back's (and a late close's) end of the route. A newer route stays.

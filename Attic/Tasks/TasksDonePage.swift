@@ -91,6 +91,8 @@ struct TasksDonePage<Cell: View>: View {
         ScrollViewReader { proxy in
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
+                // A task's page opening in one piece: every line makes way.
+                Group {
                 // The picked tags never hide finished tasks silently (13
                 // Nov, drawn in 4c): what is shown, how many are hidden, and
                 // Show All. Done has no status or date filter.
@@ -156,6 +158,8 @@ struct TasksDonePage<Cell: View>: View {
                         .frame(height: AtticLayout.rowPitch)
                         .padding(.leading, TasksDesignMetrics.textX)
                 }
+                }
+                .modifier(TaskPageMakeWayLine())
             }
             .padding(.bottom, bottomClearance - bottomMargin)
             // The log's place is kept while its page is not built (round 10).

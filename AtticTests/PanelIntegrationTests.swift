@@ -711,6 +711,160 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(panel.uiState.selectedSection, .tasks)
     }
 
+    // MARK: A task's page opens in one piece (Accepted 2026-11-25)
+
+    /// A revealed Tasks panel with motion on (runners have Reduce Motion
+    /// on), its model, and an accessibility lookup in its window.
+    private func onePiecePanel(_ drafts: [TaskDraft], reduceMotion: Bool = false) throws
+        -> (panel: Panel, tasks: [TaskItem], model: TasksPageModel, element: (String) -> AnyObject?) {
+        let panel = try makePanel()
+        let tasks = try XCTUnwrap(panel.store.commit(drafts))
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(until: { panel.controller.tasksModelForTesting != nil })
+        let model = try XCTUnwrap(panel.controller.tasksModelForTesting)
+        let root = try XCTUnwrap(panel.controller.panelForTesting.contentView)
+        func elements(_ object: AnyObject) -> [AnyObject] {
+            [object] + ((object.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        let element: (String) -> AnyObject? = { id in
+            elements(root).first { ($0.accessibilityIdentifier?() ?? "") == id }
+        }
+        return (panel, tasks, model, element)
+    }
+
+    private func withMotion(reduced: Bool, _ body: () throws -> Void) rethrows {
+        let previous = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = reduced
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previousEnhanced = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        TaskPageMotion.currentForTesting = nil
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = previous
+            NSApp.accessibilitySetValue(previousEnhanced, forAttribute: enhanced)
+        }
+        try body()
+    }
+
+    /// Opens `id` from its row, checks it opened in one piece and the built
+    /// page took over, then goes Back and waits until the row has it back.
+    private func roundTrip(_ id: UUID, in rig: (panel: Panel, tasks: [TaskItem], model: TasksPageModel,
+                                                element: (String) -> AnyObject?),
+                           file: StaticString = #filePath, line: UInt = #line) throws {
+        let begins = TaskPageMotion.beginsForTesting
+        rig.panel.uiState.openTaskNote(id, from: .tasks)
+        spin(0.02)
+        let motion = try XCTUnwrap(TaskPageMotion.currentForTesting, "the page opens in one piece", file: file, line: line)
+        XCTAssertEqual(TaskPageMotion.beginsForTesting, begins + 1, file: file, line: line)
+        XCTAssertEqual(motion.taskID, id, file: file, line: line)
+        XCTAssertTrue(motion.open, file: file, line: line)
+        XCTAssertNil(rig.element("panel-more-button"), "the bars give way on the click", file: file, line: line)
+        spin(until: { motion.handedOver && rig.element("task-note-back") != nil })
+        XCTAssertTrue(motion.handedOver, "the built page takes over once the spring has settled", file: file, line: line)
+        let back = try XCTUnwrap(rig.element("task-note-back"), file: file, line: line)
+        XCTAssertTrue(back.accessibilityPerformPress?() ?? false, file: file, line: line)
+        spin(until: { rig.panel.uiState.openTaskNoteID == nil && !motion.isActive })
+        XCTAssertNil(rig.panel.uiState.openTaskNoteID, file: file, line: line)
+        XCTAssertFalse(motion.isActive, "Back lands in the row and the opening ends", file: file, line: line)
+        spin(until: { rig.element("panel-more-button") != nil })
+        XCTAssertNotNil(rig.element("panel-more-button"), "the bars are whole again after Back", file: file, line: line)
+        XCTAssertNotNil(rig.element("tasks-new-task"), file: file, line: line)
+    }
+
+    func testOnePieceRoundTripLeavesTabScrollAndSelectionAsTheyWere() throws {
+        try withMotion(reduced: false) {
+            let rig = try onePiecePanel((0..<40).map { TaskDraft(title: "Row \($0)") })
+            let target = rig.tasks[6].id
+            spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
+            rig.model.selectOnly(target)
+            spin(0.2)
+            let tab = rig.model.tab
+            let selection = rig.model.selection
+            let rows = rig.model.agentRowFrames(nil).map { "\($0.id) \($0.frame)" }
+            XCTAssertFalse(rows.isEmpty)
+            try roundTrip(target, in: rig)
+            spin(0.1)
+            XCTAssertEqual(rig.model.tab, tab)
+            XCTAssertEqual(rig.model.selection, selection, "Back keeps the selection the page left")
+            XCTAssertEqual(rig.model.agentRowFrames(nil).map { "\($0.id) \($0.frame)" }, rows,
+                           "every row is where it was: the list was moved by drawing only")
+        }
+    }
+
+    func testOnePieceOpensFromNowLaterDoneAndASearch() throws {
+        let cases: [(String, TaskStatus, TasksTab, String?)] = [
+            ("Now", .todo, .now, nil), ("Later", .backlog, .backlog, nil),
+            ("Done", .done, .done, nil), ("Search", .done, .done, "Findme"),
+        ]
+        for (name, status, tab, query) in cases {
+            try withMotion(reduced: false) {
+                let rig = try onePiecePanel([TaskDraft(title: "Other"), TaskDraft(title: "Findme \(name)", status: status)])
+                let target = rig.tasks[1].id
+                rig.model.select(tab: tab)
+                if let query { rig.model.doneSearch = query }
+                spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
+                XCTAssertFalse(rig.model.agentRowFrames([target]).isEmpty, "\(name): the row is on show")
+                try roundTrip(target, in: rig)
+                XCTAssertEqual(rig.model.tab, tab, "\(name): Back returns to the tab it left")
+                if let query { XCTAssertEqual(rig.model.doneSearch, query, "\(name): the search stays") }
+            }
+        }
+    }
+
+    func testOnePieceIsInstantUnderReduceMotion() throws {
+        try withMotion(reduced: true) {
+            let rig = try onePiecePanel([TaskDraft(title: "Still")])
+            let target = rig.tasks[0].id
+            spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
+            let begins = TaskPageMotion.beginsForTesting
+            rig.panel.uiState.openTaskNote(target, from: .tasks)
+            spin(until: { rig.element("task-note-back") != nil })
+            XCTAssertNotNil(rig.element("task-note-back"), "the page opens as before")
+            XCTAssertEqual(TaskPageMotion.beginsForTesting, begins, "no motion under Reduce Motion")
+            XCTAssertNil(TaskPageMotion.currentForTesting)
+            let back = try XCTUnwrap(rig.element("task-note-back"))
+            XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
+            spin(until: { rig.panel.uiState.openTaskNoteID == nil && rig.element("panel-more-button") != nil })
+            XCTAssertNotNil(rig.element("panel-more-button"))
+        }
+    }
+
+    func testOnePieceTurnsRoundMidMotionWithoutStartingAgain() throws {
+        try withMotion(reduced: false) {
+            let rig = try onePiecePanel([TaskDraft(title: "Turn"), TaskDraft(title: "Below")])
+            let target = rig.tasks[0].id
+            spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
+            let begins = TaskPageMotion.beginsForTesting
+            rig.panel.uiState.openTaskNote(target, from: .tasks)
+            spin(0.08)
+            let motion = try XCTUnwrap(TaskPageMotion.currentForTesting)
+            XCTAssertFalse(motion.handedOver, "still on its way")
+            // Escape or Back mid-motion: it runs back from where it is.
+            let generation = motion.generation
+            TaskNoteRouteHost<EmptyView>.closeRoute(target, uiState: rig.panel.uiState)
+            spin(0.02)
+            XCTAssertTrue(motion.isActive, "the same opening turns round")
+            XCTAssertFalse(motion.open)
+            XCTAssertGreaterThan(motion.generation, generation)
+            // A second click on the way back turns it round again.
+            spin(0.06)
+            rig.panel.uiState.openTaskNote(target, from: .tasks)
+            spin(0.02)
+            XCTAssertTrue(motion.isActive)
+            XCTAssertTrue(motion.open)
+            XCTAssertEqual(TaskPageMotion.beginsForTesting, begins + 1, "turned round, not started again from the row")
+            XCTAssertTrue(TaskPageMotion.currentForTesting === motion)
+            spin(until: { motion.handedOver && rig.element("task-note-back") != nil })
+            XCTAssertTrue(motion.handedOver)
+            let back = try XCTUnwrap(rig.element("task-note-back"))
+            XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
+            spin(until: { rig.panel.uiState.openTaskNoteID == nil && !motion.isActive })
+            XCTAssertFalse(motion.isActive)
+            spin(until: { rig.element("panel-more-button") != nil })
+            XCTAssertNotNil(rig.element("panel-more-button"), "the bars are whole again")
+        }
+    }
+
     func testBugs4IdlePageBuildWaitsForTheActivePanelInteraction() throws {
         for reason in [PanelInteractionLockReason.panelSwipe, .menuTracking] {
             let panel = try makePanel()

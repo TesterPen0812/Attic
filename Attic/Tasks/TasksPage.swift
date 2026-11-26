@@ -978,6 +978,9 @@ struct TasksPage: View {
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
+            // Now · Later · Done, ••• and Find fade as a task's page opens
+            // in one piece (by 0.4 of its motion).
+            .modifier(TaskPageTopRowFade())
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // The search opens with the design's ease (240 ms) and leaves at once.
@@ -1747,6 +1750,8 @@ struct TasksPage: View {
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    // A task's page opening in one piece: every line makes way.
+                    Group {
                     // An active filter never hides silently (item 6): what
                     // is shown, and Show All.
                     if model.showsViewLine(on: tab) {
@@ -1862,9 +1867,14 @@ struct TasksPage: View {
                             }
                         }
                     }
+                    }
+                    .modifier(TaskPageMakeWayLine())
                 }
                 .backgroundPreferenceValue(AtticSelectedRunBounds.self) { anchors in
                     AtticJoinedSelectedRuns(anchors: anchors)
+                        // The opening row's highlight fades by 0.4 of its
+                        // page's one-piece motion.
+                        .modifier(TaskPageHighlightFade())
                 }
                 .animation(reorderFade.isEmpty ? AtticMotionScale.gapClose(travel, afterRowsLeave: rowsLeaving) : nil, value: ids)
                 // The list's place is kept while its page is not built.
@@ -1998,6 +2008,9 @@ struct TasksPage: View {
             cellBelow(tab: tab, live: live)
         }
         .equatable()
+        // The row opening into its page in one piece: its title grows into
+        // the head as it goes.
+        .modifier(TaskPageRowLeaving(id: id))
         // Files dropped on a row: one drop destination for the page
         // (`fileDropTarget(at:)`), not one per row (round 11: a drop
         // destination on every row made a screenful of rows slower to build).
