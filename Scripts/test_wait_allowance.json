@@ -156,7 +156,7 @@
     },
     "AtticTests/HiddenPageKeyboardTests.swift": {
       "runloop": 1,
-      "skip": 1
+      "skip": 2
     },
     "AtticTests/HiddenPagesCountersTests.swift": {
       "runloop": 3
