@@ -269,7 +269,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
             ) { [weak self, weak window] _ in
                 MainActor.assumeIsolated {
                     // A panel put away mid-scroll may never hear the end.
-                    if window?.isVisible == false { self?.releaseRowHover(); self?.model?.flushScrollOffsets() }
+                    if window?.isVisible == false { self?.model?.flushScrollOffsets() } // SCRATCH: release removed for the put-away red proof
                 }
             })
             for name in [NSApplication.willTerminateNotification, NSApplication.didHideNotification] {
