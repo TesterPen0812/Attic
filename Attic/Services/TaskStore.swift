@@ -1771,7 +1771,7 @@ final class TaskStore: ObservableObject {
         case .tooManyAttachments:
             "A task can hold at most \(AttachmentLimits.maxAttachmentsPerNote) attachments."
         case .noteTooLarge:
-            "Attachments for a task cannot exceed 100 MiB."
+            "A task’s files can add up to \(AttachmentLimits.sizeText(AttachmentLimits.maxBytesPerNote))."
         default:
             error.localizedDescription
         }

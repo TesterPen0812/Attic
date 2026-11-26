@@ -48,9 +48,9 @@ enum AttachmentFileStoreError: LocalizedError, Equatable {
         case .tooManyAttachments:
             "A note can contain at most 20 attachments."
         case let .attachmentTooLarge(url, bytes):
-            "\(url.lastPathComponent) is too large (\(bytes) bytes; limit is 15 MiB)."
+            "\(url.lastPathComponent) is \(AttachmentLimits.sizeText(bytes)). A file can be up to \(AttachmentLimits.sizeText(AttachmentLimits.maxBytesPerAttachment))."
         case .noteTooLarge:
-            "Attachments for a note cannot exceed 100 MiB."
+            "A note’s files can add up to \(AttachmentLimits.sizeText(AttachmentLimits.maxBytesPerNote))."
         case let .changedDuringRead(url):
             "The file changed while it was being attached: \(url.lastPathComponent)"
         case .invalidDigest:

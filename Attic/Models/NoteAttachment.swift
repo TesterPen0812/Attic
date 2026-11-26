@@ -122,6 +122,16 @@ enum AttachmentLimits {
     static let maxAttachmentsPerNote = 20
     static let maxFilenameUTF8Bytes = 512
 
+    /// A size as people read it (AUDIT-N-15): "18 MB", "15.1 MB", "640 KB".
+    /// Counted in 1,024s like the limits, rounded up so a file just over a
+    /// limit never reads as the limit, and the same in every locale.
+    static func sizeText(_ bytes: Int64) -> String {
+        let bytes = Double(max(bytes, 0))
+        guard bytes >= 1_048_576 else { return "\(max(1, Int((bytes / 1_024).rounded(.up)))) KB" }
+        let tenths = Int((bytes * 10 / 1_048_576).rounded(.up))
+        return tenths % 10 == 0 ? "\(tenths / 10) MB" : "\(tenths / 10).\(tenths % 10) MB"
+    }
+
     static func cappedByteCount<S: Sequence>(_ byteCounts: S) -> Int64 where S.Element == Int64 {
         byteCounts.reduce(Int64.zero) { total, byteCount in
             let validByteCount = max(byteCount, 0)
