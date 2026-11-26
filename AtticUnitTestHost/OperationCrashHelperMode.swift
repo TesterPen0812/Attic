@@ -1,0 +1,113 @@
+import Darwin
+import Foundation
+import SwiftData
+
+// The operation crash helper is a copy of this test host's executable, placed
+// at Contents/MacOS/AtticOperationCrashHelper and re-signed with only the
+// sandbox-inherit entitlements (the "Embed operation crash helper" build
+// phase). Under that name, main.swift hands control here before it touches
+// NSApplication. The helper never uses a default app store, invokes AppKit, or
+// permits a fixture outside the inherited tmp root. Sharing the executable
+// means the app sources compile once per unit-host build instead of twice.
+#if !ATTIC_LOCAL_ONLY || !ATTIC_OPERATION_CRASH_TESTS
+#error("Crash helper requires local-only test instrumentation")
+#endif
+
+enum OperationCrashHelperMode {
+    static let executableName = "AtticOperationCrashHelper"
+
+    /// Decided by the running image's path, not Bundle.main: inside the host
+    /// bundle, Bundle.main names the host's executable for both processes.
+    static var isRequested: Bool {
+        var size: UInt32 = 0
+        _ = _NSGetExecutablePath(nil, &size)
+        var buffer = [CChar](repeating: 0, count: Int(size) + 1)
+        guard _NSGetExecutablePath(&buffer, &size) == 0 else { return false }
+        return URL(fileURLWithPath: String(cString: buffer)).lastPathComponent == executableName
+    }
+
+    /// Mirrors the former `@main ... async` entry: the fixture runs as a main
+    /// actor task while the main run loop drains, which is what Swift's async
+    /// main does on Darwin. Every fixture path ends in `_exit`.
+    static func run() -> Never {
+        Task { @MainActor in
+            do { try await runFixture() } catch {
+                fputs("Crash fixture failed: \(error)\n", stderr)
+                _exit(74)
+            }
+            exit(0)
+        }
+        CFRunLoopRun()
+        exit(0)
+    }
+
+    @MainActor
+    private static func runFixture() async throws {
+        guard CommandLine.arguments.count == 3,
+              ["launch-probe", "seed-conversion", "convert", "writer-probe", "seed-purge", "purge", "seed-migration", "migrate", "seed-item", "delete-item", "purge-item", "restore-item", "seed-add-to-tasks", "seed-remove-from-tasks", "add-to-tasks", "remove-from-tasks", "window-add-to-tasks", "window-remove-from-tasks", "window-move-review-remove", "seed-review-add", "seed-review-remove", "seed-review-move", "undo-review-add", "undo-review-remove", "purge-review-circle", "move-review-remove"].contains(CommandLine.arguments[1]) else { _exit(64) }
+        let root = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+            .resolvingSymlinksInPath()
+        let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        guard root.path.hasPrefix(temporary.path + "/"),
+              root.lastPathComponent.hasPrefix("AtticOperationCrash-") else { _exit(65) }
+        switch CommandLine.arguments[1] {
+        case "seed-review-add", "seed-review-remove", "seed-review-move":
+            try await WorkspaceCrashFixture.seedReviewedCircle(root, adding: CommandLine.arguments[1] == "seed-review-add", moving: CommandLine.arguments[1] == "seed-review-move"); _exit(73)
+        case "undo-review-add", "undo-review-remove", "purge-review-circle", "move-review-remove":
+            guard try await WorkspaceCrashFixture.changeCircle(root, adding: CommandLine.arguments[1] == "undo-review-add", reviewAction: CommandLine.arguments[1]) else { _exit(75) }; _exit(73)
+        case "window-move-review-remove":
+            guard try await WorkspaceCrashFixture.changeCircle(root, adding: false, reviewAction: "move-review-remove", retainedWindow: true) else { _exit(75) }; _exit(73)
+        case "seed-add-to-tasks", "seed-remove-from-tasks":
+            try await WorkspaceCrashFixture.seedCircle(root, adding: CommandLine.arguments[1] == "seed-add-to-tasks"); _exit(73)
+        case "add-to-tasks", "remove-from-tasks", "window-add-to-tasks", "window-remove-from-tasks":
+            guard try await WorkspaceCrashFixture.changeCircle(root,
+                adding: CommandLine.arguments[1].hasSuffix("add-to-tasks"),
+                retainedWindow: CommandLine.arguments[1].hasPrefix("window-")) else { _exit(75) }; _exit(73)
+        case "seed-item":
+            try await WorkspaceCrashFixture.seedItem(root); _exit(73)
+        case "delete-item":
+            guard try WorkspaceCrashFixture.deleteItem(root) else { _exit(75) }; _exit(73)
+        case "restore-item":
+            guard try await WorkspaceCrashFixture.restoreItem(root) else { _exit(75) }; _exit(73)
+        case "purge-item":
+            guard try await WorkspaceCrashFixture.purgeItem(root) == .committed else { _exit(75) }; _exit(73)
+        case "seed-purge":
+            try await WorkspaceCrashFixture.seedPurge(root); _exit(73)
+        case "purge":
+            guard try await WorkspaceCrashFixture.purge(root) == .committed else { _exit(75) }
+            _exit(73)
+        case "seed-migration":
+            try await WorkspaceCrashFixture.seedMigration(root); _exit(73)
+        case "migrate":
+            guard case .migrated = try await WorkspaceCrashFixture.migrate(root) else { _exit(75) }
+            _exit(73)
+        case "seed-conversion":
+            try await WorkspaceCrashFixture.seed(root); _exit(73)
+        case "convert":
+            guard try await WorkspaceCrashFixture.convert(root) == .committed else { _exit(75) }
+            _exit(73)
+        case "writer-probe":
+            do {
+                _ = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+                _exit(75)
+            } catch WorkspaceFoundationError.writerAlreadyActive { _exit(76) }
+        default: break
+        }
+        // The production schema registry is shared by host and child.
+        let container = try PersistenceController.makeContainer(
+            cloudSyncEnabled: false, storeDirectory: root
+        )
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let task = TaskItem(title: "child task")
+        let note = NoteItem(title: "child note", body: "durable child bytes")
+        note.taskID = task.id
+        context.insert(task)
+        context.insert(note)
+        try context.save()
+        let names = container.schema.entities.map(\.name).sorted()
+        try JSONEncoder().encode(names).write(to: root.appendingPathComponent("schema.json"))
+        // No destructors or orderly container shutdown: the parent must reopen.
+        _exit(73)
+    }
+}

@@ -48,7 +48,6 @@ project.add_build_configuration('Local', :debug)
 
 app = project.new_target(:application, 'Attic', :osx, '26.0')
 unit_host = project.new_target(:application, 'AtticUnitTestHost', :osx, '26.0')
-crash_helper = project.new_target(:command_line_tool, 'AtticOperationCrashHelper', :osx, '26.0')
 agent_helper = project.new_target(:application, 'AtticAgentHelper', :osx, '26.0')
 unit_tests = project.new_target(:unit_test_bundle, 'AtticTests', :osx, '26.0')
 round_trip_tests = project.new_target(:unit_test_bundle, 'AtticRoundTripTests', :osx, '26.0')
@@ -61,13 +60,14 @@ canvas_lab = project.new_target(:application, 'CanvasLab', :osx, '26.0')
 canvas_driver = project.new_target(:command_line_tool, 'CanvasLabDriver', :osx, '26.0')
 canvas_recorder = project.new_target(:command_line_tool, 'CanvasLabRecorder', :osx, '26.0')
 canvas_tests = project.new_target(:command_line_tool, 'CanvasLabTests', :osx, '26.0')
-# Exact released parser dependency; the app, invisible unit host and crash
-# helper compile NoteMarkdownImport. Test bundles consume the host's adapter.
+# Exact released parser dependency; the app and the invisible unit host (whose
+# executable is also the crash helper) compile NoteMarkdownImport. Test bundles
+# consume the host's adapter.
 markdown_package = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
 markdown_package.repositoryURL = 'https://github.com/swiftlang/swift-markdown.git'
 markdown_package.requirement = { 'kind' => 'exactVersion', 'version' => '0.9.0' }
 project.root_object.package_references << markdown_package
-[app, unit_host, crash_helper].each do |target|
+[app, unit_host].each do |target|
   product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
   product.package = markdown_package
   product.product_name = 'Markdown'
@@ -79,7 +79,6 @@ end
 
 unit_tests.add_dependency(unit_host)
 round_trip_tests.add_dependency(unit_host)
-unit_host.add_dependency(crash_helper)
 app.add_dependency(agent_helper)
 unit_host.add_dependency(agent_helper)
 ui_tests.add_dependency(app)
@@ -143,23 +142,42 @@ add_swift_sources(
 app_group.files.each do |reference|
   next if reference.path == 'App/AtticApp.swift'
 
+  # The crash helper is a copy of this executable (below), so it runs the same
+  # source/model graph: never maintain a helper-only schema.
   unit_host.source_build_phase.add_file_reference(reference)
-  # Compile the same source/model graph: never maintain a helper-only schema.
-  crash_helper.source_build_phase.add_file_reference(reference)
 end
 unit_host.source_build_phase.add_file_reference(project.main_group['AtticUnitTestHost'].new_file('InvisiblePresentation.m'))
-add_swift_sources(project, crash_helper, 'AtticOperationCrashHelper', 'AtticOperationCrashHelper')
 add_swift_sources(project, agent_helper, 'AtticAgentHelper', 'AtticAgentHelper')
 # The helper refuses any agent model or thinking level the app does not list,
 # so it compiles the app's one closed catalog rather than a copy of it.
 agent_catalog = app_group.files.find { |file| file.path == 'Agent/Run/AgentModelCatalog.swift' }
 abort 'Missing shared agent model catalog' unless agent_catalog
 agent_helper.source_build_phase.add_file_reference(agent_catalog)
-embed_helper = unit_host.new_copy_files_build_phase('Embed operation crash helper')
-embed_helper.dst_subfolder_spec = '6' # Contents/MacOS
-embed_helper.dst_path = ''
-embedded_helper = embed_helper.add_file_reference(crash_helper.product_reference)
-embedded_helper.settings = { 'ATTRIBUTES' => ['CodeSignOnCopy'] }
+# The operation crash helper is the host's own linked executable, copied to
+# Contents/MacOS/AtticOperationCrashHelper and signed on its own with only the
+# sandbox-inherit entitlements, hardened runtime and no injected base
+# entitlements. main.swift enters helper mode under that name. This compiles
+# the app sources once per unit-host build instead of a second time for a
+# separate helper target. It runs after linking and before Xcode seals the
+# bundle; Scripts/sign_crash_harness.zsh re-signs it the same way.
+embed_helper = unit_host.new_shell_script_build_phase('Embed operation crash helper')
+embed_helper.shell_path = '/bin/sh'
+embed_helper.input_paths = [
+  '$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)',
+  '$(SRCROOT)/AtticOperationCrashHelper/Helper.entitlements'
+]
+embed_helper.output_paths = ['$(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/AtticOperationCrashHelper']
+embed_helper.shell_script = <<~'SH'
+  set -eu
+  host="${TARGET_BUILD_DIR}/${EXECUTABLE_PATH}"
+  helper="${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/AtticOperationCrashHelper"
+  /bin/rm -f "$helper"
+  /bin/cp -c "$host" "$helper" 2>/dev/null || /bin/cp "$host" "$helper"
+  if [ "${CODE_SIGNING_ALLOWED:-NO}" = YES ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+    /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --options runtime --timestamp=none \
+      --entitlements "${SRCROOT}/AtticOperationCrashHelper/Helper.entitlements" "$helper"
+  fi
+SH
 [app, unit_host].each do |host|
   embed_agent = host.new_copy_files_build_phase('Embed unsandboxed agent helper')
   embed_agent.dst_subfolder_spec = '1' # The app wrapper, at Contents/Helpers.
@@ -352,23 +370,11 @@ unit_host.build_configurations.each do |config|
   end
   settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = '$(inherited) ATTIC_UNIT_TEST_HOST'
   settings['SWIFT_OBJC_BRIDGING_HEADER'] = 'AtticUnitTestHost/InvisiblePresentation.h'
+  # The crash-helper phase signs with the developer's identity outside a
+  # script sandbox, as the former helper target's own CodeSign step did.
+  settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
 end
 
-crash_helper.build_configurations.each do |config|
-  settings = config.build_settings
-  settings['PRODUCT_NAME'] = 'AtticOperationCrashHelper'
-  settings['SWIFT_VERSION'] = '5.0'
-  settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_OPERATION_CRASH_TESTS'
-  settings['CODE_SIGN_ENTITLEMENTS'] = 'AtticOperationCrashHelper/Helper.entitlements'
-  settings['CODE_SIGN_STYLE'] = 'Automatic'
-  settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
-  settings['ENABLE_APP_SANDBOX'] = 'YES'
-  settings['ENABLE_HARDENED_RUNTIME'] = 'YES'
-  settings['OTHER_CODE_SIGN_FLAGS'] = '--options runtime'
-  settings['CODE_SIGN_INJECT_BASE_ENTITLEMENTS'] = 'NO'
-  settings['SKIP_INSTALL'] = 'YES'
-end
 
 # Launch Services starts this nested background application independently of
 # Attic's sandbox. It has no entitlements and never links the Attic data model.
@@ -576,7 +582,6 @@ lab_scheme.save_as(staged_project_path, 'CanvasLab', true)
 stable_target_uuids = {
   app => 'A7714C2169D9DBD5A01DC94837E1C051',
   unit_host => '91B51DB0FF2546EAAA06E2521BC7D6A8',
-  crash_helper => 'B5A52D9C81724173A8AB94CDF81D800A',
   agent_helper => 'A6E1A6E1A6E1A6E1A6E1A6E1A6E1A6E1',
   unit_tests => '6276F3101BBBD6791E37F0DC63F158C3',
   round_trip_tests => 'F3330000000000000000000000000001',

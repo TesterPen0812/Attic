@@ -1,5 +1,9 @@
 import AppKit
 
+// The embedded crash helper is this executable under another name; it must
+// leave before anything below touches NSApplication.
+if OperationCrashHelperMode.isRequested { OperationCrashHelperMode.run() }
+
 let application = NSApplication.shared
 application.setActivationPolicy(.prohibited)
 AtticInstallInvisiblePresentation()
