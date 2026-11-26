@@ -544,6 +544,11 @@ struct KeptEnvironment: ViewModifier {
         entry("atticProbesDisabled", \.atticProbesDisabled),
         // The panel's shell.
         entry("atticPanelPageIsCurrent", \.atticPanelPageIsCurrent),
+        // The page its content is part of, which our AppKit views take as
+        // their keyboard tag (PanelPageKeyboard). It arrives today without
+        // this line too (HiddenPageKeyboardTests.testAKeptHostHandsItsContentThePage
+        // passes without it); named here, it no longer rests on that.
+        entry("atticPanelPage", \.atticPanelPage),
         entry("atticPanelToasts", \.atticPanelToasts),
         entry("panelComposer", \.panelComposer),
         entry("panelComposerRoom", \.panelComposerRoom),

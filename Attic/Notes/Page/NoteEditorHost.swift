@@ -1024,6 +1024,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
             if coordinator.isCurrent, !textView.isSuspended { textView.restoreInputFocus() }
         }
         context.coordinator.scrollIndicators.bind(scrollView, transit: pageTransit)
+        PanelPageKeyboard.tag(scrollView, context.environment)
         return scrollView
     }
 

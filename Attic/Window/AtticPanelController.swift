@@ -486,6 +486,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             backing: .buffered,
             defer: true
         )
+        // The panel's keyboard rule asks the shell's own state (PanelPageKeyboard).
+        panel.showsPageQuery = { [weak uiState] page in uiState.map { PanelPage($0.selectedSection) == page } ?? true }
         hostingView = AtticPanelHostingView(
             rootView: AtticPanelView(
                 store: store,

@@ -3160,6 +3160,7 @@ struct AtticSubtaskTitleField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSTextField {
         let field = Self.makeField()
         field.delegate = context.coordinator
+        PanelPageKeyboard.tag(field, context.environment)
         return field
     }
 

@@ -143,6 +143,9 @@ final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
                                                 "backgroundColor": NSNull(), "sublayers": NSNull(), "frame": NSNull()]
 
     override var acceptsFirstResponder: Bool { true }
+    /// Not a key view while its page is not shown (PanelPageKeyboard), so
+    /// AppKit's Tab loop passes it by and keeps cycling on the page in use.
+    override var canBecomeKeyView: Bool { super.canBecomeKeyView && PanelPageKeyboard.mayTakeKeyboard(self) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
