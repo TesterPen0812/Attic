@@ -328,11 +328,19 @@ final class KeptContentHostTests: XCTestCase {
         // inside the host (`TasksReorderCell`), above the menus that read it.
         // The list's hover for a row or line (`AtticRowHover`), set on each
         // cell and line inside the host.
+        // A task page's one-piece motion: what a Tasks list's lines draw and
+        // the opening row's mark, set at the list's root and on the row's
+        // cell inside the host (`TaskPageListFollows`, `TaskPageRowLeaving`).
         let setInside: Set<String> = ["atticMenuEntranceTime", "atticMaterialProbeID", "atticContextMenuCountTag",
-                                      "atticRowHover"]
+                                      "atticRowHover", "taskPageWay", "taskPageRowLeaving"]
+        // Read only by the stand-in's own bar, which the route host draws
+        // over the page, never inside a kept host (`TaskPageBarFold`).
+        let readOutsideKeptHosts: Set<String> = ["taskPageBarShown"]
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Attic")
-        let folders = ["Tasks", "DesignSystem", "Design"].map { root.appendingPathComponent($0) }
+        // TaskNote holds the one-piece motion's readers that Tasks lists
+        // apply inside their hosts (`TaskPageListFollows`).
+        let folders = ["Tasks", "DesignSystem", "Design", "TaskNote"].map { root.appendingPathComponent($0) }
         let pattern = try NSRegularExpression(pattern: #"@Environment\(\\\.([A-Za-z]+)"#)
         var missing: [String: String] = [:]
         var scanned = 0
@@ -345,7 +353,8 @@ final class KeptContentHostTests: XCTestCase {
                 let range = NSRange(source.startIndex..., in: source)
                 for match in pattern.matches(in: source, range: range) {
                     guard let name = Range(match.range(at: 1), in: source).map({ String(source[$0]) }) else { continue }
-                    if !forwarded.contains(name), !derivedByTheHost.contains(name), !setInside.contains(name) {
+                    if !forwarded.contains(name), !derivedByTheHost.contains(name), !setInside.contains(name),
+                       !readOutsideKeptHosts.contains(name) {
                         missing[name] = file.lastPathComponent
                     }
                 }
@@ -408,6 +417,59 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertEqual(seen.outside.scheme, .dark, "the probe outside read the values set above")
         XCTAssertEqual(seen.outside.locale, "ar_EG")
         XCTAssertEqual(seen.inside, seen.outside, "inside the host as just outside it")
+    }
+
+    /// A task page's one-piece motion places a Tasks list's lines in the
+    /// route host's named space (`TaskPageOnePiece.space`) from inside the
+    /// tab's own host (`TaskPageLineEffect`). That space is declared in the
+    /// panel's host, outside the kept host: inside, it must resolve to the
+    /// same place, or the lines are sorted above and below the opening row
+    /// by the wrong origin.
+    func testTheRouteHostsNamedSpaceResolvesInsideAKeptHost() {
+        final class Seen { var named: CGRect?; var global: CGRect?; var outsideNamed: CGRect? }
+        let seen = Seen()
+        let window = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 200, height: 300),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let space = TaskPageOnePiece.space
+        window.contentView = NSHostingView(rootView: VStack(spacing: 0) {
+            // Outside the kept host: where the space puts this line.
+            Color.clear.frame(height: 30)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(space)) } action: { seen.outsideNamed = $0 }
+            KeptContentHost(drawn: true, interactive: true) {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 20)
+                    Color.clear.frame(height: 10)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(space)) } action: { seen.named = $0 }
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { seen.global = $0 }
+                    Spacer(minLength: 0)
+                }
+            }
+            .frame(height: 150)
+            .padding(.leading, 15)
+        }
+            // The space starts 50 pt below the panel host's top and 7 pt in,
+            // so it differs from the window's, the panel host's and the
+            // kept host's own origins.
+            .coordinateSpace(.named(space))
+            .padding(.top, 50)
+            .padding(.leading, 7)
+            .frame(width: 200, height: 300, alignment: .topLeading))
+        window.orderFront(nil)
+        waitForTestOperation("the probes' first frames") {
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            return seen.named != nil && seen.outsideNamed != nil && seen.global != nil
+        }
+        // The rig tells the spaces apart: outside the host the space puts
+        // the first line at its own origin.
+        XCTAssertEqual(seen.outsideNamed?.minY ?? -1, 0, accuracy: 0.5, "outside: the space's own origin")
+        XCTAssertEqual(seen.outsideNamed?.minX ?? -1, 0, accuracy: 0.5)
+        // Inside: 30 (the line above the host) + 20 down, 15 in.
+        print("NAMED SPACE inside named=\(String(describing: seen.named)) global=\(String(describing: seen.global))")
+        XCTAssertEqual(seen.named?.minY ?? -1, 50, accuracy: 0.5, "the route host's space resolves inside a kept host")
+        XCTAssertEqual(seen.named?.minX ?? -1, 15, accuracy: 0.5, "the route host's space resolves inside a kept host")
     }
 
     /// §4.2 and the lead's ruling (19 Nov): a host that is not drawn takes
