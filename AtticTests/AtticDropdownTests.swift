@@ -2555,26 +2555,44 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertNotNil(element("Clear Date"), "a row's existing route to remove its date stays")
         let resting = host.contentRect.height
 
-        func key(_ characters: String, _ keyCode: UInt16) {
+        // Each key is followed by a wait on what it changes, never a fixed
+        // time. The card resizes on the turn after SwiftUI's update, and the
+        // first update with suggestion rows took 58 to 149 ms on CI runners
+        // (PF-43, runs 45874517163 to 45874573712): a 0.1 s spin read the
+        // height before the resize as often as after it.
+        func key(_ characters: String, _ keyCode: UInt16, until settled: () -> Bool) {
             let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                                          windowNumber: window.windowNumber, context: nil, characters: characters,
                                          charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
             XCTAssertNil(presenter.handleKey(event), "the card takes \(characters.debugDescription)")
-            spin(0.1)
+            wait(until: settled)
         }
-        key("t", 17)
-        XCTAssertNotNil(element("Today, Mon"), "typing suggests")
-        XCTAssertNotNil(element("Tomorrow, Tue"))
         // Draft C: the suggestions sit under the field, 4 pt in, ruled off
         // from the month.
         let m = AtticDropdownMetrics.self
-        XCTAssertEqual(host.contentRect.height, resting + 3 * m.rowHeight + m.inset * 2 + m.headerRule, accuracy: 1)
-        key("\u{7f}", 51)
+        let suggesting = resting + 3 * m.rowHeight + m.inset * 2 + m.headerRule
+        // Every height the card shows on the way: it goes from one size to
+        // the other in one step, with no size in between.
+        var heights: [CGFloat] = []
+        func grown() -> Bool {
+            let height = host.contentRect.height
+            if abs(height - resting) > 1, heights.last != height { heights.append(height) }
+            return abs(height - suggesting) <= 1
+        }
+        key("t", 17, until: grown)
+        XCTAssertNotNil(element("Today, Mon"), "typing suggests")
+        XCTAssertNotNil(element("Tomorrow, Tue"))
+        XCTAssertEqual(host.contentRect.height, suggesting, accuracy: 1)
+        XCTAssertEqual(heights.count, 1, "the card grows in one step: \(heights)")
+        key("\u{7f}", 51) { abs(host.contentRect.height - resting) <= 1 }
         XCTAssertNil(element("Today, Mon"), "cleared, the suggestions go")
         XCTAssertEqual(host.contentRect.height, resting, accuracy: 1, "and the card is draft 2 again")
-        for (character, code) in [("t", UInt16(17)), ("o", 31), ("m", 46)] { key(character, code) }
+        key("t", 17) { element("Tomorrow, Tue") != nil }
+        key("o", 31) { element("Tomorrow, Tue") != nil }
+        key("m", 46) { element("Tomorrow, Tue") != nil && element("Today, Mon") == nil }
         XCTAssertNotNil(element("Tomorrow, Tue"))
-        key("\r", 36)
+        XCTAssertNil(element("Today, Mon"), "only what matches \"tom\" is suggested")
+        key("\r", 36) { picked != nil }
         XCTAssertEqual(picked, DueDay(rawValue: "2026-10-06"), "Return picks the lit suggestion")
     }
 
