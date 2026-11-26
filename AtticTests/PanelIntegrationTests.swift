@@ -170,8 +170,9 @@ final class PanelIntegrationTests: XCTestCase {
             XCTAssertEqual(window.visibleContentFrame.width, frame.width, accuracy: 0.5, "harness: step \(step) took its width")
         }
         print("RESIZE_STEP_WRITES steps=6 \(writes.sorted { $0.key < $1.key })")
-        let drawsNothing = writes.filter { $0.key != "island-size" }
-        XCTAssertEqual(drawsNothing, [:], "a resize step wrote view state that draws nothing")
+        // The island's glass takes each size from AppKit (`AtticGlassSizeSource`),
+        // so it writes none either.
+        XCTAssertEqual(writes, [:], "a resize step wrote view state")
         #endif
     }
 
@@ -225,6 +226,39 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    /// Resize round 2 (c): through a real resize, the island's glass has
+    /// the panel's size after each step and after it settles. Every glass
+    /// layout since a step was at that step's size, and there was one.
+    func testTheIslandsGlassFollowsThePanelAtEachStepAndAtSettle() throws {
+        #if ATTIC_LOCAL_ONLY
+        var glass: [CGSize] = []
+        PanelInvalidationProbe.islandGlassSize = { glass.append($0) }
+        defer { PanelInvalidationProbe.islandGlassSize = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        for step in 1...5 {
+            glass = []
+            var frame = window.visibleContentFrame
+            frame.size.width += 14
+            frame.size.height += step.isMultiple(of: 2) ? 6 : 0
+            window.setVisibleContentFrame(frame, display: true)
+            panel.uiState.updatePanelSize(window.visibleContentFrame.size)
+            let size = panel.uiState.panelSize
+            spin(until: { !glass.isEmpty }, timeout: 1)
+            print("ISLAND_GLASS_STEP \(step) panel=\(size) glass=\(glass)")
+            XCTAssertEqual(size.width, window.visibleContentFrame.width, accuracy: 0.5, "harness: step \(step) took its size")
+            XCTAssertFalse(glass.isEmpty, "step \(step): the island's glass was not laid out at the new size")
+            XCTAssertTrue(glass.allSatisfy { $0 == size }, "step \(step): the island's glass drew at a size the panel does not have")
+        }
+        let settled = panel.uiState.panelSize
+        glass = []
+        spin(0.4)
+        XCTAssertTrue(glass.allSatisfy { $0 == settled }, "settled: the island's glass moved off the panel's size")
+        #endif
+    }
+
     private func pageWideViews(_ name: String, in root: NSView) -> [NSView] {
         (root.className.hasSuffix(name) ? [root] : []) + root.subviews.flatMap { pageWideViews(name, in: $0) }
     }
@@ -255,10 +289,11 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(panel.uiState.panelSize.width, width, accuracy: 0.5)
     }
 
-    /// PR 69 fix round 1, item 6 (the lead's 16:05 condition a): the island
-    /// is another window, so its glass is sent each accepted size. A size
-    /// write re-runs the glass view and nothing above it in the island's
-    /// windows (the island, the name label, the stand-in).
+    /// PR 69 fix round 1, item 6 (the lead's 16:05 condition a), resize
+    /// round 2 (c): the island is another window, so AppKit sets its glass
+    /// each accepted size. A size write runs no view in the island's
+    /// windows (the island, the name label, the hidden stand-in), and the
+    /// glass is laid out at each size.
     func testASizeWriteRunsOnlyTheIslandsGlassView() throws {
         #if ATTIC_LOCAL_ONLY
         var roots = 0, surfaces = 0
@@ -274,15 +309,24 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(roots, 0, "harness: the island's windows are built")
         XCTAssertGreaterThan(surfaces, 0, "harness: the island's glass is drawn")
         let size = panel.uiState.panelSize
+        var glass: [CGSize] = []
+        PanelInvalidationProbe.islandGlassSize = { glass.append($0) }
+        defer { PanelInvalidationProbe.islandGlassSize = nil }
         roots = 0
         surfaces = 0
+        var sent: [CGSize] = []
         for step in 1...6 {
-            panel.uiState.updatePanelSize(CGSize(width: size.width + CGFloat(step * 8), height: size.height))
+            let next = CGSize(width: size.width + CGFloat(step * 8), height: size.height)
+            sent.append(next)
+            panel.uiState.updatePanelSize(next)
             spin(0.05)
         }
-        print("ISLAND_SIZE_FEED steps=6 roots=\(roots) glass=\(surfaces)")
+        print("ISLAND_SIZE_FEED steps=6 roots=\(roots) glass_views=\(surfaces) glass_sizes=\(Set(glass).count)")
         XCTAssertEqual(roots, 0, "a size write ran the island's root wrapper")
-        XCTAssertGreaterThanOrEqual(surfaces, 6, "the island's glass takes each size")
+        XCTAssertEqual(surfaces, 0, "a size write ran the island's glass view")
+        for size in sent {
+            XCTAssertTrue(glass.contains(size), "the island's glass was not laid out at \(size)")
+        }
         #endif
     }
 
