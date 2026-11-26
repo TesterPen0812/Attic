@@ -625,6 +625,8 @@ struct NoteFormatRowView: View {
     /// The row's width (the bottom row's), which moves on every step of a
     /// resize: kept out of view state; only whether it is roomy is drawn.
     @State private var width = AtticUnobserved<CGFloat>(0)
+    /// Whether full-size cells fit the measured width; only drawn with no
+    /// growth (a growing row takes it from the width it is given).
     @State private var measuredRoomy = true
     #if DEBUG
     /// Tests: the cell width each run of the row's body draws with.
@@ -639,7 +641,10 @@ struct NoteFormatRowView: View {
         // A long style name ("Subheading") in a narrow panel: 24 pt cells.
         let m = AtticNoteFormatMetrics.self
         let need = Self.minimumWidth(snapshot: model.snapshot, toggleWidth: m.rowToggleWidth, compact: false)
-        let roomy = measuredRoomy
+        // Growing (the panel's row): roomy follows the width the row is
+        // given in this update, so the first frame of an opening already
+        // has the right cells. Otherwise, the width measured on the row.
+        let roomy = growth.map { Self.isRoomy(width: $0.rowWidth, need: need) } ?? measuredRoomy
         #if DEBUG
         let _ = Self.toggleWidthProbe?(roomy ? m.rowToggleWidth : m.rowCompactToggleWidth)
         #endif
@@ -655,6 +660,7 @@ struct NoteFormatRowView: View {
                 settleRoomy(need: need)
             }
             .onChange(of: need) { _, now in settleRoomy(need: now) }
+            .onChange(of: growth == nil) { _, _ in settleRoomy(need: need) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Format"))
         .accessibilityIdentifier("notes-format-row")
@@ -787,6 +793,8 @@ struct NoteFormatRowView: View {
         return label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
     }()
     private func settleRoomy(need: CGFloat) {
+        // A growing row draws the width it is given: nothing to keep.
+        guard growth == nil else { return }
         let now = Self.isRoomy(width: width.value, need: need)
         guard now != measuredRoomy else { return }
         #if DEBUG && ATTIC_LOCAL_ONLY
