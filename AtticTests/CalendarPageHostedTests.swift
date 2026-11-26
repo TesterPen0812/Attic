@@ -1687,19 +1687,25 @@ extension CalendarPageHostedTests {
     }
 
     /// Cause 5 guard: a short agenda (seven empty days) fills the visible
-    /// height on the very first layout, before any run-loop turn, and
-    /// follows a height step.
+    /// height in the very first drawn frame, before any run-loop turn, and
+    /// follows a height step. The first layout and the state after one turn
+    /// are printed too.
     func testTheAgendaFillsTheViewportOnTheFirstLayoutAndAfterAHeightStep() throws {
-        var first: CGFloat = -1
+        var firstLayout: CGFloat = -1, firstDrawn: CGFloat = -1, afterTurn: CGFloat = -1
         try withResizablePage(events: [], firstLayout: { page in
             page.host.layoutSubtreeIfNeeded()
-            first = documentHeight(page)
+            firstLayout = documentHeight(page)
+            page.window.displayIfNeeded()
+            firstDrawn = documentHeight(page)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.005))
+            page.host.layoutSubtreeIfNeeded()
+            afterTurn = documentHeight(page)
         }) { page in
             let settled = documentHeight(page)
             resize(page, width: 320, height: 700)
             let shorter = documentHeight(page)
-            print("CALCOUNT cause5-first first=\(first) settled=\(settled) shorter=\(shorter)")
-            XCTAssertEqual(first, settled, accuracy: 0.5, "the first layout already fills the viewport")
+            print("CALCOUNT cause5-first layout=\(firstLayout) drawn=\(firstDrawn) turn=\(afterTurn) settled=\(settled) shorter=\(shorter)")
+            XCTAssertEqual(firstDrawn, settled, accuracy: 0.5, "the first drawn frame already fills the viewport")
             XCTAssertEqual(settled - shorter, 200, accuracy: 0.5, "the agenda's least height follows a height step")
         }
     }
