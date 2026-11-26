@@ -156,6 +156,16 @@ extension DrawPageModel {
         }
         let result = perform(.put(placed), on: drop.canvas)
         AtticSounds.play(.attached, if: result.isSaved)
+        // AUDIT-V-14: what was just pasted or dropped is selected, as pasted
+        // Draw objects are. Only on the canvas still open, and never while
+        // a text box or a gesture started since holds the board.
+        if drop.canvas == canvasID, editing == nil, live == nil {
+            let landed = placed.map(\.id).filter { id in objects.contains { $0.id == id } }
+            if !landed.isEmpty {
+                setTool(.select)
+                select(landed)
+            }
+        }
         return result
     }
 }

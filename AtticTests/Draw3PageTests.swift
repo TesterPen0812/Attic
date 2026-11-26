@@ -682,6 +682,57 @@ final class Draw3PageTests: XCTestCase {
         return pasteboard
     }
 
+    // MARK: What was pasted is selected (AUDIT-V-14)
+
+    /// ⌘V of a picture selects it, as pasting Draw objects does: Delete
+    /// right after removes the picture, not what was selected before.
+    func testV14APastedPictureIsSelectedAndTheEarlierSelectionLetGo() async throws {
+        let stroke = DrawObject(content: .stroke([DrawPoint(x: 10, y: 10), DrawPoint(x: 40, y: 30)]))
+        put(stroke)
+        model.setTool(.select)
+        model.select([stroke.id])
+        model.pasteboard.clearContents()
+        model.pasteboard.setData(Draw3Images.encoded(width: 40, height: 30), forType: .png)
+        model.paste()
+        await model.pendingImport?.value
+        let picture = try XCTUnwrap(model.objects.first(where: \.isImage))
+        XCTAssertEqual(model.selection, [picture.id], "the pasted picture is selected")
+        XCTAssertEqual(model.tool, .select)
+        model.deleteSelection()
+        XCTAssertEqual(model.objects.map(\.id), [stroke.id], "Delete removes the picture, not the stroke")
+    }
+
+    /// A drop of several pictures selects all of them, from any tool.
+    func testV14DroppedPicturesAreSelectedFromAnyTool() async throws {
+        let (one, _) = try imageFile("one.png")
+        let (two, _) = try imageFile("two.png")
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-draw3-two-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.writeObjects([one as NSURL, two as NSURL])
+        model.setTool(.pen)
+        await model.importImages(from: pasteboard, at: CGPoint(x: 160, y: 220))?.value
+        let pictures = model.objects.filter(\.isImage).map(\.id)
+        XCTAssertEqual(pictures.count, 2)
+        XCTAssertEqual(Set(model.selection), Set(pictures), "both dropped pictures are selected")
+        XCTAssertEqual(model.tool, .select)
+    }
+
+    /// A picture that lands after a switch, or while a text box is open,
+    /// changes no selection and ends no typing.
+    func testV14ALatePictureNeverTakesTheSelectionFromWhatIsOpenNow() async throws {
+        let (file, _) = try imageFile("late-select.png")
+        let task = try XCTUnwrap(model.importImages(from: filePasteboard(file), at: nil))
+        model.setTool(.text)
+        model.beginText(at: CGPoint(x: 80, y: 120))
+        model.typed("Typing")
+        await task.value
+        XCTAssertNotNil(model.editing, "the text box stays open")
+        XCTAssertEqual(model.editing?.text, "Typing")
+        XCTAssertEqual(model.tool, .text)
+        XCTAssertTrue(model.selection.isEmpty)
+    }
+
     func testAnImportThatFinishesAfterASwitchLandsOnTheCanvasItWasDroppedOn() async throws {
         let (file, data) = try imageFile("late.png")
         let origin = try XCTUnwrap(model.canvasID)
