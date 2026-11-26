@@ -1704,3 +1704,38 @@ extension CalendarPageHostedTests {
         }
     }
 }
+
+extension CalendarPageHostedTests {
+    /// Cause 6: the agenda's days are built as they come into view. Each
+    /// element of the agenda's `ForEach` is one view (a search's year header
+    /// sits inside it), so the lazy stack knows how many there are without
+    /// building them all: forty matching days build only those near the view.
+    func testASearchBuildsOnlyTheAgendaDaysNearTheView() throws {
+        // Two days in 2026, then thirty-eight in 2027: a year header on screen.
+        var events = [titled("m0", "Match 0", month: 12, on: 30), titled("m1", "Match 1", month: 12, on: 31)]
+        for i in 0..<38 {
+            let start = calendar.date(byAdding: .day, value: 2 * i, to: date(2027, 1, 2, 9))!
+            events.append(CalendarEvent(id: "m\(i + 2)", title: "Match \(i + 2)", start: start, end: start.addingTimeInterval(3_600),
+                                        isAllDay: false, location: nil, calendarTitle: "Home",
+                                        colour: CalendarEventColour(red: 0.2, green: 0.5, blue: 0.9)))
+        }
+        try withResizablePage(events: events, height: 600) { page in
+            XCTAssertTrue(try XCTUnwrap(page.element("calendar-search-button")).accessibilityPerformPress?() ?? false)
+            page.settle()
+            CalendarPage.agendaElementBuilds = 0
+            page.model.setQuery("Match")
+            page.settle(0.8)
+            let groups = page.model.snapshot.groups.count
+            let builds = CalendarPage.agendaElementBuilds
+            let header = "calendar-search-year-2027"
+            print("CALCOUNT cause6 groups=\(groups) builds=\(builds)")
+            XCTAssertGreaterThanOrEqual(groups, 40, "every matching day is a group")
+            XCTAssertNotNil(frames(page, [header])[header], "the year header is drawn")
+            XCTAssertLessThan(builds, groups, "only the days near the view are built")
+            for width in Self.resizeWidths {
+                resize(page, width: width)
+                logFrames("cause6", width: width, frames(page, ["calendar-tile-", "calendar-search-year-", "calendar-event-"]))
+            }
+        }
+    }
+}

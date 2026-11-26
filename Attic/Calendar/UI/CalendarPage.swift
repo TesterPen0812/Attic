@@ -75,6 +75,9 @@ struct CalendarPage: View {
     /// Test seam: how many times the scroll content (grid and agenda) was
     /// described. A width step must describe it again for nothing.
     static var scrollerBuilds = 0
+    /// Test seam: how many agenda elements (a day, with its year header in
+    /// a search) were built. A lazy stack builds only those near the view.
+    static var agendaElementBuilds = 0
     #endif
 
     var body: some View {
@@ -240,6 +243,9 @@ struct CalendarPage: View {
             // Every day on its own, each with its grey date tile, empty days
             // too (owner, 2026-10-31: the older agenda).
             ForEach(Array(snapshot.groups.enumerated()), id: \.element.id) { index, group in
+                #if DEBUG && ATTIC_UNIT_TEST_HOST
+                let _ = Self.agendaElementBuilds += 1
+                #endif
                 if snapshot.isSearching && (index == 0 ? group.day.year != snapshot.today.year
                     : snapshot.groups[index - 1].day.year != group.day.year) {
                     Text(verbatim: String(group.day.year))
