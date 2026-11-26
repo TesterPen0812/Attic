@@ -1405,10 +1405,11 @@ final class TasksBreadthGuardTests: XCTestCase {
 
     /// How many times a turn ran the row builder (`cell()`), per tab.
     private func builderPasses(_ hosting: NSView, _ action: () -> Void) -> [TasksTab: Int] {
-        let base = TasksCellBodyCounts.passes
+        let base = TasksCellBodyCounts.passes, pageBase = TasksPageRenderProbe.bodyRuns
         action()
         settle(hosting)
         settle(hosting)
+        print("ONE_VIEW_PAGE page_runs=\(TasksPageRenderProbe.bodyRuns - pageBase)")
         return TasksCellBodyCounts.passes.reduce(into: [TasksTab: Int]()) { result, entry in
             let added = entry.value - base[entry.key, default: 0]
             if added > 0 { result[entry.key.tab, default: 0] += added }
@@ -1422,8 +1423,8 @@ final class TasksBreadthGuardTests: XCTestCase {
     /// and ↓ (the model's route, as `TasksPage` drives it) run the row
     /// builder the same number of times with 83 and 446 open tasks and the
     /// same rows on screen.
-    func testARowClickAndArrowRunTheRowBuilderTheSameAt83And446Tasks() throws {
-        var results: [Int: (click: Int, arrow: Int, drawn: Int)] = [:]
+    func testARowClickArrowAndEditRunTheRowBuilderTheSameAt83And446Tasks() throws {
+        var results: [Int: (click: Int, arrow: Int, edit: Int, drawn: Int)] = [:]
         for count in [83, 446] {
             window?.close()
             TasksCellBodyCounts.reset()
@@ -1444,14 +1445,78 @@ final class TasksBreadthGuardTests: XCTestCase {
                 model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: ids[4]), keyboardDriving: true)
                 model.cellUpdates.objectWillChange.send()
             }
+            let edit = builderPasses(hosting) { XCTAssertTrue(model.setPriority(.high, for: [ids[6]]).isApplied) }
+            print("ONE_VIEW_TASKS n=\(count) edit_all=\(edit.values.reduce(0, +))")
             print("ONE_VIEW_TASKS n=\(count) drawn=\(drawn.count) click_now=\(click[.now, default: 0]) "
                   + "click_all=\(click.values.reduce(0, +)) arrow_now=\(arrow[.now, default: 0]) arrow_all=\(arrow.values.reduce(0, +))")
-            results[count] = (click.values.reduce(0, +), arrow.values.reduce(0, +), drawn.count)
+            results[count] = (click.values.reduce(0, +), arrow.values.reduce(0, +), edit.values.reduce(0, +), drawn.count)
         }
         let small = try XCTUnwrap(results[83]), large = try XCTUnwrap(results[446])
         XCTAssertEqual(small.drawn, large.drawn, "the same rows on screen at both sizes")
+        // Not a vacuous pass: the edit is a page pass that builds rows (the
+        // model's click and ↓ reach the rows through their states and may
+        // run no page pass at all).
+        XCTAssertGreaterThan(small.edit, 0, "the edit ran the row builder")
+        XCTAssertEqual(large.edit, small.edit, "an edit ran the row builder \(large.edit) times at 446 tasks against \(small.edit) at 83")
         XCTAssertEqual(large.click, small.click, "a row click ran the row builder \(large.click) times at 446 tasks against \(small.click) at 83")
         XCTAssertEqual(large.arrow, small.arrow, "↓ ran the row builder \(large.arrow) times at 446 tasks against \(small.arrow) at 83")
+    }
+
+    /// The real routes (key window): a click on a row and ↓ through the
+    /// page's own handlers, and a store edit of one row (a page pass for
+    /// certain). Each runs the row builder the same number of times with 83
+    /// and 446 open tasks and the same rows on screen.
+    func testARealClickArrowAndEditRunTheRowBuilderTheSameAt83And446Tasks() throws {
+        try requireKeyWindowTests()
+        var results: [Int: [String: Int]] = [:]
+        for count in [83, 446] {
+            TasksCellBodyCounts.reset()
+            let hosted = try Hosted(height: 520, seed: { container in
+                let context = ModelContext(container)
+                let now = Date()
+                var order: Int64 = 10_000_000
+                for index in 0..<count {
+                    order -= 1_024
+                    let item = TaskItem(title: "Open task \(index) with a longer title like the tracker's", status: .todo,
+                                        createdAt: now, manualOrder: order)
+                    item.listOrderVersion = TaskItem.currentListOrderVersion
+                    item.tags = ["tag\(index % 7)", "area\(index % 3)"]
+                    context.insert(item)
+                }
+                try context.save()
+            })
+            defer { hosted.close() }
+            hosted.window.makeKey()
+            let ids = hosted.model.rows(for: .now).map(\.id)
+            XCTAssertEqual(ids.count, count, "the seed's open rows")
+            let drawn = Set(ids.filter { hosted.pointer.frame(for: TasksRowID(tab: .now, id: $0)) != nil })
+            try hosted.clickRow(ids[1], tab: .now)
+            hosted.spin(0.3)
+            func passes(_ name: String, _ action: () throws -> Void) rethrows -> Int {
+                let base = TasksCellBodyCounts.passes, pageBase = TasksPageRenderProbe.bodyRuns
+                try action()
+                hosted.spin(0.3)
+                var byTab: [TasksTab: Int] = [:]
+                for (row, runs) in TasksCellBodyCounts.passes where runs > base[row, default: 0] {
+                    byTab[row.tab, default: 0] += runs - base[row, default: 0]
+                }
+                let all = byTab.values.reduce(0, +)
+                print("ONE_VIEW_REAL n=\(count) \(name) drawn=\(drawn.count) page_runs=\(TasksPageRenderProbe.bodyRuns - pageBase) "
+                      + "now=\(byTab[.now, default: 0]) all=\(all)")
+                return all
+            }
+            var result: [String: Int] = ["drawn": drawn.count]
+            result["click"] = try passes("click") { try hosted.clickRow(ids[3], tab: .now) }
+            result["arrow"] = passes("arrow") { hosted.press(String(UnicodeScalar(NSDownArrowFunctionKey)!), keyCode: 125) }
+            result["edit"] = passes("edit") { XCTAssertTrue(hosted.model.setPriority(.high, for: [ids[6]]).isApplied) }
+            results[count] = result
+        }
+        let small = try XCTUnwrap(results[83]), large = try XCTUnwrap(results[446])
+        XCTAssertEqual(small["drawn"], large["drawn"], "the same rows on screen at both sizes")
+        XCTAssertGreaterThan(small["edit", default: 0], 0, "the edit ran the row builder")
+        for name in ["click", "arrow", "edit"] {
+            XCTAssertEqual(large[name], small[name], "\(name) ran the row builder \(large[name] ?? -1) times at 446 tasks against \(small[name] ?? -1) at 83")
+        }
     }
 
     /// Done's list: a day heading or a row per line. A row click runs the
@@ -1482,9 +1547,12 @@ final class TasksBreadthGuardTests: XCTestCase {
             model.selectOnly(ids[1])
             settle(hosting)
             settle(hosting)
+            let drawn = ids.filter { pointer.frame(for: TasksRowID(tab: .done, id: $0)) != nil }.count
             let click = builderPasses(hosting) { model.click(ids[3], modifiers: [], visible: ids) }
-            print("ONE_VIEW_DONE \(name) loaded=\(ids.count) click_done=\(click[.done, default: 0]) click_all=\(click.values.reduce(0, +))")
-            return click.values.reduce(0, +)
+            let again = builderPasses(hosting) { model.click(ids[5], modifiers: [], visible: ids) }
+            print("ONE_VIEW_DONE \(name) loaded=\(ids.count) drawn=\(drawn) click_done=\(click[.done, default: 0]) "
+                  + "click_all=\(click.values.reduce(0, +)) again_all=\(again.values.reduce(0, +))")
+            return again.values.reduce(0, +)
         }
         let first = try measure("first_page")
         model.loadMoreDoneLog(limit: 200)
