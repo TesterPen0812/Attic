@@ -1577,3 +1577,130 @@ final class CalendarDayMarksTests: XCTestCase {
                       isAllDay: false, location: nil, calendarTitle: "Home", colour: colours[0])
     }
 }
+
+// MARK: - Width steps (calendar-resize-cause.md causes 5, 6 and 3, 26 Nov)
+
+/// The page at a width the test changes, as a panel drag does: the window
+/// and its hosting view resize while the page's own inputs stay the same.
+/// Each test prints the drawn frames (`CALFRAME`) at three widths, so a run
+/// on the trunk and a run on the branch compare line by line.
+extension CalendarPageHostedTests {
+    private static let resizeWidths: [CGFloat] = [380, 460, 320]
+    private static let longTitle = "Quarterly planning review with the design and engineering leads, then a walk through the new office plans"
+
+    private func titled(_ id: String, _ title: String, year y: Int = 2026, month m: Int = 10, on d: Int, hour h: Int = 9) -> CalendarEvent {
+        CalendarEvent(id: id, title: title, start: date(y, m, d, h), end: date(y, m, d, h + 1),
+                      isAllDay: false, location: nil, calendarTitle: "Home",
+                      colour: CalendarEventColour(red: 0.2, green: 0.5, blue: 0.9))
+    }
+
+    /// Today's long title wraps to another line count at each width.
+    private var resizeEvents: [CalendarEvent] {
+        [titled("long", Self.longTitle, on: 29, hour: 15), titled("next", "Standup", on: 30, hour: 10)]
+    }
+
+    private func withResizablePage(events: [CalendarEvent], width: CGFloat = 320, height: CGFloat = 900,
+                                   firstLayout: (MountedPage) -> Void = { _ in },
+                                   _ body: (MountedPage) throws -> Void) throws {
+        let store = try makeTestStore()
+        let source = CalendarEventSourceStub(events: events)
+        let model = CalendarPageModel(store: store, source: source, calendar: calendar, now: { self.date(2026, 10, 29, 12) })
+        let size = CGSize(width: width, height: height)
+        var design = AtticDesignContext(mode: .light)
+        design.reduceMotion = false
+        design.reduceTransparency = AtticTransparencySeam.systemOverride ?? false
+        let page = CalendarPage(model: model, layout: PanelPageLayout(cornerSize: 28, panelSize: size),
+                                taskActions: CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }),
+                                onNewTask: { _ in })
+            .atticDesign(design)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: AnyView(page))
+        host.sizingOptions = []
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let mounted = MountedPage(model: model, source: source, host: host, window: window)
+        firstLayout(mounted)
+        mounted.settle(0.6)
+        try body(mounted)
+    }
+
+    private func resize(_ page: MountedPage, width: CGFloat, height: CGFloat? = nil) {
+        page.window.setContentSize(NSSize(width: width, height: height ?? page.window.frame.height))
+        page.settle(0.3)
+    }
+
+    /// The window frames of the drawn elements whose id starts with one of `prefixes`.
+    private func frames(_ page: MountedPage, _ prefixes: [String]) -> [String: CGRect] {
+        page.host.layoutSubtreeIfNeeded()
+        var found: [String: CGRect] = [:]
+        func walk(_ node: AnyObject) {
+            if let id = node.accessibilityIdentifier?(), found[id] == nil, prefixes.contains(where: { id.hasPrefix($0) }),
+               let element = node as? NSAccessibilityElementProtocol {
+                found[id] = page.window.convertFromScreen(element.accessibilityFrame())
+            }
+            for child in (node.accessibilityChildren?() ?? nil) ?? [] { walk(child as AnyObject) }
+        }
+        walk(page.host)
+        return found
+    }
+
+    private func logFrames(_ label: String, width: CGFloat, _ frames: [String: CGRect]) {
+        func half(_ value: CGFloat) -> String { String(describing: (value * 2).rounded() / 2) }
+        for (id, frame) in frames.sorted(by: { $0.key < $1.key }) {
+            print("CALFRAME \(label) w=\(Int(width)) \(id) \(half(frame.minX)) \(half(frame.minY)) \(half(frame.width)) \(half(frame.height))")
+        }
+    }
+
+    private func documentHeight(_ page: MountedPage) -> CGFloat {
+        page.scroller?.documentView?.frame.height ?? -1
+    }
+
+    /// Cause 5: a width step describes none of the scroll content again.
+    /// Only the scroller's height is read (the agenda fills at least the
+    /// visible height), so the grid and the agenda's days stay as they are
+    /// while the panel gets wider or narrower.
+    func testAWidthStepDoesNotDescribeTheScrollContentAgain() throws {
+        let todayKey = "calendar-day-\(day(2026, 10, 29).rawValue)"
+        try withResizablePage(events: resizeEvents) { page in
+            let bodies = CalendarPage.bodyEvaluations
+            CalendarPage.scrollerBuilds = 0
+            var keyWidths: [CGFloat] = []
+            for width in Self.resizeWidths {
+                resize(page, width: width)
+                let drawn = frames(page, ["calendar-day-", "calendar-tile-", "calendar-event-", "calendar-scroll"])
+                logFrames("cause5", width: width, drawn)
+                keyWidths.append(drawn[todayKey]?.width ?? -1)
+            }
+            print("CALCOUNT cause5 scrollerBuilds=\(CalendarPage.scrollerBuilds) pageBodies=\(CalendarPage.bodyEvaluations - bodies)")
+            XCTAssertEqual(Set(keyWidths).count, Self.resizeWidths.count, "the grid follows the width: \(keyWidths)")
+            XCTAssertEqual(CalendarPage.bodyEvaluations, bodies, "a width step does not run the page's body")
+            XCTAssertEqual(CalendarPage.scrollerBuilds, 0, "a width step describes the grid and the agenda again")
+        }
+    }
+
+    /// Cause 5 guard: a short agenda (seven empty days) fills the visible
+    /// height on the very first layout, before any run-loop turn, and
+    /// follows a height step.
+    func testTheAgendaFillsTheViewportOnTheFirstLayoutAndAfterAHeightStep() throws {
+        var first: CGFloat = -1
+        try withResizablePage(events: [], firstLayout: { page in
+            page.host.layoutSubtreeIfNeeded()
+            first = documentHeight(page)
+        }) { page in
+            let settled = documentHeight(page)
+            resize(page, width: 320, height: 700)
+            let shorter = documentHeight(page)
+            print("CALCOUNT cause5-first first=\(first) settled=\(settled) shorter=\(shorter)")
+            XCTAssertEqual(first, settled, accuracy: 0.5, "the first layout already fills the viewport")
+            XCTAssertEqual(settled - shorter, 200, accuracy: 0.5, "the agenda's least height follows a height step")
+        }
+    }
+}

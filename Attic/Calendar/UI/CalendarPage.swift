@@ -71,6 +71,12 @@ struct CalendarPage: View {
     static var bodyEvaluations = 0
     #endif
 
+    #if DEBUG && ATTIC_UNIT_TEST_HOST
+    /// Test seam: how many times the scroll content (grid and agenda) was
+    /// described. A width step must describe it again for nothing.
+    static var scrollerBuilds = 0
+    #endif
+
     var body: some View {
         #if DEBUG
         let _ = Self.bodyEvaluations += 1
@@ -159,6 +165,9 @@ struct CalendarPage: View {
     // MARK: Scrolling grid and agenda
 
     private func scroller(_ snapshot: CalendarPageSnapshot, viewport: CGFloat) -> some View {
+        #if DEBUG && ATTIC_UNIT_TEST_HOST
+        Self.scrollerBuilds += 1
+        #endif
         let (weeks, pinnedIndex) = gridWeeks(snapshot)
         let rowTop = pinnedIndex.map { CGFloat($0) * CalendarDesign.weekPitch }
         return ScrollView(.vertical) {
