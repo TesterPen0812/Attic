@@ -250,21 +250,26 @@ struct CalendarPage: View {
                 #if DEBUG && ATTIC_UNIT_TEST_HOST
                 let _ = Self.agendaElementBuilds += 1
                 #endif
-                if snapshot.isSearching && (index == 0 ? group.day.year != snapshot.today.year
-                    : snapshot.groups[index - 1].day.year != group.day.year) {
-                    Text(verbatim: String(group.day.year))
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: design.tokens).color)
-                        .padding(.horizontal, CalendarDesign.dayPadding)
-                        .padding(.top, 4)
-                        .padding(.bottom, 6)
-                        .accessibilityLabel(String(group.day.year))
-                        .accessibilityIdentifier("calendar-search-year-\(group.day.year)")
+                // One view per day, the year header inside it: the lazy stack
+                // counts its items without building every day
+                // (calendar-resize-cause.md, cause 6).
+                VStack(alignment: .leading, spacing: 0) {
+                    if snapshot.isSearching && (index == 0 ? group.day.year != snapshot.today.year
+                        : snapshot.groups[index - 1].day.year != group.day.year) {
+                        Text(verbatim: String(group.day.year))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(AtticSurfaceInk.toneInk(.meta, tokens: design.tokens).color)
+                            .padding(.horizontal, CalendarDesign.dayPadding)
+                            .padding(.top, 4)
+                            .padding(.bottom, 6)
+                            .accessibilityLabel(String(group.day.year))
+                            .accessibilityIdentifier("calendar-search-year-\(group.day.year)")
+                    }
+                    CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
+                                      rows: model.taskRows, eventRows: model.eventRows, focus: $taskFocus, focused: taskFocus,
+                                      onSelectDay: { day in afterClosingEvent { model.select(day) } })
+                        .equatable()
                 }
-                CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
-                                  rows: model.taskRows, eventRows: model.eventRows, focus: $taskFocus, focused: taskFocus,
-                                  onSelectDay: { day in afterClosingEvent { model.select(day) } })
-                    .equatable()
             }
             if snapshot.showsNoMatches {
                 Text("No matches")
