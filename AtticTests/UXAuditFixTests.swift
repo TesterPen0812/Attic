@@ -604,6 +604,70 @@ final class UXAuditFixTests: XCTestCase {
             "visible contour must follow the accepted shape", file: file, line: line)
     }
 
+    // MARK: Draw by point and hidden Draw controls (AUDIT-V-15, V-16, V-17)
+
+    private func findLabel(_ label: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
+        guard depth < 50 else { return nil }
+        if (element.accessibilityLabel?() ?? nil) == label { return element }
+        for child in (element.accessibilityChildren?() ?? nil) ?? [] {
+            if let found = findLabel(label, in: child as AnyObject, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+
+    /// What a lookup by point (VoiceOver following the pointer, hover text,
+    /// automation) finds at the centre of the element with `id`: the
+    /// identifiers of the hit and of its parents, nearest first.
+    private func pointLookup(at id: String, in host: NSView) throws -> (hit: AnyObject, chain: [String]) {
+        let target = try XCTUnwrap(find(id, in: host), "\(id) is in the tree")
+        let frame = try XCTUnwrap(target.accessibilityFrame?(), "\(id) has a frame")
+        let window = try XCTUnwrap(host.window)
+        let hit = try XCTUnwrap(window.accessibilityHitTest(NSPoint(x: frame.midX, y: frame.midY))) as AnyObject
+        var chain: [String] = []
+        var node: AnyObject? = hit
+        for _ in 0..<12 {
+            guard let current = node else { break }
+            chain.append((current.accessibilityIdentifier?() ?? nil) ?? "")
+            if let parent = current.accessibilityParent?() ?? nil { node = parent as AnyObject } else { node = nil }
+        }
+        return (hit, chain)
+    }
+
+    func testAuditV15PointingAtADrawControlFindsThatControlNotTheBoard() throws {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        try withHost(DrawPageHost(model: model, uiState: PanelUIState(),
+            layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 320, height: 460)))) { host in
+            for id in ["draw-swatch", "draw-undo"] {
+                let (hit, chain) = try pointLookup(at: id, in: host)
+                XCTAssertFalse(hit is DrawBoardView, "\(id): the point lookup answers the board")
+                XCTAssertTrue(chain.contains(id), "\(id): the point lookup finds \(chain), not the control")
+            }
+        }
+    }
+
+    func testAuditV16PointingAtTheDrawTitleFindsTheTitleNotTheShutFilter() throws {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        try withHost(DrawPageHost(model: model, uiState: PanelUIState(),
+            layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 320, height: 460)))) { host in
+            let (hit, chain) = try pointLookup(at: "draw-title", in: host)
+            XCTAssertFalse(hit is NSTextField || hit is NSText, "the shut filter field answers for the title")
+            XCTAssertFalse(chain.contains("draw-title-filter"), "the shut filter field answers for the title")
+            XCTAssertTrue(chain.contains("draw-title"), "the point lookup finds \(chain), not the title")
+        }
+    }
+
+    func testAuditV17HiddenDrawControlsAreNotAnnounced() throws {
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        try withHost(DrawPageHost(model: model, uiState: PanelUIState(),
+            layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 320, height: 460)))) { host in
+            XCTAssertFalse(model.isFiltering)
+            XCTAssertFalse(model.viewportState.pillShown)
+            XCTAssertNil(findLabel(String(localized: "Close canvas menu"), in: host), "the shut filter's ✕ is announced")
+            XCTAssertNil(find("draw-zoom-pill", in: host), "the hidden zoom pill is announced")
+            XCTAssertNotNil(find("draw-title", in: host), "the tree is read at all")
+        }
+    }
+
     private func find(_ id: String, in element: AnyObject, depth: Int = 0) -> AnyObject? {
         guard depth < 50 else { return nil }
         if (element.accessibilityIdentifier?() ?? nil) == id { return element }

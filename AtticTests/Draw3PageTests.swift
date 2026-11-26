@@ -682,6 +682,57 @@ final class Draw3PageTests: XCTestCase {
         return pasteboard
     }
 
+    // MARK: What was pasted is selected (AUDIT-V-14)
+
+    /// ⌘V of a picture selects it, as pasting Draw objects does: Delete
+    /// right after removes the picture, not what was selected before.
+    func testV14APastedPictureIsSelectedAndTheEarlierSelectionLetGo() async throws {
+        let stroke = DrawObject(content: .stroke([DrawPoint(x: 10, y: 10), DrawPoint(x: 40, y: 30)]))
+        put(stroke)
+        model.setTool(.select)
+        model.select([stroke.id])
+        model.pasteboard.clearContents()
+        model.pasteboard.setData(Draw3Images.encoded(width: 40, height: 30), forType: .png)
+        model.paste()
+        await model.pendingImport?.value
+        let picture = try XCTUnwrap(model.objects.first(where: \.isImage))
+        XCTAssertEqual(model.selection, [picture.id], "the pasted picture is selected")
+        XCTAssertEqual(model.tool, .select)
+        model.deleteSelection()
+        XCTAssertEqual(model.objects.map(\.id), [stroke.id], "Delete removes the picture, not the stroke")
+    }
+
+    /// A drop of several pictures selects all of them, from any tool.
+    func testV14DroppedPicturesAreSelectedFromAnyTool() async throws {
+        let (one, _) = try imageFile("one.png")
+        let (two, _) = try imageFile("two.png")
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-draw3-two-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.writeObjects([one as NSURL, two as NSURL])
+        model.setTool(.pen)
+        await model.importImages(from: pasteboard, at: CGPoint(x: 160, y: 220))?.value
+        let pictures = model.objects.filter(\.isImage).map(\.id)
+        XCTAssertEqual(pictures.count, 2)
+        XCTAssertEqual(Set(model.selection), Set(pictures), "both dropped pictures are selected")
+        XCTAssertEqual(model.tool, .select)
+    }
+
+    /// A picture that lands after a switch, or while a text box is open,
+    /// changes no selection and ends no typing.
+    func testV14ALatePictureNeverTakesTheSelectionFromWhatIsOpenNow() async throws {
+        let (file, _) = try imageFile("late-select.png")
+        let task = try XCTUnwrap(model.importImages(from: filePasteboard(file), at: nil))
+        model.setTool(.text)
+        model.beginText(at: CGPoint(x: 80, y: 120))
+        model.typed("Typing")
+        await task.value
+        XCTAssertNotNil(model.editing, "the text box stays open")
+        XCTAssertEqual(model.editing?.text, "Typing")
+        XCTAssertEqual(model.tool, .text)
+        XCTAssertTrue(model.selection.isEmpty)
+    }
+
     func testAnImportThatFinishesAfterASwitchLandsOnTheCanvasItWasDroppedOn() async throws {
         let (file, data) = try imageFile("late.png")
         let origin = try XCTUnwrap(model.canvasID)
@@ -1194,6 +1245,118 @@ final class Draw3PageTests: XCTestCase {
             let png = try XCTUnwrap(item.data(forType: .png).flatMap(Draw3Images.cgImage), "\(type): a PNG too")
             XCTAssertEqual([png.width, png.height], [30, 20], "\(type): the image at its own pixels")
         }
+    }
+
+    // MARK: ⌘C and ⌘X for other apps (AUDIT-V-02)
+
+    private var drawType: NSPasteboard.PasteboardType { NSPasteboard.PasteboardType(DrawStore.clipboardType) }
+
+    /// ⌘C puts Draw's own objects and a picture of them on one item: other
+    /// apps paste the picture, Draw still pastes objects.
+    func testV02CommandCGivesOtherAppsAPictureAndDrawItsObjects() async throws {
+        let rectangle = DrawObject(frame: DrawFrame(x: 10, y: 10, width: 40, height: 30), content: .shape(.rectangle))
+        put(rectangle)
+        model.setTool(.select)
+        model.select([rectangle.id])
+        XCTAssertTrue(model.handleKey(DrawKey(characters: "c", command: true)))
+        let objects = try XCTUnwrap(model.pasteboard.data(forType: drawType), "Draw's objects are there at once")
+        await model.images.lastTask?.value
+        let items = model.pasteboard.pasteboardItems ?? []
+        XCTAssertEqual(items.count, 1, "one item, so a paste gives one thing")
+        XCTAssertEqual(items.first?.data(forType: drawType), objects, "Draw's own objects are kept as they were")
+        let png = try XCTUnwrap(items.first?.data(forType: .png).flatMap(Draw3Images.cgImage), "a picture for other apps")
+        let expected = DrawGeometry.bounds(rectangle).insetBy(dx: -DrawExport.margin, dy: -DrawExport.margin)
+        XCTAssertEqual(png.width, Int((expected.width * 2).rounded(.up)), "the same picture Copy as Image makes")
+        XCTAssertFalse(model.pasteboardHasImage, "Draw reads its own objects first")
+        model.paste()
+        XCTAssertEqual(model.objects.count, 2)
+        XCTAssertFalse(model.objects.contains(where: \.isImage), "Draw pastes objects, not the picture")
+    }
+
+    func testV02CommandXGivesOtherAppsAPictureOfWhatWasCut() async throws {
+        let ellipse = DrawObject(frame: DrawFrame(x: 20, y: 20, width: 30, height: 30), content: .shape(.ellipse))
+        put(ellipse)
+        model.setTool(.select)
+        model.select([ellipse.id])
+        XCTAssertTrue(model.handleKey(DrawKey(characters: "x", command: true)))
+        XCTAssertTrue(model.objects.isEmpty)
+        await model.images.lastTask?.value
+        XCTAssertNotNil(model.pasteboard.data(forType: drawType))
+        XCTAssertNotNil(model.pasteboard.data(forType: .png).flatMap(Draw3Images.cgImage), "a picture of what was cut")
+        model.paste()
+        XCTAssertEqual(model.objects.map(\.content), [ellipse.content], "Draw pastes the cut object back")
+    }
+
+    /// One image selected: other apps get the image itself, as Copy as Image gives it.
+    func testV02CommandCOnOneImageGivesItsOriginalBytes() async throws {
+        let jpeg = Draw3Images.encoded(width: 30, height: 20, type: .jpeg)
+        put(imageObject(jpeg, width: 30, height: 20, type: UTType.jpeg.identifier))
+        model.setTool(.select)
+        model.select([try XCTUnwrap(model.objects.last).id])
+        model.copySelection()
+        await model.images.lastTask?.value
+        let item = try XCTUnwrap(model.pasteboard.pasteboardItems?.first)
+        XCTAssertEqual(model.pasteboard.pasteboardItems?.count, 1)
+        XCTAssertNotNil(item.data(forType: drawType))
+        XCTAssertEqual(item.data(forType: NSPasteboard.PasteboardType(UTType.jpeg.identifier)), jpeg, "the original, byte for byte")
+        let png = try XCTUnwrap(item.data(forType: .png).flatMap(Draw3Images.cgImage), "a PNG too")
+        XCTAssertEqual([png.width, png.height], [30, 20])
+    }
+
+    /// No picture (too big to draw): Draw's objects stay, alone.
+    func testV02APictureThatCannotBeMadeLeavesDrawsObjects() async throws {
+        model.images.copyRenderer = { _, _ in nil }
+        let rectangle = DrawObject(frame: DrawFrame(x: 10, y: 10, width: 40, height: 30), content: .shape(.rectangle))
+        put(rectangle)
+        model.setTool(.select)
+        model.select([rectangle.id])
+        model.copySelection()
+        let objects = try XCTUnwrap(model.pasteboard.data(forType: drawType))
+        await model.images.lastTask?.value
+        XCTAssertEqual(model.pasteboard.data(forType: drawType), objects)
+        XCTAssertNil(model.pasteboard.data(forType: .png))
+    }
+
+    /// A later copy (or another app's) wins over a picture still drawing.
+    func testV02ALatePictureNeverOverwritesANewerCopy() async throws {
+        let gate = Draw3Gate()
+        let first = DrawObject(frame: DrawFrame(x: 0, y: 0, width: 20, height: 20), content: .shape(.rectangle))
+        let second = DrawObject(frame: DrawFrame(x: 100, y: 0, width: 60, height: 20), content: .shape(.ellipse))
+        put(first)
+        put(second)
+        model.images.copyRenderer = { objects, dark in
+            if objects.map(\.id) == [first.id] { await gate.wait() }
+            return DrawExport.render(objects, format: .png, dark: dark)
+        }
+        model.setTool(.select)
+        model.select([first.id])
+        model.copySelection()
+        let older = model.images.lastTask
+        await Task.yield()
+        model.select([second.id])
+        model.copySelection()
+        let newest = try XCTUnwrap(model.pasteboard.data(forType: drawType))
+        await model.images.lastTask?.value
+        let picture = try XCTUnwrap(model.pasteboard.data(forType: .png), "the newer copy has its picture")
+        gate.open()
+        await older?.value
+        XCTAssertEqual(model.pasteboard.data(forType: drawType), newest)
+        XCTAssertEqual(model.pasteboard.data(forType: .png), picture)
+
+        // Another app writes after a copy: the late picture leaves it alone.
+        let gateTwo = Draw3Gate()
+        model.images.copyRenderer = { objects, dark in
+            await gateTwo.wait()
+            return DrawExport.render(objects, format: .png, dark: dark)
+        }
+        model.copySelection()
+        let pending = model.images.lastTask
+        model.pasteboard.clearContents()
+        model.pasteboard.setString("From another app", forType: .string)
+        gateTwo.open()
+        await pending?.value
+        XCTAssertEqual(model.pasteboard.string(forType: .string), "From another app")
+        XCTAssertNil(model.pasteboard.data(forType: drawType))
     }
 
     func testAFailedExportOrSaveImageKeepsTheOldFileAndSaysSo() async throws {
