@@ -1864,7 +1864,7 @@ struct AtticTaskRow: View {
                     Spacer(minLength: m.trailingMinGap)
                     trailing(disabled: disabled, onSelectedRow: onSelectedRow)
                     if let onActions, capture == nil, !disabled, titleEditing == nil,
-                       AtticTaskRow.showsActionsButton(forced: forced, keyboardFocused: showsFocusRing) {
+                       forced == .focused /* PROBE: no ••• for the keyboard row */ {
                         // Only for the row the keyboard is on (round 10).
                         AtticRowActionsButton(action: onActions)
                             .padding(.leading, AtticRowActionsMetrics.gap)
