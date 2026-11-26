@@ -119,7 +119,10 @@ struct TaskNoteRouteHost<Origin: View>: View {
             // One piece moves the bars itself, on its own spring.
             if !onePiece.isActive { sharedChrome?.setCovered(covered, page: page) }
         }
-        .onChange(of: shown == nil) { _, gone in if gone, onePiece.landedBack { endOnePiece() } }
+        .onChange(of: shown == nil) { _, gone in
+            onePiece.trace("shown gone=\(gone)")
+            if gone, onePiece.landedBack { endOnePiece() }
+        }
         .onDisappear {
             endOnePiece()
             sharedChrome?.setCovered(false, page: page)
@@ -285,6 +288,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
     /// The stand-in came in (the click, or Back from the built page): the
     /// spring runs from where everything is now.
     private func onePieceStandInAppeared() {
+        onePiece.trace("standInAppeared")
         guard onePiece.isActive else { return }
         if onePiece.open, onePiece.progress < 1 { turnOnePiece(open: true) }
         if !onePiece.open, onePiece.progress > 0 { turnOnePiece(open: false) }
@@ -293,6 +297,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
     /// Runs the motion towards the page (true) or back into the row, from
     /// wherever it is (the spring keeps its speed as it turns).
     private func turnOnePiece(open: Bool) {
+        onePiece.trace("turn \(open)")
         guard onePiece.isActive else { return }
         onePiece.open = open
         onePiece.landedBack = false
@@ -315,6 +320,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
     }
 
     private func landedOnePiece(_ generation: Int) {
+        onePiece.trace("landed gen \(generation) presented=\(presentedTaskID != nil) displayed=\(displayedTaskID != nil)")
         guard onePiece.isActive, onePiece.generation == generation else { return }
         if onePiece.open {
             onePiece.landed(true)
@@ -345,12 +351,14 @@ struct TaskNoteRouteHost<Origin: View>: View {
         var still = Transaction()
         still.disablesAnimations = true
         withTransaction(still) { onePiece.handedOver = true }
+        onePiece.trace("handedOver waits=\(waits)")
         onePieceProbe.stopWatchingEscape()
     }
 
     /// Back: the stand-in takes the page's place again (the same places) and
     /// runs into the row as it is now, or fades when the row is gone.
     private func reverseOnePiece(_ taskID: UUID) {
+        onePiece.trace("reverse")
         guard onePiece.taskID == taskID, onePiece.open else { return }
         onePieceProbe.stopWatchingEscape()
         let origin = uiState.taskNoteGrowOrigin(for: taskID, on: page)
@@ -375,6 +383,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
     }
 
     private func endOnePiece() {
+        onePiece.trace("end")
         onePieceProbe.stopWatchingEscape()
         guard onePiece.isActive else { return }
         var still = Transaction()

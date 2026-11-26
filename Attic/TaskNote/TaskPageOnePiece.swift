@@ -703,7 +703,18 @@ final class TaskPageMotion {
     /// production builds, which leave this out).
     static weak var currentForTesting: TaskPageMotion?
     static var beginsForTesting = 0
+    /// What the route did, in order, for a failing test to print.
+    static var traceForTesting: [String] = []
     #endif
+
+    /// DEBUG only: one line of the opening's history (tests print it).
+    func trace(_ event: @autoclosure () -> String) {
+        #if DEBUG
+        Self.traceForTesting.append(String(format: "%.3f ", CACurrentMediaTime()) + event()
+            + " open=\(open) p=\(progress) handed=\(handedOver) back=\(landedBack) gen=\(generation)")
+        if Self.traceForTesting.count > 200 { Self.traceForTesting.removeFirst(50) }
+        #endif
+    }
 
     func begin(_ id: UUID, content: TaskPageStandInContent, pose: TaskPagePose) {
         #if DEBUG
