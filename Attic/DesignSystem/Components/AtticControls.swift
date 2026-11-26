@@ -154,7 +154,8 @@ struct AtticRaisedButton: View {
             AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected || emphasisedGlyph,
                                    isOn: isSelected,
                                    onSystemName: selectedSystemName,
-                                   onHoverSystemName: selectedHoverSystemName)
+                                   onHoverSystemName: selectedHoverSystemName,
+                                   isTurned: glyphRotation != 0)
                 .rotationEffect(.degrees(glyphRotation))
                 // The pin's lean turns with its cross-fade (13 Nov); Reduced
                 // keeps the fade and drops the turn.
@@ -247,6 +248,9 @@ private struct AtticRaisedButtonLabel: View {
     /// A toggle's "on" glyph, and the one under the pointer while on.
     var onSystemName: String?
     var onHoverSystemName: String?
+    /// Whether the button turns its glyph (the unpinned pin's lean), so
+    /// the glyph's probe frame is the turned frame's bounding box.
+    var isTurned = false
     @Environment(\.atticControlState) private var state
     @Environment(\.atticDesign) private var design
 
@@ -269,9 +273,14 @@ private struct AtticRaisedButtonLabel: View {
                 // corners reach the rim (the edge light, Increase
                 // Contrast's border), so the check reads the face beside
                 // the glyph instead (17 Nov: #A7A7A7 read where the face is
-                // #ECECEC). Label buttons keep the corner samples.
-                let background: [CGPoint]? = title == nil
-                    ? [CGPoint(x: -0.2, y: 0.5), CGPoint(x: 1.2, y: 0.5)] : nil
+                // #ECECEC). A turned glyph reports its turned frame's
+                // bounding box, wider than the glyph: its side midpoints
+                // already lie beside the glyph, on the face (just outside
+                // them is past the face). Label buttons keep the corner
+                // samples.
+                let background: [CGPoint]? = title != nil ? nil
+                    : isTurned ? [CGPoint(x: 0, y: 0.5), CGPoint(x: 1, y: 0.5)]
+                    : [CGPoint(x: -0.2, y: 0.5), CGPoint(x: 1.2, y: 0.5)]
                 if onSystemName == nil {
                     AtticIcon(systemName: systemName, size: size, weight: weight, ink: glyph, probeBackground: background)
                 } else {
