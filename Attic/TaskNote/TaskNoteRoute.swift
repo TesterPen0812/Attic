@@ -315,6 +315,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
         let target: CGFloat = open ? 1 : 0
         #if DEBUG
         TaskPageMotion.lineDrawsForTesting = []
+        TaskPageMotion.drawLogForTesting = []
         #endif
         // It lands when every spring this started is over. What holds one is
         // the stand-in, Tasks' top row and the list the page opened from

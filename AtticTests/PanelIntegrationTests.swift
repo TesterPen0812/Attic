@@ -1039,6 +1039,117 @@ final class PanelIntegrationTests: XCTestCase {
         }
     }
 
+    /// The motion's draws since its last turn, for a failing test: the
+    /// stand-in ("S"), the list's lines ("L") and the tab hosts' drawn
+    /// changes ("H"), in time order, in ms from the turn's first draw.
+    private func onePieceDrawLog() -> String {
+        let draws = TaskPageMotion.drawLogForTesting
+        guard let start = draws.first?.time else { return "(nothing drawn)" }
+        let hosts = KeptContentHostCounts.drawnLog.filter { $0.time >= start - 0.05 }
+            .map { (time: $0.time, text: "H \($0.host.hashValue % 10_000) drawn=\($0.drawn)") }
+        let lines = draws.map { (time: $0.time, text: "\($0.kind) \(String(format: "%.3f", $0.p))") } + hosts
+        return lines.sorted { $0.time < $1.time }.prefix(160)
+            .map { String(format: "%7.1f ", ($0.time - start) * 1000) + $0.text }.joined(separator: "\n")
+    }
+
+    /// Back: the list runs back with the page from Back's first frame. The
+    /// pager drew the shown list again only when the route had closed, so
+    /// its lines started about 266-285 ms after the stand-in (CI runs
+    /// 45861853003, 45894022179).
+    func testOnePieceBackListRidesWithTheStandInFromBacksFirstFrame() throws {
+        try withMotion(reduced: false) {
+            let rig = try onePiecePanel([TaskDraft(title: "Above"), TaskDraft(title: "Open me"), TaskDraft(title: "Below")])
+            let target = rig.tasks[1].id
+            spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
+            rig.panel.uiState.openTaskNote(target, from: .tasks)
+            spin(until: { TaskPageMotion.currentForTesting?.taskID == target })
+            let motion = try XCTUnwrap(TaskPageMotion.currentForTesting, "the page opens in one piece")
+            spin(until: { motion.handedOver && rig.element("task-note-back") != nil })
+            XCTAssertTrue(motion.handedOver)
+            KeptContentHostCounts.drawnLog = []
+            let back = try XCTUnwrap(rig.element("task-note-back"))
+            XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
+            spin(until: { rig.panel.uiState.openTaskNoteID == nil && !motion.isActive })
+            XCTAssertFalse(motion.isActive, "Back lands")
+            let log = TaskPageMotion.drawLogForTesting
+            print("ONEPIECE BACK DRAWS\n" + onePieceDrawLog())
+            let standInHalfway = log.firstIndex { $0.kind == "S" && $0.p <= 0.5 }
+            let lineBetween = log.firstIndex { $0.kind == "L" && $0.p > 0 && $0.p < 1 }
+            XCTAssertNotNil(standInHalfway, "the stand-in runs back")
+            XCTAssertNotNil(lineBetween, "the list's lines ride Back on the spring")
+            if let standInHalfway, let lineBetween {
+                XCTAssertLessThan(lineBetween, standInHalfway,
+                                  "the list's lines move while the stand-in is still above halfway back")
+            }
+            XCTAssertEqual(log.last { $0.kind == "L" }?.p, 0, "the lines end at rest")
+        }
+    }
+
+    /// An opening in the turn of a tab switch: the arriving tab's list
+    /// follows the motion on the spring, not told of its tab after the
+    /// spring's change and jumping.
+    func testOnePieceOpenedInTheTurnOfATabSwitchMovesTheList() throws {
+        try withMotion(reduced: false) {
+            let rig = try onePiecePanel([TaskDraft(title: "Now one"), TaskDraft(title: "Later above", status: .backlog),
+                                         TaskDraft(title: "Later open", status: .backlog),
+                                         TaskDraft(title: "Later below", status: .backlog)])
+            let target = rig.tasks[2].id
+            spin(until: { !rig.model.agentRowFrames([rig.tasks[0].id]).isEmpty })
+            // The panel builds the tabs not shown while it is idle.
+            spin(until: { self.tabHosts(rig.panel).contains { !$0.isDrawn } }, timeout: 5)
+            rig.model.select(tab: .backlog)
+            rig.panel.uiState.openTaskNote(target, from: .tasks)
+            spin(until: { TaskPageMotion.currentForTesting?.taskID == target })
+            let motion = try XCTUnwrap(TaskPageMotion.currentForTesting, "the page opens in one piece")
+            spin(until: { motion.handedOver && rig.element("task-note-back") != nil })
+            print("ONEPIECE TAB SWITCH DRAWS\n" + onePieceDrawLog() + "\n"
+                  + TaskPageMotion.traceForTesting.suffix(40).joined(separator: "\n"))
+            XCTAssertTrue(motion.handedOver, "the built page takes over")
+            XCTAssertEqual(motion.listTab, .backlog, "the motion knows the tab shown")
+            let draws = TaskPageMotion.lineDrawsForTesting
+            XCTAssertTrue(draws.contains { $0 > 0 && $0 < 1 }, "Later's list makes way on the spring, drew \(draws.prefix(8))")
+            let back = try XCTUnwrap(rig.element("task-note-back"))
+            XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
+            spin(until: { rig.panel.uiState.openTaskNoteID == nil && !motion.isActive })
+            XCTAssertFalse(motion.isActive, "Back lands")
+        }
+    }
+
+    /// Another task opened while one is still on its way: the list makes
+    /// way for the second on the spring, not told of the first's end after
+    /// the spring's change and jumping. (What this cannot see: the end of
+    /// the first writes the list's value back to rest without animation,
+    /// so a list that snaps back before running still draws values in
+    /// between; the log prints the first values for that.)
+    func testOnePieceOpeningAnotherTaskMidMotionMovesTheList() throws {
+        try withMotion(reduced: false) {
+            let rig = try onePiecePanel([TaskDraft(title: "First"), TaskDraft(title: "Middle"),
+                                         TaskDraft(title: "Second"), TaskDraft(title: "Last")])
+            let first = rig.tasks[0].id, second = rig.tasks[2].id
+            spin(until: { !rig.model.agentRowFrames([first, second]).isEmpty })
+            rig.panel.uiState.openTaskNote(first, from: .tasks)
+            spin(until: { TaskPageMotion.currentForTesting?.taskID == first })
+            let motion = try XCTUnwrap(TaskPageMotion.currentForTesting, "the first opens in one piece")
+            // Under way: the stand-in has drawn a value in between.
+            spin(until: { TaskPageMotion.drawLogForTesting.contains { $0.kind == "S" && $0.p > 0.05 && $0.p < 0.7 } })
+            XCTAssertFalse(motion.handedOver, "the first is still on its way")
+            let generation = motion.generation
+            rig.panel.uiState.openTaskNote(second, from: .tasks)
+            spin(until: { motion.taskID == second && motion.generation != generation })
+            spin(until: { motion.handedOver && rig.element("task-note-back") != nil })
+            print("ONEPIECE SECOND TASK DRAWS\n" + onePieceDrawLog() + "\n"
+                  + TaskPageMotion.traceForTesting.suffix(40).joined(separator: "\n"))
+            XCTAssertEqual(motion.taskID, second, "the second task's page opens")
+            XCTAssertTrue(motion.handedOver, "the built page takes over")
+            let draws = TaskPageMotion.lineDrawsForTesting
+            XCTAssertTrue(draws.contains { $0 > 0 && $0 < 1 }, "the list makes way on the spring, drew \(draws.prefix(8))")
+            let back = try XCTUnwrap(rig.element("task-note-back"))
+            XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
+            spin(until: { rig.panel.uiState.openTaskNoteID == nil && !motion.isActive })
+            XCTAssertFalse(motion.isActive, "Back lands")
+        }
+    }
+
     func testOnePieceOpensFromNowLaterDoneAndASearch() throws {
         let cases: [(String, TaskStatus, TasksTab, String?)] = [
             ("Now", .todo, .now, nil), ("Later", .backlog, .backlog, nil),

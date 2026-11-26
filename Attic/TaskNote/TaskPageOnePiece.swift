@@ -711,6 +711,9 @@ private struct TaskPageStandInPart: ViewModifier, Animatable {
     func body(content: Content) -> some View {
         let p = progress
         let O = TaskPageOnePiece.self
+        #if DEBUG
+        if part == .head { TaskPageMotion.drew("S", p) }
+        #endif
         switch part {
         case .head:
             // From the row's line at the row's size to the head's: the first
@@ -845,6 +848,14 @@ final class TaskPageMotion {
     static var lineDrawsForTesting: [CGFloat] = []
     static func lineDrew(_ p: CGFloat) {
         if lineDrawsForTesting.last != p, lineDrawsForTesting.count < 512 { lineDrawsForTesting.append(p) }
+        drew("L", p)
+    }
+    /// What the stand-in ("S", its head) and the list's lines ("L") drew,
+    /// in order, with the time: Back's list is judged against the stand-in.
+    static var drawLogForTesting: [(time: CFTimeInterval, kind: Character, p: CGFloat)] = []
+    static func drew(_ kind: Character, _ p: CGFloat) {
+        if let last = drawLogForTesting.last(where: { $0.kind == kind }), last.p == p { return }
+        if drawLogForTesting.count < 1024 { drawLogForTesting.append((CACurrentMediaTime(), kind, p)) }
     }
     #endif
 

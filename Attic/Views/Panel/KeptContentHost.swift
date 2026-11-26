@@ -48,6 +48,11 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// together.
     var isDrawn = true {
         didSet {
+            #if DEBUG
+            if isDrawn != oldValue, KeptContentHostCounts.drawnLog.count < 512 {
+                KeptContentHostCounts.drawnLog.append((CACurrentMediaTime(), ObjectIdentifier(self), isDrawn))
+            }
+            #endif
             guard isDrawn != oldValue, isDrawn else { return }
             holdsLayout = false
             if owesLayout {
@@ -645,6 +650,9 @@ enum KeptContentHostCounts {
     }
 
     static var layouts = Split()
+    /// Each host's drawn changes, with the time (tests order them against
+    /// a motion's draws).
+    static var drawnLog: [(time: CFTimeInterval, host: ObjectIdentifier, drawn: Bool)] = []
     /// Root sets that laid the host out in their own pass.
     static var laidOutInSet = 0
     static var roots = Split()
