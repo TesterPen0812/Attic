@@ -877,7 +877,11 @@ jobs:
     if: ${{ inputs.lane != 'fast' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Optimized costs and opt-in soak retention gates
     runs-on: macos-26
-    timeout-minutes: 90
+    # The four serial -O builds took 59-84 min (runs 44868042052,
+    # 45755225479, 45762257021; the candidate alone 56.5 min in 45826396992)
+    # and the gates after them 22-36 min, so 90 cancelled most full runs
+    # before any verdict. Worst seen 84 + 36 = 120 min; 45826396992 took 114.5.
+    timeout-minutes: 150
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       # Candidate commands inherit enforcement; only reference commands opt out.
@@ -945,12 +949,14 @@ jobs:
               # table-only functional test belongs to the candidate suite.
               fixture_flags=('OTHER_SWIFT_FLAGS=$(inherited) -DATTIC_COST_REFERENCE_HOST')
             fi
+            build_started=$SECONDS
             # shellcheck disable=SC2086
             (cd "$source" && "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" build-for-testing \
               -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
               -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" $COST_FLAGS "${fixture_flags[@]}") \
               > "$RUNNER_TEMP/AtticCosts/$name-build.log" 2>&1 \
               || { tail -n 80 "$RUNNER_TEMP/AtticCosts/$name-build.log"; exit 1; }
+            echo "COST_BUILD_TIMING name=$name seconds=$((SECONDS - build_started))"
           done
 
       # Keep XCTest's compressed-hour allocation workload out of the default
