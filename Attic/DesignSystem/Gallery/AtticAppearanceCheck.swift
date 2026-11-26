@@ -362,6 +362,18 @@ enum AtticAppearanceCheck {
             } else {
                 bitmap.background(around: probe.frame, outside: isIcon, foreground: foreground, scale: scale)
             }
+            // SCRATCH DIAGNOSTIC (not on the deliverable branch).
+            if isIcon, label(probe).contains("pin"), combination.contains("Solid") {
+                let f = probe.frame
+                let corners = [(f.minX - 1.5, f.minY - 1.5), (f.maxX + 1.5, f.minY - 1.5), (f.minX - 1.5, f.maxY + 1.5), (f.maxX + 1.5, f.maxY + 1.5)]
+                    .map { bitmap.colour(atX: $0.0, y: $0.1, scale: scale)?.hexString ?? "nil" }
+                let old = bitmap.background(around: f, outside: true, foreground: foreground, scale: scale)?.hexString ?? "nil"
+                let glyphNew = sampled.flatMap { bitmap.glyphContrast(in: f, background: $0, scale: scale) }
+                print(String(format: "PINDIAG %@ › %@ · %@ frame %.1fx%.1f corners %@ old %@ new %@ fg %@ declared-new %.2f glyph-new %.2f %@",
+                             family, specimen, combination, f.width, f.height, corners.joined(separator: ","), old,
+                             sampled?.hexString ?? "nil", foreground.hexString,
+                             sampled.map { foreground.contrast(on: $0) } ?? 0, glyphNew?.ratio ?? 0, glyphNew?.ink.hexString ?? "nil"))
+            }
             guard let background = sampled else {
                 report.fail(.init(kind: .unmeasured, family: family, specimen: specimen,
                                   detail: "\(label(probe)) \(ink.rawValue): no background pixels to measure against"), in: combination)
