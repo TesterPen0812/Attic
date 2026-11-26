@@ -18,8 +18,24 @@ import SwiftData
     static var islandSurface: (() -> Void)?
     /// The panel size the island's glass drew with, on each of its runs.
     static var islandGlassSize: ((CGSize) -> Void)?
+    /// A view state written from a layout step (resize second pass): the
+    /// writer's name. A resize step should write none that draws nothing.
+    /// Tests only: compiled out of Release.
+    #if DEBUG
+    static var stepWrite: ((String) -> Void)?
+    #endif
 }
 #endif
+
+/// A value a view measures on every layout step but draws nothing from
+/// directly (resize second pass, 25 Nov): kept out of view state, so a
+/// step that changes it starts no transaction and re-runs no body. The
+/// view keeps in state only what it draws (a Bool that flips at a
+/// threshold), or copies the value in when it starts to draw from it.
+final class AtticUnobserved<Value> {
+    var value: Value
+    init(_ value: Value) { self.value = value }
+}
 
 #if DEBUG
 /// Test seam (NotesUndoMirrorCountGuardTests): the view that pads the

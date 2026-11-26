@@ -690,6 +690,11 @@ struct PanelIslandView: View {
     #if DEBUG
     /// Allows a hosted test to observe the real native Tab focus binding.
     @MainActor static var focusProbe: ((FocusState<PanelIslandItem?>.Binding) -> Void)?
+    /// Tests: told where the capsule is laid out in its window's content,
+    /// with its model (the island's, never the stand-in's). Read when an
+    /// island is built: with no hook set then, nothing is observed.
+    @MainActor static var capsuleProbe: ((ObjectIdentifier, CGRect) -> Void)?
+    let capsuleReport: ((ObjectIdentifier, CGRect) -> Void)? = PanelIslandView.capsuleProbe
     #endif
     @ObservedObject var model: PanelIslandModel
     @ObservedObject var focusTracker: AtticKeyboardFocusTracker
@@ -741,6 +746,9 @@ struct PanelIslandView: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+        #if DEBUG
+        .modifier(PanelIslandCapsuleProbe(model: model, report: isStandIn ? nil : capsuleReport))
+        #endif
         .overlay {
             // A floating panel dragged near: a solid blue ring (the
             // design's 4 px at 55 %, outside the capsule).
@@ -1021,29 +1029,57 @@ private struct PanelIslandSurface: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.panelIslandSizeSource) private var source
-    /// The panel's size, for the glass (`nativeGlassSize`). The island is
-    /// another window and cannot take it from its own layout, so this view,
-    /// its one reader, is sent each accepted size: a step of a resize
-    /// re-runs this body and nothing above it. Until the first one arrives
-    /// it reads the size the panel has, so it is never stale when shown.
+    /// The stand-in's (nil for the island itself): while it draws nothing,
+    /// it is sent no size, and it reads the panel's size as it shows.
+    @Environment(\.panelIslandStandIn) private var standIn
+    /// The island's (its windows'): the panel's size, set by AppKit
+    /// (`PanelIslandWindows`). A step of a resize lays the glass out again
+    /// and runs no body here.
+    @Environment(\.panelIslandGlassSize) private var glassSize
+    /// The stand-in's panel size, for the glass (`nativeGlassSize`). The
+    /// stand-in is sent each accepted size while it shows: a step re-runs
+    /// this body and nothing above it. Until the first one arrives it reads
+    /// the size the panel has, so it is never stale when shown.
     @State private var sentSize: CGSize?
 
     var body: some View {
-        let panelSize = sentSize ?? source?.panelSize ?? AtticLayout.panelSize
+        if standIn == nil, let glassSize {
+            #if ATTIC_LOCAL_ONLY
+            let _ = PanelInvalidationProbe.islandSurface?()
+            #endif
+            surface(panelSize: nil, sizeSource: glassSize)
+        } else {
+            following
+        }
+    }
+
+    /// The stand-in (and an island with no AppKit size): sent each size.
+    @ViewBuilder private var following: some View {
+        let follows = standIn?.isShown ?? true
+        let panelSize = (follows ? sentSize : nil) ?? source?.panelSize ?? AtticLayout.panelSize
         #if ATTIC_LOCAL_ONLY
         let _ = PanelInvalidationProbe.islandSurface?()
         let _ = PanelInvalidationProbe.islandGlassSize?(panelSize)
         #endif
-        surface(panelSize: panelSize)
+        surface(panelSize: panelSize, sizeSource: nil)
             .onReceive(source?.panelSizeChanges.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) {
-                if sentSize != $0 { sentSize = $0 }
+                // A hidden stand-in draws nothing: no size, no transaction.
+                guard standIn?.isShown ?? true, sentSize != $0 else { return }
+                #if DEBUG && ATTIC_LOCAL_ONLY
+                PanelInvalidationProbe.stepWrite?(standIn == nil ? "island-size" : "stand-in-size")
+                #endif
+                sentSize = $0
             }
+            // Hidden: what it was last sent goes, so it shows with the
+            // panel's size as it is then (read in the body above).
+            .onChange(of: follows) { _, now in if !now { sentSize = nil } }
     }
 
-    @ViewBuilder private func surface(panelSize: CGSize) -> some View {
+    @ViewBuilder private func surface(panelSize: CGSize?, sizeSource: AtticGlassSizeSource?) -> some View {
         let shape = Squircle(cornerRadius: cornerRadius, exponent: AtticShape.controlExponent)
         let shadow = PanelIslandLayout.contactShadow(dark: design.mode == .dark)
-        AtticSurfaceBackground(model: design.tokens.panel, shape: shape, nativeGlassSize: panelSize)
+        AtticSurfaceBackground(model: design.tokens.panel, shape: shape, nativeGlassSize: panelSize,
+                               nativeGlassSizeSource: sizeSource)
             .overlay { AtticPanelRim(cornerSize: cornerRadius, exponent: AtticShape.controlExponent) }
             .background {
                 // L4: the layers fall outside the capsule only, so a
@@ -1193,26 +1229,68 @@ private struct PanelIslandKeyed<Content: View>: View {
     let settings: AppSettings
     let model: PanelIslandModel
     let uiState: PanelUIState
+    /// The island's windows' glass size (nil for the stand-in).
+    var glassSize: AtticGlassSizeSource? = nil
     let content: Content
+    #if DEBUG
+    /// Tests: read once, when the root is built.
+    let onSizeQuery = PanelIslandSizingProbe.onSizeQuery
+    #endif
 
     var body: some View {
         #if ATTIC_LOCAL_ONLY
         let _ = PanelInvalidationProbe.islandRoot?()
         #endif
+        #if DEBUG
+        if let onSizeQuery {
+            PanelIslandSizingQueryProbe(onQuery: onSizeQuery) { root }
+        } else {
+            root
+        }
+        #else
+        root
+        #endif
+    }
+
+    private var root: some View {
         PanelIslandRoot(settings: settings, isPanelKey: false, content: content)
             .environment(\.panelIslandSizeSource, uiState)
+            .environment(\.panelIslandGlassSize, glassSize)
     }
+}
+
+/// Whether the island's stand-in (drawn by the panel's motion layer) is
+/// shown: its glass follows the panel's size only then.
+@MainActor @Observable final class PanelIslandStandInShown {
+    var isShown = false
+}
+
+private struct PanelIslandStandInKey: EnvironmentKey {
+    static let defaultValue: PanelIslandStandInShown? = nil
 }
 
 private struct PanelIslandSizeSourceKey: EnvironmentKey {
     static let defaultValue: PanelUIState? = nil
 }
 
+private struct PanelIslandGlassSizeKey: EnvironmentKey {
+    static let defaultValue: AtticGlassSizeSource? = nil
+}
+
 private extension EnvironmentValues {
     /// Where the island's glass takes the panel's size from.
+    var panelIslandStandIn: PanelIslandStandInShown? {
+        get { self[PanelIslandStandInKey.self] }
+        set { self[PanelIslandStandInKey.self] = newValue }
+    }
     var panelIslandSizeSource: PanelUIState? {
         get { self[PanelIslandSizeSourceKey.self] }
         set { self[PanelIslandSizeSourceKey.self] = newValue }
+    }
+    /// The island windows' glass size, set by AppKit.
+    var panelIslandGlassSize: AtticGlassSizeSource? {
+        get { self[PanelIslandGlassSizeKey.self] }
+        set { self[PanelIslandGlassSizeKey.self] = newValue }
     }
 }
 
@@ -1396,15 +1474,89 @@ struct PanelIslandPullTracker {
     }
 }
 
+#if DEBUG
+/// Tests: reports where the island's capsule is laid out, only when a test
+/// set `PanelIslandView.capsuleProbe` before the island was built.
+private struct PanelIslandCapsuleProbe: ViewModifier {
+    let model: PanelIslandModel
+    let report: ((ObjectIdentifier, CGRect) -> Void)?
+
+    func body(content: Content) -> some View {
+        if let report {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { [model] in
+                report(ObjectIdentifier(model), $0)
+            }
+        } else {
+            content
+        }
+    }
+}
+#endif
+
 /// A click on the island works on its first press, whichever app is active.
+/// Its window is sized by `PanelIslandWindows.layout` alone, so nothing
+/// flows from SwiftUI to AppKit (as the panel's root, `AtticPanelHostingView`,
+/// and `KeptContentHostingView`): with the sizing options on, every island
+/// update, each resize step's glass size among them, asked SwiftUI for the
+/// root's whole size to set window content-size limits nothing reads.
 private final class PanelIslandHostingView<Root: View>: NSHostingView<Root> {
+    required init(rootView: Root) {
+        super.init(rootView: rootView)
+        sizingOptions = []
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+#if DEBUG
+/// Test seam: the island roots' size queries at an unbounded or ideal
+/// proposal. With NSHostingView's sizing options on, each update of an
+/// island hosting view asks its root for its minimum, maximum and ideal
+/// sizes (proposals 0, unbounded and nil) to set its window's content-size
+/// limits; a layout at the window's size proposes the window's size only.
+@MainActor enum PanelIslandSizingProbe {
+    /// Told of each such query. Read when an island window's root is built:
+    /// with no hook set then, the root has no probe in its tree.
+    static var onSizeQuery: (() -> Void)?
+}
+
+/// Passes its one subview the proposal and places it as the hosting view
+/// would (centred, at its bounds); counts the sizing queries.
+private struct PanelIslandSizingQueryProbe: Layout {
+    let onQuery: () -> Void
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let unbounded = { (value: CGFloat?) in value.map { !$0.isFinite || $0 >= .greatestFiniteMagnitude / 2 } ?? true }
+        if unbounded(proposal.width) || unbounded(proposal.height) { onQuery() }
+        return subviews.first?.sizeThatFits(proposal) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center, proposal: ProposedViewSize(bounds.size))
+    }
+}
+#endif
+
 /// The island's stand-in in the panel's motion layer: never hit, never an
 /// accessibility element, so at rest the island windows stay the live
-/// island.
+/// island. Placed by `AtticPanelContentContainer.placeIslandStandIn`, so,
+/// like the island's own, it sends no size to AppKit.
 private final class PanelIslandStandInHostingView<Root: View>: NSHostingView<Root> {
+    required init(rootView: Root) {
+        super.init(rootView: rootView)
+        sizingOptions = []
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func isAccessibilityElement() -> Bool { false }
     override func accessibilityChildren() -> [Any]? { [] }
@@ -1440,12 +1592,24 @@ final class PanelIslandWindows {
     /// showing as one shape"). The panel's content container places it
     /// over the island window and shows it only while the panel moves.
     let standIn: NSView
+    /// Whether the stand-in is shown (`AtticPanelContentContainer.setIslandStandInShown`).
+    let standInShown: PanelIslandStandInShown
     /// While the stand-in shows the island: how shown the island is meant
     /// to be (the motion's end), in place of the windows' own content.
     private(set) var handedOffShown: CGFloat?
+    /// The panel's size for the island windows' glass: each accepted size
+    /// is set here, in AppKit, and lays the glass out again on the next
+    /// display pass with no view-state write (the stand-in is sent its own).
+    let glassSize: AtticGlassSizeSource
+    private var glassSizeFeed: AnyCancellable?
 
     init(model: PanelIslandModel, uiState: PanelUIState, settings: AppSettings) {
         self.model = model
+        let glassSize = AtticGlassSizeSource(size: uiState.panelSize)
+        self.glassSize = glassSize
+        #if ATTIC_LOCAL_ONLY
+        glassSize.onLaidOut = { PanelInvalidationProbe.islandGlassSize?($0) }
+        #endif
         func window(interactive: Bool) -> PanelIslandWindow {
             let window = PanelIslandWindow(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                                            backing: .buffered, defer: true)
@@ -1466,16 +1630,21 @@ final class PanelIslandWindows {
         label = window(interactive: false)
         island.setAccessibilityLabel(String(localized: "Pages"))
         island.contentView = PanelIslandHostingView(rootView: PanelIslandKeyed(
-            settings: settings, model: model, uiState: uiState,
+            settings: settings, model: model, uiState: uiState, glassSize: glassSize,
             content: PanelIslandView(model: model, focusTracker: uiState.keyboardFocus)))
         label.contentView = PanelIslandHostingView(rootView: PanelIslandKeyed(
-            settings: settings, model: model, uiState: uiState, content: PanelIslandLabels(model: model)))
+            settings: settings, model: model, uiState: uiState, glassSize: glassSize,
+            content: PanelIslandLabels(model: model)))
         label.setAccessibilityElement(false)
+        let standInShown = PanelIslandStandInShown()
+        self.standInShown = standInShown
         let standIn = PanelIslandStandInHostingView(rootView: PanelIslandKeyed(
             settings: settings, model: model, uiState: uiState,
-            content: PanelIslandView(model: model, focusTracker: uiState.keyboardFocus, isStandIn: true)))
+            content: PanelIslandView(model: model, focusTracker: uiState.keyboardFocus, isStandIn: true)
+                .environment(\.panelIslandStandIn, standInShown)))
         standIn.setAccessibilityElement(false)
         self.standIn = standIn
+        glassSizeFeed = uiState.panelSizeChanges.sink { [weak glassSize] in glassSize?.set($0) }
         island.onIdleTraceContext = { [weak self] in self?.onIdleTraceContext?() }
         island.onPointer = { [weak self] pointer in self?.handlePointer(pointer) }
         // SwiftUI may retain @FocusState after another window becomes key:
