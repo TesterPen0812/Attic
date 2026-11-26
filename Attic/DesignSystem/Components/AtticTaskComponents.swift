@@ -1670,6 +1670,9 @@ struct AtticTaskRow: View {
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @Environment(\.atticRowHoverGate) private var hoverGate
+    /// Opening into its page in one piece: the title grows into the head as
+    /// it fades, and the circle hands over to the head's.
+    @Environment(\.taskPageRowLeaving) private var leaving
     @State private var focused = false
     @State private var hovered = false
     @State private var dateHovered = false
@@ -1759,6 +1762,9 @@ struct AtticTaskRow: View {
                               isEmphasised: showsFocusRing, onToggle: actions.toggleDone)
                 .atticForcedState(nil)
                 .atticRowControl()
+                .opacity(leaving ? 0 : 1)
+                .animation(leaving ? AtticMotionScale.easeOut(0.08) : AtticMotionScale.easeOut(AtticMotionScale.fast).delay(0.16),
+                           value: leaving)
                 .padding(.leading, AtticLayout.circleX + AtticControlSize.statusCircle / 2 - AtticControlSize.minimumHitTarget / 2)
                 .padding(.top, d.paddingY + d.line / 2 - AtticControlSize.minimumHitTarget / 2)
 
@@ -1793,6 +1799,7 @@ struct AtticTaskRow: View {
                             // The title gives way first (review 13).
                             .layoutPriority(-1)
                             .help(model.title)
+                            .modifier(TaskPageLeavingTitle(leaving: leaving))
                             if !done {
                                 AtticPriorityMark(priority: model.priority, disabled: disabled)
                             }
