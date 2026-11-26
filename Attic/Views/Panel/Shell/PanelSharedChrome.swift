@@ -372,6 +372,13 @@ struct PanelSharedBottomBar: View {
         guard let reach, agentMinX.isFinite else { return false }
         return reach + AtticPanelChromeMetrics.footerGap > agentMinX
     }
+
+    /// The ✦'s step-aside after a measure or a reach change: the new value
+    /// only when it differs from `current` (nil: nothing to write).
+    static func agentAsideChange(current: Bool, reach: CGFloat?, agentMinX: CGFloat) -> Bool? {
+        let now = agentStepsAside(reach: reach, agentMinX: agentMinX)
+        return now == current ? nil : now
+    }
     /// The row going under the card uses the quick leave. After the card
     /// finishes folding, the row starts its normal popover show immediately.
     static func rowAnimation(taken: Bool, reduceMotion: Bool) -> Animation? {
@@ -587,10 +594,12 @@ private struct PanelAgentSlot: View {
     let reach: CGFloat?
 
     @Environment(\.atticDesign) private var design
-    @State private var minX = CGFloat.infinity
+    /// Its laid-out place, which moves on every step of a resize: kept out
+    /// of view state; only whether it steps aside is drawn.
+    @State private var minX = AtticUnobserved(CGFloat.infinity)
+    @State private var aside = false
 
     var body: some View {
-        let aside = PanelSharedBottomBar.agentStepsAside(reach: reach, agentMinX: minX)
         let away = taken || aside
         PanelControlFold(folded: away, animation: { covered ? nil : PanelSharedBottomBar.rowAnimation(taken: $0, reduceMotion: design.reduceMotion) }) {
             AgentChatBarButton(bar: agentChat.bar, action: agentChat.toggle)
@@ -600,14 +609,29 @@ private struct PanelAgentSlot: View {
         .allowsHitTesting(!away)
         .accessibilityHidden(!shown || away)
         // Its laid-out place (the slide above is drawn, not laid out).
-        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(PanelSharedBottomBar.rowSpace)).minX } action: { minX = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(PanelSharedBottomBar.rowSpace)).minX } action: {
+            minX.value = $0
+            settleAside()
+        }
+        .onChange(of: reach) { settleAside() }
         #if DEBUG
-        .onChange(of: aside, initial: true) { _, now in Self.stepsAside = now }
+        .onChange(of: aside, initial: true) { _, now in PanelAgentSlotProbe.stepsAside = now }
         #endif
     }
 
-    #if DEBUG
-    /// Test seam: whether the ✦ stood aside last time it changed.
-    static var stepsAside = false
-    #endif
+    private func settleAside() {
+        guard let now = PanelSharedBottomBar.agentAsideChange(current: aside, reach: reach, agentMinX: minX.value) else { return }
+        #if DEBUG && ATTIC_LOCAL_ONLY
+        PanelInvalidationProbe.stepWrite?("agent-aside")
+        #endif
+        aside = now
+    }
+
 }
+
+#if DEBUG
+/// Test seam: whether the ✦ stood aside last time it changed.
+@MainActor enum PanelAgentSlotProbe {
+    static var stepsAside = false
+}
+#endif

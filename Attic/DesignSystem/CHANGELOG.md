@@ -23,6 +23,27 @@ The rows' own hover handlers still use `NSApp.currentEvent` to ignore a row
 sliding under a resting pointer as the keyboard scrolls; that is unchanged.
 No look, motion, size or token changes.
 
+## 2026-11-26 · A resize step writes only the view state it draws
+
+A step of a window resize wrote view state that draws nothing, and each
+write ran another transaction pass. A per-step measurement is now kept out
+of view state (`AtticUnobserved`), and a view keeps only what it draws. The
+agent slot keeps whether the ✦ steps aside, not its minX. The note format
+row keeps whether its cells are roomy, not its width; while closed it keeps
+the width unobserved and copies it in with the first frame of its opening
+motion. The island's stand-in is sent no size while hidden and reads the
+panel's size as it shows.
+
+The island's glass takes the panel's size from AppKit, not from view state.
+`AtticGlassSizeSource` (`AtticMaterials.swift`) holds the size, and
+`AtticSurfaceBackground.nativeGlassSizeSource` sizes the glass from it
+through `AtticGlassSizer`, a view that draws nothing and is never hit,
+focused or read by accessibility. A new size lays the glass out again and
+runs no view body. `nativeGlassSize` stays for the island's stand-in.
+Looks are unchanged: the island and label frames match the trunk's
+at rest, at each step and once settled (CI, to the point). With Reduce
+Transparency the island is solid, has no sizer, and takes no size.
+
 ## 2026-11-25 · Hover in the Tasks list comes from the list, not from each row
 
 A row in the Tasks list no longer carries a SwiftUI hover region for itself,
