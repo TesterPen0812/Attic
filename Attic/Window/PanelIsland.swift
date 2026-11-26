@@ -1448,7 +1448,6 @@ private struct PanelIslandCapsuleProbe: ViewModifier {
 private final class PanelIslandHostingView<Root: View>: NSHostingView<Root> {
     required init(rootView: Root) {
         super.init(rootView: rootView)
-        sizingOptions = []
     }
 
     @available(*, unavailable)
@@ -1495,7 +1494,6 @@ private struct PanelIslandSizingQueryProbe: Layout {
 private final class PanelIslandStandInHostingView<Root: View>: NSHostingView<Root> {
     required init(rootView: Root) {
         super.init(rootView: rootView)
-        sizingOptions = []
     }
 
     @available(*, unavailable)
