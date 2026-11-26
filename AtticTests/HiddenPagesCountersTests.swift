@@ -760,6 +760,50 @@ final class HiddenPagesCountersTests: XCTestCase {
         }
     }
 
+    /// Calendar's kept page host, if it has one (P1-b).
+    private func calendarHost(_ rig: Rig) -> KeptContentHostingView? {
+        func hosts(_ view: NSView) -> [KeptContentHostingView] {
+            ((view as? KeptContentHostingView).map { [$0] } ?? []) + view.subviews.flatMap(hosts)
+        }
+        return hosts(rig.content).first { PanelPageKeyboard.membership(of: $0) == .page(.calendar) }
+    }
+
+    /// P1-b's target (review of PR 80, P1-1): with Calendar hidden behind
+    /// Tasks, a live resize with its release, one size write outside a drag
+    /// and a switch from Tasks to Notes run none of Calendar's views. On the
+    /// trunk they run at the release and the write (red there). With
+    /// Calendar in its own kept host, the host stays undrawn throughout and
+    /// is laid out no more (the green side's guard).
+    func testC5DHiddenCalendarRunsNothingThroughAResizeAWriteAndASwitch() throws {
+        try withRig { rig in
+            XCTAssertEqual(rig.state.selectedSection, .tasks, "harness: Tasks is shown")
+            let host = calendarHost(rig)
+            let layoutsBefore = host.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] }
+            let start = rig.state.panelSize
+            var total: [String: Int] = [:]
+            func add(_ counts: [String: Int]) { total.merge(counts) { $0 + $1 } }
+            add(measure(rig, "C5D lock-on") { rig.state.setInteractionLock(.windowResize, isActive: true) })
+            for step in 1...Self.dragSteps {
+                add(measure(rig, "C5D write step=\(step)") { resize(rig, to: dragSize(start, step: step)) })
+            }
+            add(measure(rig, "C5D release") { release(rig) })
+            add(measure(rig, "C5D outside a drag") { resize(rig, to: dragSize(start, step: Self.dragSteps + 2)) })
+            XCTAssertEqual(PanelRootLayout.lastPlacedSize, dragSize(start, step: Self.dragSteps + 2),
+                           "harness: the write outside a drag reached the root's layout")
+            add(measure(rig, "C5D Tasks to Notes") { show(.notes, rig) })
+            let layoutsAfter = host.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] }
+            print("HIDDEN_COUNTS C5D total " + Self.line(total)
+                  + " host=\(host != nil) drawn=\(host?.isDrawn ?? false) host_layouts=\(layoutsBefore ?? -1)->\(layoutsAfter ?? -1)")
+            for view in Self.hiddenPageViews[.calendar, default: []] {
+                XCTAssertEqual(total[view, default: 0], 0,
+                               "C5D: Calendar's \(view) ran while hidden through a resize, a write and a switch")
+            }
+            let calendar = try XCTUnwrap(host, "Calendar sits in a kept host of its own")
+            XCTAssertFalse(calendar.isDrawn, "C5D: hidden, Calendar's host is not drawn")
+            XCTAssertEqual(layoutsAfter, layoutsBefore, "C5D: hidden, Calendar's host was laid out")
+        }
+    }
+
     /// The page-wide native views of a page, found again on each read:
     /// Notes' library scroll view, Calendar's (the other end keepers) and
     /// the Draw board.
@@ -946,6 +990,12 @@ final class HiddenPagesCountersTests: XCTestCase {
     /// the shown tab is at the new width in the step's own frame; the swipe
     /// hears the width.
     func testRZ7ASizeStepRunsNoPagerPassAndUpdatesNoTabHost() throws {
+        // Reduce Motion off, stated (CI's runners have it on): hidden pages
+        // then rest a settled width to their side, so a write outside a
+        // drag moves them (review of PR 80, P2-1).
+        let previousReduceMotion = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = previousReduceMotion }
         try withRig { rig in
             XCTAssertEqual(rig.state.selectedSection, .tasks, "harness: Tasks is shown")
             let start = rig.state.panelSize
