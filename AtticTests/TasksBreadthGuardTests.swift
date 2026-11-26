@@ -1458,8 +1458,9 @@ final class TasksBreadthGuardTests: XCTestCase {
         // run no page pass at all).
         XCTAssertGreaterThan(small.edit, 0, "the edit ran the row builder")
         XCTAssertEqual(large.edit, small.edit, "an edit ran the row builder \(large.edit) times at 446 tasks against \(small.edit) at 83")
-        XCTAssertEqual(large.click, small.click, "a row click ran the row builder \(large.click) times at 446 tasks against \(small.click) at 83")
-        XCTAssertEqual(large.arrow, small.arrow, "↓ ran the row builder \(large.arrow) times at 446 tasks against \(small.arrow) at 83")
+        // The model's click and ↓ reach the rows through their states: no
+        // row builder runs at either size (run 45843089944).
+        XCTAssertEqual([small.click, small.arrow, large.click, large.arrow], [0, 0, 0, 0], "a click or ↓ ran the row builder")
     }
 
     /// Date groups (Overdue, Today, later days, No date: header entries
@@ -1580,6 +1581,8 @@ final class TasksBreadthGuardTests: XCTestCase {
         let small = try XCTUnwrap(results[83]), large = try XCTUnwrap(results[446])
         XCTAssertEqual(small["drawn"], large["drawn"], "the same rows on screen at both sizes")
         XCTAssertGreaterThan(small["edit", default: 0], 0, "the edit ran the row builder")
+        // The real click and ↓ run the page's body but no row builder.
+        XCTAssertEqual([small["click"], small["arrow"], large["click"], large["arrow"]], [0, 0, 0, 0], "a real click or ↓ ran the row builder")
         for name in ["click", "arrow", "edit"] {
             XCTAssertEqual(large[name], small[name], "\(name) ran the row builder \(large[name] ?? -1) times at 446 tasks against \(small[name] ?? -1) at 83")
         }
