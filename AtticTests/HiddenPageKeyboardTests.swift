@@ -491,6 +491,36 @@ extension HiddenPageKeyboardTests {
     /// The real shell with Draw and Notes built (hidden pages with views
     /// that can take the keyboard), Calendar shown with one task due today,
     /// the panel key; then Tab until the agenda's row has the keyboard.
+    /// SCRATCH (FKA lane hunt): one line per Tab, with where the keyboard
+    /// landed and how often that place came up before.
+    private func traceTab(_ rig: Rig, _ label: String, _ step: Int, seen: inout [String: Int], task: UUID?, event: String? = nil) {
+        let responder = rig.panel.firstResponder
+        var place = responderName(rig.panel)
+        var tag = "-"
+        if let view = responder as? NSView {
+            let frame = view.convert(view.bounds, to: nil)
+            place += " \(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))"
+            var current: NSView? = view
+            while let candidate = current {
+                if let membership = PanelPageKeyboard.membership(of: candidate) { tag = "\(membership)"; break }
+                if let host = candidate as? KeptContentHostingView { tag = "kept(interactive=\(host.isInteractive))"; break }
+                current = candidate.superview
+            }
+        }
+        let repeats = seen[place, default: 0]
+        seen[place] = repeats + 1
+        var ax = "-"
+        if let focused = rig.panel.accessibilityAttributeValue(.focusedUIElement) as? NSObject {
+            let role = focused.accessibilityAttributeValue(.role).map { "\($0)" } ?? "-"
+            let id = focused.accessibilityAttributeValue(.identifier).map { "\($0)" } ?? "-"
+            let name = (focused.accessibilityAttributeValue(.description) ?? focused.accessibilityAttributeValue(.title)).map { "\($0)" } ?? "-"
+            ax = "\(role) id=\(id) name=\(name.prefix(30))"
+        }
+        let row = task.map { AtticTaskRow.keyboardStates[$0]?.focused == true } ?? false
+        let head = event.map { CalendarEventRow.headFocus[$0] == true } ?? false
+        print("CAL_TAB \(label) step=\(step) fr=\(place) tag=\(tag) rep=\(repeats) row=\(row) head=\(head) ax=\(ax)")
+    }
+
     private func agendaRig(file: StaticString = #filePath, line: UInt = #line) throws -> AgendaRig {
         let rig = try makeRig()
         let task = try seedTodayTask(rig.store, title: "Agenda row")
@@ -508,11 +538,15 @@ extension HiddenPageKeyboardTests {
         rig.panel.makeFirstResponder(nil)
         var tabs = 0
         var recalculated = false
-        while AtticTaskRow.keyboardStates[task]?.focused != true, tabs < 40 {
+        var seen: [String: Int] = [:]
+        let fka = NSApp.isFullKeyboardAccessEnabled
+        print("CAL_TAB rig fka=\(fka) start fr=\(responderName(rig.panel))")
+        while AtticTaskRow.keyboardStates[task]?.focused != true, tabs < (fka ? 160 : 40) {
             queue("\t", code: 48, rig)
             assertNoHiddenPage(rig, board: board, editor: editor, "Tab to the row", file: file, line: line)
             tabs += 1
-            if tabs == 4, AtticTaskRow.keyboardStates[task]?.focused != true, !recalculated {
+            traceTab(rig, "rig", tabs, seen: &seen, task: task)
+            if !fka, tabs == 4, AtticTaskRow.keyboardStates[task]?.focused != true, !recalculated {
                 var chain: [String] = []
                 var next = rig.panel.contentView?.nextValidKeyView
                 while let view = next, chain.count < 12 { chain.append(String(describing: type(of: view))); next = view.nextValidKeyView; if next === rig.panel.contentView?.nextValidKeyView { break } }
@@ -651,10 +685,12 @@ extension HiddenPageKeyboardTests {
         defer { close(agenda.rig) }
         agenda.rig.panel.makeFirstResponder(nil)
         var steps = 0
-        while CalendarEventRow.headFocus[event.id] != true, steps < 40 {
+        var seen: [String: Int] = [:]
+        while CalendarEventRow.headFocus[event.id] != true, steps < 160 {
             queue("\t", code: 48, agenda.rig)
             assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, "Tab \(steps) to the event head")
             steps += 1
+            traceTab(agenda.rig, "head", steps, seen: &seen, task: agenda.task, event: event.id)
         }
         XCTAssertEqual(CalendarEventRow.headFocus[event.id], true, "Tab reached the event head")
         queue("\r", code: 36, agenda.rig)
