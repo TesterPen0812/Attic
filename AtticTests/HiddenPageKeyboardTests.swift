@@ -537,6 +537,11 @@ extension HiddenPageKeyboardTests {
         }
     }
 
+    /// Calendar's page host (the one kept host that claims no keyboard).
+    private func calendarHost(_ rig: Rig) -> KeptContentHostingView? {
+        views(KeptContentHostingView.self, in: rig.panel).first { PanelPageKeyboard.membership(of: $0) == .page(.calendar) }
+    }
+
     private func rowState(_ agenda: AgendaRig) -> String {
         let state = AtticTaskRow.keyboardStates[agenda.task]
         return "fr=\(responderName(agenda.rig.panel)) focused=\(state?.focused ?? false) ring=\(state?.ring ?? false) editing=\(state?.editing ?? false)"
@@ -581,9 +586,12 @@ extension HiddenPageKeyboardTests {
         XCTAssertEqual(AtticTaskRow.keyboardStates[agenda.task]?.ring, true, "the focused row draws its ring")
     }
 
-    /// (c) Tab and Shift-Tab move on and never reach a hidden page's view;
-    /// Esc hides the panel, as on the trunk (`row_esc panel=false`, Air
-    /// stretch 4, both arms).
+    /// (c) Tab and Shift-Tab never reach a hidden page's view: they land on
+    /// the agenda's row, Calendar's one Tab stop with full keyboard access
+    /// off. (The trunk also stops on a SwiftUI focus host at the top of the
+    /// panel's own hosting view, 101×27, where no ring shows and Space,
+    /// Return and ↓ do nothing: a dead stop, lead's case 3, 26 Nov.)
+    /// Esc hides the panel, as on the trunk (`row_esc panel=false`).
     func testCalendarAgendaRowAfterTabMovesOnAndEscHides() throws {
         try requireKeyWindowTests()
         let agenda = try agendaRig()
@@ -592,6 +600,9 @@ extension HiddenPageKeyboardTests {
             if step < 4 { queue("\t", code: 48, agenda.rig) } else { queue("\t", code: 48, agenda.rig, flags: .shift) }
             print("CAL_ROW c step=\(step) \(step < 4 ? "Tab" : "Shift-Tab") \(rowState(agenda))")
             assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, "step \(step)")
+            XCTAssertEqual(AtticTaskRow.keyboardStates[agenda.task]?.focused, true,
+                           "step \(step): \(step < 4 ? "Tab" : "Shift-Tab") lands on the agenda's row")
+            XCTAssertTrue(holds(agenda.rig.panel, try XCTUnwrap(calendarHost(agenda.rig))), "step \(step): inside Calendar's page host")
         }
         queue("\u{1b}", code: 53, agenda.rig)
         spin(0.4)
