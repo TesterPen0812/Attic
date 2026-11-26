@@ -1269,7 +1269,9 @@ enum AtticOverlayHierarchy {
 final class AtticOverlayHostingView: NSHostingView<AnyView> {
     /// The content's inset from the host's edges (the shadow room).
     var contentInset: CGFloat = AtticNoteFormatMetrics.shadowRoom
-    var isInteractive = false
+    var isInteractive = false {
+        didSet { if isInteractive != oldValue { announceCovering() } }
+    }
     /// The host takes the keyboard (a card with a field, a picker's keys).
     var acceptsKeyboard = false
 
@@ -1316,6 +1318,59 @@ final class AtticOverlayHostingView: NSHostingView<AnyView> {
         let local = convert(point, from: superview)
         guard contentRect.contains(local) else { return nil }
         return super.hitTest(point)
+    }
+
+    // MARK: Covering (MENU-HOVER-BEHIND)
+
+    /// Posted, with the window as its object, when a host in that window
+    /// starts or stops covering part of it, or its covered part moves: the
+    /// Tasks list's hover looks again (`TasksPointerProbeView`).
+    static let coveringDidChange = Notification.Name("AtticOverlayHostingView.coveringDidChange")
+
+    /// The hosts in a window (weak).
+    private static let inWindows = NSHashTable<AtticOverlayHostingView>.weakObjects()
+
+    /// Whether an overlay in `window` covers `point` (window coordinates):
+    /// hover gets the answer a click gets (`hitTest`), from rectangles only.
+    static func covers(_ point: NSPoint, in window: NSWindow) -> Bool {
+        inWindows.allObjects.contains { host in
+            host.window === window && host.isCovering && host.contentRect.contains(host.convert(point, from: nil))
+        }
+    }
+
+    /// It takes clicks over its content: open, shown.
+    private var isCovering: Bool { isInteractive && !isHiddenOrHasHiddenAncestor }
+
+    private func announceCovering(in target: NSWindow? = nil) {
+        guard let window = target ?? window else { return }
+        NotificationCenter.default.post(name: Self.coveringDidChange, object: window)
+    }
+
+    override var isHidden: Bool {
+        didSet { if isHidden != oldValue, isInteractive { announceCovering() } }
+    }
+
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        let old = frame.origin
+        super.setFrameOrigin(newOrigin)
+        if frame.origin != old, isCovering { announceCovering() }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let old = frame.size
+        super.setFrameSize(newSize)
+        if frame.size != old, isCovering { announceCovering() }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if let window, newWindow !== window, isCovering { announceCovering(in: window) }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { Self.inWindows.remove(self) } else { Self.inWindows.add(self) }
+        if isCovering { announceCovering() }
     }
 }
 
@@ -2484,8 +2539,11 @@ private struct AtticDropdownModifier<Card: View>: ViewModifier {
     func body(content: Content) -> some View {
         // The anchor exists only while the card is asked for: a row at rest
         // costs nothing (no AppKit view per row).
-        // The card is in its own window: a row's list hover (frames in the
-        // row's page, `AtticRowHover`) never reaches it.
+        // The card is in its own hosting view, in the page's window above
+        // the page: the row hover it gets is nil, so a row's list hover
+        // (frames in the row's page, `AtticRowHover`) never reaches it. The
+        // list's hover skips points the card covers
+        // (`AtticOverlayHostingView.covers`).
         content.background {
             if isPresented {
                 AtticDropdownAnchor(isPresented: $isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, contentWidth: contentWidth,

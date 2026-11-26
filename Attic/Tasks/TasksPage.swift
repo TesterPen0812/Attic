@@ -5563,7 +5563,9 @@ final class TasksPointer {
     }
 
     /// The pointer's point in the page, when it is over the rows' visible
-    /// part of the page's view.
+    /// part of the page's view and no open card covers it (MENU-HOVER-BEHIND:
+    /// a dropdown card is above the page in the same window, and hover
+    /// answers as a click does).
     private func hoverPoint() -> CGPoint? {
         let point: CGPoint
         if let pointerLocation {
@@ -5576,7 +5578,14 @@ final class TasksPointer {
         }
         let band = hoverBand()
         let bottom = (view?.bounds.height ?? .greatestFiniteMagnitude) - band.bottom
-        return point.y >= band.top && point.y <= bottom ? point : nil
+        guard point.y >= band.top && point.y <= bottom else { return nil }
+        if let view, let window = view.window {
+            let covered = MainActor.assumeIsolated {
+                AtticOverlayHostingView.covers(view.convert(point, to: nil), in: window)
+            }
+            if covered { return nil }
+        }
+        return point
     }
 
     /// The row or line under the pointer went: it is told so.
@@ -5722,9 +5731,24 @@ final class TasksPointerProbeView: NSView {
         addTrackingArea(NSTrackingArea(rect: .zero, options: Self.hoverTracking, owner: self, userInfo: nil))
     }
 
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if let window { NotificationCenter.default.removeObserver(self, name: AtticOverlayHostingView.coveringDidChange, object: window) }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         updateTrackingAreas()
+        if let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(coveringDidChange),
+                                                   name: AtticOverlayHostingView.coveringDidChange, object: window)
+        }
+        pointer?.scheduleHoverUpdate(refreshingPointer: true)
+    }
+
+    /// A card opened, moved or closed over the page: a still pointer may
+    /// now be over it, or over a row again.
+    @objc private func coveringDidChange(_ notification: Notification) {
         pointer?.scheduleHoverUpdate(refreshingPointer: true)
     }
 
