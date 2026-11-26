@@ -2309,6 +2309,32 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                let own = attributes[.paragraphStyle] as? NSParagraphStyle {
                 attributes[.paragraphStyle] = Self.lineAfterBreakStyle(own)
             }
+            // AUDIT-N-22: a caret moved to a link's, a highlight's or inline
+            // code's edge (arrows, a click) types plain text there, as those
+            // marks end where they end. Inside the run they carry on, and a
+            // selection change made by typing keeps what the typing set.
+            if selection.length == 0, userEditDepth == 0, engineEditDepth == 0, !history.isChangeInFlight {
+                let after = selection.location < NSMaxRange(line) && selection.location < textStorage.length
+                    ? textStorage.attributes(at: selection.location, effectiveRange: nil) : [:]
+                var dropped = false
+                for kind in [NoteMark.Kind.link, .highlight, .code] {
+                    guard let value = attributes[.noteMark(kind)] else { continue }
+                    if let next = after[.noteMark(kind)], (next as AnyObject).isEqual(value) { continue }
+                    attributes[.noteMark(kind)] = nil
+                    dropped = true
+                }
+                if dropped {
+                    // The line's own look, with the marks that carry on.
+                    let base = self.attributes(forParagraphAt: selection.location)
+                    for key in [NSAttributedString.Key.font, .backgroundColor, .underlineStyle, .underlineColor,
+                                .strikethroughStyle, .link, .foregroundColor, .kern] { attributes[key] = base[key] }
+                    let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { kind in
+                        attributes[.noteMark(kind)].map { (kind, $0) }
+                    })
+                    let font = base[.font] as? NSFont ?? style.bodyFont
+                    attributes.merge(style.markedAttributes(marks: marks, baseFont: font)) { _, new in new }
+                }
+            }
             textView.typingAttributes = attributes
         }
         // O17-07: while the caret is on the note's empty last line, TextKit

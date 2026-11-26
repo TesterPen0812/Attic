@@ -612,6 +612,45 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(loaded.blocks[1].marks.first { $0.kind == .highlight }?.colour, "future-amber")
     }
 
+    // AUDIT-N-22: a caret moved (→) to the end of a link, a highlight or
+    // inline code types plain text; inside the run the mark carries on.
+    func testAuditN22TypingAfterALinkHighlightOrCodeIsPlain() throws {
+        for kind in [NoteMark.Kind.link, .highlight, .code] {
+            var body = NoteBlock.text("go here now")
+            body.marks = [NoteMark(kind, offset: 3, length: 4, url: kind == .link ? "https://example.com" : nil)]
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), body]), window: true)
+            defer { engine.detachView() }
+            // "T\n" is 2: the run "here" is 5..<9.
+            view.setSelectedRange(NSRange(location: 8, length: 0))
+            view.moveRight(nil)
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 9, length: 0))
+            type("X", view)
+            var block = engine.document().blocks[1]
+            XCTAssertEqual(block.text, "go hereX now")
+            XCTAssertEqual(block.marks.filter { $0.kind == kind }.map { NSRange(location: $0.offset, length: $0.length) },
+                           [NSRange(location: 3, length: 4)], "\(kind): text typed after the run is plain")
+            // Inside the run, the mark carries on.
+            view.setSelectedRange(NSRange(location: 7, length: 0))
+            type("Y", view)
+            block = engine.document().blocks[1]
+            XCTAssertEqual(block.text, "go heYreX now")
+            XCTAssertEqual(block.marks.filter { $0.kind == kind }.map { NSRange(location: $0.offset, length: $0.length) },
+                           [NSRange(location: 3, length: 5)], "\(kind): text typed inside the run joins it")
+        }
+    }
+
+    // AUDIT-N-22 guard: a highlight turned on at the caret keeps on while
+    // typing, past the first character.
+    func testAuditN22HighlightTurnedOnKeepsOnWhileTyping() throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("body")]), window: true)
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 6, length: 0))
+        XCTAssertTrue(engine.setHighlight(.yellow))
+        type("xyz", view)
+        let marks = engine.document().blocks[1].marks.filter { $0.kind == .highlight }
+        XCTAssertEqual(marks.map { NSRange(location: $0.offset, length: $0.length) }, [NSRange(location: 4, length: 3)])
+    }
+
     // Owner decision 2026-10-16: the palette owns a visible input client.
     // Selection notifications and native palette focus handoff do not cancel it.
     func testG05NativePaletteFocusHandoffKeepsTheRequestAndText() throws {
