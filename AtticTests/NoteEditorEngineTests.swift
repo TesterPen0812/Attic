@@ -662,6 +662,27 @@ final class NoteEditorEngineTests: XCTestCase {
                        "T\n## Plan\n1. first\n1. second\n1. third\n[ ] buy milk\n[x] eggs", "search text is unchanged")
     }
 
+    // pro-perf-notes-r1-fix2 Opus R-10 (check on trunk): text typed straight
+    // before an inline-code run keeps the chip's room exactly as the same
+    // text opened fresh, with no restyle in between.
+    func testInlineCodeRoomAfterTypingBeforeTheRunMatchesAFreshOpen() {
+        var typedBody = NoteBlock.text("ab code")
+        typedBody.marks = [NoteMark(.code, offset: 3, length: 4)]
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), typedBody]))
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 5, length: 0))
+        type("x", view)
+        var freshBody = NoteBlock.text("ab xcode")
+        freshBody.marks = [NoteMark(.code, offset: 4, length: 4)]
+        let (fresh, _) = makeEngine(NoteDocument(blocks: [.text("T"), freshBody]))
+        defer { fresh.detachView() }
+        XCTAssertEqual(engine.textStorage.string, fresh.textStorage.string)
+        for index in 2..<engine.textStorage.length {
+            XCTAssertEqual(engine.textStorage.attribute(.kern, at: index, effectiveRange: nil) as? CGFloat,
+                           fresh.textStorage.attribute(.kern, at: index, effectiveRange: nil) as? CGFloat, "kern at \(index)")
+        }
+    }
+
     // AUDIT-N-22 guard: a highlight turned on at the caret keeps on while
     // typing, past the first character.
     func testAuditN22HighlightTurnedOnKeepsOnWhileTyping() throws {
