@@ -992,6 +992,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             perimeter: panel.nativeMargin
         )
         container.installIslandStandIn(islandWindows.standIn)
+        container.onIslandStandInShown = { [standInShown = islandWindows.standInShown] in standInShown.isShown = $0 }
         panel.contentView = container
         panel.isOpaque = false
         panel.backgroundColor = .clear

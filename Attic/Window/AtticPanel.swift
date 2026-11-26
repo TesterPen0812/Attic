@@ -1428,10 +1428,17 @@ final class AtticPanelContentContainer: NSView {
     /// Whether the stand-in draws the island (in the caller's transaction).
     var isIslandStandInShown: Bool { (islandStandIn?.layer?.opacity ?? 0) > 0.5 }
 
+    /// Told as the stand-in shows or hides (its glass follows the panel's
+    /// size only while shown).
+    var onIslandStandInShown: ((Bool) -> Void)?
+
     func setIslandStandInShown(_ shown: Bool) {
         guard let layer = islandStandIn?.layer else { return }
         let opacity: Float = shown ? 1 : 0
         guard layer.opacity != opacity else { return }
+        onIslandStandInShown?(shown)
+        // Showing: its glass takes the panel's size before this frame.
+        if shown { islandStandIn?.layoutSubtreeIfNeeded() }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.opacity = opacity
@@ -1883,7 +1890,14 @@ final class AtticPanelContentContainer: NSView {
         let live = surface?.live
         // The island flies with the panel: its stand-in is drawn into the
         // snapshot (shown for the capture only; the render reads the model
-        // tree, so this transaction never reaches the screen).
+        // tree, so this transaction never reaches the screen). A hidden
+        // stand-in is sent no size, so it is told it shows and laid out
+        // first: its glass is captured at the panel's size as it is now.
+        let standInWasShown = isIslandStandInShown
+        if !standInWasShown, islandStandIn != nil {
+            onIslandStandInShown?(true)
+            islandStandIn?.layoutSubtreeIfNeeded()
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let standInLayer = islandStandIn?.layer
@@ -1898,6 +1912,7 @@ final class AtticPanelContentContainer: NSView {
         }
         standInLayer?.opacity = standInOpacity
         CATransaction.commit()
+        if !standInWasShown, islandStandIn != nil { onIslandStandInShown?(false) }
         if opacity != 1 {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
