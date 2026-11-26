@@ -265,8 +265,15 @@ private struct AtticRaisedButtonLabel: View {
                 // the page switch's selected icon is (visual A).
                 let size = title == nil ? AtticControlSize.raisedGlyph : AtticRaisedButtonMetrics.labelIconSize
                 let weight: Font.Weight = isSelected ? .regular : AtticIconWeight.outline
+                // A lone glyph sits on the button's face, but its frame's
+                // corners reach the rim (the edge light, Increase
+                // Contrast's border), so the check reads the face beside
+                // the glyph instead (17 Nov: #A7A7A7 read where the face is
+                // #ECECEC). Label buttons keep the corner samples.
+                let background: [CGPoint]? = title == nil
+                    ? [CGPoint(x: -0.2, y: 0.5), CGPoint(x: 1.2, y: 0.5)] : nil
                 if onSystemName == nil {
-                    AtticIcon(systemName: systemName, size: size, weight: weight, ink: glyph)
+                    AtticIcon(systemName: systemName, size: size, weight: weight, ink: glyph, probeBackground: background)
                 } else {
                     // Every glyph the toggle can show, laid on one centre and
                     // cross-faded (F/E), so a change never moves the button.
@@ -276,8 +283,11 @@ private struct AtticRaisedButtonLabel: View {
                     let names = AtticRaisedButtonMetrics.toggleSymbols(systemName, on: onSystemName, onHover: onHoverSystemName)
                     ZStack {
                         ForEach(names, id: \.self) { name in
-                            AtticIcon(systemName: name, size: size, weight: weight, ink: glyph)
+                            AtticIcon(systemName: name, size: size, weight: weight, ink: glyph, probeBackground: background)
                                 .opacity(name == shown ? 1 : 0)
+                                // Only the glyph on show is checked: a faded
+                                // one draws nothing of its own.
+                                .transformEnvironment(\.atticProbesDisabled) { if name != shown { $0 = true } }
                         }
                     }
                     .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionScale.easeOut(AtticMotionScale.fast), value: shown)
