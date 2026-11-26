@@ -49,6 +49,13 @@ final class HiddenPagesCountersTests: XCTestCase {
     private static let pumpSeconds: TimeInterval = 0.6
     /// C9's seed: a scrollable Now list and a task due today (off for the rest).
     private static var scrollSeed = false
+    /// SPEED-FOCUSSTATE-FANOUT's seed: 446 open tasks in all, the owner's
+    /// open count (t446n439), a third of them dated from two days ago to six
+    /// days ahead (so the hidden Calendar's agenda has rows), a quarter
+    /// tagged, some prioritised, with tracker-length titles. Synthetic; the
+    /// notes stay the small seed's.
+    private static var ownerScaleSeed = false
+    private static let ownerScaleOpen = 446
     private static let scrollRows = 60
     private static let scrollSteps = 30
     private static let menuTag = "errand"
@@ -168,6 +175,23 @@ final class HiddenPagesCountersTests: XCTestCase {
         }
         // C9 only: a Now list long enough to scroll, and today's agenda day
         // with a row on it, so the hidden Calendar draws its now line.
+        if Self.ownerScaleSeed {
+            let calendar = CalendarMonthMath.calendar()
+            let tail = " and the long tail of words a tracker row carries about its pull request and its review"
+            let priorities: [TaskPriority] = [.none, .none, .medium, .none, .high]
+            for index in 0..<(Self.ownerScaleOpen - 8) {
+                let item = TaskItem(title: "Owner-size task \(index + 1)" + (index.isMultiple(of: 2) ? tail : ""),
+                                    status: index % 25 == 0 ? .inProgress : .todo, priority: priorities[index % priorities.count],
+                                    createdAt: now.addingTimeInterval(Double(-(8 + index) * 60)),
+                                    manualOrder: 1_000_000 + Int64(8 + index) * 1_024, parentID: nil)
+                if index % 4 == 0 { item.tags = Array(["home", "work", "errands"].prefix(index % 3 + 1)) }
+                if index % 3 == 0, let date = calendar.date(byAdding: .day, value: (index / 3) % 9 - 2, to: now) {
+                    item.dueDay = DueDay(date: date, calendar: calendar)
+                }
+                item.listOrderVersion = TaskItem.currentListOrderVersion
+                context.insert(item)
+            }
+        }
         if Self.scrollSeed {
             let tail = " and the long tail of words a tracker row carries about its pull request and its review"
             for index in 0..<Self.scrollRows {
@@ -1336,6 +1360,82 @@ final class HiddenPagesCountersTests: XCTestCase {
                     let total = checks.filter { $0.key.hasPrefix(region + "@") }.values.reduce(0, +)
                     XCTAssertLessThanOrEqual(total, 2, "\(key.name) checked \(total) focus readers in \(region), more than the trunk (\(checks))")
                 }
+            }
+        }
+    }
+
+    /// SPEED-FOCUSSTATE-FANOUT (board; first-click trace, 21 Nov): a focus
+    /// move re-evaluated every focus-state holder, and 186 of the 228 runs
+    /// of `AtticLiveOwnFocusRing` at one row select were for controls
+    /// outside the rows. Counted here per move on an owner-size Tasks list,
+    /// by scope (inside a task row or outside) and layer: the live ring's
+    /// body, the keyboard ring's body, and the keyboard ring's focus-state
+    /// re-checks (`AtticFocusReaderCensus.ringRuns`).
+    /// - The first click (the list takes the keyboard), a MOVE click, a
+    ///   steady ↓ and a steady Tab re-evaluate no ring outside the rows:
+    ///   none of their focus changed.
+    /// - Reported, not asserted: the first ↓ after a click, which turns the
+    ///   keyboard rings on (`atticKeyboardFocusVisible`), by design.
+    func testFocusRingRunsPerMoveAtOwnerSize() throws {
+        try requireKeyWindowTests()
+        Self.ownerScaleSeed = true
+        defer { Self.ownerScaleSeed = false }
+        AtticFocusReaderCensus.reset()
+        AtticFocusReaderCensus.records = true
+        defer { AtticFocusReaderCensus.records = false; AtticFocusReaderCensus.reset() }
+        try withRig { rig in
+            rig.panel.makeKey()
+            pump(rig.content, rig.panel)
+            XCTAssertTrue(rig.panel.isKeyWindow, "harness: the panel is the key window")
+            let open = try ModelContext(rig.container).fetchCount(FetchDescriptor<TaskItem>())
+            let ids = rig.page.rows(for: .now).map(\.id)
+            print("FOCUS_RING_RUNS seed tasks=\(open) now_rows=\(ids.count)")
+            XCTAssertGreaterThanOrEqual(open, Self.ownerScaleOpen, "harness: the owner-size seed")
+            XCTAssertGreaterThan(ids.count, 6, "harness: Now has rows to move between")
+            AtticFocusReaderCensus.reset()
+
+            var moves: [(name: String, runs: [String: Int])] = []
+            @MainActor func take(_ name: String) {
+                moves.append((name, AtticFocusReaderCensus.ringRuns))
+                AtticFocusReaderCensus.reset()
+            }
+            try rowClick(rig, ids[2])
+            pump(rig.content, rig.panel)
+            take("first-click")
+            XCTAssertEqual(rig.page.keyboardFocus?.id, ids[2], "harness: the first click gave row 2 the keyboard")
+            try rowClick(rig, ids[4])
+            pump(rig.content, rig.panel)
+            take("move-click")
+            XCTAssertEqual(rig.page.keyboardFocus?.id, ids[4], "harness: the click gave row 4 the cursor")
+            try rowKey(rig, 125, "\u{F701}")
+            pump(rig.content, rig.panel)
+            take("first-down")
+            XCTAssertEqual(rig.page.keyboardFocus?.id, ids[5], "harness: ↓ moved the cursor to row 5")
+            try rowKey(rig, 125, "\u{F701}")
+            pump(rig.content, rig.panel)
+            take("down")
+            XCTAssertEqual(rig.page.keyboardFocus?.id, ids[6], "harness: ↓ moved the cursor to row 6")
+            try rowKey(rig, 48, "\t")
+            pump(rig.content, rig.panel)
+            take("tab")
+            XCTAssertEqual(rig.page.keyboardFocus?.id, ids[7], "harness: Tab moved the cursor to row 7")
+
+            for move in moves {
+                func sum(_ scope: String, _ layer: String) -> Int {
+                    move.runs.filter { $0.key.hasPrefix("\(scope)|\(layer)|") }.values.reduce(0, +)
+                }
+                let total = move.runs.values.reduce(0, +)
+                let outside = move.runs.filter { $0.key.hasPrefix("outside|") }.values.reduce(0, +)
+                let share = total == 0 ? 0 : outside * 100 / total
+                print("FOCUS_RING_RUNS \(move.name) row_live=\(sum("row", "live")) row_kbd=\(sum("row", "kbd")) "
+                      + "row_check=\(sum("row", "check")) out_live=\(sum("outside", "live")) out_kbd=\(sum("outside", "kbd")) "
+                      + "out_check=\(sum("outside", "check")) total=\(total) outside=\(outside) outside_pct=\(share)")
+                let sites = move.runs.filter { $0.key.hasPrefix("outside|") }.sorted { $0.value > $1.value }.prefix(12)
+                for site in sites { print("FOCUS_RING_RUNS \(move.name) site \(site.key)=\(site.value)") }
+            }
+            for move in moves where move.name != "first-down" {
+                let outside = move.runs.filter { $0.key.hasPrefix("outside|") }.values.reduce(0, +)
+                XCTAssertEqual(outside, 0, "\(move.name) re-evaluated \(outside) focus rings outside the rows, whose focus did not change")
             }
         }
     }

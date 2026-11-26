@@ -153,6 +153,19 @@ extension View {
 }
 
 #if DEBUG
+private struct AtticFocusCensusScopeKey: EnvironmentKey {
+    static let defaultValue = "outside"
+}
+
+extension EnvironmentValues {
+    /// DEBUG only: "row" inside a task row, for the ring census
+    /// (`AtticFocusReaderCensus.ringRuns`). Constant per subtree.
+    var atticFocusCensusScope: String {
+        get { self[AtticFocusCensusScopeKey.self] }
+        set { self[AtticFocusCensusScopeKey.self] = newValue }
+    }
+}
+
 /// DEBUG census of the views that hold a `@FocusState` only to draw
 /// something for the keyboard (a ring, a row's •••). Every such holder is a
 /// focus reader: SwiftUI re-checks it on each focus change in its graph,
@@ -176,6 +189,19 @@ enum AtticFocusReaderCensus {
     /// The Notes rows' ••• buttons that hold their own focus state, with
     /// whether each had the keyboard on its last run.
     static var notesRowActions: [UUID: Bool] = [:]
+
+    /// SPEED-FOCUSSTATE-FANOUT: Attic's own focus rings' work per focus
+    /// move, keyed "scope|layer|site": scope "row" inside a task row (set by
+    /// `AtticTaskRow`) or "outside"; layer "live" (`AtticLiveOwnFocusRing`'s
+    /// body), "kbd" (`AtticKeyboardOwnFocusRing`'s body) or "check" (its
+    /// focus state's `update()`, run on each focus re-check of that holder
+    /// even when its body is skipped); site the `atticOwnFocusRing` call's
+    /// file and line. Counted while `records` is on; read as deltas.
+    static var ringRuns: [String: Int] = [:]
+
+    static func noteRingRun(_ layer: String, scope: String, site: String) {
+        if records { ringRuns["\(scope)|\(layer)|\(site)", default: 0] += 1 }
+    }
 
     static func noteRing(_ id: UUID, keyboardFocusVisible: Bool, shown: Bool, outline: AtticOwnFocusRing.Outline) {
         guard records else { return }
@@ -213,6 +239,7 @@ enum AtticFocusReaderCensus {
 
     static func reset() {
         phaseChecks = [:]
+        ringRuns = [:]
         rings = [:]
         notesRows = []
         notesRowActions = [:]
