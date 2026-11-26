@@ -221,7 +221,15 @@ struct AgentEventArrival: ViewModifier {
 
     init(id: String) { self.id = id }
 
+    #if DEBUG && ATTIC_UNIT_TEST_HOST
+    /// Test seam: how many times an arrival's body has run.
+    static var bodyEvaluations = 0
+    #endif
+
     func body(content: Content) -> some View {
+        #if DEBUG && ATTIC_UNIT_TEST_HOST
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let growing = board.growingEvents.contains(id)
         let p: CGFloat = board.hiddenEvents.contains(id) ? 0 : growing && !design.reduceMotion ? grown : 1
         content
