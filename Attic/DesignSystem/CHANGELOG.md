@@ -1,3 +1,16 @@
+## 2026-11-26 · A task row opening into its page, in one piece
+
+`AtticTaskRow` reads `taskPageRowLeaving` (set only on the row whose page is
+opening in one piece, Accepted 2026-11-25). While it is set, the row's title
+grows on the size spring towards the page head's 17 pt and fades by about
+45 % of it (`TaskPageLeavingTitle`), and its status circle fades at once,
+since the page's stand-in draws the circle travelling to the head. When it
+clears (Back), the title and circle come back over the motion's last part.
+Every other row sees no change. The shared bars' covering can now move:
+`PanelSharedChrome.setCovered(_:page:animated:)` lets the switch, the tag bar,
+"+" and the agent's opener give way on the size spring for this opening only;
+every other covering stays instant.
+
 ## 2026-11-25 · Hover in the Tasks list comes from the list, not from each row
 
 A row in the Tasks list no longer carries a SwiftUI hover region for itself,

@@ -276,11 +276,6 @@ struct TaskNoteRouteHost<Origin: View>: View {
             onePieceFade = 1
             onePiece = run
         }
-        onePieceProbe.watchEscape { [uiState, pages = noteDraft.pages] in
-            guard let run = onePiece, run.open, !run.handedOver else { return false }
-            Self.closeRoute(run.taskID, uiState: uiState, controller: pages)
-            return true
-        }
         // The first frame shows the row as it is (its title already the
         // head's); the motion starts on the next.
         DispatchQueue.main.async { turnOnePiece(open: true) }
@@ -290,6 +285,14 @@ struct TaskNoteRouteHost<Origin: View>: View {
     /// Runs the motion towards the page (true) or back into the row.
     private func turnOnePiece(open: Bool) {
         guard var run = onePiece else { return }
+        if open, !run.handedOver {
+            // Escape goes Back while the stand-in is the page.
+            onePieceProbe.watchEscape { [uiState, pages = noteDraft.pages] in
+                guard let run = onePiece, run.open, !run.handedOver else { return false }
+                Self.closeRoute(run.taskID, uiState: uiState, controller: pages)
+                return true
+            }
+        }
         run.open = open
         run.landedBack = false
         run.generation &+= 1
@@ -315,9 +318,20 @@ struct TaskNoteRouteHost<Origin: View>: View {
         }
     }
 
-    /// The built page is there and laid out: the stand-in gives way.
-    private func handOverOnePiece() {
+    /// The built page is there and laid out: the stand-in gives way. The
+    /// page's editor mounts a turn after the route shows it (its presenter
+    /// is made on appear), so this waits for the mount, then a frame more.
+    private func handOverOnePiece(waits: Int = 0) {
         guard var run = onePiece, run.open, !run.handedOver, presentedTaskID == run.taskID else { return }
+        if waits < 12, TaskNotePresenter.open(for: run.taskID)?.isMounted != true {
+            DispatchQueue.main.async { handOverOnePiece(waits: waits + 1) }
+            return
+        }
+        if waits >= 0, waits < 100 {
+            // One more turn: the mounted page's first layout goes out.
+            DispatchQueue.main.async { handOverOnePiece(waits: 100) }
+            return
+        }
         run.handedOver = true
         var still = Transaction()
         still.disablesAnimations = true
