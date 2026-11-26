@@ -14,8 +14,8 @@ The island's glass takes the panel's size from AppKit, not from view state.
 `AtticSurfaceBackground.nativeGlassSizeSource` sizes the glass from it
 through `AtticGlassSizer`, a view that draws nothing and is never hit,
 focused or read by accessibility. A new size lays the glass out again and
-runs no view body. `nativeGlassSize` stays for the stand-in and the
-gallery. Looks are unchanged: the island and label frames match the trunk's
+runs no view body. `nativeGlassSize` stays for the island's stand-in.
+Looks are unchanged: the island and label frames match the trunk's
 at rest, at each step and once settled (CI, to the point). With Reduce
 Transparency the island is solid, has no sizer, and takes no size.
 
