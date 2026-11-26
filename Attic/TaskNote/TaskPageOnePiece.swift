@@ -226,6 +226,22 @@ struct TaskPageListTab: ViewModifier {
     }
 }
 
+/// Whether the Tasks pager draws its shown list under a task's page: from
+/// Back's first frame, so the list runs back with the page instead of
+/// starting when the route has closed.
+struct TaskPageDrawsList<Content: View>: View {
+    @Environment(\.taskPageMotion) private var motion
+    @ViewBuilder let content: (Bool) -> Content
+
+    var body: some View {
+        // Told only when Back starts and when a page takes over. An opening
+        // that ended leaves the flag as it is (writing it would run the
+        // pager again for nothing), so it counts only while one is under
+        // way, which is read here without being observed.
+        content((motion?.drawsListUnderPage ?? false) && motion?.place != nil)
+    }
+}
+
 private struct TaskPageLineEffect: ViewModifier, Animatable {
     var progress: CGFloat
     let pose: TaskPagePose?
@@ -819,6 +835,9 @@ final class TaskPageMotion {
     var rowGone = false
     /// The Tasks tab shown: only its list follows the motion (`TaskPageListFollows`).
     var listTab: TasksTab?
+    /// The pager draws its shown list under the page (from Back's start
+    /// until the next page has taken over).
+    var drawsListUnderPage = false
     /// The row and the head for the list, read without being observed: the
     /// list's readers are told of the progress only (`TaskPageListFollows`).
     @ObservationIgnored private(set) var place: (anchorID: UUID, pose: TaskPagePose)?
