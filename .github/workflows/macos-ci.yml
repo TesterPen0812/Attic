@@ -181,10 +181,11 @@ jobs:
             -only-testing:AtticTests/HiddenPageKeyboardTests/testFKAArrowsOnTheAgendaStayOnTheShownPage \
             -only-testing:AtticTests/HiddenPageKeyboardTests/testFKAShiftTabLeavesCalendarTheWayItCameIn \
             -only-testing:AtticTests/HiddenPageKeyboardTests/testFKATabLoopNeverStopsOnAHiddenPage \
+            -only-testing:AtticTests/HiddenPageKeyboardTests/testFKAInsideCalendarUndoEscAndHotkey \
             | tee "$RUNNER_TEMP/fka-calendar-agenda.log" || true
           grep -E '^CAL_FKA' "$RUNNER_TEMP/fka-calendar-agenda.log" || echo 'CAL_FKA no lines'
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-calendar-agenda.xcresult" --format json > "$RUNNER_TEMP/fka-calendar-agenda-summary.json" || echo '{}' > "$RUNNER_TEMP/fka-calendar-agenda-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==4 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-calendar-agenda-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==5 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-calendar-agenda-summary.json"
       - name: Upload focused keyboard evidence
         if: always()
         uses: actions/upload-artifact@v4

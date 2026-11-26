@@ -495,6 +495,70 @@ extension HiddenPageKeyboardTests {
     /// own page host may not make the way longer.
     private static let trunkTabsToTheAgendaWithFKA = 58
 
+    /// Rigs made in this process (SCRATCH, first-panel trace).
+    private static var rigsMade = 0
+
+    /// A SwiftUI focus stand-in of the panel's own hosting view (the tab
+    /// bar's stops), not of a kept host.
+    private func isRootProxy(_ view: NSView) -> Bool {
+        guard String(describing: type(of: view)) == "KeyViewProxy" else { return false }
+        var current = view.superview
+        while let candidate = current {
+            if candidate is KeptContentHostingView { return false }
+            current = candidate.superview
+        }
+        return true
+    }
+
+    private func kvName(_ view: NSView?) -> String {
+        guard let view else { return "nil" }
+        let frame = view.convert(view.bounds, to: nil)
+        var name = String(describing: type(of: view))
+        if let open = name.firstIndex(of: "<") { name = String(name[..<open]) + "<>" }
+        return "\(name)@\(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))"
+    }
+
+    private func kvTag(_ view: NSView) -> String {
+        var current: NSView? = view
+        while let candidate = current {
+            if let membership = PanelPageKeyboard.membership(of: candidate) { return "\(membership)" }
+            if let host = candidate as? KeptContentHostingView { return "kept(i=\(host.isInteractive))" }
+            current = candidate.superview
+        }
+        return "-"
+    }
+
+    /// SCRATCH (first-panel trace): the nextKeyView chain from the tab
+    /// bar's last stop, 40 hops, and where Calendar's host sits.
+    private func traceChain(_ rig: Rig, _ label: String) {
+        let host = calendarHost(rig)
+        let bar = views(NSView.self, in: rig.panel).filter(isRootProxy)
+        let last = bar.max { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+        var hops: [String] = []
+        var inChain = false
+        var seen = Set<ObjectIdentifier>()
+        var next: NSView? = last
+        while let view = next, hops.count < 40, seen.insert(ObjectIdentifier(view)).inserted {
+            if view === host { inChain = true }
+            hops.append("\(kvName(view)) tag=\(kvTag(view)) canKey=\(view.canBecomeKeyView) hidden=\(view.isHiddenOrHasHiddenAncestor)")
+            next = view.nextKeyView
+        }
+        var hostIndex = -1
+        var count = 0
+        seen.removeAll()
+        next = rig.panel.contentView
+        while let view = next, count < 400, seen.insert(ObjectIdentifier(view)).inserted {
+            if view === host { hostIndex = count }
+            count += 1
+            next = view.nextKeyView
+        }
+        print("KV1 \(label) fka=\(NSApp.isFullKeyboardAccessEnabled) auto=\(rig.panel.autorecalculatesKeyViewLoop) fr=\(kvName(rig.panel.firstResponder as? NSView)) "
+              + "bar=\(bar.count) last=\(kvName(last)) host=\(kvName(host)) hostCanKey=\(host.map { "\($0.canBecomeKeyView)" } ?? "-") "
+              + "hostInChainFromBar=\(inChain) hops=\(hops.count) fromContent=\(count) hostIndex=\(hostIndex) "
+              + "hostPrev=\(kvName(host?.previousKeyView)) hostNext=\(kvName(host?.nextKeyView)) hostSubviews=\(host?.subviews.count ?? -1)")
+        for (index, hop) in hops.enumerated() { print("KV1 \(label) hop[\(index)] \(hop)") }
+    }
+
     /// One line per Tab: where the keyboard landed (class, frame in the
     /// window, page or kept host) and how often that place came up before,
     /// with whether the agenda's row or the event's head has focus.
@@ -541,12 +605,16 @@ extension HiddenPageKeyboardTests {
         var path: [NSResponder?] = []
         var seen: [String: Int] = [:]
         let fka = NSApp.isFullKeyboardAccessEnabled
+        Self.rigsMade += 1
+        let traced = fka && Self.rigsMade <= 2 ? "panel\(Self.rigsMade)" : nil
+        if let traced { traceChain(rig, "\(traced) before") }
         while AtticTaskRow.keyboardStates[task]?.focused != true, tabs < (fka ? 160 : 40) {
             queue("\t", code: 48, rig)
             assertNoHiddenPage(rig, board: board, editor: editor, "Tab to the row", file: file, line: line)
             tabs += 1
             path.append(rig.panel.firstResponder)
             traceTab(rig, "rig", tabs, seen: &seen, task: task)
+            if let traced, tabs <= 8 { traceChain(rig, "\(traced) tab\(tabs)") }
             if !fka, tabs == 4, AtticTaskRow.keyboardStates[task]?.focused != true, !recalculated {
                 var chain: [String] = []
                 var next = rig.panel.contentView?.nextValidKeyView
@@ -741,37 +809,107 @@ extension HiddenPageKeyboardTests {
         return nil
     }
 
-    /// Shift-Tab from the agenda's row leaves Calendar the way Tab came in:
-    /// it walks back to the stop Tab entered Calendar from, on the shown
-    /// page all the way. That stop is the last one on the way in that is
-    /// neither inside Calendar's page host nor the responder holding the
-    /// row (on the trunk Calendar's controls sit in the panel's own host).
+    /// Shift-Tab leaves Calendar the way Tab came in. The keyboard is put on
+    /// the panel's tab bar first (Tab until a stop of the panel's own host
+    /// has it), then Tab walks into Calendar to the agenda's row; Shift-Tab,
+    /// at most as many times, walks back to the stop Tab entered Calendar
+    /// from: the last one on the way in that is neither inside Calendar's
+    /// page host nor the responder holding the row (on the trunk Calendar's
+    /// controls sit in the panel's own host, so that is the bar stop it
+    /// started from). Every press is logged by first responder.
     func testFKAShiftTabLeavesCalendarTheWayItCameIn() throws {
         try requireFullKeyboardAccess()
         let agenda = try agendaRig()
         defer { close(agenda.rig) }
+        let panel = agenda.rig.panel
         let host = calendarHost(agenda.rig)
         func inCalendar(_ responder: NSResponder?) -> Bool {
             guard let host, let view = responder as? NSView else { return false }
             return view === host || view.isDescendant(of: host)
         }
-        let atRow = agenda.rig.panel.firstResponder
-        let entry = agenda.path.dropLast().last { $0 !== atRow && !inCalendar($0) } ?? nil
-        let entryName = entry.map { String(describing: type(of: $0)) } ?? "none"
-        var steps = 0
+        func onBar(_ responder: NSResponder?) -> Bool { (responder as? NSView).map(isRootProxy) ?? false }
         var seen: [String: Int] = [:]
-        while steps < agenda.path.count + 8 {
-            queue("\u{19}", code: 48, agenda.rig, flags: .shift)
-            assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, "Shift-Tab \(steps) out of Calendar")
-            steps += 1
-            traceTab(agenda.rig, "back", steps, seen: &seen, task: agenda.task)
-            if entry != nil, agenda.rig.panel.firstResponder === entry { break }
+        var toBar = 0
+        while !onBar(panel.firstResponder), toBar < 160 {
+            queue("\t", code: 48, agenda.rig)
+            toBar += 1
+            traceTab(agenda.rig, "to-bar", toBar, seen: &seen, task: agenda.task)
         }
-        let arrived = entry != nil && agenda.rig.panel.firstResponder === entry
-        print("CAL_FKA back shift_tabs=\(steps) tabs_in=\(agenda.path.count) entry=\(entryName) arrived=\(arrived) row=\(AtticTaskRow.keyboardStates[agenda.task]?.focused ?? false)")
-        XCTAssertNotNil(entry, "Tab came into Calendar from a stop of the panel")
-        XCTAssertTrue(arrived, "Shift-Tab leaves Calendar for the stop Tab came in from (\(entryName))")
-        XCTAssertNotEqual(AtticTaskRow.keyboardStates[agenda.task]?.focused, true, "the agenda's row no longer has focus")
+        let start = panel.firstResponder
+        XCTAssertTrue(onBar(start), "Tab reached the panel's tab bar")
+        var path: [NSResponder?] = []
+        seen = [:]
+        while AtticTaskRow.keyboardStates[agenda.task]?.focused != true, path.count < 160 {
+            queue("\t", code: 48, agenda.rig)
+            assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, "Tab \(path.count) into Calendar")
+            path.append(panel.firstResponder)
+            traceTab(agenda.rig, "in", path.count, seen: &seen, task: agenda.task)
+        }
+        XCTAssertEqual(AtticTaskRow.keyboardStates[agenda.task]?.focused, true, "Tab from the bar reached the agenda's row")
+        let atRow = panel.firstResponder
+        let entry = (path.dropLast().last { $0 !== atRow && !inCalendar($0) } ?? nil) ?? start
+        var firstOut: NSResponder?
+        var back = 0
+        seen = [:]
+        while back < path.count {
+            queue("\u{19}", code: 48, agenda.rig, flags: .shift)
+            assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, "Shift-Tab \(back) out of Calendar")
+            back += 1
+            traceTab(agenda.rig, "back", back, seen: &seen, task: agenda.task)
+            let responder = panel.firstResponder
+            if firstOut == nil, responder !== atRow, !inCalendar(responder) { firstOut = responder }
+            if responder === entry { break }
+        }
+        let arrived = panel.firstResponder === entry
+        print("CAL_FKA back tabs_in=\(path.count) shift_tabs=\(back) start=\(kvName(start as? NSView)) entry=\(kvName(entry as? NSView)) "
+              + "first_out=\(kvName(firstOut as? NSView)) arrived=\(arrived) row=\(AtticTaskRow.keyboardStates[agenda.task]?.focused ?? false)")
+        XCTAssertTrue(firstOut === entry, "the first stop Shift-Tab reaches outside Calendar is the one Tab entered from")
+        XCTAssertTrue(arrived, "Shift-Tab, at most as many times as Tab, lands on the stop Tab entered Calendar from")
+    }
+
+    /// With the keyboard inside Calendar (the agenda's row) under Full
+    /// Keyboard Access: ⌘Z after Space, Esc, and what the global hotkey
+    /// runs (`AppCoordinator.swift` `newTaskHotKey.action` → `showNewTask`
+    /// → `revealProgrammatically(openComposer: true, section: .tasks)`).
+    func testFKAInsideCalendarUndoEscAndHotkey() throws {
+        try requireFullKeyboardAccess()
+        do {
+            let agenda = try agendaRig()
+            defer { close(agenda.rig) }
+            queue(" ", code: 49, agenda.rig)
+            let afterSpace = agenda.rig.store.task(withID: agenda.task).map { "\($0.status)" } ?? "nil"
+            queue("z", code: 6, agenda.rig, flags: .command)
+            spin(0.3)
+            let afterUndo = agenda.rig.store.task(withID: agenda.task).map { "\($0.status)" } ?? "nil"
+            print("CAL_FKA undo after_space=\(afterSpace) after_cmdz=\(afterUndo) visible=\(agenda.rig.panel.isVisible) fr=\(kvName(agenda.rig.panel.firstResponder as? NSView))")
+            assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, "⌘Z")
+            XCTAssertTrue(agenda.rig.panel.isVisible, "⌘Z leaves the panel up")
+        }
+        do {
+            let agenda = try agendaRig()
+            defer { close(agenda.rig) }
+            queue("\u{1b}", code: 53, agenda.rig)
+            spin(0.4)
+            print("CAL_FKA esc visible=\(agenda.rig.panel.isVisible)")
+            XCTAssertFalse(agenda.rig.panel.isVisible, "Esc hides the panel")
+        }
+        do {
+            let agenda = try agendaRig()
+            defer { close(agenda.rig) }
+            let rig = agenda.rig
+            let monitor = CornerHoverMonitor(settings: AppSettings(defaults: rig.defaults), panelController: rig.controller, uiState: rig.uiState,
+                                             store: rig.store, noteStore: rig.notes, canvasStore: CanvasStore(container: rig.store.container),
+                                             noteDraft: rig.draft)
+            defer { monitor.stop() }
+            let outcome = monitor.revealProgrammatically(openComposer: true, section: .tasks)
+            spin(0.8)
+            print("CAL_FKA hotkey outcome=\(outcome) section=\(rig.uiState.selectedSection) composer=\(rig.uiState.isComposerPresented) "
+                  + "visible=\(rig.panel.isVisible) key=\(rig.panel.isKeyWindow) fr=\(kvName(rig.panel.firstResponder as? NSView))")
+            XCTAssertEqual(outcome, .shown)
+            XCTAssertEqual(rig.uiState.selectedSection, .tasks, "the hotkey brings Tasks forward")
+            XCTAssertTrue(rig.uiState.isComposerPresented, "with the new-task card open")
+            assertNoHiddenPage(rig, board: agenda.board, editor: agenda.editor, "hotkey")
+        }
     }
 
     /// Fix B under Full Keyboard Access, by name: no stop of the panel's
