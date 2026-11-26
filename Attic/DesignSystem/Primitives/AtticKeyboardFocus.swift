@@ -158,7 +158,8 @@ private struct AtticFocusCensusScopeKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    /// DEBUG only: "row" inside a task row, for the ring census
+    /// DEBUG only: "list" inside a Tasks list cell, "task-row" inside any
+    /// other `AtticTaskRow`, for the ring census
     /// (`AtticFocusReaderCensus.ringRuns`). Constant per subtree.
     var atticFocusCensusScope: String {
         get { self[AtticFocusCensusScopeKey.self] }
@@ -191,8 +192,9 @@ enum AtticFocusReaderCensus {
     static var notesRowActions: [UUID: Bool] = [:]
 
     /// SPEED-FOCUSSTATE-FANOUT: Attic's own focus rings' work per focus
-    /// move, keyed "scope|layer|site": scope "row" inside a task row (set by
-    /// `AtticTaskRow`) or "outside"; layer "live" (`AtticLiveOwnFocusRing`'s
+    /// move, keyed "scope|layer|site": scope "list" inside a Tasks list cell
+    /// (`TasksReorderCell`), "task-row" inside an `AtticTaskRow` anywhere
+    /// else (the Calendar agenda's), or "outside"; layer "live" (`AtticLiveOwnFocusRing`'s
     /// body), "kbd" (`AtticKeyboardOwnFocusRing`'s body) or "check" (its
     /// focus state's `update()`, run on each focus re-check of that holder
     /// even when its body is skipped); site the `atticOwnFocusRing` call's

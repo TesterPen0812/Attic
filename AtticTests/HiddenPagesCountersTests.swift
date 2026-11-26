@@ -1368,11 +1368,12 @@ final class HiddenPagesCountersTests: XCTestCase {
     /// move re-evaluated every focus-state holder, and 186 of the 228 runs
     /// of `AtticLiveOwnFocusRing` at one row select were for controls
     /// outside the rows. Counted here per move on an owner-size Tasks list,
-    /// by scope (inside a task row or outside) and layer: the live ring's
+    /// by scope (inside a Tasks list cell, or outside it: other pages' task
+    /// rows apart) and layer: the live ring's
     /// body, the keyboard ring's body, and the keyboard ring's focus-state
     /// re-checks (`AtticFocusReaderCensus.ringRuns`).
     /// - The first click (the list takes the keyboard), a MOVE click, a
-    ///   steady ↓ and a steady Tab re-evaluate no ring outside the rows:
+    ///   steady ↓ and a steady Tab re-evaluate no ring outside the list:
     ///   none of their focus changed.
     /// - Reported, not asserted: the first ↓ after a click, which turns the
     ///   keyboard rings on (`atticKeyboardFocusVisible`), by design.
@@ -1421,21 +1422,26 @@ final class HiddenPagesCountersTests: XCTestCase {
             XCTAssertEqual(rig.page.keyboardFocus?.id, ids[7], "harness: Tab moved the cursor to row 7")
 
             for move in moves {
-                func sum(_ scope: String, _ layer: String) -> Int {
-                    move.runs.filter { $0.key.hasPrefix("\(scope)|\(layer)|") }.values.reduce(0, +)
+                func sum(_ scope: String?, _ layer: String) -> Int {
+                    move.runs.filter { key, _ in
+                        let parts = key.split(separator: "|")
+                        return parts[1] == layer && (scope.map { parts[0] == $0 } ?? (parts[0] != "list"))
+                    }.values.reduce(0, +)
                 }
                 let total = move.runs.values.reduce(0, +)
-                let outside = move.runs.filter { $0.key.hasPrefix("outside|") }.values.reduce(0, +)
+                let outside = move.runs.filter { !$0.key.hasPrefix("list|") }.values.reduce(0, +)
                 let share = total == 0 ? 0 : outside * 100 / total
-                print("FOCUS_RING_RUNS \(move.name) row_live=\(sum("row", "live")) row_kbd=\(sum("row", "kbd")) "
-                      + "row_check=\(sum("row", "check")) out_live=\(sum("outside", "live")) out_kbd=\(sum("outside", "kbd")) "
-                      + "out_check=\(sum("outside", "check")) total=\(total) outside=\(outside) outside_pct=\(share)")
-                let sites = move.runs.filter { $0.key.hasPrefix("outside|") }.sorted { $0.value > $1.value }.prefix(12)
-                for site in sites { print("FOCUS_RING_RUNS \(move.name) site \(site.key)=\(site.value)") }
+                print("FOCUS_RING_RUNS \(move.name) list_live=\(sum("list", "live")) list_kbd=\(sum("list", "kbd")) "
+                      + "list_check=\(sum("list", "check")) out_live=\(sum(nil, "live")) out_kbd=\(sum(nil, "kbd")) "
+                      + "out_check=\(sum(nil, "check")) (task-row live/kbd/check=\(sum("task-row", "live"))/"
+                      + "\(sum("task-row", "kbd"))/\(sum("task-row", "check"))) total=\(total) outside=\(outside) outside_pct=\(share)")
+                for site in move.runs.sorted(by: { $0.value > $1.value }) {
+                    print("FOCUS_RING_RUNS \(move.name) site \(site.key)=\(site.value)")
+                }
             }
             for move in moves where move.name != "first-down" {
-                let outside = move.runs.filter { $0.key.hasPrefix("outside|") }.values.reduce(0, +)
-                XCTAssertEqual(outside, 0, "\(move.name) re-evaluated \(outside) focus rings outside the rows, whose focus did not change")
+                let outside = move.runs.filter { !$0.key.hasPrefix("list|") }.values.reduce(0, +)
+                XCTAssertEqual(outside, 0, "\(move.name) re-evaluated \(outside) focus rings outside the Tasks list, whose focus did not change")
             }
         }
     }

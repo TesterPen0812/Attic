@@ -5084,6 +5084,9 @@ struct TasksReorderCell<Row: View, Below: View>: View, Equatable {
             if drag?.id == id, drag?.landing != true { drag = nil }
             session.end()
         }
+        #if DEBUG
+        .environment(\.atticFocusCensusScope, "list")
+        #endif
     }
 
     private var gesture: some Gesture {

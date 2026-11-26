@@ -1953,7 +1953,7 @@ struct AtticTaskRow: View {
             expectedSize: CGSize(width: 0, height: pitch), radius: d.radius, expectedRadius: AtticRadius.taskRow
         )
         #if DEBUG
-        .environment(\.atticFocusCensusScope, "row")
+        .transformEnvironment(\.atticFocusCensusScope) { if $0 == "outside" { $0 = "task-row" } }
         #endif
     }
 
