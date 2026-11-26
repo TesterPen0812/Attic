@@ -561,24 +561,25 @@ final class PanelIntegrationTests: XCTestCase {
 
     /// Island sizing (26 Nov): the island's windows are sized by
     /// `PanelIslandWindows.layout` alone. An island update (resize steps, a
-    /// page change) runs no AppKit constraint pass on its hosting views,
-    /// which asked SwiftUI for the island root's whole size each time only
-    /// to set window content-size limits nothing reads.
-    func testAnIslandUpdateRunsNoWindowSizingPass() throws {
+    /// page change) asks the island roots for no unbounded or ideal size:
+    /// with sizing options on, each update asked SwiftUI for the root's
+    /// minimum, maximum and ideal sizes only to set window content-size
+    /// limits nothing reads (AppKit's constraint pass itself still runs).
+    func testAnIslandUpdateAsksItsContentForNoUnboundedSize() throws {
         #if DEBUG
         let rig = try makePanel()
         XCTAssertEqual(rig.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
         spin(0.6)
         let window = rig.controller.panelForTesting
-        PanelIslandSizingProbe.constraintPasses = 0
+        PanelIslandSizingProbe.sizeQueries = 0
         for _ in 1...4 { resizeStep(rig, by: 12) }
-        let afterSteps = PanelIslandSizingProbe.constraintPasses
+        let afterSteps = PanelIslandSizingProbe.sizeQueries
         rig.uiState.selectSection(.notes)
         spin(0.4)
-        let afterPage = PanelIslandSizingProbe.constraintPasses - afterSteps
-        print("ISLAND_SIZING_PASSES steps=4 passes=\(afterSteps) page=\(afterPage) panel=\(window.visibleContentFrame.size)")
-        XCTAssertEqual(afterSteps, 0, "a resize step ran a sizing pass on the island's hosting views")
-        XCTAssertEqual(afterPage, 0, "a page change ran a sizing pass on the island's hosting views")
+        let afterPage = PanelIslandSizingProbe.sizeQueries - afterSteps
+        print("ISLAND_SIZE_QUERIES steps=4 queries=\(afterSteps) page=\(afterPage) panel=\(window.visibleContentFrame.size)")
+        XCTAssertEqual(afterSteps, 0, "a resize step asked the island's content for an unbounded or ideal size")
+        XCTAssertEqual(afterPage, 0, "a page change asked the island's content for an unbounded or ideal size")
         #endif
     }
 
@@ -604,7 +605,10 @@ final class PanelIntegrationTests: XCTestCase {
                            "\(moment): the label window left its laid-out frame")
             for window in [windows.island, windows.label] {
                 XCTAssertEqual(window.contentMinSize, plain.contentMinSize, "\(moment): SwiftUI set a window's minimum size")
-                XCTAssertEqual(window.contentMaxSize, plain.contentMaxSize, "\(moment): SwiftUI set a window's maximum size")
+                // Unbounded: a plain panel says FLT_MAX, SwiftUI with no
+                // options CGFloat.greatestFiniteMagnitude; either is no bound.
+                XCTAssertGreaterThanOrEqual(window.contentMaxSize.width, plain.contentMaxSize.width, "\(moment): SwiftUI set a window's maximum size")
+                XCTAssertGreaterThanOrEqual(window.contentMaxSize.height, plain.contentMaxSize.height, "\(moment): SwiftUI set a window's maximum size")
             }
         }
         check("shown")

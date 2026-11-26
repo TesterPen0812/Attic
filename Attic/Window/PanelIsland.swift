@@ -690,6 +690,9 @@ struct PanelIslandView: View {
     #if DEBUG
     /// Allows a hosted test to observe the real native Tab focus binding.
     @MainActor static var focusProbe: ((FocusState<PanelIslandItem?>.Binding) -> Void)?
+    /// Tests: the capsule as laid out in its window's content, by model
+    /// (the island's, never the stand-in's).
+    @MainActor static var laidOutCapsule: [ObjectIdentifier: CGRect] = [:]
     #endif
     @ObservedObject var model: PanelIslandModel
     @ObservedObject var focusTracker: AtticKeyboardFocusTracker
@@ -741,6 +744,7 @@ struct PanelIslandView: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .modifier(PanelIslandCapsuleProbe(model: isStandIn ? nil : model))
         .overlay {
             // A floating panel dragged near: a solid blue ring (the
             // design's 4 px at 55 %, outside the capsule).
@@ -1199,6 +1203,14 @@ private struct PanelIslandKeyed<Content: View>: View {
         #if ATTIC_LOCAL_ONLY
         let _ = PanelInvalidationProbe.islandRoot?()
         #endif
+        #if DEBUG
+        PanelIslandSizingQueryProbe { root }
+        #else
+        root
+        #endif
+    }
+
+    private var root: some View {
         PanelIslandRoot(settings: settings, isPanelKey: false, content: content)
             .environment(\.panelIslandSizeSource, uiState)
     }
@@ -1396,6 +1408,25 @@ struct PanelIslandPullTracker {
     }
 }
 
+/// Tests (DEBUG only): reports where the island's capsule is laid out.
+private struct PanelIslandCapsuleProbe: ViewModifier {
+    let model: PanelIslandModel?
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        if let model {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                PanelIslandView.laidOutCapsule[ObjectIdentifier(model)] = $0
+            }
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
 /// A click on the island works on its first press, whichever app is active.
 /// Its window is sized by `PanelIslandWindows.layout` alone, so nothing
 /// flows from SwiftUI to AppKit (as the panel's root, `AtticPanelHostingView`,
@@ -1414,20 +1445,32 @@ private final class PanelIslandHostingView<Root: View>: NSHostingView<Root> {
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    #if DEBUG
-    override func updateConstraints() {
-        PanelIslandSizingProbe.constraintPasses += 1
-        super.updateConstraints()
-    }
-    #endif
 }
 
 #if DEBUG
-/// Test seam: AppKit constraint passes on the island's hosting views (with
-/// NSHostingView's sizing options on, each asks SwiftUI for the island
-/// root's size to set its window's content-size limits).
+/// Test seam: the island roots' size queries at an unbounded or ideal
+/// proposal. With NSHostingView's sizing options on, each update of an
+/// island hosting view asks its root for its minimum, maximum and ideal
+/// sizes (proposals 0, unbounded and nil) to set its window's content-size
+/// limits; a layout at the window's size proposes the window's size only.
 @MainActor enum PanelIslandSizingProbe {
-    static var constraintPasses = 0
+    static var sizeQueries = 0
+}
+
+/// Passes its one subview the proposal and places it as the hosting view
+/// would (centred, at its bounds); counts the sizing queries.
+private struct PanelIslandSizingQueryProbe: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let unbounded = { (value: CGFloat?) in value.map { !$0.isFinite || $0 >= .greatestFiniteMagnitude / 2 } ?? true }
+        if unbounded(proposal.width) || unbounded(proposal.height) {
+            MainActor.assumeIsolated { PanelIslandSizingProbe.sizeQueries += 1 }
+        }
+        return subviews.first?.sizeThatFits(proposal) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center, proposal: ProposedViewSize(bounds.size))
+    }
 }
 #endif
 
@@ -1452,12 +1495,6 @@ private final class PanelIslandStandInHostingView<Root: View>: NSHostingView<Roo
     override func accessibilityHitTest(_ point: NSPoint) -> Any? { nil }
     override var acceptsFirstResponder: Bool { false }
     override var canBecomeKeyView: Bool { false }
-    #if DEBUG
-    override func updateConstraints() {
-        PanelIslandSizingProbe.constraintPasses += 1
-        super.updateConstraints()
-    }
-    #endif
 }
 
 /// The island and its label, child windows of the Attic panel (Accepted
