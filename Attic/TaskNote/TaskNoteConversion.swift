@@ -480,26 +480,26 @@ extension TaskNoteConversion {
     static func removeTask(_ taskID: UUID, notes: NotesPageController, tasks: TaskStore,
                            workspaceSession: NoteSession? = nil) async -> RemovalOutcome {
         if let page = TaskNotePresenter.open(for: taskID), !page.model.resolveFieldDrafts() {
-            return .refused(String(localized: "Couldn't save the task's fields first"))
+            return { () -> RemovalOutcome in print("AGENTLIB removeTask site 1"); return .refused(String(localized: "Couldn't save the task's fields first")) }()
         }
-        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return .refused("Couldn't remove from Tasks") }
+        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return { () -> RemovalOutcome in print("AGENTLIB removeTask site 2"); return .refused("Couldn't remove from Tasks") }() }
         do { try proveEarlierWritingAbsent(taskID: taskID, in: coordinator.freshContext()) }
-        catch RemovalRefusal.earlierWriting { return .refused(earlierWritingReason) }
-        catch { return .refused(String(localized: "Resolve this item's writing and copies before removing from Tasks")) }
+        catch RemovalRefusal.earlierWriting { return { () -> RemovalOutcome in print("AGENTLIB removeTask site 3"); return .refused(earlierWritingReason) }() }
+        catch { return { () -> RemovalOutcome in print("AGENTLIB removeTask site 4"); return .refused(String(localized: "Resolve this item's writing and copies before removing from Tasks")) }() }
         guard let initial = try? removalSource(taskID, coordinator: coordinator),
               let session = workspaceSession ?? notes.workspaceSession(noteID: initial.noteID),
               session.noteID == initial.noteID, !session.isReadOnly else {
-            return .refused(String(localized: "Resolve this item's writing and copies before removing from Tasks"))
+            return { () -> RemovalOutcome in print("AGENTLIB removeTask site 5"); return .refused(String(localized: "Resolve this item's writing and copies before removing from Tasks")) }()
         }
         session.engine.refreshCompositionActivity()
         guard session.engine.activity == .idle, session.engine.textView?.hasMarkedText() != true,
               !session.isImporting, notes.settleForWorkspaceOperation(session) else {
-            return .refused(String(localized: "Finish typing and save the writing first"))
+            return { () -> RemovalOutcome in print("AGENTLIB removeTask site 6"); return .refused(String(localized: "Finish typing and save the writing first")) }()
         }
         let history = session.engine.history.workspace ?? notes.undoRoute.workspace(for: .taskWorkspace(taskID))
-        guard session.engine.history.workspace != nil || session.engine.history.redoOps.isEmpty else { return .refused("Couldn't remove from Tasks") }
+        guard session.engine.history.workspace != nil || session.engine.history.redoOps.isEmpty else { return { () -> RemovalOutcome in print("AGENTLIB removeTask site 7"); return .refused("Couldn't remove from Tasks") }() }
         history.attach(session.engine.history)
-        guard notes.undoRoute.alias(.note(initial.noteID), to: history.historyID) else { return .refused("Couldn't remove from Tasks") }
+        guard notes.undoRoute.alias(.note(initial.noteID), to: history.historyID) else { return { () -> RemovalOutcome in print("AGENTLIB removeTask site 8"); return .refused("Couldn't remove from Tasks") }() }
         let result = ResultState(), entryID = UUID(), stamp = session.callbackStamp, agent = AgentWorkspaceCall.current
         let outcome = await history.performCommand(using: coordinator) {
             let source = try removalSource(taskID, coordinator: coordinator)
@@ -533,14 +533,15 @@ extension TaskNoteConversion {
                 }, publication: removalPublication(source, result: result, notes: notes, tasks: tasks, history: history, coordinator: coordinator))
         }
         agent?.observe(outcome)
+        print("AGENTLIB removeTask outcome \(outcome)")
         if [.committed, .publicationPending].contains(outcome) { return .removed(noteID: initial.noteID) }
         do { try proveEarlierWritingAbsent(taskID: taskID, in: coordinator.freshContext()) }
-        catch RemovalRefusal.earlierWriting { return .refused(earlierWritingReason) }
-        catch { return .refused(String(localized: "Couldn't remove from Tasks")) }
+        catch RemovalRefusal.earlierWriting { return { () -> RemovalOutcome in print("AGENTLIB removeTask site 9"); return .refused(earlierWritingReason) }() }
+        catch { return { () -> RemovalOutcome in print("AGENTLIB removeTask site 10"); return .refused(String(localized: "Couldn't remove from Tasks")) }() }
         if (try? proveFiles(taskID: taskID, noteID: initial.noteID, in: coordinator.freshContext())) == nil {
-            return .refused(earlierFilesReason)
+            return { () -> RemovalOutcome in print("AGENTLIB removeTask site 11"); return .refused(earlierFilesReason) }()
         }
-        return .refused(String(localized: "Couldn't remove from Tasks"))
+        return { () -> RemovalOutcome in print("AGENTLIB removeTask site 12"); return .refused(String(localized: "Couldn't remove from Tasks")) }()
     }
     private enum RemovalRefusal: Error { case earlierFiles, earlierWriting }
 

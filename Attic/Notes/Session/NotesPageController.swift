@@ -1127,6 +1127,7 @@ final class NotesPageController: ObservableObject {
             store.refresh()
             return true
         } catch {
+            print("AGENTLIB accept error: \((error as? AgentToolError)?.message ?? String(describing: error)) conflicted=\(call.conflicted)")
             if call.conflicted { _ = await beginWorkspaceProposalReview(review.id) }
             proposalReviewNotice = "The operation couldn't be applied: \(error.localizedDescription)"
             return false
