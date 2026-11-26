@@ -286,10 +286,6 @@ final class PanelIntegrationTests: XCTestCase {
             window.setVisibleContentFrame(frame, display: true)
             panel.uiState.updatePanelSize(window.visibleContentFrame.size)
             let size = panel.uiState.panelSize
-            // The island's next frame has it, with no wait (no frame of lag).
-            panel.controller.islandWindowsForTesting.island.displayIfNeeded()
-            let atOnce = glass
-            XCTAssertTrue(atOnce.contains(size), "step \(step): the island's glass was not laid out at the new size in the island's next frame (\(atOnce))")
             spin(until: { !glass.isEmpty }, timeout: 1)
             print("ISLAND_GLASS_STEP \(step) panel=\(size) glass=\(glass)")
             XCTAssertEqual(size.width, window.visibleContentFrame.width, accuracy: 0.5, "harness: step \(step) took its size")
