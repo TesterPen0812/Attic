@@ -1006,6 +1006,11 @@ struct AtticOwnFocusRing: ViewModifier {
     }
 
     let outline: Outline
+    /// Whether the control is a Tab stop. One that is not (the status
+    /// circle in a task row or card) can never take the keyboard, so its
+    /// ring can never show for it: it holds no focus state, which SwiftUI
+    /// would re-check on every focus change, and only a pinned ring draws.
+    var isTabStop = true
     #if DEBUG
     /// The `atticOwnFocusRing` call's file and line, for the ring census.
     var site = ""
@@ -1021,7 +1026,7 @@ struct AtticOwnFocusRing: ViewModifier {
     @Environment(\.atticForcedState) private var forced
 
     func body(content: Content) -> some View {
-        if capture == nil {
+        if capture == nil, isTabStop {
             #if DEBUG
             content.modifier(AtticLiveOwnFocusRing(outline: outline, pinned: forced == .focused, site: site))
             #else
@@ -1143,9 +1148,9 @@ extension View {
                            file: StaticString = #fileID, line: UInt = #line) -> some View {
         if acceptsKeyboardFocus {
             #if DEBUG
-            modifier(AtticOwnFocusRing(outline: outline, site: "\(file):\(line)" + (isTabStop ? "" : " notab")))
+            modifier(AtticOwnFocusRing(outline: outline, isTabStop: isTabStop, site: "\(file):\(line)" + (isTabStop ? "" : " notab")))
             #else
-            modifier(AtticOwnFocusRing(outline: outline))
+            modifier(AtticOwnFocusRing(outline: outline, isTabStop: isTabStop))
             #endif
         } else {
             // Transient feedback must never register a SwiftUI focus proxy
