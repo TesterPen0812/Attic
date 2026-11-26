@@ -828,15 +828,20 @@ extension HiddenPageKeyboardTests {
             return view === host || view.isDescendant(of: host)
         }
         func onBar(_ responder: NSResponder?) -> Bool { (responder as? NSView).map(isRootProxy) ?? false }
+        // The bar's first stop (its leftmost), the same view in both arms.
+        func firstBarStop() -> NSView? {
+            views(NSView.self, in: panel).filter(isRootProxy)
+                .min { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+        }
         var seen: [String: Int] = [:]
         var toBar = 0
-        while !onBar(panel.firstResponder), toBar < 160 {
+        while panel.firstResponder !== firstBarStop() || AtticTaskRow.keyboardStates[agenda.task]?.focused == true, toBar < 160 {
             queue("\t", code: 48, agenda.rig)
             toBar += 1
             traceTab(agenda.rig, "to-bar", toBar, seen: &seen, task: agenda.task)
         }
         let start = panel.firstResponder
-        XCTAssertTrue(onBar(start), "Tab reached the panel's tab bar")
+        XCTAssertTrue(onBar(start) && start === firstBarStop(), "Tab reached the tab bar's first stop")
         var path: [NSResponder?] = []
         seen = [:]
         while AtticTaskRow.keyboardStates[agenda.task]?.focused != true, path.count < 160 {
@@ -884,6 +889,9 @@ extension HiddenPageKeyboardTests {
             print("CAL_FKA undo after_space=\(afterSpace) after_cmdz=\(afterUndo) visible=\(agenda.rig.panel.isVisible) fr=\(kvName(agenda.rig.panel.firstResponder as? NSView))")
             assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, "⌘Z")
             XCTAssertTrue(agenda.rig.panel.isVisible, "⌘Z leaves the panel up")
+            // As on the trunk (fka run 45820518839: `after_space=done after_cmdz=todo`).
+            XCTAssertEqual(afterSpace, "done", "Space on the row marks the task done")
+            XCTAssertEqual(afterUndo, "todo", "⌘Z undoes it, as on the trunk")
         }
         do {
             let agenda = try agendaRig()
@@ -905,9 +913,13 @@ extension HiddenPageKeyboardTests {
             spin(0.8)
             print("CAL_FKA hotkey outcome=\(outcome) section=\(rig.uiState.selectedSection) composer=\(rig.uiState.isComposerPresented) "
                   + "visible=\(rig.panel.isVisible) key=\(rig.panel.isKeyWindow) fr=\(kvName(rig.panel.firstResponder as? NSView))")
+            // As on the trunk (fka run 45820518839: `outcome=shown section=tasks
+            // composer=false key=true fr=AtticTokenTextView`): Tasks comes
+            // forward with the keyboard in its add bar.
             XCTAssertEqual(outcome, .shown)
             XCTAssertEqual(rig.uiState.selectedSection, .tasks, "the hotkey brings Tasks forward")
-            XCTAssertTrue(rig.uiState.isComposerPresented, "with the new-task card open")
+            XCTAssertTrue(rig.panel.isKeyWindow, "the panel is key")
+            XCTAssertEqual(responderName(rig.panel), "AtticTokenTextView", "the keyboard is in Tasks' add bar, as on the trunk")
             assertNoHiddenPage(rig, board: agenda.board, editor: agenda.editor, "hotkey")
         }
     }

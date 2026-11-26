@@ -282,10 +282,18 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// wrapped to the panel's tab bar (fka lane run 45808976473: the shown
     /// Calendar host `canKey=false`, no `KeyViewProxy` child;
     /// page-host-tech-note.md, "FKA entry into the Calendar host").
+    ///
+    /// It is the stop for entering, not one inside: while the keyboard is in
+    /// its content it is no key view, so Shift-Tab from the content's first
+    /// control leaves for the stop before the host rather than re-entering
+    /// the host at its last control (fka run 45820495764: Shift-Tab from
+    /// Calendar's header went on to Calendar's own `57,30` stop).
     override var canBecomeKeyView: Bool {
         guard isInteractive else { return false }
         if claimsKeyboard { return super.canBecomeKeyView }
-        return NSApp.isFullKeyboardAccessEnabled && !isHiddenOrHasHiddenAncestor
+        guard NSApp.isFullKeyboardAccessEnabled, !isHiddenOrHasHiddenAncestor else { return false }
+        if let responder = window?.firstResponder as? NSView, responder.isDescendant(of: self) { return false }
+        return true
     }
 
     override func isAccessibilityElement() -> Bool {
@@ -319,7 +327,8 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// dropdown or menu, the panel's own host (its tab bar's ←/→), or while
     /// the panel is not key. A refusal is left alone.
     private func claimKeyboard() {
-        guard claimsKeyboard, let window, window.isKeyWindow else { return }
+        guard claimsKeyboard else { return joinKeyViewLoop() }
+        guard let window, window.isKeyWindow else { return }
         let responder = window.firstResponder
         let fromNoOne = responder == nil || responder === window
         let fromATabHost = (responder as? NSView).map { view in
@@ -340,6 +349,20 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
             current = candidate.superview
         }
         return nil
+    }
+
+    /// A host that claims no keyboard takes its place in the panel's
+    /// key-view loop instead, under full keyboard access, where it would
+    /// have claimed: as it comes into use (at its first frame when made in
+    /// use) and when a dropdown gives the keyboard back.
+    /// The window's loop is recalculated there and then; a fresh panel's
+    /// loop otherwise stays as it was before the host was attached (fka run
+    /// 45820495764, first panel: `hostInChainFromBar=false fromContent=48
+    /// hostIndex=-1` before the first Tab and after each of 8). A host put
+    /// away needs no unlinking: it is no key view (`canBecomeKeyView`).
+    private func joinKeyViewLoop() {
+        guard NSApp.isFullKeyboardAccessEnabled, let window, window.autorecalculatesKeyViewLoop else { return }
+        window.recalculateKeyViewLoop()
     }
 
     /// A host that stops taking part while the keyboard is inside it gives
