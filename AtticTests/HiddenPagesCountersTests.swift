@@ -1720,7 +1720,17 @@ extension HiddenPagesCountersTests {
             let linesAtScroll = CalendarNowLine.bodyEvaluations
             let clocksAtScroll = CalendarNowLine.clockBuilds
             let panelBefore = AtticPanelHostingView.layoutPasses
-            for step in 1...Self.scrollSteps { scrollStep(list, rig, step: step) }
+            let calHost = calendarHost(rig)
+            print("C9DIAG before-scroll agenda=\(CalendarAgendaDay.bodyEvaluationsByDay.values.reduce(0, +) - agendaBefore) host=\(calHost != nil) drawn=\(calHost?.isDrawn ?? false) layouts=\(calHost.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] } ?? -1) rootsOff=\(KeptContentHostCounts.roots.off) updOff=\(KeptContentHostCounts.updates.off) bounds=\(calHost?.bounds.size ?? .zero)")
+            for step in 1...Self.scrollSteps {
+                let a0 = CalendarAgendaDay.bodyEvaluationsByDay
+                scrollStep(list, rig, step: step)
+                let a1 = CalendarAgendaDay.bodyEvaluationsByDay
+                let ran = a1.filter { $0.value != a0[$0.key, default: 0] }.map { "\($0.key)" }
+                if !ran.isEmpty || step <= 2 {
+                    print("C9DIAG step=\(step) ran=\(ran) layouts=\(calHost.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] } ?? -1) rootsOff=\(KeptContentHostCounts.roots.off) updOff=\(KeptContentHostCounts.updates.off) envOff=\(KeptContentHostCounts.environments.off) drawn=\(calHost?.isDrawn ?? false)")
+                }
+            }
             let agenda = CalendarAgendaDay.bodyEvaluationsByDay.values.reduce(0, +) - agendaBefore
             let panel = AtticPanelHostingView.layoutPasses - panelBefore
             print("HIDDEN_COUNTS C9A steps=\(Self.scrollSteps) panelLayouts=\(panel) agendaDays=\(agenda) "
