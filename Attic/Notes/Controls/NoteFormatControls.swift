@@ -63,7 +63,9 @@ final class NoteFormatControls: NSObject {
             guard isFormatBarOpen != oldValue else { return }
             if isFormatBarOpen {
                 moveCaretOutOfTitle()
-                refreshSnapshot()
+                // D-06 (AUDIT-N-23): a selection's bar already on screen
+                // hands its marks to the row, so it goes as the row opens.
+                if formatModel.barShown, selection.length > 0, !linkInBar { refresh() } else { refreshSnapshot() }
             } else {
                 formatModel.rowKeyboardIndex = nil
                 if formatModel.rowStyleListOpen { formatModel.rowStyleListOpen = false }

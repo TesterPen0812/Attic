@@ -160,6 +160,25 @@ final class NotesFormatControlsTests: XCTestCase {
         .text("Student pricing")
     ])
 
+    // AUDIT-N-23 (D-06): a word selected, so the bar shows, then Aa (⌘T):
+    // the row takes the marks and the bar goes at once, not on a later
+    // selection change. Closing the row brings the bar back.
+    func testAuditN23OpeningTheRowOverASelectionHidesTheBar() {
+        let (controls, _, textView) = make()
+        let words = range("most people", textView)
+        textView.setSelectedRange(words)
+        controls.refresh()
+        XCTAssertTrue(controls.formatModel.barShown, "a selection shows the bar")
+        let snapshots = controls.snapshotCount
+        controls.isFormatBarOpen = true
+        XCTAssertFalse(controls.formatModel.barShown, "one set of controls: the row's")
+        XCTAssertEqual(controls.snapshotCount, snapshots + 1, "one state read as it opens")
+        XCTAssertEqual(textView.selectedRange(), words, "the selection stays")
+        controls.isFormatBarOpen = false
+        controls.refresh()
+        XCTAssertTrue(controls.formatModel.barShown, "the bar returns with the row closed")
+    }
+
     private func make(_ document: NoteDocument = sample, readOnly: Bool = false, topInset: CGFloat = 0,
                       bottomInset: CGFloat = 0) -> (NoteFormatControls, NoteEditorEngine, NoteEditorTextView) {
         let engine = NoteEditorEngine(noteID: UUID(), document: document, readOnly: readOnly)
