@@ -385,7 +385,10 @@ final class TaskFilesSliceTests: XCTestCase {
         var arguments = arguments
         if AgentTaskTools.asyncToolNames.contains(name), arguments["base_workspace_token"] == nil,
            !arguments.keys.contains(where: { $0.hasPrefix("base_") }) {
-            let tools = AgentTaskTools(store: tasks, noteStore: notes.store)
+            // The test's own library: a library-less AgentTaskTools would
+            // build a throwaway library that takes over the stores' weak
+            // command route and lifecycle library and leaves them nil.
+            let tools = AgentTaskTools(store: tasks, noteStore: notes.store, library: library)
             if let intent = try? tools.workspaceIntent(name: name, arguments: arguments) {
                 let snapshot = try AgentWorkspaceReadSet.capture(taskID: intent.taskID, noteID: intent.noteID, in: ModelContext(container))
                 arguments["base_workspace_token"] = try WorkspaceModelFields.encode(snapshot).base64EncodedString()
