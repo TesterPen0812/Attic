@@ -1680,7 +1680,7 @@ struct AtticSuggestionList: View {
                 AtticDropdownRow(title: item.title, systemName: item.systemName, detail: item.detail,
                                isHighlighted: index == highlighted,
                                onHover: onHover.map { report in { inside in if inside { report(index) } } },
-                               position: index + 1, itemCount: items.count) { onChoose(index) }
+                               position: index + 1, itemCount: items.count, scrollID: item.id) { onChoose(index) }
             }
         }
         .accessibilityElement(children: .contain)

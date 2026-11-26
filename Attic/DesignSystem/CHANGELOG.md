@@ -1,3 +1,21 @@
+## 2026-11-26 · A dropdown row carries one id, so the keyboard's row scrolls into view on macOS 27
+
+On macOS 27, `ScrollViewReader.scrollTo` finds no row whose String `.id`
+differs from the String id its `ForEach` keys on: the scroll is issued and
+the list stays. macOS 26 found such rows. Two lists' rows had no
+`scrollID`, so they took their title ("#work") as their id while their
+`ForEach` keyed on the item's id ("work"):
+
+- the Notes tag suggestions (`AtticTagSuggestionList`);
+- the Tasks title's and composer's "#" and date suggestions (`AtticSuggestionList`).
+
+↑ and ↓ moved the highlight past the bottom row there and the list never
+followed it. Each row now passes its `ForEach` id as its `scrollID`, so its
+`.id`, the highlight it publishes and the id the pointer reports are the
+same value. The row reads the same to VoiceOver (its title, and a tag's
+count), and a highlight move rebuilds no row. A row that keeps its id while
+its title changes is no longer rebuilt.
+
 ## 2026-11-26 · A row under an open dropdown card does not hover
 
 A dropdown card is in its own hosting view above the page, in the same
