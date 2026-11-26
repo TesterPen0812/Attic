@@ -789,6 +789,9 @@ final class NoteTableCanvas: NSView, AtticMenuTrigger {
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { table?.cellSelection != nil }
+    /// Not a key view while its page is not shown (PanelPageKeyboard), so
+    /// AppKit's Tab loop passes it by and keeps cycling on the page in use.
+    override var canBecomeKeyView: Bool { super.canBecomeKeyView && PanelPageKeyboard.mayTakeKeyboard(self) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {

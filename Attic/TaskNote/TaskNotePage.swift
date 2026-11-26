@@ -1138,6 +1138,7 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
             if !engine.isReadOnly { textView.window?.makeFirstResponder(textView) }
         }
         context.coordinator.scrollIndicators.bind(host.scrollView, transit: pageTransit)
+        PanelPageKeyboard.tag(host.scrollView, context.environment)
         return host.scrollView
     }
 
@@ -1458,6 +1459,7 @@ private struct TaskNoteFailedOpeningEscapeReceiver: NSViewRepresentable {
     func makeNSView(context: Context) -> EscapeView {
         let view = EscapeView()
         view.onEscape = onEscape
+        PanelPageKeyboard.tag(view, context.environment)
         return view
     }
 
