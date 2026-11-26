@@ -4871,8 +4871,15 @@ final class TasksDragSession {
     /// How many times a row's drag group was worked out.
     static var groupLookups = 0
 
+    /// How many times a page pass ran each row's builder (`cell()`): a lazy
+    /// list's `ForEach` runs it for the rows it builds, not for every entry
+    /// (scale-work audit #1).
+    static var passes: [TasksRowID: Int] = [:]
+
     static func notePass(_ row: TasksRowID, palette: AtticTagPalette) {
-        if records { passPalettes[row] = palette }
+        guard records else { return }
+        passPalettes[row] = palette
+        passes[row, default: 0] += 1
     }
 
     static func noteBuilder(_ row: TasksRowID, palette: AtticTagPalette) {
@@ -4902,6 +4909,7 @@ final class TasksDragSession {
         dragGroups = [:]
         builderPalettes = [:]
         passPalettes = [:]
+        passes = [:]
         leaves = [:]
         leafModels = [:]
         leafStates = [:]
