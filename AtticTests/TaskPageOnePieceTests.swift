@@ -129,6 +129,51 @@ final class TaskPageOnePieceTests: XCTestCase {
         XCTAssertEqual(motion.progress, 0)
     }
 
+    /// The list's readers observe the progress alone, so the click's own
+    /// writes must not reach them: told of those first, they took the
+    /// spring's change with them, unanimated (CI run 45890021290).
+    func testTheClickWritesNothingTheListObserves() throws {
+        let (id, content) = try makeContent()
+        let motion = TaskPageMotion()
+        final class Count: @unchecked Sendable { var n = 0 }
+        let told = Count()
+        func observe() {
+            withObservationTracking { _ = motion.progress; _ = motion.listTab } onChange: { told.n += 1 }
+        }
+        observe()
+        motion.begin(id, content: content, pose: pose)
+        XCTAssertEqual(told.n, 0, "the click tells the list nothing")
+        XCTAssertEqual(motion.place?.anchorID, id, "and its row and head are there to read")
+        XCTAssertEqual(motion.place?.pose, pose)
+        var moved = pose
+        moved.rowTop += 40
+        moved.rowBottom += 40
+        motion.retarget(content: nil, pose: moved)
+        XCTAssertEqual(told.n, 0, "nor does Back finding the row again")
+        XCTAssertEqual(motion.place?.pose, moved)
+        motion.progress = 1
+        XCTAssertEqual(told.n, 1, "the spring's change is the first it hears")
+        observe()
+        motion.progress = 0
+        told.n = 0
+        observe()
+        motion.end()
+        XCTAssertEqual(told.n, 0, "an opening that ended at the row writes nothing either")
+        XCTAssertNil(motion.place)
+    }
+
+    func testBackAndAaFoldAsTheMotionPassesTheirPart() {
+        // Towards the page: held to 0.25, as the drawing holds them.
+        XCTAssertFalse(One.backBarShown(0, opening: true))
+        XCTAssertFalse(One.backBarShown(0.25, opening: true))
+        XCTAssertTrue(One.backBarShown(0.26, opening: true))
+        // Back: there in the first frame, away once the motion leaves 0.85.
+        XCTAssertTrue(One.backBarShown(1, opening: false), "Back's first frame still has the buttons")
+        XCTAssertTrue(One.backBarShown(0.86, opening: false))
+        XCTAssertFalse(One.backBarShown(0.85, opening: false))
+        XCTAssertFalse(One.backBarShown(0, opening: false))
+    }
+
     func testThePageIsBuiltOnlyOnceTheSpringTowardsItHasSettled() async throws {
         let (id, content) = try makeContent()
         let motion = TaskPageMotion()

@@ -161,6 +161,8 @@ struct TasksDonePage<Cell: View>: View {
                 }
                 .modifier(TaskPageMakeWayLine())
             }
+            // This list's one reader of a task page's motion.
+            .modifier(TaskPageListFollows(tab: .done))
             .padding(.bottom, bottomClearance - bottomMargin)
             // The log's place is kept while its page is not built (round 10).
             .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, pointer: pointer,

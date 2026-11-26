@@ -760,6 +760,7 @@ final class PanelIntegrationTests: XCTestCase {
     /// page took over, then goes Back and waits until the row has it back.
     private func roundTrip(_ id: UUID, in rig: (panel: Panel, tasks: [TaskItem], model: TasksPageModel,
                                                 element: (String) -> AnyObject?),
+                           checksLines: Bool = false,
                            file: StaticString = #filePath, line: UInt = #line) throws {
         let begins = TaskPageMotion.beginsForTesting
         TaskPageMotion.traceForTesting = []
@@ -776,6 +777,15 @@ final class PanelIntegrationTests: XCTestCase {
         spin(until: { motion.handedOver && rig.element("task-note-back") != nil })
         if !motion.handedOver { print("ONEPIECE OPEN TRACE\n" + TaskPageMotion.traceForTesting.suffix(80).joined(separator: "\n")) }
         XCTAssertTrue(motion.handedOver, "the built page takes over once the spring has settled", file: file, line: line)
+        if checksLines {
+            // The list's lines ride the spring: a line that jumps draws the
+            // end value and nothing before it (CI run 45890021290: the drawn
+            // list's lines drew 1.000 first on every opening).
+            let draws = TaskPageMotion.lineDrawsForTesting
+            XCTAssertTrue(draws.contains { $0 > 0 && $0 < 1 }, "the list makes way on the spring, drew \(draws.prefix(8))",
+                          file: file, line: line)
+            XCTAssertEqual(draws.last, 1, "and ends at the page", file: file, line: line)
+        }
         let back = try XCTUnwrap(rig.element("task-note-back"), file: file, line: line)
         XCTAssertTrue(back.accessibilityPerformPress?() ?? false, file: file, line: line)
         spin(until: { rig.panel.uiState.openTaskNoteID == nil && !motion.isActive })
@@ -806,13 +816,42 @@ final class PanelIntegrationTests: XCTestCase {
             let selection = rig.model.selection
             let rows = rig.model.agentRowFrames(nil).map { "\($0.id) \($0.frame)" }
             XCTAssertFalse(rows.isEmpty)
-            try roundTrip(target, in: rig)
+            try roundTrip(target, in: rig, checksLines: true)
             spin(0.1)
             XCTAssertEqual(rig.model.tab, tab)
             XCTAssertEqual(rig.model.selection, selection, "Back keeps the selection the page left")
             XCTAssertEqual(scroll.contentView.bounds.origin.y, offset, accuracy: 0.5, "Back keeps the scroll")
             XCTAssertEqual(rig.model.agentRowFrames(nil).map { "\($0.id) \($0.frame)" }, rows,
                            "every row is where it was: the list was moved by drawing only")
+        }
+    }
+
+    /// The Tasks tabs' own hosts in the panel.
+    private func tabHosts(_ panel: Panel) -> [KeptContentHostingView] {
+        var hosts: [KeptContentHostingView] = []
+        func walk(_ view: NSView) {
+            if let host = view as? KeptContentHostingView { hosts.append(host) }
+            view.subviews.forEach(walk)
+        }
+        if let root = panel.controller.panelForTesting.contentView { walk(root) }
+        return hosts
+    }
+
+    /// Back lands with the other tabs built, as they are in use. A hidden
+    /// tab's list read the motion and started a spring its host never moved
+    /// on, so the motion's completion never came (CI run 45890021290,
+    /// variants H and B; landed with the lists' readers off, variant G).
+    func testOnePieceBackLandsWithTheOtherTabsBuilt() throws {
+        try withMotion(reduced: false) {
+            let rig = try onePiecePanel([TaskDraft(title: "Open me"), TaskDraft(title: "Below")])
+            let target = rig.tasks[0].id
+            spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
+            // The panel builds the tabs not shown while it is idle.
+            spin(until: { self.tabHosts(rig.panel).contains { !$0.isDrawn } }, timeout: 5)
+            XCTAssertTrue(tabHosts(rig.panel).contains { !$0.isDrawn }, "a tab not shown is built, in a host that is not drawn")
+            try roundTrip(target, in: rig, checksLines: true)
+            // And again: the first Back left nothing behind.
+            try roundTrip(target, in: rig, checksLines: true)
         }
     }
 

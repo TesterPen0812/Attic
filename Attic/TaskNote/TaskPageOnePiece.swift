@@ -81,6 +81,10 @@ enum TaskPageOnePiece {
     nonisolated static func barAway(_ p: CGFloat) -> CGFloat { ramp(p, 0, 0.45) }
     /// Back and Aa.
     nonisolated static func backBarIn(_ p: CGFloat) -> CGFloat { ramp(p, 0.25, 0.85) }
+    /// Back and Aa's glass cannot follow an opacity (a glass group ignores
+    /// one from outside), so it folds as the motion enters their part of it:
+    /// in from 0.25 on the way to the page, away from 0.85 on the way back.
+    nonisolated static func backBarShown(_ p: CGFloat, opening: Bool) -> Bool { p > (opening ? 0.25 : 0.85) }
 }
 
 // MARK: - Where things are
@@ -152,8 +156,15 @@ extension EnvironmentValues {
     /// lines, the opening row and Tasks' top row read its progress, so a turn
     /// of the motion reaches them and nothing else in the page.
     @Entry var taskPageMotion: TaskPageMotion? = nil
+    /// What a Tasks list's lines draw: set at the list's root, in the list's
+    /// own host (`TaskPageListFollows`), and nil in every list but the one
+    /// the page opened from.
+    @Entry var taskPageWay: TaskPageMakeWay? = nil
     /// Set only on the row whose page is opening: its parts travel.
     @Entry var taskPageRowLeaving: TaskPageMakeWay? = nil
+    /// Back and Aa are in (set by the stand-in's bar as the motion passes
+    /// their part of it).
+    @Entry var taskPageBarShown = true
 }
 
 // MARK: - The list makes way
@@ -164,11 +175,70 @@ extension EnvironmentValues {
 /// its parts move (`TaskPageRowPart`). Offset and opacity only, drawn and
 /// never laid out, so tab, scroll and selection are exactly as they were.
 struct TaskPageMakeWayLine: ViewModifier {
+    @Environment(\.taskPageWay) private var way
+
+    func body(content: Content) -> some View {
+        content.modifier(TaskPageLineEffect(progress: way?.progress ?? 0, pose: way?.pose))
+    }
+}
+
+/// A Tasks list's root, in the list's own host: the one reader of the motion
+/// in that list. Its lines, rows and highlight draw the value it hands them.
+///
+/// Every built tab keeps its list in a host of its own, and a host that is
+/// not drawn runs its readers but never moves a spring on. A hidden tab that
+/// read the motion started a spring it never finished, so the motion's
+/// completion, which waits for every spring it started, never came and Back
+/// never landed (CI run 45890021290, variant H: `line host=1511 drawn=false
+/// ... last=1.000` and no completion; with the lists' readers off it
+/// landed). So only the list the page opened from follows the motion.
+///
+/// It reads the progress and nothing else that an opening writes before its
+/// spring starts: a reader told of the click's own writes first took the
+/// spring's change with them, unanimated, and its lines jumped (the same
+/// run: the drawn list's lines drew 1.000 first on every opening).
+struct TaskPageListFollows: ViewModifier {
+    let tab: TasksTab
     @Environment(\.taskPageMotion) private var motion
 
     func body(content: Content) -> some View {
-        let way = motion?.way
-        return content.modifier(TaskPageLineEffect(progress: way?.progress ?? 0, pose: way?.pose))
+        content.environment(\.taskPageWay, way)
+    }
+
+    private var way: TaskPageMakeWay? {
+        guard let motion, motion.listTab == tab else { return nil }
+        let progress = motion.progress
+        guard let place = motion.place else { return nil }
+        return TaskPageMakeWay(anchorID: place.anchorID, pose: place.pose, progress: progress)
+    }
+}
+
+/// Tells the motion which Tasks tab is shown, as it changes (long before a
+/// click, so the lists have taken it by then).
+struct TaskPageListTab: ViewModifier {
+    let tab: TasksTab
+    @Environment(\.taskPageMotion) private var motion
+
+    func body(content: Content) -> some View {
+        content.onChange(of: tab, initial: true) { _, tab in
+            if motion?.listTab != tab { motion?.listTab = tab }
+        }
+    }
+}
+
+/// Whether the Tasks pager draws its shown list under a task's page: from
+/// Back's first frame, so the list runs back with the page instead of
+/// starting when the route has closed.
+struct TaskPageDrawsList<Content: View>: View {
+    @Environment(\.taskPageMotion) private var motion
+    @ViewBuilder let content: (Bool) -> Content
+
+    var body: some View {
+        // Told only when Back starts and when a page takes over. An opening
+        // that ended leaves the flag as it is (writing it would run the
+        // pager again for nothing), so it counts only while one is under
+        // way, which is read here without being observed.
+        content((motion?.drawsListUnderPage ?? false) && motion?.place != nil)
     }
 }
 
@@ -183,6 +253,9 @@ private struct TaskPageLineEffect: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         let p = progress, pose = pose
+        #if DEBUG
+        let _ = TaskPageMotion.lineDrew(p)
+        #endif
         content.visualEffect { effect, proxy in
             guard let pose, p != 0 else { return effect.offset(y: 0).opacity(1) }
             let mid = proxy.frame(in: .named(TaskPageOnePiece.space)).midY
@@ -196,11 +269,10 @@ private struct TaskPageLineEffect: ViewModifier, Animatable {
 /// The opening row's cell: tells its row it is the one leaving.
 struct TaskPageRowLeaving: ViewModifier {
     let id: UUID
-    @Environment(\.taskPageMotion) private var motion
+    @Environment(\.taskPageWay) private var way
 
     func body(content: Content) -> some View {
-        let way = motion?.way
-        return content.environment(\.taskPageRowLeaving, way?.anchorID == id ? way : nil)
+        content.environment(\.taskPageRowLeaving, way?.anchorID == id ? way : nil)
     }
 }
 
@@ -258,11 +330,10 @@ extension TaskPagePose {
 
 /// The selection's highlight under the opening row fades by 0.4.
 struct TaskPageHighlightFade: ViewModifier {
-    @Environment(\.taskPageMotion) private var motion
+    @Environment(\.taskPageWay) private var way
 
     func body(content: Content) -> some View {
-        let way = motion?.way
-        return content.modifier(TaskPageFadeEffect(progress: way?.progress ?? 0, track: .highlight))
+        content.modifier(TaskPageFadeEffect(progress: way?.progress ?? 0, track: .highlight))
     }
 }
 
@@ -380,7 +451,8 @@ struct TaskPageStandIn: View {
     let content: TaskPageStandInContent
     let pose: TaskPagePose
     let layout: PanelPageLayout
-    let barShown: Bool
+    /// Towards the page (Back and Aa come in) or back into the row.
+    let opening: Bool
     /// The built page has it: the stand-in stays in, unseen and with no
     /// glass, so Back runs it from the page's places (a stand-in put back in
     /// on Back drew the row's places at once, CI run 45858549846).
@@ -428,7 +500,7 @@ struct TaskPageStandIn: View {
                     .modifier(TaskPageStandInPart(part: .circle, progress: progress, pose: pose, top: head.top))
             }
             bar
-                .modifier(TaskPageStandInPart(part: .bar, progress: progress, pose: pose, top: head.top))
+                .modifier(TaskPageStandInPart(part: .bar, progress: progress, pose: pose, top: head.top, opening: opening))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
         .accessibilityHidden(true)
@@ -540,13 +612,13 @@ struct TaskPageStandIn: View {
     private var glassBar: some View {
         AtticControlGroup {
             HStack(spacing: 0) {
-                PanelControlFold(folded: !barShown, animation: { folded in Self.barAnimation(folded: folded, reduceMotion: design.reduceMotion) }) {
+                TaskPageBarFold {
                     AtticRaisedButton(systemName: "chevron.left", label: "Back", help: backTitle + "  (Esc)") { back() }
                         .accessibilityLabel(backTitle)
                 }
                 Spacer(minLength: AtticSpacing.s12)
                 if content.writing != nil {
-                    PanelControlFold(folded: !barShown, animation: { folded in Self.barAnimation(folded: folded, reduceMotion: design.reduceMotion) }) {
+                    TaskPageBarFold {
                         AtticRaisedButton(systemName: "textformat", label: "Format", help: String(localized: "Format (⌘T)")) {}
                             .allowsHitTesting(false)
                     }
@@ -560,11 +632,69 @@ struct TaskPageStandIn: View {
         .padding(.bottom, layout.chromeInsets.bottom)
     }
 
-    /// Back and Aa's glass comes in between 0.25 and 0.85 of the spring and
-    /// leaves in its first part (a glass group ignores an outside opacity).
+    /// Back and Aa's fold once the motion reaches their part of it: each
+    /// about as long as the spring takes over that part.
     static func barAnimation(folded: Bool, reduceMotion: Bool) -> Animation? {
         guard !reduceMotion else { return nil }
-        return folded ? .spring(duration: 0.12, bounce: 0) : .spring(duration: 0.2, bounce: 0).delay(0.06)
+        return folded ? .spring(duration: 0.12, bounce: 0) : .spring(duration: 0.14, bounce: 0)
+    }
+}
+
+/// Back or Aa in the stand-in's bar: folds (its glass with it) as the motion
+/// passes its part (`taskPageBarShown`). It starts as it is first drawn, so
+/// on Back it is there in the first frame, in the built page's buttons'
+/// place, and folds away from there (it was put in already folded, and the
+/// buttons vanished at once).
+private struct TaskPageBarFold<Content: View>: View {
+    @Environment(\.taskPageBarShown) private var shown
+    @Environment(\.atticDesign) private var design
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        TaskPageBarFoldBody(shown: shown, reduceMotion: design.reduceMotion, content: content)
+    }
+}
+
+private struct TaskPageBarFoldBody<Content: View>: View {
+    let shown: Bool
+    let reduceMotion: Bool
+    let content: () -> Content
+    @State private var away: Bool
+    @State private var gone: Bool
+
+    init(shown: Bool, reduceMotion: Bool, content: @escaping () -> Content) {
+        self.shown = shown
+        self.reduceMotion = reduceMotion
+        self.content = content
+        _away = State(initialValue: !shown)
+        _gone = State(initialValue: !shown)
+    }
+
+    var body: some View {
+        content()
+            .environment(\.atticControlAway, away)
+            .environment(\.atticControlGone, gone)
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            .animation(TaskPageStandIn.barAnimation(folded: !shown, reduceMotion: reduceMotion), value: shown)
+            .onChange(of: shown) { _, shown in fold(!shown) }
+    }
+
+    /// As `PanelControlFold`: the glass fades with the button, then goes.
+    private func fold(_ folded: Bool) {
+        guard folded != away else { return }
+        let animation = TaskPageStandIn.barAnimation(folded: folded, reduceMotion: reduceMotion)
+        if folded {
+            guard let animation else {
+                away = true
+                gone = true
+                return
+            }
+            withAnimation(animation) { away = true } completion: { if away { gone = true } }
+        } else {
+            gone = false
+            withAnimation(animation) { away = false }
+        }
     }
 }
 
@@ -578,12 +708,15 @@ private struct TaskPageStandInPart: ViewModifier, Animatable {
     let pose: TaskPagePose
     /// The head's top (the head's title is scaled from there).
     let top: CGFloat
+    /// The bar's: towards the page or back.
+    let opening: Bool
 
-    init(part: TaskPageStandInPartKind, progress: CGFloat, pose: TaskPagePose, top: CGFloat) {
+    init(part: TaskPageStandInPartKind, progress: CGFloat, pose: TaskPagePose, top: CGFloat, opening: Bool = true) {
         self.part = part
         self.progress = progress
         self.pose = pose
         self.top = top
+        self.opening = opening
     }
 
     var animatableData: CGFloat {
@@ -625,6 +758,7 @@ private struct TaskPageStandInPart: ViewModifier, Animatable {
                 .opacity(O.bodyOpacity(p))
         case .bar:
             content
+                .environment(\.taskPageBarShown, O.backBarShown(p, opening: opening))
                 .offset(y: TaskPageOnePiece.barTravel * (1 - O.backBarIn(p)))
         }
     }
@@ -696,6 +830,14 @@ final class TaskPageMotion {
     var handedOver = false
     /// Back found no row to go into: the stand-in fades as it goes.
     var rowGone = false
+    /// The Tasks tab shown: only its list follows the motion (`TaskPageListFollows`).
+    var listTab: TasksTab?
+    /// The pager draws its shown list under the page (from Back's start
+    /// until the next page has taken over).
+    var drawsListUnderPage = false
+    /// The row and the head for the list, read without being observed: the
+    /// list's readers are told of the progress only (`TaskPageListFollows`).
+    @ObservationIgnored private(set) var place: (anchorID: UUID, pose: TaskPagePose)?
     /// Each turn of the motion; a landing from an older one is ignored.
     @ObservationIgnored var generation = 0
     /// The motion is back at the row while the route is still closing.
@@ -718,6 +860,11 @@ final class TaskPageMotion {
     static var beginsForTesting = 0
     /// What the route did, in order, for a failing test to print.
     static var traceForTesting: [String] = []
+    /// What the list's lines drew since the last turn began, in order.
+    static var lineDrawsForTesting: [CGFloat] = []
+    static func lineDrew(_ p: CGFloat) {
+        if lineDrawsForTesting.last != p, lineDrawsForTesting.count < 512 { lineDrawsForTesting.append(p) }
+    }
     #endif
 
     /// DEBUG only: one line of the opening's history (tests print it).
@@ -737,7 +884,10 @@ final class TaskPageMotion {
         taskID = id
         self.content = content
         self.pose = pose
-        progress = 0
+        place = (id, pose)
+        // Not written when it is 0 already: the list's readers are told of
+        // the spring's change first, never of the click's.
+        if progress != 0 { progress = 0 }
         open = false
         handedOver = false
         rowGone = false
@@ -748,14 +898,15 @@ final class TaskPageMotion {
     func retarget(content: TaskPageStandInContent?, pose: TaskPagePose?) {
         if let content, content != self.content { self.content = content }
         if let pose, pose != self.pose { self.pose = pose }
+        if let pose, let taskID { place = (taskID, pose) }
     }
 
     func end() {
-        landingGeneration = nil
         taskID = nil
         content = nil
         pose = nil
-        progress = 0
+        place = nil
+        if progress != 0 { progress = 0 }
         open = false
         handedOver = false
         rowGone = false
@@ -772,8 +923,6 @@ final class TaskPageMotion {
 
     /// The spring towards the page is still running.
     @ObservationIgnored var landingPending = false
-    /// The turn whose landing is awaited (the stand-in drawing its end).
-    @ObservationIgnored var landingGeneration: Int?
 
     func landed(_ atPage: Bool) {
         landingPending = false
@@ -791,8 +940,6 @@ struct TaskPageOnePieceLayer: View {
     let backTitle: String
     /// The stand-in is in: the spring may start from where it is.
     let onAppear: () -> Void
-    /// The stand-in drew an end of the motion (0: the row, 1: the page).
-    let onDrewEnd: (CGFloat) -> Void
     let back: () -> Void
 
     var body: some View {
@@ -802,46 +949,13 @@ struct TaskPageOnePieceLayer: View {
         if motion.isActive, let content = motion.content, let pose = motion.pose {
             let parked = motion.handedOver
             TaskPageStandIn(progress: motion.progress, content: content, pose: pose, layout: layout,
-                            barShown: motion.open, parked: parked, backTitle: backTitle, back: back)
+                            opening: motion.open, parked: parked, backTitle: backTitle, back: back)
                 // Back with the row gone: the page fades as the list comes back.
                 .opacity(parked ? 0 : motion.rowGone ? Double(max(0, min(1, motion.progress))) : 1)
                 .allowsHitTesting(!parked)
                 .accessibilityHidden(parked)
-                .modifier(TaskPageLanding(progress: motion.progress, drewEnd: onDrewEnd))
                 .transition(.identity)
                 .onAppear(perform: onAppear)
         }
-    }
-}
-
-/// The motion lands when the stand-in draws its end. The stand-in is the one
-/// part that is in from the click until Back has landed; the list's lines
-/// are not (a lazy list lets rows go mid-motion), so the spring's own
-/// completion, which waits for every animated view, never came for a Back
-/// over a long scrolled list (CI run 45861853003: the stand-in drew 0, the
-/// completion never fired).
-private struct TaskPageLanding: ViewModifier, Animatable {
-    var progress: CGFloat
-    let drewEnd: (CGFloat) -> Void
-
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        // A spring passes its ends only as nearby values; it draws one
-        // exactly once it has settled there.
-        let _ = report(progress)
-        content
-    }
-
-    private func report(_ p: CGFloat) {
-        #if DEBUG
-        TaskPageMotion.currentForTesting?.trace("landing drew " + String(format: "%.4f", p) + (p == 0 || p == 1 ? " END" : ""))
-        #endif
-        guard p == 0 || p == 1 else { return }
-        let drewEnd = drewEnd
-        DispatchQueue.main.async { drewEnd(p) }
     }
 }

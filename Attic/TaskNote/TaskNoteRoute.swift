@@ -104,7 +104,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
                 // The head and first lines from the task's data, from the
                 // click's first frame, until the built page takes over.
                 TaskPageOnePieceLayer(motion: onePiece, layout: layout, backTitle: uiState.taskNoteBackTitle,
-                                      onAppear: onePieceStandInAppeared, onDrewEnd: onePieceDrewEnd) {
+                                      onAppear: onePieceStandInAppeared) {
                     if let id = onePiece.taskID { Self.closeRoute(id, uiState: uiState, controller: noteDraft.pages) }
                 }
                 .zIndex(3)
@@ -213,6 +213,8 @@ struct TaskNoteRouteHost<Origin: View>: View {
             let origin = uiState.taskNoteGrowOrigin
             uiState.taskNoteGrowOrigin = nil
             if old != new, startOnePiece(new, origin: origin) { return }
+            // Not in one piece: the list is hidden under its page as before.
+            if onePiece.drawsListUnderPage { onePiece.drawsListUnderPage = false }
             growStartedAt = CACurrentMediaTime()
             grow.open(from: origin, reduceMotion: design.reduceMotion, reducedStyle: reducedStyle)
             #if DEBUG
@@ -313,20 +315,20 @@ struct TaskNoteRouteHost<Origin: View>: View {
             onePiece.landed(false)
         }
         let target: CGFloat = open ? 1 : 0
-        onePiece.landingGeneration = generation
-        withAnimation(TaskPageOnePiece.spring) {
+        #if DEBUG
+        TaskPageMotion.lineDrawsForTesting = []
+        #endif
+        // It lands when every spring this started is over. What holds one is
+        // drawn for the whole motion: the stand-in, Tasks' top row and the
+        // list the page opened from (`TaskPageListFollows`).
+        withAnimation(TaskPageOnePiece.spring, completionCriteria: .removed) {
             onePiece.progress = target
-            sharedChrome?.setGivingWay(target, page: page)
+        } completion: {
+            landedOnePiece(generation)
         }
-    }
-
-    /// The stand-in drew an end: the turn towards it has landed.
-    private func onePieceDrewEnd(_ end: CGFloat) {
-        onePiece.trace("drewEnd \(end) landing=\(String(describing: onePiece.landingGeneration)) model=\(onePiece.progress)")
-        guard onePiece.isActive, let generation = onePiece.landingGeneration,
-              end == (onePiece.open ? 1 : 0), onePiece.progress == end else { return }
-        onePiece.landingGeneration = nil
-        landedOnePiece(generation)
+        // The shell's bars follow on a spring of their own: nothing of the
+        // shell's can hold the landing.
+        withAnimation(TaskPageOnePiece.spring) { sharedChrome?.setGivingWay(target, page: page) }
     }
 
     private func landedOnePiece(_ generation: Int) {
@@ -360,7 +362,11 @@ struct TaskNoteRouteHost<Origin: View>: View {
         }
         var still = Transaction()
         still.disablesAnimations = true
-        withTransaction(still) { onePiece.handedOver = true }
+        withTransaction(still) {
+            onePiece.handedOver = true
+            // The list is covered now and stops being drawn.
+            if onePiece.drawsListUnderPage { onePiece.drawsListUnderPage = false }
+        }
         onePiece.trace("handedOver waits=\(waits)")
         onePieceProbe.stopWatchingEscape()
     }
@@ -378,6 +384,10 @@ struct TaskNoteRouteHost<Origin: View>: View {
         withTransaction(still) {
             onePiece.retarget(content: TaskPageStandInContent.make(taskID, store: taskStore), pose: pose)
             onePiece.rowGone = pose == nil
+            // The list is drawn again from Back's first frame, so it runs
+            // back with the page (it was first drawn when the route closed,
+            // and started its own spring then).
+            if !onePiece.drawsListUnderPage { onePiece.drawsListUnderPage = true }
         }
         // The bars come back on the way down.
         sharedChrome?.setCovered(false, page: page, onePiece: true)

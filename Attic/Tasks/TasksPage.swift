@@ -981,6 +981,8 @@ struct TasksPage: View {
             // Now · Later · Done, ••• and Find fade as a task's page opens
             // in one piece (by 0.4 of its motion).
             .modifier(TaskPageTopRowFade())
+            // The motion follows the tab shown (only its list makes way).
+            .modifier(TaskPageListTab(tab: model.tab))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // The search opens with the design's ease (240 ms) and leaves at once.
@@ -1876,6 +1878,8 @@ struct TasksPage: View {
                         // page's one-piece motion.
                         .modifier(TaskPageHighlightFade())
                 }
+                // This list's one reader of a task page's motion.
+                .modifier(TaskPageListFollows(tab: tab))
                 .animation(reorderFade.isEmpty ? AtticMotionScale.gapClose(travel, afterRowsLeave: rowsLeaving) : nil, value: ids)
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
