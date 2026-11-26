@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Observation
 import SwiftUI
 
 /// The Calendar page in the panel (owner's panel design, 28 Oct; Task
@@ -54,6 +55,11 @@ struct CalendarPage: View {
     }
 
     final class OffsetBox { var y: CGFloat = 0 }
+    /// The scroller's height. Only the agenda's least height reads it, so a
+    /// width step changes nothing and a height step updates that frame
+    /// alone, not the page or its scroll content (calendar-resize-cause.md,
+    /// cause 5).
+    @State private var viewport = CalendarViewportHeight()
 
     init(model: CalendarPageModel, layout: PanelPageLayout, taskActions: CalendarTaskRowActions,
          onNewTask: @escaping (DueDay) -> Void, panelIsVisible: Bool = true) {
@@ -97,9 +103,8 @@ struct CalendarPage: View {
                                     isLive: isReallyVisible, isLoadingEvents: model.isLoadingEvents,
                                     onSelectDay: { day in afterClosingEvent { model.select(day) } })
                 } else {
-                    GeometryReader { proxy in
-                        scroller(snapshot, viewport: proxy.size.height)
-                    }
+                    scroller(snapshot)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport.height = $0 }
                 }
             }
             topRow(snapshot)
@@ -167,7 +172,7 @@ struct CalendarPage: View {
 
     // MARK: Scrolling grid and agenda
 
-    private func scroller(_ snapshot: CalendarPageSnapshot, viewport: CGFloat) -> some View {
+    private func scroller(_ snapshot: CalendarPageSnapshot) -> some View {
         #if DEBUG && ATTIC_UNIT_TEST_HOST
         Self.scrollerBuilds += 1
         #endif
@@ -184,8 +189,7 @@ struct CalendarPage: View {
                             .accessibilityHidden(week.containsSelection)
                     }
                 }
-                agenda(snapshot)
-                    .frame(minHeight: viewport, alignment: .top)
+                CalendarViewportFill(viewport: viewport, content: agenda(snapshot))
             }
             .padding(.bottom, CalendarDesign.agendaBottom)
             .background(PanelComposerScrollKeeper().frame(width: 0, height: 0))
@@ -541,6 +545,24 @@ struct CalendarPage: View {
         .atticDesignCorners()
         .padding(.horizontal, layout.chromeInsets.leading)
         .padding(.bottom, layout.chromeInsets.bottom)
+    }
+}
+
+/// The scroller's measured height (see `CalendarPage.viewport`).
+@Observable @MainActor
+final class CalendarViewportHeight {
+    var height: CGFloat = 0
+}
+
+/// The agenda at least as tall as the scroller, so the grid can scroll up
+/// to the week view however few days are listed. The only reader of the
+/// scroller's height.
+private struct CalendarViewportFill<Content: View>: View {
+    let viewport: CalendarViewportHeight
+    let content: Content
+
+    var body: some View {
+        content.frame(minHeight: viewport.height, alignment: .top)
     }
 }
 
