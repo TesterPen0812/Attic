@@ -837,6 +837,9 @@ private struct TaskPageLanding: ViewModifier, Animatable {
     }
 
     private func report(_ p: CGFloat) {
+        #if DEBUG
+        TaskPageMotion.currentForTesting?.trace("landing drew " + String(format: "%.4f", p) + (p == 0 || p == 1 ? " END" : ""))
+        #endif
         guard p == 0 || p == 1 else { return }
         let drewEnd = drewEnd
         DispatchQueue.main.async { drewEnd(p) }

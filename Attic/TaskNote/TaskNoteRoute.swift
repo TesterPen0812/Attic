@@ -322,6 +322,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
 
     /// The stand-in drew an end: the turn towards it has landed.
     private func onePieceDrewEnd(_ end: CGFloat) {
+        onePiece.trace("drewEnd \(end) landing=\(String(describing: onePiece.landingGeneration)) model=\(onePiece.progress)")
         guard onePiece.isActive, let generation = onePiece.landingGeneration,
               end == (onePiece.open ? 1 : 0), onePiece.progress == end else { return }
         onePiece.landingGeneration = nil

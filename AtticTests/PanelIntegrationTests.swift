@@ -774,6 +774,7 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertTrue(motion.open, file: file, line: line)
         if hadMore { XCTAssertNil(rig.element("panel-more-button"), "the bars give way on the click", file: file, line: line) }
         spin(until: { motion.handedOver && rig.element("task-note-back") != nil })
+        if !motion.handedOver { print("ONEPIECE OPEN TRACE\n" + TaskPageMotion.traceForTesting.suffix(80).joined(separator: "\n")) }
         XCTAssertTrue(motion.handedOver, "the built page takes over once the spring has settled", file: file, line: line)
         let back = try XCTUnwrap(rig.element("task-note-back"), file: file, line: line)
         XCTAssertTrue(back.accessibilityPerformPress?() ?? false, file: file, line: line)
