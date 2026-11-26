@@ -437,12 +437,6 @@ final class TaskFilesSliceTests: XCTestCase {
         library = AtticLibrary(tasks: tasks, notes: notes.store)
         notes.attachUndoRoute(library.undo)
         let handler = agent()
-        func token(_ name: String, _ arguments: [String: Any]) throws -> String {
-            let intent = try AgentTaskTools(store: tasks, noteStore: notes.store, library: library)
-                .workspaceIntent(name: name, arguments: arguments)
-            let snapshot = try AgentWorkspaceReadSet.capture(taskID: intent.taskID, noteID: intent.noteID, in: ModelContext(container))
-            return try WorkspaceModelFields.encode(snapshot).base64EncodedString()
-        }
         func assertOneLibrary(_ moment: String, tag: String, file: StaticString = #filePath, line: UInt = #line) {
             XCTAssertTrue(tasks.commandLibrary === library, "\(moment): task commands route to the app's library", file: file, line: line)
             XCTAssertTrue(notes.store.commandLibrary === library, "\(moment): note commands route to the app's library", file: file, line: line)
@@ -454,11 +448,10 @@ final class TaskFilesSliceTests: XCTestCase {
         }
 
         let noteID = UUID()
-        _ = try notes.store.createDocumentNote(id: noteID, document: NoteDocument(blocks: [.text("Agent item")])).get()
-        let addArguments: [String: Any] = ["note_id": noteID.uuidString]
-        var arguments = addArguments
-        arguments["base_workspace_token"] = try token("add_to_tasks", addArguments)
-        let (added, addError) = try await call(handler, "add_to_tasks", arguments)
+        // Writing beyond the title line: Remove from Tasks needs some.
+        _ = try notes.store.createDocumentNote(id: noteID, document: NoteDocument(blocks: [.text("Agent item"),
+            .checklist("Keep writing", checked: true)])).get()
+        let (added, addError) = try await call(handler, "add_to_tasks", ["note_id": noteID.uuidString])
         XCTAssertFalse(addError, added)
         let taskID = try XCTUnwrap(ownNoteTask(noteID), added)
         let stale = try AgentWorkspaceReadSet.capture(taskID: taskID, noteID: nil, in: ModelContext(container))
