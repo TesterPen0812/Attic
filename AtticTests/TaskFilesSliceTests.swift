@@ -385,7 +385,10 @@ final class TaskFilesSliceTests: XCTestCase {
         var arguments = arguments
         if AgentTaskTools.asyncToolNames.contains(name), arguments["base_workspace_token"] == nil,
            !arguments.keys.contains(where: { $0.hasPrefix("base_") }) {
-            let tools = AgentTaskTools(store: tasks, noteStore: notes.store)
+            // The test's own library: a library-less AgentTaskTools would
+            // build a throwaway library that takes over the stores' weak
+            // command route and lifecycle library and leaves them nil.
+            let tools = AgentTaskTools(store: tasks, noteStore: notes.store, library: library)
             if let intent = try? tools.workspaceIntent(name: name, arguments: arguments) {
                 let snapshot = try AgentWorkspaceReadSet.capture(taskID: intent.taskID, noteID: intent.noteID, in: ModelContext(container))
                 arguments["base_workspace_token"] = try WorkspaceModelFields.encode(snapshot).base64EncodedString()
@@ -422,6 +425,48 @@ final class TaskFilesSliceTests: XCTestCase {
         let accepted = await notes.acceptProposal(); XCTAssertTrue(accepted)
         XCTAssertNil(tasks.task(withID: taskID)); XCTAssertNil(ownNoteTask(ordinaryID))
         XCTAssertEqual(notes.undoRoute.workspace(for: .taskWorkspace(taskID)).undoName, "Remove from Tasks")
+    }
+
+    /// Board agent-tools-second-library (Opus R-1 on PR 21): applying an
+    /// agent's workspace proposal from Notes runs on the app's one library.
+    /// A second library would take over the stores' command route and every
+    /// tag inventory hook, then be freed, leaving tags and commands dead.
+    func testANotesAgentApplyKeepsTheAppsOneLibraryAndItsHooks() async throws {
+        // App-shaped, as AppCoordinator wires it: one library over tasks and
+        // notes, Notes on its Undo route. The MCP tools are given it too.
+        library = AtticLibrary(tasks: tasks, notes: notes.store)
+        notes.attachUndoRoute(library.undo)
+        let handler = agent()
+        func assertOneLibrary(_ moment: String, tag: String, file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertTrue(tasks.commandLibrary === library, "\(moment): task commands route to the app's library", file: file, line: line)
+            XCTAssertTrue(notes.store.commandLibrary === library, "\(moment): note commands route to the app's library", file: file, line: line)
+            XCTAssertTrue(coordinator.lifecycleLibrary === library, "\(moment): workspace lifecycle uses the app's library", file: file, line: line)
+            XCTAssertNotNil(tasks.commit([TaskDraft(title: "Tagged \(moment)", tags: [tag])]), file: file, line: line)
+            XCTAssertEqual(library.tags.countsByName[tag], 1, "\(moment): the app's tag inventory sees a new tag", file: file, line: line)
+            XCTAssertEqual(notes.store.sharedTagCounts?(), library.tags.countsByName,
+                           "\(moment): Notes read the app's tag inventory", file: file, line: line)
+        }
+
+        let noteID = UUID()
+        // Writing beyond the title line: Remove from Tasks needs some.
+        _ = try notes.store.createDocumentNote(id: noteID, document: NoteDocument(blocks: [.text("Agent item"),
+            .checklist("Keep writing", checked: true)])).get()
+        let (added, addError) = try await call(handler, "add_to_tasks", ["note_id": noteID.uuidString])
+        XCTAssertFalse(addError, added)
+        let taskID = try XCTUnwrap(ownNoteTask(noteID), added)
+        let stale = try AgentWorkspaceReadSet.capture(taskID: taskID, noteID: nil, in: ModelContext(container))
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "New task title"))
+        let (pending, pendingError) = try await call(handler, "remove_from_tasks", ["task_id": taskID.uuidString,
+            "base_workspace_token": try WorkspaceModelFields.encode(stale).base64EncodedString()])
+        XCTAssertFalse(pendingError, pending); XCTAssertTrue(pending.contains("pending"), pending)
+        let proposal = try XCTUnwrap(notes.workspaceProposals.first)
+        assertOneLibrary("before the apply", tag: "agentlibbefore")
+
+        // The apply the Notes page's Apply button makes.
+        let began = await notes.beginProposalReview(id: proposal.id); XCTAssertTrue(began)
+        let accepted = await notes.acceptProposal(); XCTAssertTrue(accepted, notes.proposalReviewNotice ?? "")
+        XCTAssertNil(tasks.task(withID: taskID))
+        assertOneLibrary("after the apply", tag: "agentlibafter")
     }
 
     func testBAgentRemoveClosedPageLeavesPresentationUnchanged() async throws {
