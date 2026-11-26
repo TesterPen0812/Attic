@@ -865,18 +865,26 @@ final class DrawPageModel: ObservableObject {
 
     func copySelection() {
         guard let canvasID, !selection.isEmpty, let data = try? store.copy(selection, from: canvasID) else { return }
-        pasteboard.clearContents()
-        pasteboard.setData(data, forType: NSPasteboard.PasteboardType(DrawStore.clipboardType))
+        _ = writeToPasteboard(data)
     }
 
     func cutSelection() {
         syncExternalChanges()
         guard let canvasID, !selection.isEmpty, let data = try? store.copy(selection, from: canvasID) else { return }
-        pasteboard.clearContents()
-        guard pasteboard.setData(data, forType: NSPasteboard.PasteboardType(DrawStore.clipboardType)) else { return }
+        guard writeToPasteboard(data) else { return }
         let ids = selection
         select([])
         apply(store.cut(ids, from: canvasID))
+    }
+
+    /// Draw's own objects, and the picture other apps paste (AUDIT-V-02),
+    /// on one pasteboard item.
+    private func writeToPasteboard(_ data: Data) -> Bool {
+        let item = NSPasteboardItem()
+        guard item.setData(data, forType: NSPasteboard.PasteboardType(DrawStore.clipboardType)) else { return false }
+        images.promisePicture(of: selectedObjects, on: item)
+        pasteboard.clearContents()
+        return pasteboard.writeObjects([item])
     }
 
     var canPaste: Bool {

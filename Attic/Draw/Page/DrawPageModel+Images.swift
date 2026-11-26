@@ -160,6 +160,27 @@ extension DrawPageModel {
     }
 }
 
+/// The picture a ⌘C or ⌘X promises other apps (AUDIT-V-02): a PNG of the
+/// copied objects on the board colour, or of one image's own pixels, made
+/// only when an app asks for it.
+final class DrawPicturePromise: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
+    private let objects: [DrawObject]
+    private let dark: Bool
+    private let original: Data?
+
+    init(objects: [DrawObject], dark: Bool, original: Data?) {
+        self.objects = objects
+        self.dark = dark
+        self.original = original
+    }
+
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        guard type == .png else { return }
+        let png = original.map(DrawImageActions.png(of:)) ?? DrawExport.render(objects, format: .png, dark: dark)
+        if let png { item.setData(png, forType: .png) }
+    }
+}
+
 /// Where an import lands: its canvas and that canvas's view at the drop.
 private struct DrawImageDrop: Sendable {
     var canvas: UUID
@@ -198,6 +219,8 @@ final class DrawImageActions: DrawImageSeam {
     /// The latest file or pasteboard write, for tests to wait on.
     private(set) var lastTask: Task<Void, Never>?
     private var copyGeneration: UInt64 = 0
+    /// The latest ⌘C or ⌘X picture, kept until the next one replaces it.
+    private var picturePromise: DrawPicturePromise?
     var copyRenderer: @MainActor ([DrawObject], Bool) async -> Data? = { objects, dark in
         await Task.detached(priority: .userInitiated) { DrawExport.render(objects, format: .png, dark: dark) }.value
     }
@@ -258,6 +281,26 @@ final class DrawImageActions: DrawImageSeam {
         copy(objects)
     }
 
+    /// ⌘C and ⌘X (AUDIT-V-02): Draw's own objects go on `item` as before;
+    /// a picture of them joins them, so other apps paste an image and Draw
+    /// still pastes objects. It is the picture Copy as Image makes (one
+    /// image: its original bytes, plus a PNG when it isn't one), promised
+    /// now and drawn only when an app asks for it. A newer copy, or another
+    /// app's, replaces the item and with it the promise.
+    func promisePicture(of objects: [DrawObject], on item: NSPasteboardItem) {
+        guard !objects.isEmpty else { return }
+        var original: Data?
+        if objects.count == 1, case .image(let image) = objects[0].content {
+            let type = NSPasteboard.PasteboardType(image.contentType)
+            item.setData(image.original, forType: type)
+            guard type != .png else { return }
+            original = image.original
+        }
+        let promise = DrawPicturePromise(objects: objects, dark: Self.isDark, original: original)
+        item.setDataProvider(promise, forTypes: [.png])
+        picturePromise = promise
+    }
+
     private func copyOriginal(_ image: DrawImage) {
         guard let pasteboard = model?.pasteboard else { return }
         let changeCount = pasteboard.changeCount
@@ -276,7 +319,7 @@ final class DrawImageActions: DrawImageSeam {
     }
 
     /// A PNG of the image's own pixels (orientation and colour kept).
-    nonisolated private static func png(of data: Data) -> Data? {
+    nonisolated static func png(of data: Data) -> Data? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0 else { return nil }
         let output = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { return nil }
