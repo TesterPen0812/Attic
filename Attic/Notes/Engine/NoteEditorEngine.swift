@@ -2804,7 +2804,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             case Self.fragmentType:
                 if let data = try? NoteContentCodec.encode(fragment, context: .fragment) { wrote = pasteboard.setData(data, forType: type) || wrote }
             case .string:
-                wrote = pasteboard.setString(NoteTextExport.plainText(fragment), forType: .string) || wrote
+                // AUDIT-N-02: as the note reads (numbers count), not its search text.
+                wrote = pasteboard.setString(NoteTextExport.clipboardText(fragment), forType: .string) || wrote
             case AtticPasteboardTypes.markdown:
                 // A fragment's first paragraph is body text, not a title.
                 let body = NoteDocument(blocks: [.text("")] + fragment.blocks)

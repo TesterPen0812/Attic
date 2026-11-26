@@ -639,6 +639,30 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    // AUDIT-N-02: Copy's plain text reads like the note: numbers count and
+    // a checklist item is "- [ ] text" (headings keep "##", as U18 pins). Search text
+    // and the saved body keep their own form.
+    func testAuditN02PlainTextCopyCountsNumbersAndReadsLikeTheNote() throws {
+        var heading = NoteBlock.text("Plan", style: "heading")
+        heading.level = 2
+        let blocks: [NoteBlock] = [.text("T"), heading, .text("first", style: "number"), .text("second", style: "number"),
+                                   .text("third", style: "number"), .checklist("buy milk"), .checklist("eggs", checked: true)]
+        let (engine, _) = makeEngine(NoteDocument(blocks: blocks))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        XCTAssertTrue(engine.writeSelection(NSRange(location: 2, length: engine.textStorage.length - 2), to: board, types: [.string]))
+        XCTAssertEqual(board.string(forType: .string), "## Plan\n1. first\n2. second\n3. third\n- [ ] buy milk\n- [x] eggs")
+        // A copy from inside the list counts from 1, as its Markdown does
+        // (testB02InAppCutToReorderContinuesNumbering pins "1. b").
+        let second = (engine.textStorage.string as NSString).range(of: "second")
+        board.clearContents()
+        XCTAssertTrue(engine.writeSelection(NSRange(location: second.location, length: engine.textStorage.length - second.location),
+                                            to: board, types: [.string]))
+        XCTAssertEqual(board.string(forType: .string), "1. second\n2. third\n- [ ] buy milk\n- [x] eggs")
+        XCTAssertEqual(NoteTextExport.plainText(engine.document()),
+                       "T\n## Plan\n1. first\n1. second\n1. third\n[ ] buy milk\n[x] eggs", "search text is unchanged")
+    }
+
     // AUDIT-N-22 guard: a highlight turned on at the caret keeps on while
     // typing, past the first character.
     func testAuditN22HighlightTurnedOnKeepsOnWhileTyping() throws {

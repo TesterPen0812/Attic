@@ -14,6 +14,35 @@ enum NoteTextExport {
         document.blocks.dropFirst().map(plainLine).joined(separator: "\n")
     }
 
+    /// The plain-text flavour of a copy (AUDIT-N-02): as the note reads,
+    /// not its search text. Numbers count within the copy (1. 2. 3., from
+    /// an item's own start), as its Markdown flavour does, and a checklist
+    /// item is `- [ ] text`. Headings keep their marks (RoundUContentTests
+    /// U18 pins "###### x"). Search and the saved body keep `plainText`.
+    static func clipboardText(_ document: NoteDocument) -> String {
+        var numbered: [Int: Int] = [:]
+        return document.blocks.map { block -> String in
+            let depth = min(2, max(0, block.indent ?? 0))
+            let pad = String(repeating: "  ", count: depth)
+            let isList = block.kind == .checklist || (block.kind == .text && ["bullet", "number"].contains(block.style ?? ""))
+            if !isList { numbered.removeAll() }
+            switch block.kind {
+            case .text where block.style == "number" && block.callout == nil:
+                numbered = numbered.filter { $0.key <= depth }
+                let old = numbered[depth] ?? 0
+                let number = block.start ?? (old < Int.max ? old + 1 : old)
+                numbered[depth] = number
+                return pad + "\(number). " + block.displayText
+            case .checklist:
+                numbered = numbered.filter { $0.key < depth }
+                return pad + (block.checked ? "- [x] " : "- [ ] ") + block.displayText
+            default:
+                if isList { numbered = numbered.filter { $0.key < depth } }
+                return plainLine(block)
+            }
+        }.joined(separator: "\n")
+    }
+
     static func plainLine(_ block: NoteBlock) -> String {
         switch block.kind {
         case .text:
