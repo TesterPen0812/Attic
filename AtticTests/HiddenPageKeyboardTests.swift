@@ -521,6 +521,37 @@ extension HiddenPageKeyboardTests {
         print("CAL_TAB \(label) step=\(step) fr=\(place) tag=\(tag) rep=\(repeats) row=\(row) head=\(head) ax=\(ax)")
     }
 
+    /// SCRATCH (FKA hunt): the AppKit key-view chain from the content view,
+    /// and every kept host's key-view state.
+    private func dumpKeyViews(_ rig: Rig, _ label: String) {
+        func info(_ view: NSView) -> String {
+            var tag = PanelPageKeyboard.membership(of: view).map { "\($0)" } ?? "-"
+            if let host = view as? KeptContentHostingView { tag += " kept(interactive=\(host.isInteractive))" }
+            return "\(AtticPanel.keyViewName(view)) canKey=\(view.canBecomeKeyView) accepts=\(view.acceptsFirstResponder) tag=\(tag)"
+        }
+        print("KVCHAIN \(label) fka=\(NSApp.isFullKeyboardAccessEnabled) fr=\(responderName(rig.panel)) initial=\(AtticPanel.keyViewName(rig.panel.initialFirstResponder)) auto=\(rig.panel.autorecalculatesKeyViewLoop)")
+        var seen = Set<ObjectIdentifier>()
+        var next = rig.panel.contentView
+        var index = 0
+        while let view = next, seen.insert(ObjectIdentifier(view)).inserted, index < 40 {
+            print("KVCHAIN \(label) raw[\(index)] \(info(view))")
+            next = view.nextKeyView
+            index += 1
+        }
+        seen.removeAll()
+        next = rig.panel.contentView?.nextValidKeyView
+        index = 0
+        while let view = next, seen.insert(ObjectIdentifier(view)).inserted, index < 40 {
+            print("KVCHAIN \(label) valid[\(index)] \(info(view))")
+            next = view.nextValidKeyView
+            index += 1
+        }
+        for host in views(KeptContentHostingView.self, in: rig.panel) {
+            print("KVCHAIN \(label) host \(info(host)) next=\(AtticPanel.keyViewName(host.nextKeyView)) prev=\(AtticPanel.keyViewName(host.previousKeyView)) "
+                  + "nextValid=\(AtticPanel.keyViewName(host.nextValidKeyView)) subviews=\(host.subviews.map { String(describing: type(of: $0)) })")
+        }
+    }
+
     private func agendaRig(file: StaticString = #filePath, line: UInt = #line) throws -> AgendaRig {
         let rig = try makeRig()
         let task = try seedTodayTask(rig.store, title: "Agenda row")
@@ -541,11 +572,14 @@ extension HiddenPageKeyboardTests {
         var seen: [String: Int] = [:]
         let fka = NSApp.isFullKeyboardAccessEnabled
         print("CAL_TAB rig fka=\(fka) start fr=\(responderName(rig.panel))")
+        if fka { dumpKeyViews(rig, "calendar-start"); AtticPanel.traceKeyViews = true }
+        defer { AtticPanel.traceKeyViews = false }
         while AtticTaskRow.keyboardStates[task]?.focused != true, tabs < (fka ? 160 : 40) {
             queue("\t", code: 48, rig)
             assertNoHiddenPage(rig, board: board, editor: editor, "Tab to the row", file: file, line: line)
             tabs += 1
             traceTab(rig, "rig", tabs, seen: &seen, task: task)
+            if tabs == 12 { AtticPanel.traceKeyViews = false; if fka { dumpKeyViews(rig, "calendar-after12") } }
             if !fka, tabs == 4, AtticTaskRow.keyboardStates[task]?.focused != true, !recalculated {
                 var chain: [String] = []
                 var next = rig.panel.contentView?.nextValidKeyView
@@ -722,4 +756,33 @@ extension HiddenPageKeyboardTests {
             XCTAssertTrue(agenda.rig.panel.isVisible, "\(name) leaves the panel up")
         }
     }
+
+    /// SCRATCH (FKA hunt): how the Tasks page's kept tab hosts are entered.
+    func testScratchFKATasksEntry() throws {
+        try requireKeyWindowTests()
+        let rig = try makeRig()
+        defer { close(rig) }
+        let task = try seedTodayTask(rig.store, title: "Tasks row")
+        show(.calendar, rig)
+        show(.tasks, rig, settle: 1.0)
+        NSApp.activate(ignoringOtherApps: true)
+        rig.panel.makeKey()
+        spin(0.5)
+        dumpKeyViews(rig, "tasks-shown")
+        AtticPanel.traceKeyViews = true
+        defer { AtticPanel.traceKeyViews = false }
+        var seen: [String: Int] = [:]
+        for step in 1...14 {
+            queue("\t", code: 48, rig)
+            traceTab(rig, "tasks", step, seen: &seen, task: task)
+        }
+        AtticPanel.traceKeyViews = false
+        rig.panel.makeFirstResponder(nil)
+        dumpKeyViews(rig, "tasks-window-holds")
+        for step in 1...6 {
+            queue("\t", code: 48, rig)
+            traceTab(rig, "tasks-from-window", step, seen: &seen, task: task)
+        }
+    }
+
 }
