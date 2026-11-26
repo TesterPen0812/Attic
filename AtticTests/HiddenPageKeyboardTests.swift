@@ -498,8 +498,8 @@ extension HiddenPageKeyboardTests {
         let board = try board(rig)
         let editor = try openNote(rig, [.text("Agenda title"), .text("Agenda body")])
         show(.calendar, rig, settle: 1.0)
-        // The first panel a test process shows can come up before the app
-        // is active, and an inactive app's key panel takes no Tab.
+        // Key and active before the first Tab. (The first panel a test
+        // process shows can still hold a stale key-view loop; see below.)
         NSApp.activate(ignoringOtherApps: true)
         rig.panel.makeKey()
         let deadline = Date().addingTimeInterval(3)
