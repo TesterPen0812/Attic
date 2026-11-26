@@ -775,7 +775,7 @@ final class PanelIntegrationTests: XCTestCase {
         let back = try XCTUnwrap(rig.element("task-note-back"), file: file, line: line)
         XCTAssertTrue(back.accessibilityPerformPress?() ?? false, file: file, line: line)
         spin(until: { rig.panel.uiState.openTaskNoteID == nil && !motion.isActive })
-        do { print("ONEPIECE TRACE active=\(motion.isActive)\n" + TaskPageMotion.traceForTesting.suffix(90).joined(separator: "\n")) }
+        do { print("ONEPIECE TRACE active=\(motion.isActive)\n" + TaskPageMotion.traceForTesting.suffix(160).joined(separator: "\n")) }
         XCTAssertNil(rig.panel.uiState.openTaskNoteID, file: file, line: line)
         XCTAssertFalse(motion.isActive, "Back lands in the row and the opening ends", file: file, line: line)
         spin(until: { rig.element("panel-more-button") != nil })

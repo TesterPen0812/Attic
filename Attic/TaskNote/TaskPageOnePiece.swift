@@ -43,9 +43,11 @@ enum TaskPageOnePiece {
     @MainActor private static var lastFrame: [String: CGFloat] = [:]
     /// Tests: a part drew the motion's end value (0 or 1); logged once per change.
     @MainActor static func frame(_ who: String, _ p: CGFloat) {
-        guard p == 0 || p == 1, lastFrame[who] != p else { if p != 0 && p != 1 { lastFrame[who] = p }; return }
+        // The head logs every value it draws (is the motion animated?); the rest only their end values.
+        let every = who == "standin.head"
+        guard every || p == 0 || p == 1, lastFrame[who] != p else { if p != 0 && p != 1 { lastFrame[who] = p }; return }
         lastFrame[who] = p
-        TaskPageMotion.currentForTesting?.trace("frame \(who) \(p)")
+        TaskPageMotion.currentForTesting?.trace("frame \(who) " + String(format: "%.3f", p))
     }
     #endif
 
@@ -737,7 +739,7 @@ final class TaskPageMotion {
         #if DEBUG
         Self.traceForTesting.append(String(format: "%.3f ", CACurrentMediaTime()) + event()
             + " open=\(open) p=\(progress) handed=\(handedOver) back=\(landedBack) gen=\(generation)")
-        if Self.traceForTesting.count > 200 { Self.traceForTesting.removeFirst(50) }
+        if Self.traceForTesting.count > 400 { Self.traceForTesting.removeFirst(100) }
         #endif
     }
 
