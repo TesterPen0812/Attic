@@ -39,18 +39,6 @@ enum TaskPageOnePiece {
         .spring(duration: AtticMotionPreset.expand.duration, bounce: AtticMotionPreset.expand.bounce)
     }
 
-    #if DEBUG
-    @MainActor private static var lastFrame: [String: CGFloat] = [:]
-    /// Tests: a part drew the motion's end value (0 or 1); logged once per change.
-    @MainActor static func frame(_ who: String, _ p: CGFloat) {
-        // The head logs every value it draws (is the motion animated?); the rest only their end values.
-        let every = who == "standin.head"
-        guard every || p == 0 || p == 1, lastFrame[who] != p else { if p != 0 && p != 1 { lastFrame[who] = p }; return }
-        lastFrame[who] = p
-        TaskPageMotion.currentForTesting?.trace("frame \(who) " + String(format: "%.3f", p))
-    }
-    #endif
-
     /// How far the bars drop and Back and Aa rise (the drawing's 24 px).
     nonisolated static let barTravel: CGFloat = 12
     /// The least the rows below are pushed (the drawing's 120 px).
@@ -194,9 +182,6 @@ private struct TaskPageLineEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        #if DEBUG
-        let _ = TaskPageOnePiece.frame("line", progress)
-        #endif
         let p = progress, pose = pose
         content.visualEffect { effect, proxy in
             guard let pose, p != 0 else { return effect.offset(y: 0).opacity(1) }
@@ -246,9 +231,6 @@ private struct TaskPageRowPartEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        #if DEBUG
-        let _ = TaskPageOnePiece.frame("rowpart", progress)
-        #endif
         let p = pose == nil ? 0 : progress
         let pose = pose ?? .zero
         switch kind {
@@ -308,9 +290,6 @@ private struct TaskPageFadeEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        #if DEBUG
-        let _ = TaskPageOnePiece.frame("fade", progress)
-        #endif
         switch track {
         case .highlight: content.opacity(TaskPageOnePiece.highlightOpacity(progress))
         case .top: content.opacity(TaskPageOnePiece.topOpacity(progress))
@@ -329,9 +308,6 @@ struct TaskPageBarDrop: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        #if DEBUG
-        let _ = TaskPageOnePiece.frame("bar", progress)
-        #endif
         content.offset(y: TaskPageOnePiece.barTravel * TaskPageOnePiece.barAway(progress))
     }
 }
@@ -616,9 +592,6 @@ private struct TaskPageStandInPart: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        #if DEBUG
-        let _ = TaskPageOnePiece.frame("standin.\(part)", progress)
-        #endif
         let p = progress
         let O = TaskPageOnePiece.self
         switch part {
@@ -778,6 +751,7 @@ final class TaskPageMotion {
     }
 
     func end() {
+        landingGeneration = nil
         taskID = nil
         content = nil
         pose = nil
@@ -798,6 +772,8 @@ final class TaskPageMotion {
 
     /// The spring towards the page is still running.
     @ObservationIgnored var landingPending = false
+    /// The turn whose landing is awaited (the stand-in drawing its end).
+    @ObservationIgnored var landingGeneration: Int?
 
     func landed(_ atPage: Bool) {
         landingPending = false
@@ -815,6 +791,8 @@ struct TaskPageOnePieceLayer: View {
     let backTitle: String
     /// The stand-in is in: the spring may start from where it is.
     let onAppear: () -> Void
+    /// The stand-in drew an end of the motion (0: the row, 1: the page).
+    let onDrewEnd: (CGFloat) -> Void
     let back: () -> Void
 
     var body: some View {
@@ -829,8 +807,38 @@ struct TaskPageOnePieceLayer: View {
                 .opacity(parked ? 0 : motion.rowGone ? Double(max(0, min(1, motion.progress))) : 1)
                 .allowsHitTesting(!parked)
                 .accessibilityHidden(parked)
+                .modifier(TaskPageLanding(progress: motion.progress, drewEnd: onDrewEnd))
                 .transition(.identity)
                 .onAppear(perform: onAppear)
         }
+    }
+}
+
+/// The motion lands when the stand-in draws its end. The stand-in is the one
+/// part that is in from the click until Back has landed; the list's lines
+/// are not (a lazy list lets rows go mid-motion), so the spring's own
+/// completion, which waits for every animated view, never came for a Back
+/// over a long scrolled list (CI run 45861853003: the stand-in drew 0, the
+/// completion never fired).
+private struct TaskPageLanding: ViewModifier, Animatable {
+    var progress: CGFloat
+    let drewEnd: (CGFloat) -> Void
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        // A spring passes its ends only as nearby values; it draws one
+        // exactly once it has settled there.
+        let _ = report(progress)
+        content
+    }
+
+    private func report(_ p: CGFloat) {
+        guard p == 0 || p == 1 else { return }
+        let drewEnd = drewEnd
+        DispatchQueue.main.async { drewEnd(p) }
     }
 }

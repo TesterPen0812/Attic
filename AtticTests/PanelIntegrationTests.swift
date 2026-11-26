@@ -763,13 +763,16 @@ final class PanelIntegrationTests: XCTestCase {
                            file: StaticString = #filePath, line: UInt = #line) throws {
         let begins = TaskPageMotion.beginsForTesting
         TaskPageMotion.traceForTesting = []
+        // The bars as they were (Done's search field takes the top row's More).
+        let hadMore = rig.element("panel-more-button") != nil
+        let hadPlus = rig.element("tasks-new-task") != nil
         rig.panel.uiState.openTaskNote(id, from: .tasks)
         spin(until: { TaskPageMotion.currentForTesting?.taskID == id })
         let motion = try XCTUnwrap(TaskPageMotion.currentForTesting, "the page opens in one piece", file: file, line: line)
         XCTAssertEqual(TaskPageMotion.beginsForTesting, begins + 1, file: file, line: line)
         XCTAssertEqual(motion.taskID, id, file: file, line: line)
         XCTAssertTrue(motion.open, file: file, line: line)
-        XCTAssertNil(rig.element("panel-more-button"), "the bars give way on the click", file: file, line: line)
+        if hadMore { XCTAssertNil(rig.element("panel-more-button"), "the bars give way on the click", file: file, line: line) }
         spin(until: { motion.handedOver && rig.element("task-note-back") != nil })
         XCTAssertTrue(motion.handedOver, "the built page takes over once the spring has settled", file: file, line: line)
         let back = try XCTUnwrap(rig.element("task-note-back"), file: file, line: line)
@@ -778,9 +781,9 @@ final class PanelIntegrationTests: XCTestCase {
         do { print("ONEPIECE TRACE active=\(motion.isActive)\n" + TaskPageMotion.traceForTesting.suffix(160).joined(separator: "\n")) }
         XCTAssertNil(rig.panel.uiState.openTaskNoteID, file: file, line: line)
         XCTAssertFalse(motion.isActive, "Back lands in the row and the opening ends", file: file, line: line)
-        spin(until: { rig.element("panel-more-button") != nil })
-        XCTAssertNotNil(rig.element("panel-more-button"), "the bars are whole again after Back", file: file, line: line)
-        XCTAssertNotNil(rig.element("tasks-new-task"), file: file, line: line)
+        spin(until: { (rig.element("panel-more-button") != nil) == hadMore && (rig.element("tasks-new-task") != nil) == hadPlus })
+        XCTAssertEqual(rig.element("panel-more-button") != nil, hadMore, "the bars are as they were after Back", file: file, line: line)
+        XCTAssertEqual(rig.element("tasks-new-task") != nil, hadPlus, "the bars are as they were after Back", file: file, line: line)
     }
 
     func testOnePieceRoundTripLeavesTabScrollAndSelectionAsTheyWere() throws {

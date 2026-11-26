@@ -104,7 +104,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
                 // The head and first lines from the task's data, from the
                 // click's first frame, until the built page takes over.
                 TaskPageOnePieceLayer(motion: onePiece, layout: layout, backTitle: uiState.taskNoteBackTitle,
-                                      onAppear: onePieceStandInAppeared) {
+                                      onAppear: onePieceStandInAppeared, onDrewEnd: onePieceDrewEnd) {
                     if let id = onePiece.taskID { Self.closeRoute(id, uiState: uiState, controller: noteDraft.pages) }
                 }
                 .zIndex(3)
@@ -313,17 +313,19 @@ struct TaskNoteRouteHost<Origin: View>: View {
             onePiece.landed(false)
         }
         let target: CGFloat = open ? 1 : 0
-        withAnimation(TaskPageOnePiece.spring, completionCriteria: .removed) {
+        onePiece.landingGeneration = generation
+        withAnimation(TaskPageOnePiece.spring) {
             onePiece.progress = target
-        } completion: {
-            onePiece.trace("completion progress gen \(generation)")
-            landedOnePiece(generation)
-        }
-        withAnimation(TaskPageOnePiece.spring, completionCriteria: .removed) {
             sharedChrome?.setGivingWay(target, page: page)
-        } completion: {
-            onePiece.trace("completion givingWay gen \(generation)")
         }
+    }
+
+    /// The stand-in drew an end: the turn towards it has landed.
+    private func onePieceDrewEnd(_ end: CGFloat) {
+        guard onePiece.isActive, let generation = onePiece.landingGeneration,
+              end == (onePiece.open ? 1 : 0), onePiece.progress == end else { return }
+        onePiece.landingGeneration = nil
+        landedOnePiece(generation)
     }
 
     private func landedOnePiece(_ generation: Int) {
