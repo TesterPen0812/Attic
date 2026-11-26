@@ -4570,11 +4570,14 @@ extension NotesPageController {
         return nil
     }
 
-    func copyMarkdown(noteID: UUID) {
+    func copyMarkdown(noteID: UUID, to pasteboard: NSPasteboard = .general) {
         guard let text = markdown(noteID: noteID) else { return }
-        let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        guard pasteboard.setString(text, forType: .string) else { return }
+        // AUDIT-N-38: say that it copied, where the page shows its notices,
+        // never over an error or a caution the page is still showing.
+        guard let session = active, session.noticeValue.map({ $0.severity == .information }) ?? true else { return }
+        session.showNotice(NoteNotice(kind: .markdownCopied, detail: String(localized: "The note is on the clipboard as Markdown.")))
     }
 
     /// The note the library selects: the one on screen, else (from a new

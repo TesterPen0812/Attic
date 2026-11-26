@@ -5,7 +5,7 @@ import AppKit
 struct NoteNotice: Equatable, Sendable {
     enum Severity: Sendable { case error, caution, information, progress }
     enum Kind: CaseIterable, Sendable {
-        case saving, stillSaving, stillReading, damaged, quarantined, copySaved, copyFailed, notDeleted, copyKept, keptSafe, noteSaved, tablePasted, textRestored, notAvailable, notKept, finishFirst, stillAdding, importBusy, imageGone, notSaved, noDuplicate, cancelled, cantCancel, notAdded, historyError, saveFirst, readFailed, notReadable, notRestored, notCleared, textPasted, tableLimit, notPasted, pasteAgain, didntWork, notice
+        case saving, stillSaving, stillReading, damaged, quarantined, copySaved, copyFailed, notDeleted, copyKept, keptSafe, noteSaved, tablePasted, textRestored, notAvailable, notKept, finishFirst, stillAdding, importBusy, imageGone, notSaved, noDuplicate, cancelled, cantCancel, notAdded, historyError, saveFirst, readFailed, notReadable, notRestored, notCleared, textPasted, tableLimit, notPasted, pasteAgain, didntWork, notice, markdownCopied
         var headline: String {
             switch self {
             case .saving: String(localized: "Saving…")
@@ -46,13 +46,14 @@ struct NoteNotice: Equatable, Sendable {
             case .pasteAgain: String(localized: "Paste again")
             case .didntWork: String(localized: "Didn’t work")
             case .notice: String(localized: "Heads up")
+            case .markdownCopied: String(localized: "Markdown copied")
             }
         }
         var severity: Severity {
             switch self {
             case .copyFailed, .notDeleted, .notSaved, .noDuplicate, .cantCancel, .notAdded, .notRestored, .notCleared, .didntWork: .error
             case .damaged, .copyKept, .keptSafe, .notAvailable, .notKept, .imageGone, .historyError, .readFailed, .notReadable, .notPasted: .caution
-            case .quarantined, .copySaved, .noteSaved, .tablePasted, .textRestored, .finishFirst, .importBusy, .cancelled, .saveFirst, .textPasted, .tableLimit, .pasteAgain, .notice: .information
+            case .quarantined, .copySaved, .noteSaved, .tablePasted, .textRestored, .finishFirst, .importBusy, .cancelled, .saveFirst, .textPasted, .tableLimit, .pasteAgain, .notice, .markdownCopied: .information
             case .saving, .stillSaving, .stillReading, .stillAdding: .progress
             }
         }
