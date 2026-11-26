@@ -1,3 +1,16 @@
+## 2026-11-26 · A row under an open dropdown card does not hover
+
+A dropdown card is in its own hosting view above the page, in the same
+window, and the Tasks list's hover tracker only asked whether the pointer
+was in the page, so the row under the card kept or took its tint through
+the card (MENU-HOVER-BEHIND). The tracker now skips a point an overlay
+covers (`AtticOverlayHostingView.covers`: interactive, shown, its content's
+rectangle; the answer a click gets from `hitTest`), and looks again when
+an overlay starts or stops covering or moves (`coveringDidChange`, posted
+by the host itself). A row beside the card still hovers: a click there acts.
+The row under a still pointer hovers again as the card closes. Nothing else
+in hover's look changes.
+
 ## 2026-11-26 · A resize step writes only the view state it draws
 
 A step of a window resize wrote view state that draws nothing, and each
