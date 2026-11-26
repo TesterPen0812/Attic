@@ -1232,3 +1232,269 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(published(model.doneSearchInput), [], "TasksDoneSearchInput: " + message)
     }
 }
+
+
+/// Board id toast-undo-obsolete-step (design ops/design/toast-undo-step.md):
+/// an Undo offer undoes exactly the step it names, or nothing, and says so.
+/// Labels give each test's behaviour on the trunk (1957b5c5).
+@MainActor
+final class ToastUndoExactStepTests: XCTestCase {
+    private let clock = MutableNow(Date(timeIntervalSince1970: 1_790_000_000))
+    private var gate: PersistenceGate!
+    private var container: ModelContainer!
+    private var store: TaskStore!
+    private var library: AtticLibrary!
+    private var toasts: PanelToastCenter!
+    private var model: TasksPageModel!
+
+    override func setUp() async throws {
+        gate = PersistenceGate()
+        container = try PersistenceController.makeContainer(inMemory: true)
+    }
+
+    override func tearDown() {
+        model = nil; toasts = nil; library = nil; store = nil; container = nil; gate = nil
+    }
+
+    /// Starts the page on the container (after any seeded rows).
+    private func start() {
+        let gate = gate!
+        store = TaskStore(container: container, now: { [clock] in clock.value }, persist: { try gate.save($0) })
+        library = AtticLibrary(tasks: store, now: { [clock] in clock.value })
+        toasts = PanelToastCenter()
+        toasts.holdDuration = 3_600
+        model = TasksPageModel(library: library, toasts: toasts)
+    }
+
+    private func add(_ text: String) throws -> UUID {
+        model.select(tab: .now)
+        model.addBar.text = text
+        return try XCTUnwrap(model.submitAddBar())
+    }
+
+    /// R: A's title; S: B's priority, with its toast.
+    private func twoSteps(a: UUID, b: UUID) throws -> (r: UUID, s: UUID) {
+        XCTAssertTrue(library.updateTask(a, title: "A2").isApplied)
+        let r = try XCTUnwrap(library.undo.undoStepID(in: .tasks))
+        XCTAssertTrue(model.setPriority(.high, for: [b]).isApplied)
+        let s = try XCTUnwrap(library.undo.undoStepID(in: .tasks))
+        XCTAssertNotEqual(r, s)
+        XCTAssertEqual(toasts.current?.actionTitle, "Undo")
+        return (r, s)
+    }
+
+    /// B deleted elsewhere: its writing page's history, not the Tasks one.
+    private func deleteElsewhere(_ id: UUID) {
+        XCTAssertTrue(library.deleteListedTasks([id], in: .taskWorkspace(id)).isApplied)
+    }
+
+    private func rows(_ id: UUID) throws -> [TaskItem] {
+        try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+            .sorted { $0.updatedAt < $1.updatedAt }
+    }
+
+    private struct RowState: Equatable {
+        let title: String, priority: TaskPriority, deleted: Bool
+    }
+
+    private func states(_ id: UUID) throws -> [RowState] {
+        try rows(id).map { RowState(title: $0.title, priority: $0.priority, deleted: $0.deletedAt != nil) }
+    }
+
+    /// Asserts R is still applied, S is not on the redo stack, and ⌘Z / ⇧⌘Z
+    /// then work on R.
+    private func assertOlderStepIntact(a: UUID, r: UUID, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(store.task(withID: a)?.title, "A2", "the older, unrelated step is still applied", file: file, line: line)
+        XCTAssertEqual(library.undo.undoStepID(in: .tasks), r, file: file, line: line)
+        XCTAssertFalse(library.undo.canRedo(in: .tasks), "nothing was undone", file: file, line: line)
+        toasts.dismiss()
+        XCTAssertTrue(model.undo().isApplied, file: file, line: line)
+        XCTAssertEqual(store.task(withID: a)?.title, "A", file: file, line: line)
+        XCTAssertTrue(model.redo().isApplied, file: file, line: line)
+        XCTAssertEqual(store.task(withID: a)?.title, "A2", file: file, line: line)
+    }
+
+    // MARK: Tasks toast
+
+    /// Test 1 · trunk: RED (the press undoes R).
+    func testToastUndoOfDeletedTaskLeavesOlderStepApplied() throws {
+        start()
+        let a = try add("A"), b = try add("B")
+        let (r, _) = try twoSteps(a: a, b: b)
+        deleteElsewhere(b)
+        XCTAssertEqual(toasts.current?.actionTitle, "Undo", "the Tasks history did not change, so the offer stays")
+        let outcome = toasts.performAction()
+        XCTAssertEqual(outcome.failure?.canRetry, false, "a gone step is said, without Retry")
+        XCTAssertEqual(toasts.current?.isFailure, true)
+        assertOlderStepIntact(a: a, r: r)
+    }
+
+    /// Test 4 · trunk: RED (a stale press returns .applied and says nothing).
+    func testStalePressTellsAndChangesNothing() throws {
+        start()
+        let a = try add("A"), b = try add("B")
+        let (_, s) = try twoSteps(a: a, b: b)
+        // N, recorded while the toast is still up (its watch runs a turn later).
+        XCTAssertTrue(library.updateTask(a, title: "A3").isApplied)
+        let n = try XCTUnwrap(library.undo.undoStepID(in: .tasks))
+        let outcome = toasts.performAction()
+        XCTAssertEqual(outcome.failure, CommandFailure("Can’t undo: a newer change came after it.", canRetry: false))
+        XCTAssertEqual(library.undo.undoStepID(in: .tasks), n)
+        XCTAssertEqual(store.task(withID: a)?.title, "A3")
+        XCTAssertEqual(store.task(withID: b)?.priority, .high, "S is still applied")
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        XCTAssertEqual(library.undo.undoStepID(in: .tasks), s)
+    }
+
+    /// Test 5 · trunk: green guard (⌘Z got there first; the press is quiet).
+    func testPressAfterUndoIsQuiet() throws {
+        start()
+        let a = try add("A"), b = try add("B")
+        _ = try twoSteps(a: a, b: b)
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        XCTAssertEqual(store.task(withID: b)?.priority, TaskPriority.none)
+        XCTAssertEqual(toasts.performAction(), .applied)
+        XCTAssertNil(toasts.current)
+        XCTAssertEqual(store.task(withID: a)?.title, "A2", "R untouched")
+        XCTAssertTrue(library.undo.canRedo(in: .tasks))
+        XCTAssertTrue(model.redo().isApplied)
+        XCTAssertEqual(store.task(withID: b)?.priority, .high, "⇧⌘Z redoes S")
+    }
+
+    /// Test 8 · trunk: green guard (a failed save keeps everything; Retry works).
+    func testFailedSaveRollsBackAndRetries() throws {
+        start()
+        let a = try add("A"), b = try add("B")
+        let (r, s) = try twoSteps(a: a, b: b)
+        let before = try states(b)
+        gate.shouldFail = true
+        XCTAssertEqual(toasts.performAction().failure?.canRetry, true)
+        XCTAssertEqual(toasts.current?.actionTitle, "Retry")
+        XCTAssertEqual(try states(b), before, "the failed save rolled back")
+        XCTAssertEqual(library.undo.undoStepID(in: .tasks), s)
+        XCTAssertFalse(library.undo.canRedo(in: .tasks))
+        gate.shouldFail = false
+        XCTAssertEqual(toasts.performAction(), .applied)
+        XCTAssertEqual(store.task(withID: b)?.priority, TaskPriority.none)
+        XCTAssertEqual(store.task(withID: a)?.title, "A2")
+        XCTAssertEqual(library.undo.undoStepID(in: .tasks), r)
+        XCTAssertTrue(model.redo().isApplied)
+        XCTAssertEqual(store.task(withID: b)?.priority, .high)
+    }
+
+    /// Test 8, red variant · trunk: RED (Retry after B went loops into R).
+    func testRetryAfterTheTaskWentLeavesOlderStepApplied() throws {
+        start()
+        let a = try add("A"), b = try add("B")
+        let (r, _) = try twoSteps(a: a, b: b)
+        gate.shouldFail = true
+        XCTAssertEqual(toasts.performAction().failure?.canRetry, true)
+        gate.shouldFail = false
+        deleteElsewhere(b)
+        XCTAssertEqual(toasts.performAction().failure?.canRetry, false)
+        assertOlderStepIntact(a: a, r: r)
+    }
+
+    /// Test 10 · trunk: green guard (⌘Z with no toast keeps the documented skip).
+    func testCmdZWithoutToastStillSkipsObsolete() throws {
+        start()
+        let a = try add("A"), b = try add("B")
+        _ = try twoSteps(a: a, b: b)
+        toasts.dismiss()
+        deleteElsewhere(b)
+        XCTAssertTrue(model.undo().isApplied)
+        XCTAssertEqual(store.task(withID: a)?.title, "A", "⌘Z drops the gone step and undoes the one before it")
+    }
+
+    // MARK: Two physical replicas of B
+
+    private func seedReplicas() throws -> (a: UUID, b: UUID) {
+        let seed = ModelContext(container)
+        let a = TaskItem(title: "A"), b = UUID()
+        seed.insert(a)
+        seed.insert(TaskItem(id: b, title: "B", updatedAt: Date(timeIntervalSince1970: 100)))
+        seed.insert(TaskItem(id: b, title: "B", updatedAt: Date(timeIntervalSince1970: 200)))
+        try seed.save()
+        start()
+        XCTAssertNotNil(store.task(withID: b))
+        return (a.id, b)
+    }
+
+    /// Test 7a · trunk: RED. Both replicas deleted through the library.
+    func testReplicasBothDeletedElsewhere() throws {
+        let (a, b) = try seedReplicas()
+        let (r, _) = try twoSteps(a: a, b: b)
+        deleteElsewhere(b)
+        let before = try states(b)
+        XCTAssertEqual(toasts.performAction().failure?.canRetry, false)
+        XCTAssertEqual(try states(b), before, "no replica revived or changed")
+        XCTAssertEqual(try rows(b).count, 2)
+        assertOlderStepIntact(a: a, r: r)
+    }
+
+    /// Test 7b · trunk: RED. Only the newest replica is deleted (as another
+    /// Mac's delete arriving for one row).
+    func testOnlyNewestReplicaDeletedElsewhere() throws {
+        let (a, b) = try seedReplicas()
+        let (r, _) = try twoSteps(a: a, b: b)
+        let other = ModelContext(container)
+        let newest = try XCTUnwrap(try other.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == b }))
+            .max { $0.updatedAt < $1.updatedAt })
+        newest.updatedAt = clock.value.addingTimeInterval(3_600)
+        newest.deletedAt = clock.value
+        try other.save()
+        store.refresh()
+        XCTAssertNil(store.task(withID: b), "the canonical replica is deleted")
+        let before = try states(b)
+        XCTAssertNotEqual(toasts.performAction(), .applied)
+        XCTAssertEqual(try states(b), before, "the press made the replicas no more divergent")
+        assertOlderStepIntact(a: a, r: r)
+    }
+
+    /// Test 7c · trunk: green guard. B live: the press undoes S on every replica.
+    func testReplicasLiveUndoRestoresEveryRow() throws {
+        let (a, b) = try seedReplicas()
+        let (r, _) = try twoSteps(a: a, b: b)
+        XCTAssertTrue(try rows(b).allSatisfy { $0.priority == .high })
+        XCTAssertEqual(toasts.performAction(), .applied)
+        XCTAssertTrue(try rows(b).allSatisfy { $0.priority == TaskPriority.none }, "every physical replica")
+        XCTAssertEqual(store.task(withID: a)?.title, "A2")
+        XCTAssertEqual(library.undo.undoStepID(in: .tasks), r)
+    }
+
+    // MARK: Other offers on the route (test 9)
+
+    private final class Calls { var r = 0 }
+
+    private func syntheticSteps(on route: UndoRoute, in history: UndoHistoryID) -> (calls: Calls, s: UUID) {
+        let calls = Calls()
+        route.record(UndoStep(name: "R", undoOutcome: { calls.r += 1; return .applied }, redoOutcome: { .applied }), in: history)
+        let s = UndoStep(name: "S", undoOutcome: { .obsolete }, redoOutcome: { .applied })
+        route.record(s, in: history)
+        return (calls, s.id)
+    }
+
+    /// Test 9, `undoLatest` (Task note, panel and purge toasts) · trunk: RED.
+    func testUndoLatestStopsAtItsStep() async {
+        let route = UndoRoute()
+        let history = WorkspaceHistory(route: route, historyID: .note(UUID()))
+        let (calls, s) = syntheticSteps(on: route, in: history.historyID)
+        let outcome = await history.undoLatest(stepID: s)
+        XCTAssertNotEqual(outcome, .applied)
+        XCTAssertEqual(calls.r, 0, "the step below the named one is never called")
+        XCTAssertEqual(route.undoCount(in: history.historyID), 1)
+    }
+
+    /// Test 9, Notes' delete toast · trunk: RED.
+    func testNotesDeleteToastStopsAtItsStep() async throws {
+        let notes = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: notes, journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "ToastExact")),
+                                             saveDelay: .seconds(60))
+        await controller.startAndWait()
+        let (calls, s) = syntheticSteps(on: controller.undoRoute, in: .notesLibrary)
+        let undone = await controller.undoLibraryDurably(expectedStepID: s)
+        XCTAssertFalse(undone)
+        XCTAssertEqual(calls.r, 0)
+        XCTAssertEqual(controller.undoRoute.undoCount(in: .notesLibrary), 1)
+    }
+}

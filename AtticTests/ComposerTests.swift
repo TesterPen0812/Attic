@@ -1678,6 +1678,22 @@ final class ComposerTests: XCTestCase {
         XCTAssertNil(notes.notes.first { $0.id == note.id && $0.deletedAt == nil }, "the note went, not a Calendar step")
     }
 
+    /// toast-undo-obsolete-step, test 9 (Composer, newer step) · trunk: RED
+    /// (the toast undid whatever was on top).
+    func testCreationToastNeverUndoesANewerStep() async throws {
+        model.open(on: .tasks(.now), as: .note)
+        type("Tasks-side idea")
+        await XCTAssertTrueAsync(await model.create())
+        let note = try XCTUnwrap(notes.notes.first { $0.deletedAt == nil })
+        let undo = try XCTUnwrap(toastUndos.last)
+        final class Count { var value = 0 }
+        let newerUndone = Count()
+        library.undo.record(UndoStep(name: "Newer", undo: { newerUndone.value += 1; return true }, redo: { true }), in: .tasks)
+        XCTAssertEqual(undo().failure?.canRetry, false)
+        XCTAssertEqual(newerUndone.value, 0, "the toast never reaches a step it did not name")
+        XCTAssertNotNil(notes.notes.first { $0.id == note.id && $0.deletedAt == nil })
+    }
+
     func testCommandReturnOpensTheNoteInNotes() async throws {
         model.open(on: .tasks(.now), as: .note)
         type("Reading list")
