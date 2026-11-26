@@ -798,6 +798,7 @@ final class AtticGlassSizeSource {
     func set(_ new: CGSize) {
         guard new != size else { return }
         size = new
+        print("GDIAG set new=\(new) sizers=\(sizers.allObjects.count)")
         for sizer in sizers.allObjects { sizer.invalidateIntrinsicContentSize() }
     }
 
@@ -814,6 +815,7 @@ final class AtticGlassSizeView: NSView {
         self.source = source
         super.init(frame: .zero)
         source.add(self)
+        print("GDIAG make size=\(source.size)")
     }
 
     @available(*, unavailable)
@@ -822,6 +824,7 @@ final class AtticGlassSizeView: NSView {
     override var intrinsicContentSize: NSSize { source.size }
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        print("GDIAG frame new=\(newSize) win=\(window != nil) vis=\(window?.isVisible ?? false)")
         guard newSize != laidOut, newSize.width > 0, newSize.height > 0 else { return }
         laidOut = newSize
         source.onLaidOut?(newSize)
@@ -908,6 +911,7 @@ struct AtticSurfaceBackground<S: Shape>: View {
 
     @ViewBuilder
     private var underlay: some View {
+        let _ = print("GDIAG underlay kind=\(model.kind) capture=\(capture != nil) chrome=\(isChrome) src=\(nativeGlassSizeSource != nil) size=\(String(describing: nativeGlassSize))")
         if let capture {
             switch capture.backdrop {
             case .desktop(let desktop):

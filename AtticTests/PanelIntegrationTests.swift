@@ -247,6 +247,10 @@ final class PanelIntegrationTests: XCTestCase {
             panel.uiState.updatePanelSize(window.visibleContentFrame.size)
             let size = panel.uiState.panelSize
             spin(until: { !glass.isEmpty }, timeout: 1)
+            let islands = panel.controller.islandWindowsForTesting
+            print("GDIAG step \(step) before-force glass=\(glass) islandVisible=\(islands.island.isVisible) occl=\(islands.island.occlusionState.contains(.visible)) needsLayout=\(islands.island.contentView?.needsLayout ?? false)")
+            islands.island.contentView?.layoutSubtreeIfNeeded()
+            print("GDIAG step \(step) after-force glass=\(glass)")
             print("ISLAND_GLASS_STEP \(step) panel=\(size) glass=\(glass)")
             XCTAssertEqual(size.width, window.visibleContentFrame.width, accuracy: 0.5, "harness: step \(step) took its size")
             XCTAssertFalse(glass.isEmpty, "step \(step): the island's glass was not laid out at the new size")
