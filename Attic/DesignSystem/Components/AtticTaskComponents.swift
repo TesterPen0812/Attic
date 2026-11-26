@@ -1689,6 +1689,10 @@ struct AtticTaskRow: View {
     static var evaluations: [UUID: Int] = [:]
     /// Test seam: whether each row last drew its ›.
     static var drawsOpen: [UUID: Bool] = [:]
+    /// Test seam: each row's keyboard state on its last body run: whether
+    /// it held the list's focus, drew its ring, and edited its title.
+    struct KeyboardState: Equatable { var focused: Bool; var ring: Bool; var editing: Bool }
+    static var keyboardStates: [UUID: KeyboardState] = [:]
     #endif
 
     var body: some View {
@@ -1702,6 +1706,9 @@ struct AtticTaskRow: View {
         // The ring shows only while the keyboard drives (a click shows none).
         let rowFocused = focus?.isFocused ?? focused
         let showsFocusRing = forced == .focused || (forced == nil && isEnabled && rowFocused && keyboardFocusVisible && titleEditing == nil)
+        #if DEBUG
+        let _ = Self.keyboardStates[model.id] = KeyboardState(focused: rowFocused, ring: showsFocusRing, editing: titleEditing != nil)
+        #endif
         let twoLine = model.hasDetails
         // The owner's panel design (2026-10-27): the row is its own
         // highlight (7 above and below the 15 pt lines, no gap between

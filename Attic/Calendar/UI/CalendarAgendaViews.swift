@@ -288,6 +288,11 @@ struct CalendarEventRow: View {
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @FocusState private var headFocused: Bool
 
+    #if DEBUG
+    /// Test seam: whether each event's head held the keyboard on its row's last body run.
+    static var headFocus: [String: Bool] = [:]
+    #endif
+
     private var isOpen: Bool { rows.rowID == event.id && rows.rowDay == day }
     private var metrics: CalendarEventRowMetrics { style.metrics }
     private var isBlock: Bool { if case .dayBlock = style { true } else { false } }
@@ -295,6 +300,9 @@ struct CalendarEventRow: View {
     private var fillInset: CGFloat { style == .dayAllDay ? AtticLayout.rowHighlightInset : 0 }
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.headFocus[event.id] = headFocused
+        #endif
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topLeading) {
                 Button(action: toggleRow) { summary }

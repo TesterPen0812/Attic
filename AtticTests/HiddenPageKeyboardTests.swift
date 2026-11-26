@@ -1,4 +1,5 @@
 import AppKit
+import SwiftData
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -439,5 +440,222 @@ final class HiddenPageKeyboardTests: XCTestCase {
         defer { untagged.removeFromSuperview() }
         XCTAssertTrue(rig.panel.makeFirstResponder(untagged.textView))
         XCTAssertEqual(reports.count, 1, "an untagged view of ours under the shell took the keyboard unreported: \(reports)")
+    }
+}
+
+// MARK: - Calendar's agenda rows from the keyboard (P1-b's Tab rows)
+
+extension HiddenPageKeyboardTests {
+    /// A task due today, so the agenda lists it on Calendar's first show.
+    private func seedTodayTask(_ store: TaskStore, title: String) throws -> UUID {
+        let id = UUID()
+        let context = ModelContext(store.container)
+        let task = TaskItem(id: id, title: title, createdAt: Date())
+        task.listOrderVersion = TaskItem.currentListOrderVersion
+        task.dueDay = DueDay(date: Date(), calendar: .current)
+        context.insert(task)
+        try context.save()
+        store.refresh()
+        return id
+    }
+
+    /// A key through the app's queue, as a real one comes (SwiftUI's focus
+    /// and key presses, and the ring's local monitor, see only these).
+    private func queue(_ characters: String, code: UInt16, _ rig: Rig, flags: NSEvent.ModifierFlags = []) {
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            guard let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags,
+                                               timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: rig.panel.windowNumber,
+                                               context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                               isARepeat: false, keyCode: code) else { continue }
+            NSApp.postEvent(event, atStart: false)
+            var count = 0
+            while count < 64, let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                NSApp.sendEvent(next)
+                count += 1
+            }
+        }
+        spin(0.3)
+    }
+
+    // The rows after Tab on an agenda task row (lead's ruling for P1-b,
+    // ops/design/page-host-tech-note.md). Each prints a `CAL_ROW` line, so
+    // the trunk's run (B) and the branch's (P-cal) sit side by side.
+
+    private struct AgendaRig {
+        let rig: Rig
+        let task: UUID
+        let board: DrawBoardView
+        let editor: NoteEditorTextView
+    }
+
+    /// The real shell with Draw and Notes built (hidden pages with views
+    /// that can take the keyboard), Calendar shown with one task due today,
+    /// the panel key; then Tab until the agenda's row has the keyboard.
+    private func agendaRig(file: StaticString = #filePath, line: UInt = #line) throws -> AgendaRig {
+        let rig = try makeRig()
+        let task = try seedTodayTask(rig.store, title: "Agenda row")
+        show(.canvas, rig)
+        let board = try board(rig)
+        let editor = try openNote(rig, [.text("Agenda title"), .text("Agenda body")])
+        show(.calendar, rig, settle: 1.0)
+        rig.panel.makeKey()
+        spin(0.3)
+        rig.panel.makeFirstResponder(nil)
+        for _ in 0..<40 where AtticTaskRow.keyboardStates[task]?.focused != true {
+            queue("\t", code: 48, rig)
+            assertNoHiddenPage(rig, board: board, editor: editor, "Tab to the row", file: file, line: line)
+        }
+        XCTAssertEqual(AtticTaskRow.keyboardStates[task]?.focused, true, "Tab reached the agenda's row", file: file, line: line)
+        return AgendaRig(rig: rig, task: task, board: board, editor: editor)
+    }
+
+    private func assertNoHiddenPage(_ rig: Rig, board: NSView, editor: NSView, _ step: String,
+                                    file: StaticString = #filePath, line: UInt = #line) {
+        for (name, view) in [("Draw board", board), ("Notes editor", editor)] {
+            XCTAssertFalse(holds(rig.panel, view), "\(step): the keyboard is on the hidden \(name)", file: file, line: line)
+        }
+        if let responder = rig.panel.firstResponder as? NSView {
+            XCTAssertTrue(PanelPageKeyboard.mayTakeKeyboard(responder), "\(step): \(responderName(rig.panel)) sits under a hidden page",
+                          file: file, line: line)
+        }
+    }
+
+    private func rowState(_ agenda: AgendaRig) -> String {
+        let state = AtticTaskRow.keyboardStates[agenda.task]
+        return "fr=\(responderName(agenda.rig.panel)) focused=\(state?.focused ?? false) ring=\(state?.ring ?? false) editing=\(state?.editing ?? false)"
+    }
+
+    /// (a) Every key the source binds to a focused agenda row acts. The
+    /// row's actions (`CalendarAgendaViews.swift` `taskRow`): toggleDone,
+    /// openPage, editTitle; its keys (`AtticTaskKeys.command`, list
+    /// commands on, `AtticTaskComponents.swift` `AtticTaskRow` body):
+    /// Space → toggleDone, Return → editTitle, ⌘Return and ⇧⌘I → openPage.
+    /// ⇧Space, Delete, ⌘B, ⌘C and ⌘D map to actions the row does not
+    /// offer (`AtticTaskKeys.offers`), so they are not the row's keys.
+    func testCalendarAgendaRowAfterTabEveryBoundKeyActs() throws {
+        try requireKeyWindowTests()
+        struct Key { let name: String; let characters: String; let code: UInt16; let flags: NSEvent.ModifierFlags }
+        let keys = [Key(name: "Space", characters: " ", code: 49, flags: []),
+                    Key(name: "Return", characters: "\r", code: 36, flags: []),
+                    Key(name: "Cmd-Return", characters: "\r", code: 36, flags: .command),
+                    Key(name: "Shift-Cmd-I", characters: "i", code: 34, flags: [.command, .shift])]
+        for key in keys {
+            let agenda = try agendaRig()
+            defer { close(agenda.rig) }
+            queue(key.characters, code: key.code, agenda.rig, flags: key.flags)
+            let acted: Bool = switch key.name {
+            case "Space": agenda.rig.store.task(withID: agenda.task)?.status == .done
+            case "Return": AtticTaskRow.keyboardStates[agenda.task]?.editing == true
+            default: agenda.rig.uiState.openTaskNoteID == agenda.task
+            }
+            print("CAL_ROW a key=\(key.name) acted=\(acted) \(rowState(agenda))")
+            XCTAssertTrue(acted, "\(key.name) on the focused agenda row acts")
+            assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, key.name)
+        }
+    }
+
+    /// (b) The row shows its focus: the ring the row draws from its focus
+    /// and the keyboard-driven state (`AtticTaskRow` `showsFocusRing`).
+    func testCalendarAgendaRowAfterTabShowsItsFocus() throws {
+        try requireKeyWindowTests()
+        let agenda = try agendaRig()
+        defer { close(agenda.rig) }
+        print("CAL_ROW b \(rowState(agenda))")
+        XCTAssertEqual(AtticTaskRow.keyboardStates[agenda.task]?.ring, true, "the focused row draws its ring")
+    }
+
+    /// (c) Tab and Shift-Tab move on and never reach a hidden page's view;
+    /// Esc hides the panel, as on the trunk (`row_esc panel=false`, Air
+    /// stretch 4, both arms).
+    func testCalendarAgendaRowAfterTabMovesOnAndEscHides() throws {
+        try requireKeyWindowTests()
+        let agenda = try agendaRig()
+        defer { close(agenda.rig) }
+        for step in 0..<8 {
+            if step < 4 { queue("\t", code: 48, agenda.rig) } else { queue("\t", code: 48, agenda.rig, flags: .shift) }
+            print("CAL_ROW c step=\(step) \(step < 4 ? "Tab" : "Shift-Tab") \(rowState(agenda))")
+            assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, "step \(step)")
+        }
+        queue("\u{1b}", code: 53, agenda.rig)
+        spin(0.4)
+        print("CAL_ROW c esc visible=\(agenda.rig.panel.isVisible) \(rowState(agenda))")
+        XCTAssertFalse(agenda.rig.panel.isVisible, "Esc hides the panel")
+    }
+
+    // FKA rows (CI's fka lane only: `ATTIC_FULL_KEYBOARD_ACCESS_TESTS`,
+    // the setting turned on by `Scripts/with_ci_input_modes.sh` on a hosted
+    // runner). An event today comes from the UI-testing calendar.
+
+    private func requireFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
+        guard ProcessInfo.processInfo.environment["ATTIC_FULL_KEYBOARD_ACCESS_TESTS"] == "1" else {
+            throw XCTSkip("needs Full Keyboard Access, which only CI's hosted runner may turn on")
+        }
+        XCTAssertTrue(NSApp.isFullKeyboardAccessEnabled, "the fka lane turned Full Keyboard Access on")
+    }
+
+    private func seedTodayEvent() -> CalendarEvent {
+        let start = Calendar.current.date(bySettingHour: 23, minute: 0, second: 0, of: Date()) ?? Date()
+        let event = CalendarEvent(id: "fka-event-\(UUID().uuidString)", title: "FKA event", start: start,
+                                  end: start.addingTimeInterval(30 * 60), isAllDay: false, location: nil,
+                                  calendarTitle: "Test", colour: CalendarEventColour(red: 0.35, green: 0.55, blue: 0.85))
+        UITestingCalendar.isOn = true
+        UITestingCalendar.seeded = [event]
+        return event
+    }
+
+    private func clearTodayEvent() {
+        UITestingCalendar.isOn = false
+        UITestingCalendar.seeded = []
+    }
+
+    private func eventIsOpen(_ event: CalendarEvent) -> Bool {
+        CalendarDraftTerminationRegistry.shared.openRows(for: .docked).contains { $0.rowID == event.id }
+    }
+
+    /// Return and Space on an event head (`CalendarEventRow`'s `onKeyPress`):
+    /// Return opens the row, Space closes it.
+    func testFKAEventHeadAnswersReturnAndSpace() throws {
+        try requireFullKeyboardAccess()
+        let event = seedTodayEvent()
+        defer { clearTodayEvent() }
+        let agenda = try agendaRig()
+        defer { close(agenda.rig) }
+        agenda.rig.panel.makeFirstResponder(nil)
+        var steps = 0
+        while CalendarEventRow.headFocus[event.id] != true, steps < 40 {
+            queue("\t", code: 48, agenda.rig)
+            assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, "Tab \(steps) to the event head")
+            steps += 1
+        }
+        XCTAssertEqual(CalendarEventRow.headFocus[event.id], true, "Tab reached the event head")
+        queue("\r", code: 36, agenda.rig)
+        spin(0.4)
+        let openedByReturn = eventIsOpen(event)
+        queue(" ", code: 49, agenda.rig)
+        spin(0.4)
+        let closedBySpace = !eventIsOpen(event)
+        print("CAL_FKA head tabs=\(steps) return_opens=\(openedByReturn) space_closes=\(closedBySpace) fr=\(responderName(agenda.rig.panel))")
+        XCTAssertTrue(openedByReturn, "Return on the event head opens the row")
+        XCTAssertTrue(closedBySpace, "Space on the event head closes it")
+        assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, "after Return and Space")
+    }
+
+    /// The arrows on the agenda (no Calendar binding: SwiftUI moves focus
+    /// itself under Full Keyboard Access). Each arrow from the focused row
+    /// keeps the keyboard on the shown page; where it lands is printed.
+    func testFKAArrowsOnTheAgendaStayOnTheShownPage() throws {
+        try requireFullKeyboardAccess()
+        let event = seedTodayEvent()
+        defer { clearTodayEvent() }
+        let agenda = try agendaRig()
+        defer { close(agenda.rig) }
+        for (name, characters, code) in [("Down", "\u{F701}", UInt16(125)), ("Up", "\u{F700}", UInt16(126)),
+                                         ("Right", "\u{F703}", UInt16(124)), ("Left", "\u{F702}", UInt16(123))] {
+            queue(characters, code: code, agenda.rig, flags: [.numericPad, .function])
+            print("CAL_FKA arrow=\(name) head=\(CalendarEventRow.headFocus[event.id] ?? false) \(rowState(agenda))")
+            assertNoHiddenPage(agenda.rig, board: agenda.board, editor: agenda.editor, name)
+            XCTAssertTrue(agenda.rig.panel.isVisible, "\(name) leaves the panel up")
+        }
     }
 }
