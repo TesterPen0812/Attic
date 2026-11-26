@@ -150,6 +150,10 @@ final class PanelIntegrationTests: XCTestCase {
     /// transaction pass; only the shown island's glass takes each size.
     func testAResizeStepWritesNoViewStateThatDrawsNothing() throws {
         #if DEBUG && ATTIC_LOCAL_ONLY
+        // GitHub's macOS runners turn Reduce Transparency on, which draws
+        // the island solid, with no glass: these tests state glass.
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         var writes: [String: Int] = [:]
         PanelInvalidationProbe.stepWrite = { writes[$0, default: 0] += 1 }
         defer { PanelInvalidationProbe.stepWrite = nil }
@@ -231,6 +235,10 @@ final class PanelIntegrationTests: XCTestCase {
     /// layout since a step was at that step's size, and there was one.
     func testTheIslandsGlassFollowsThePanelAtEachStepAndAtSettle() throws {
         #if ATTIC_LOCAL_ONLY
+        // GitHub's macOS runners turn Reduce Transparency on, which draws
+        // the island solid, with no glass: these tests state glass.
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         var glass: [CGSize] = []
         PanelInvalidationProbe.islandGlassSize = { glass.append($0) }
         defer { PanelInvalidationProbe.islandGlassSize = nil }
@@ -296,6 +304,10 @@ final class PanelIntegrationTests: XCTestCase {
     /// glass is laid out at each size.
     func testASizeWriteRunsOnlyTheIslandsGlassView() throws {
         #if ATTIC_LOCAL_ONLY
+        // GitHub's macOS runners turn Reduce Transparency on, which draws
+        // the island solid, with no glass: these tests state glass.
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         var roots = 0, surfaces = 0
         PanelInvalidationProbe.islandRoot = { roots += 1 }
         PanelInvalidationProbe.islandSurface = { surfaces += 1 }
