@@ -675,4 +675,74 @@ extension HiddenPageKeyboardTests {
             XCTAssertTrue(agenda.rig.panel.isVisible, "\(name) leaves the panel up")
         }
     }
+
+    // SCRATCH (lead's Tab ruling, 26 Nov): name the stop the trunk's Tab
+    // reaches after leaving the agenda row.
+    private func describeStop(_ rig: Rig, _ label: String) {
+        let panel = rig.panel
+        guard let view = panel.firstResponder as? NSView else {
+            print("TABSTOP \(label) fr=\(responderName(panel)) (not a view)")
+            return
+        }
+        let frame = view.convert(view.bounds, to: nil)
+        print("TABSTOP \(label) fr=\(type(of: view)) frame=\(frame) contentBounds=\(panel.contentView?.bounds ?? .zero) "
+              + "hiddenOrAncestor=\(view.isHiddenOrHasHiddenAncestor) alpha=\(view.alphaValue) mayTake=\(PanelPageKeyboard.mayTakeKeyboard(view))")
+        var chain: [String] = []
+        var current: NSView? = view
+        while let candidate = current {
+            let tag = PanelPageKeyboard.membership(of: candidate).map { "\($0)" } ?? "-"
+            chain.append("\(type(of: candidate))[hidden=\(candidate.isHiddenOrHasHiddenAncestor) alpha=\(candidate.alphaValue) tag=\(tag)"
+                         + (candidate is KeptContentHostingView ? " kept interactive=\((candidate as! KeptContentHostingView).isInteractive)" : "") + "]")
+            current = candidate.superview
+        }
+        print("TABSTOP \(label) chain=\(chain.joined(separator: " > "))")
+        // SwiftUI's own view of what has focus, through accessibility.
+        func ax(_ o: NSObject) -> String {
+            func value(_ name: NSAccessibility.Attribute) -> String { o.accessibilityAttributeValue(name).map { "\($0)" } ?? "-" }
+            return "\(type(of: o)) role=\(value(.role)) id=\(value(.identifier)) label=\(value(.description).prefix(40)) title=\(value(.title).prefix(30)) pos=\(value(.position)) size=\(value(.size))"
+        }
+        if let focused = panel.accessibilityAttributeValue(.focusedUIElement) as? NSObject {
+            var parents = [ax(focused)]
+            var parent = focused.accessibilityAttributeValue(.parent) as? NSObject
+            while let p = parent, parents.count < 14 {
+                parents.append(ax(p)); parent = p.accessibilityAttributeValue(.parent) as? NSObject
+            }
+            print("TABSTOP \(label) axfocus=\(parents.joined(separator: " < "))")
+        } else {
+            print("TABSTOP \(label) axfocus=nil")
+        }
+        let rings = AtticFocusReaderCensus.rings.filter { $0.value.shown }.map { "\($0.value.outline)" }
+        let rows = AtticTaskRow.keyboardStates.filter { $0.value.focused || $0.value.ring }.map { "\($0.key.uuidString.prefix(8)):\($0.value)" }
+        let heads = CalendarEventRow.headFocus.filter { $0.value }.map(\.key)
+        print("TABSTOP \(label) ringsShown=\(rings) rowsFocused=\(rows) headsFocused=\(heads) panelFrame=\(panel.frame) screen=\(panel.screen?.frame ?? .zero)")
+    }
+
+    func testScratchNameTheTrunksSecondTabStop() throws {
+        try requireKeyWindowTests()
+        AtticFocusReaderCensus.records = true
+        defer { AtticFocusReaderCensus.records = false }
+        for key in ["none", "Space", "Return", "Down"] {
+            let agenda = try agendaRig()
+            defer { close(agenda.rig) }
+            describeStop(agenda.rig, "\(key) onRow")
+            AtticFocusReaderCensus.rings = [:]
+            queue("\t", code: 48, agenda.rig)
+            let onRow = AtticTaskRow.keyboardStates[agenda.task]?.focused == true
+            describeStop(agenda.rig, "\(key) afterTab onRow=\(onRow)")
+            guard key != "none" else { continue }
+            let before = (agenda.rig.store.task(withID: agenda.task)?.status, agenda.rig.uiState.selectedSection, agenda.rig.uiState.openTaskNoteID,
+                          agenda.rig.store.tasks.count, responderName(agenda.rig.panel))
+            switch key {
+            case "Space": queue(" ", code: 49, agenda.rig)
+            case "Return": queue("\r", code: 36, agenda.rig)
+            default: queue("\u{F701}", code: 125, agenda.rig, flags: [.numericPad, .function])
+            }
+            spin(0.4)
+            let after = (agenda.rig.store.task(withID: agenda.task)?.status, agenda.rig.uiState.selectedSection, agenda.rig.uiState.openTaskNoteID,
+                         agenda.rig.store.tasks.count, responderName(agenda.rig.panel))
+            print("TABSTOP \(key) key before=\(before) after=\(after) visible=\(agenda.rig.panel.isVisible)")
+            describeStop(agenda.rig, "\(key) afterKey")
+        }
+    }
+
 }
