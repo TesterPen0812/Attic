@@ -732,6 +732,16 @@ final class PanelIntegrationTests: XCTestCase {
         return (panel, tasks, model, element)
     }
 
+    /// The Tasks list's scroll view: the tallest one around its rows.
+    private func tasksScrollView(_ model: TasksPageModel) -> NSScrollView? {
+        guard let root = model.rowPointer?.view?.window?.contentView else { return nil }
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            let own: [NSScrollView] = (view as? NSScrollView).map { [$0] } ?? []
+            return own + view.subviews.flatMap(scrolls)
+        }
+        return scrolls(root).max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+    }
+
     private func withMotion(reduced: Bool, _ body: () throws -> Void) rethrows {
         let previous = AtticMotionPreference.systemReduceMotionOverride
         AtticMotionPreference.systemReduceMotionOverride = reduced
@@ -753,7 +763,7 @@ final class PanelIntegrationTests: XCTestCase {
                            file: StaticString = #filePath, line: UInt = #line) throws {
         let begins = TaskPageMotion.beginsForTesting
         rig.panel.uiState.openTaskNote(id, from: .tasks)
-        spin(0.02)
+        spin(until: { TaskPageMotion.currentForTesting?.taskID == id })
         let motion = try XCTUnwrap(TaskPageMotion.currentForTesting, "the page opens in one piece", file: file, line: line)
         XCTAssertEqual(TaskPageMotion.beginsForTesting, begins + 1, file: file, line: line)
         XCTAssertEqual(motion.taskID, id, file: file, line: line)
@@ -773,9 +783,17 @@ final class PanelIntegrationTests: XCTestCase {
 
     func testOnePieceRoundTripLeavesTabScrollAndSelectionAsTheyWere() throws {
         try withMotion(reduced: false) {
-            let rig = try onePiecePanel((0..<40).map { TaskDraft(title: "Row \($0)") })
-            let target = rig.tasks[6].id
-            spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
+            let rig = try onePiecePanel((0..<60).map { TaskDraft(title: "Row \($0)") })
+            spin(until: { !rig.model.agentRowFrames(nil).isEmpty })
+            // Scrolled part way down, so Back has a scroll to keep.
+            let scroll = try XCTUnwrap(tasksScrollView(rig.model))
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 300))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            spin(0.3)
+            let offset = scroll.contentView.bounds.origin.y
+            XCTAssertGreaterThan(offset, 100, "the list scrolled")
+            let shown = rig.model.agentRowFrames(nil)
+            let target = try XCTUnwrap(shown.dropFirst(shown.count / 2).first?.id)
             rig.model.selectOnly(target)
             spin(0.2)
             let tab = rig.model.tab
@@ -786,6 +804,7 @@ final class PanelIntegrationTests: XCTestCase {
             spin(0.1)
             XCTAssertEqual(rig.model.tab, tab)
             XCTAssertEqual(rig.model.selection, selection, "Back keeps the selection the page left")
+            XCTAssertEqual(scroll.contentView.bounds.origin.y, offset, accuracy: 0.5, "Back keeps the scroll")
             XCTAssertEqual(rig.model.agentRowFrames(nil).map { "\($0.id) \($0.frame)" }, rows,
                            "every row is where it was: the list was moved by drawing only")
         }
@@ -836,20 +855,19 @@ final class PanelIntegrationTests: XCTestCase {
             spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
             let begins = TaskPageMotion.beginsForTesting
             rig.panel.uiState.openTaskNote(target, from: .tasks)
-            spin(0.08)
+            spin(until: { TaskPageMotion.currentForTesting?.taskID == target })
             let motion = try XCTUnwrap(TaskPageMotion.currentForTesting)
             XCTAssertFalse(motion.handedOver, "still on its way")
             // Escape or Back mid-motion: it runs back from where it is.
             let generation = motion.generation
             TaskNoteRouteHost<EmptyView>.closeRoute(target, uiState: rig.panel.uiState)
-            spin(0.02)
+            spin(until: { !motion.open })
             XCTAssertTrue(motion.isActive, "the same opening turns round")
             XCTAssertFalse(motion.open)
             XCTAssertGreaterThan(motion.generation, generation)
             // A second click on the way back turns it round again.
-            spin(0.06)
             rig.panel.uiState.openTaskNote(target, from: .tasks)
-            spin(0.02)
+            spin(until: { motion.open })
             XCTAssertTrue(motion.isActive)
             XCTAssertTrue(motion.open)
             XCTAssertEqual(TaskPageMotion.beginsForTesting, begins + 1, "turned round, not started again from the row")

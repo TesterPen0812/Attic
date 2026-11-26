@@ -266,15 +266,20 @@ struct TaskNoteRouteHost<Origin: View>: View {
         onePiece.landingPending = true
         // The bars give way on the click, not when the page shows.
         sharedChrome?.setCovered(true, page: page, onePiece: true)
-        // Escape goes Back while the stand-in is the page.
+        watchOnePieceEscape()
+        // The spring starts once the stand-in is in, at the row's place
+        // (`onePieceStandInAppeared`).
+        return true
+    }
+
+    /// Escape goes Back while the stand-in is the page on its way to it (the
+    /// click, or a turn round); the built page answers Escape itself.
+    private func watchOnePieceEscape() {
         onePieceProbe.watchEscape { [uiState, pages = noteDraft.pages] in
             guard onePiece.isActive, onePiece.open, !onePiece.handedOver, let id = onePiece.taskID else { return false }
             Self.closeRoute(id, uiState: uiState, controller: pages)
             return true
         }
-        // The spring starts once the stand-in is in, at the row's place
-        // (`onePieceStandInAppeared`).
-        return true
     }
 
     /// The stand-in came in (the click, or Back from the built page): the
@@ -293,7 +298,13 @@ struct TaskNoteRouteHost<Origin: View>: View {
         onePiece.landedBack = false
         onePiece.generation &+= 1
         let generation = onePiece.generation
-        if open { onePiece.landingPending = true } else { onePiece.landed(false) }
+        if open {
+            onePiece.landingPending = true
+            if !onePiece.handedOver { watchOnePieceEscape() }
+        } else {
+            onePieceProbe.stopWatchingEscape()
+            onePiece.landed(false)
+        }
         let target: CGFloat = open ? 1 : 0
         withAnimation(TaskPageOnePiece.spring, completionCriteria: .removed) {
             onePiece.progress = target
