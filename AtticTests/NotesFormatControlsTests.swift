@@ -2062,6 +2062,93 @@ final class NotesFormatControlsTests: XCTestCase {
         #endif
     }
 
+    /// Review P2-1 (PR 78): a row opened, closed, then reopened after the
+    /// panel narrowed draws its cells at the size the new width allows
+    /// from its first drawn frame: Subheading in the narrowest row (288 pt)
+    /// takes the compact cells at once, never full-size cells that then
+    /// snap (with motion and under Reduce Motion).
+    func testAFormatRowReopenedAfterANarrowingDrawsItsCellsAtTheNewSizeOnItsFirstFrame() {
+        #if DEBUG
+        var subheading = NoteFormatSnapshot.empty
+        subheading.paragraph = .heading(3)
+        let need = NoteFormatRowView.minimumWidth(snapshot: subheading, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth, compact: false)
+        XCTAssertTrue(NoteFormatRowView.isRoomy(width: 388, need: need), "harness: full cells fit 388 pt")
+        XCTAssertFalse(NoteFormatRowView.isRoomy(width: 288, need: need), "harness: full cells do not fit 288 pt")
+        for reduceMotion in [true, false] {
+            let (controls, _, _) = make()
+            controls.formatModel.setSnapshot(subheading)
+            let state = NoteFormatRowState()
+            var design = AtticDesignContext(mode: .light)
+            design.reduceMotion = reduceMotion
+            let view = NoteFormatRowSwitch(state: state, model: { controls.formatModel }) {
+                HStack(spacing: 0) {
+                    Color.clear.frame(width: 36, height: 32)
+                    Spacer(minLength: 12)
+                    Color.clear.frame(width: 36, height: 32)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .environment(\.atticDesign, design)
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(x: 0, y: 0, width: 388, height: 40)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            windows.append(window)
+            func frames(_ count: Int = 5) {
+                for _ in 0..<count {
+                    spin()
+                    hosting.layoutSubtreeIfNeeded()
+                }
+            }
+            func resize(to width: CGFloat) {
+                hosting.frame.size.width = width
+                hosting.layoutSubtreeIfNeeded()
+                frames(1)
+            }
+            resize(to: 388)
+            // Each run of the row: the cells it draws, then the growth's
+            // width and whether its glass was gone (the closed, dormant row).
+            enum Run { case cells(CGFloat), growth(CGFloat, gone: Bool) }
+            var runs: [Run] = []
+            NoteFormatRowView.toggleWidthProbe = { runs.append(.cells($0)) }
+            AtticFormatRowGrowthProbe.rowWidth = { runs.append(.growth($0, gone: $1)) }
+            defer {
+                NoteFormatRowView.toggleWidthProbe = nil
+                AtticFormatRowGrowthProbe.rowWidth = nil
+            }
+            state.open(keyboard: false)
+            settle { hosting.layoutSubtreeIfNeeded(); return runs.contains { if case .growth(_, gone: false) = $0 { return true }; return false } }
+            frames()
+            state.close()
+            frames(30)
+            for width in [370, 340, 310, 288] as [CGFloat] { resize(to: width) }
+            runs = []
+            state.open(keyboard: false)
+            hosting.layoutSubtreeIfNeeded()
+            settle { hosting.layoutSubtreeIfNeeded(); return runs.contains { if case .growth(_, gone: false) = $0 { return true }; return false } }
+            frames()
+            // The cells each drawn (not gone) run of the reopened row drew with.
+            var cells: CGFloat?
+            var drawn: [(width: CGFloat, cells: CGFloat?)] = []
+            for run in runs {
+                switch run {
+                case .cells(let width): cells = width
+                case .growth(let width, let gone): if !gone { drawn.append((width, cells)) }
+                }
+            }
+            print("FORMAT_ROW_REOPEN_NARROW reduceMotion=\(reduceMotion) style=\(controls.formatModel.snapshot.paragraph) drawn=\(drawn)")
+            XCTAssertEqual(controls.formatModel.snapshot.paragraph, .heading(3), "harness: the caret is on Subheading")
+            XCTAssertFalse(drawn.isEmpty, "harness: the row drew as it reopened (reduceMotion \(reduceMotion))")
+            for run in drawn {
+                XCTAssertEqual(run.width, 288, accuracy: 0.5, "the reopened row drew at a width the bottom row no longer has (reduceMotion \(reduceMotion))")
+                XCTAssertEqual(run.cells, AtticNoteFormatMetrics.rowCompactToggleWidth,
+                               "the reopened row drew full-size cells that do not fit 288 pt (reduceMotion \(reduceMotion))")
+            }
+        }
+        #endif
+    }
+
     /// ⌃Tab reaches the open row; ← → Tab ⇧Tab move round it, Return
     /// presses, and any other key goes back to writing. The text keeps the
     /// caret throughout.

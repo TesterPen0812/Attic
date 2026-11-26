@@ -625,7 +625,11 @@ struct NoteFormatRowView: View {
     /// The row's width (the bottom row's), which moves on every step of a
     /// resize: kept out of view state; only whether it is roomy is drawn.
     @State private var width = AtticUnobserved<CGFloat>(0)
-    @State private var roomy = true
+    @State private var measuredRoomy = true
+    #if DEBUG
+    /// Tests: the cell width each run of the row's body draws with.
+    @MainActor static var toggleWidthProbe: ((CGFloat) -> Void)?
+    #endif
     @Environment(\.atticDesign) private var design
 
     /// Full-size cells fit (or the row is not measured yet).
@@ -635,6 +639,10 @@ struct NoteFormatRowView: View {
         // A long style name ("Subheading") in a narrow panel: 24 pt cells.
         let m = AtticNoteFormatMetrics.self
         let need = Self.minimumWidth(snapshot: model.snapshot, toggleWidth: m.rowToggleWidth, compact: false)
+        let roomy = measuredRoomy
+        #if DEBUG
+        let _ = Self.toggleWidthProbe?(roomy ? m.rowToggleWidth : m.rowCompactToggleWidth)
+        #endif
         Group {
             if let table = model.snapshot.table {
                 tableRow(table, toggleWidth: m.rowToggleWidth)
@@ -780,11 +788,11 @@ struct NoteFormatRowView: View {
     }()
     private func settleRoomy(need: CGFloat) {
         let now = Self.isRoomy(width: width.value, need: need)
-        guard now != roomy else { return }
+        guard now != measuredRoomy else { return }
         #if DEBUG && ATTIC_LOCAL_ONLY
         PanelInvalidationProbe.stepWrite?("format-row-roomy")
         #endif
-        roomy = now
+        measuredRoomy = now
     }
 
 

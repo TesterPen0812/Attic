@@ -230,6 +230,38 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    /// Review P2-2 (PR 78): the Genie snapshot draws the hidden stand-in
+    /// (its glass rides live in the flight). After a resize at rest it is
+    /// captured at the panel's size as it is now, not the size it had
+    /// when it last hid, and it is hidden again afterwards.
+    func testTheGenieSnapshotDrawsTheStandInAtTheCurrentSize() throws {
+        #if ATTIC_LOCAL_ONLY
+        var glass: [CGSize] = []
+        PanelInvalidationProbe.islandGlassSize = { glass.append($0) }
+        defer { PanelInvalidationProbe.islandGlassSize = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        let container = try XCTUnwrap(window.contentView as? AtticPanelContentContainer)
+        XCTAssertFalse(container.isIslandStandInShown, "harness: the stand-in is hidden at rest")
+        var frame = window.visibleContentFrame
+        frame.size.width += 40
+        window.setVisibleContentFrame(frame, display: true)
+        panel.uiState.updatePanelSize(window.visibleContentFrame.size)
+        spin(0.2)
+        let size = panel.uiState.panelSize
+        glass = []
+        container.prepareAlternateSnapshot(.genieLiveGlass, surface: nil)
+        let captured = glass
+        spin(0.1)
+        print("GENIE_STAND_IN panel=\(size) captured=\(captured)")
+        XCTAssertFalse(captured.isEmpty, "the stand-in's glass was not laid out for the snapshot")
+        XCTAssertTrue(captured.allSatisfy { $0 == size }, "the snapshot drew the stand-in at a size the panel no longer has")
+        XCTAssertFalse(container.isIslandStandInShown, "the stand-in stays hidden after the capture")
+        #endif
+    }
+
     /// Resize round 2 (c): through a real resize, the island's glass has
     /// the panel's size after each step and after it settles. Every glass
     /// layout since a step was at that step's size, and there was one.
@@ -254,6 +286,10 @@ final class PanelIntegrationTests: XCTestCase {
             window.setVisibleContentFrame(frame, display: true)
             panel.uiState.updatePanelSize(window.visibleContentFrame.size)
             let size = panel.uiState.panelSize
+            // The island's next frame has it, with no wait (no frame of lag).
+            panel.controller.islandWindowsForTesting.island.displayIfNeeded()
+            let atOnce = glass
+            XCTAssertTrue(atOnce.contains(size), "step \(step): the island's glass was not laid out at the new size in the island's next frame (\(atOnce))")
             spin(until: { !glass.isEmpty }, timeout: 1)
             print("ISLAND_GLASS_STEP \(step) panel=\(size) glass=\(glass)")
             XCTAssertEqual(size.width, window.visibleContentFrame.width, accuracy: 0.5, "harness: step \(step) took its size")
@@ -704,6 +740,10 @@ final class PanelIntegrationTests: XCTestCase {
     /// limits nothing reads (AppKit's constraint pass itself still runs).
     func testAnIslandUpdateAsksItsContentForNoUnboundedSize() throws {
         #if DEBUG
+        // GitHub's macOS runners turn Reduce Transparency on, which draws
+        // the island solid, with no glass sizer: this test states glass.
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         // The hook is read when an island root is built, so it is set first.
         var queries = 0
         PanelIslandSizingProbe.onSizeQuery = { queries += 1 }
