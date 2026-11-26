@@ -198,7 +198,7 @@ struct TasksNextEventRow: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .onHover { hovered = $0 }
+        .atticHover { hovered = $0 }
         .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.hover.animation(reduceMotion: false), value: hovered)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(verbatim: "\(event.time) \(event.title)"))
