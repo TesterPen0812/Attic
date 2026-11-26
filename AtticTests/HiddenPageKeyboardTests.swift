@@ -828,9 +828,12 @@ extension HiddenPageKeyboardTests {
             return view === host || view.isDescendant(of: host)
         }
         func onBar(_ responder: NSResponder?) -> Bool { (responder as? NSView).map(isRootProxy) ?? false }
-        // The bar's first stop (its leftmost), the same view in both arms.
+        // The tab bar's first stop: the leftmost stop of the panel's own
+        // host in the bar's row (`56,461 27x27` in both arms). On the trunk
+        // Calendar's controls are stops of that host too, lower down.
         func firstBarStop() -> NSView? {
-            views(NSView.self, in: panel).filter(isRootProxy)
+            let barTop = panel.contentView.map { $0.convert($0.bounds, to: nil).maxY - 100 } ?? 0
+            return views(NSView.self, in: panel).filter { isRootProxy($0) && $0.convert($0.bounds, to: nil).minY >= barTop }
                 .min { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
         }
         var seen: [String: Int] = [:]
