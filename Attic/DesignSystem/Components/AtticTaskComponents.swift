@@ -980,7 +980,7 @@ struct AtticStatusButton: View {
         .focusable(isTabStop)
         .focusEffectDisabled()
         .atticHover { hovered = $0 }
-        .atticOwnFocusRing(.circle(diameter: AtticControlSize.statusCircle))
+        .atticOwnFocusRing(.circle(diameter: AtticControlSize.statusCircle), isTabStop: isTabStop)
         .disabled(isDisabled)
         .help(state == .done ? String(localized: "Mark as not done") : String(localized: "Complete"))
         .accessibilityLabel(String(localized: "Status"))
@@ -1081,13 +1081,13 @@ private struct AtticLiveOwnFocusRing: ViewModifier {
     }
 }
 
-/// The ring's own focus state. A `@FocusState` wrapped in a dynamic
-/// property so that DEBUG builds count each re-check of this holder
-/// (`update()` runs on every focus re-check, even when the body is skipped);
-/// it is the same single focus state in every build.
+#if DEBUG
+/// DEBUG only: the ring's own focus state, a `@FocusState` wrapped in a
+/// dynamic property that counts each re-check of this holder (`update()`
+/// runs on every focus re-check, even when the body is skipped). Release
+/// builds hold the plain `@FocusState`.
 private struct AtticRingFocusState: DynamicProperty {
     @FocusState var focused: Bool
-    #if DEBUG
     let scope: String
     let site: String
     init(scope: String, site: String) {
@@ -1095,10 +1095,8 @@ private struct AtticRingFocusState: DynamicProperty {
         self.site = site
     }
     func update() { MainActor.assumeIsolated { AtticFocusReaderCensus.noteRingRun("check", scope: scope, site: site) } }
-    #else
-    init() {}
-    #endif
 }
+#endif
 
 /// The ring while the keyboard drives: built fresh each time the keyboard
 /// takes over, with the button's own focus state.
@@ -1119,18 +1117,21 @@ private struct AtticKeyboardOwnFocusRing: ViewModifier {
         ringFocus = AtticRingFocusState(scope: scope, site: site)
     }
     @State private var censusID = UUID()
+    private var focused: Bool { ringFocus.focused }
+    private var focusBinding: FocusState<Bool>.Binding { ringFocus.$focused }
     #else
-    private let ringFocus = AtticRingFocusState()
+    @FocusState private var focused: Bool
+    private var focusBinding: FocusState<Bool>.Binding { $focused }
     #endif
 
     func body(content: Content) -> some View {
-        let shows = AtticOwnFocusRing.shows(pinned: pinned, focused: ringFocus.focused, keyboardFocusVisible: true)
+        let shows = AtticOwnFocusRing.shows(pinned: pinned, focused: focused, keyboardFocusVisible: true)
         #if DEBUG
         let _ = AtticFocusReaderCensus.noteRing(censusID, keyboardFocusVisible: true, shown: shows, outline: outline)
         let _ = AtticFocusReaderCensus.noteRingRun("kbd", scope: scope, site: site)
         #endif
         content
-            .focused(ringFocus.$focused)
+            .focused(focusBinding)
             .overlay { if shows { AtticOwnFocusRing.ring(outline) } }
     }
 }
@@ -1138,11 +1139,11 @@ private struct AtticKeyboardOwnFocusRing: ViewModifier {
 extension View {
     /// Attic's focus ring for this button's own keyboard focus.
     @ViewBuilder
-    func atticOwnFocusRing(_ outline: AtticOwnFocusRing.Outline, acceptsKeyboardFocus: Bool = true,
+    func atticOwnFocusRing(_ outline: AtticOwnFocusRing.Outline, acceptsKeyboardFocus: Bool = true, isTabStop: Bool = true,
                            file: StaticString = #fileID, line: UInt = #line) -> some View {
         if acceptsKeyboardFocus {
             #if DEBUG
-            modifier(AtticOwnFocusRing(outline: outline, site: "\(file):\(line)"))
+            modifier(AtticOwnFocusRing(outline: outline, site: "\(file):\(line)" + (isTabStop ? "" : " notab")))
             #else
             modifier(AtticOwnFocusRing(outline: outline))
             #endif

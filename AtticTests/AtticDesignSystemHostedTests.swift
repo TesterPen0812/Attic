@@ -862,6 +862,39 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         XCTAssertEqual(ringShown(radius: 1), false, "the control Tab left draws none")
     }
 
+    /// SPEED-FOCUSSTATE-FANOUT: a status circle that is not a Tab stop (in a
+    /// task row or card) never takes the keyboard. With the keyboard driving,
+    /// walking the window's key-view loop both ways (what Tab and Shift-Tab
+    /// do) lands on the plain controls beside it and never on the circle, so
+    /// its ring never shows. Holds on the trunk; it is why such a ring needs
+    /// no focus state of its own.
+    func testAStatusCircleThatIsNotATabStopNeverTakesTheKeyboard() throws {
+        try requireKeyWindowTests()
+        AtticFocusReaderCensus.reset(); AtticFocusReaderCensus.records = true
+        defer { AtticFocusReaderCensus.records = false; AtticFocusReaderCensus.reset() }
+        let tracker = AtticKeyboardFocusTracker()
+        let view = HStack(spacing: 12) {
+            Color.gray.frame(width: 40, height: 24).focusable().atticOwnFocusRing(.rounded(radius: 3))
+            AtticStatusButton(state: .todo, priority: .none, isTabStop: false) {}
+            Color.gray.frame(width: 40, height: 24).focusable().atticOwnFocusRing(.rounded(radius: 4))
+        }
+        .atticKeyboardFocusTracking(tracker)
+        let (window, _) = host(view, size: CGSize(width: 200, height: 48), key: true)
+        tracker.observe(.keyDown, keyCode: 48) // Tab
+        spin(0.3)
+        var reached = Set<Int>()
+        for step in 0..<8 {
+            if step < 4 { window.selectNextKeyView(nil) } else { window.selectPreviousKeyView(nil) }
+            spin(0.2)
+            let shown = AtticFocusReaderCensus.rings.values.filter { $0.keyboardFocusVisible && $0.shown }
+            XCTAssertFalse(shown.contains { $0.outline.hasPrefix("circle") },
+                           "step \(step): the key-view loop reached the status circle that is not a Tab stop")
+            if ringShown(radius: 3) == true { reached.insert(3) }
+            if ringShown(radius: 4) == true { reached.insert(4) }
+        }
+        XCTAssertEqual(reached, [3, 4], "harness: the key-view loop reached both plain controls")
+    }
+
     /// RINGS-FLIP-DROPS-FOCUS, a trunk defect pinned here (found on
     /// 2eb2269f, unchanged by this branch): the ring's modifier builds its
     /// content in one branch while the mouse drives and another while the

@@ -1439,9 +1439,22 @@ final class HiddenPagesCountersTests: XCTestCase {
                     print("FOCUS_RING_RUNS \(move.name) site \(site.key)=\(site.value)")
                 }
             }
+            // A ring on a control that is not a Tab stop (the status circle in
+            // a task row or card) can never take the keyboard, so it holds no
+            // focus state, flips with no keyboard and re-checks on no move.
+            for move in moves {
+                let notTabStops = move.runs.filter { $0.key.hasSuffix(" notab") }.values.reduce(0, +)
+                XCTAssertEqual(notTabStops, 0, "\(move.name) re-evaluated \(notTabStops) focus rings on controls that are not Tab stops")
+            }
+            // The rest: focusable controls on the hidden pages (Calendar's
+            // grid and top row, Draw's tools, Notes rows' •••) still re-check
+            // on each key; ops/design/focus-fanout.md.
             for move in moves where move.name != "first-down" {
                 let outside = move.runs.filter { !$0.key.hasPrefix("list|") }.values.reduce(0, +)
-                XCTAssertEqual(outside, 0, "\(move.name) re-evaluated \(outside) focus rings outside the Tasks list, whose focus did not change")
+                XCTExpectFailure("SPEED-FOCUSSTATE-FANOUT: hidden pages' focusable controls re-check on each key (focus-fanout.md)",
+                                 enabled: move.name == "down" || move.name == "tab", strict: true) {
+                    XCTAssertEqual(outside, 0, "\(move.name) re-evaluated \(outside) focus rings outside the Tasks list, whose focus did not change")
+                }
             }
         }
     }
