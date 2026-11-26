@@ -1105,7 +1105,10 @@ final class NotesPageController: ObservableObject {
               let family = try? store.pendingEditRows(review.id), let edit = family.first,
               NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [edit.noteID]),
               NoteProposalSignature(edit) == review.signature,
-              let tasks = workspaceTaskStore else { return false }
+              let tasks = workspaceTaskStore,
+              // The app's one library: a second one would take over the
+              // stores' command route and tag inventory hooks, then be freed.
+              let library = lifecycleHistoryLibrary else { return false }
         guard session.engine.document() == review.current, session.engine.tags == review.currentTags,
               !session.isImporting, canLeaveComposition(in: session),
               (try? readSet.isCurrent(in: ModelContext(store.container))) == true else {
@@ -1113,7 +1116,7 @@ final class NotesPageController: ObservableObject {
             proposalReviewNotice = "The workspace changed. Review the refreshed operation before applying."
             return false
         }
-        let tools = AgentTaskTools(store: tasks, noteStore: store)
+        let tools = AgentTaskTools(store: tasks, noteStore: store, library: library)
         tools.notesController = { [weak self] in self }
         let call = AgentWorkspaceCall(readSet: readSet, intent: intent, notes: self, resolving: review.signature)
         call.presenter = intent.taskID.flatMap { TaskNotePresenter.open(for: $0) }
