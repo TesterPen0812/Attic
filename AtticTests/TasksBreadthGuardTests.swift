@@ -1585,12 +1585,12 @@ final class TasksBreadthGuardTests: XCTestCase {
         }
     }
 
-    /// Done's list: a day heading or a row per line. With every row
-    /// loaded and the list scrolled to its end (where a lazy stack that
-    /// cannot count each line's views walks every line above), a row click
-    /// runs the row builder the same number of times with 60 or 240 rows,
-    /// and the same rows on screen.
-    func testADoneRowClickAtTheEndRunsTheRowBuilderTheSameWith60Or240Rows() throws {
+    /// Done's list: a day heading or a row per line (a `switch` of two
+    /// single views, a constant count). With every row loaded and the list
+    /// scrolled to its end (where a lazy stack that cannot count each
+    /// line's views walks every line above), a row click builds only rows
+    /// within a screen of the shown ones, with 60 or 240 rows.
+    func testADoneRowClickAtTheEndBuildsOnlyRowsNearTheShownOnes() throws {
         var results: [Int: (click: Int, drawn: Int)] = [:]
         for count in [60, 240] {
             window?.close()
@@ -1635,15 +1635,25 @@ final class TasksBreadthGuardTests: XCTestCase {
             model.selectOnly(shown[1])
             settle(hosting)
             settle(hosting)
+            let base = TasksCellBodyCounts.passes
             let click = builderPasses(hosting) { model.click(shown[3], modifiers: [], visible: ids) }
             let all = click.values.reduce(0, +)
-            print("ONE_VIEW_DONE_END n=\(count) lines=\(ids.count + model.doneDays().count) drawn=\(shown.count) click_all=\(all)")
+            // The rows the click built lie within a screen of the shown rows;
+            // a stack that walked every line would build the list's first rows.
+            let built = TasksCellBodyCounts.passes.compactMap { row, runs in
+                row.tab == .done && runs > base[row, default: 0] ? row.id : nil
+            }
+            let index = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
+            let shownIndices = shown.compactMap { index[$0] }
+            let low = (shownIndices.min() ?? 0) - shown.count, high = (shownIndices.max() ?? 0) + shown.count
+            let far = built.filter { (index[$0] ?? -1) < low || (index[$0] ?? -1) > high }
+            print("ONE_VIEW_DONE_END n=\(count) lines=\(ids.count + model.doneDays().count) drawn=\(shown.count) "
+                  + "click_all=\(all) built_rows=\(built.count) far=\(far.count)")
+            XCTAssertGreaterThan(all, 0, "the click ran Done's row builder (\(count) rows)")
+            XCTAssertEqual(far.count, 0, "a Done row click at the end built \(far.count) rows more than a screen from the shown ones (\(count) rows)")
             results[count] = (all, shown.count)
         }
-        let small = try XCTUnwrap(results[60]), large = try XCTUnwrap(results[240])
-        XCTAssertEqual(small.drawn, large.drawn, "the same rows on screen at both sizes")
-        XCTAssertGreaterThan(small.click, 0, "the click ran Done's row builder")
-        XCTAssertEqual(large.click, small.click, "a Done row click at the end ran the row builder \(large.click) times with 240 rows against \(small.click) with 60")
+        XCTAssertEqual(results.count, 2, "both sizes ran")
     }
 
     // MARK: - Turns
