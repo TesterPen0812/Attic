@@ -295,6 +295,7 @@ struct DrawBoardRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> DrawBoardView {
         let view = DrawBoardView(model: model)
+        PanelPageKeyboard.tag(view, context.environment)
         model.setBoard(size: model.boardSize, clearInsets: clearInsets)
         return view
     }
@@ -335,6 +336,7 @@ struct DrawTitleField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSTextField {
         let field = PreparedField(string: text)
+        PanelPageKeyboard.tag(field, context.environment)
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none

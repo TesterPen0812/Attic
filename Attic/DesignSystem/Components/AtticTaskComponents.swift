@@ -979,7 +979,7 @@ struct AtticStatusButton: View {
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusable(isTabStop)
         .focusEffectDisabled()
-        .onHover { hovered = $0 }
+        .atticHover { hovered = $0 }
         .atticOwnFocusRing(.circle(diameter: AtticControlSize.statusCircle))
         .disabled(isDisabled)
         .help(state == .done ? String(localized: "Mark as not done") : String(localized: "Complete"))
@@ -1475,6 +1475,111 @@ final class AtticRowHoverGate {
 extension EnvironmentValues {
     /// The list's hover gate (`AtticRowHoverGate`); nil: hover as it comes.
     @Entry var atticRowHoverGate: AtticRowHoverGate? = nil
+    /// The list's hover for this row (`AtticRowHover`); nil: each hovered
+    /// part keeps its own SwiftUI hover region.
+    @Entry var atticRowHover: AtticRowHover? = nil
+}
+
+/// One list row's hover, told by its list (25 Nov 2026, the list hover
+/// tracker). A SwiftUI hover region in every row is hit-tested again after
+/// every layout of the list, a scroll's frames included; the list instead
+/// finds the row under the pointer from the frames it already measures
+/// (`TasksPointer`) and tells only that row. The row's hovered parts (the
+/// row, its date, its circle, its ›) measure themselves only while the
+/// pointer is in the row, and the list tells each whether it is under the
+/// pointer. The list never tells while its gate holds (the tint hold).
+@Observable
+final class AtticRowHover {
+    /// The pointer is in the row (its frame), so its parts measure.
+    private(set) var isPointerInside = false
+    /// Where the parts' frames are measured (the row's frame's space).
+    @ObservationIgnored var space: NamedCoordinateSpace = .named("attic-row-hover-unset")
+    /// Asks the list to look again (a part's frame arrived or moved).
+    @ObservationIgnored var onPartMoved: (() -> Void)?
+    @ObservationIgnored private var parts: [ObjectIdentifier: AtticRowHoverPart] = [:]
+    @ObservationIgnored private var point: CGPoint?
+
+    var partCount: Int { parts.count }
+
+    /// The list's answer: the pointer at `point` (in `space`), or not in
+    /// the row (nil). Each part is hovered while its frame holds the point.
+    func pointer(at point: CGPoint?) {
+        self.point = point
+        if isPointerInside != (point != nil) { isPointerInside = point != nil }
+        for part in parts.values { part.update(point) }
+    }
+
+    func add(_ part: AtticRowHoverPart) {
+        parts[ObjectIdentifier(part)] = part
+        onPartMoved?()
+    }
+
+    func remove(_ part: AtticRowHoverPart) {
+        parts[ObjectIdentifier(part)] = nil
+    }
+
+    func partMoved() { onPartMoved?() }
+}
+
+/// One hovered part of a row (`AtticRowHover`), alive only while the
+/// pointer is in the row.
+@Observable
+final class AtticRowHoverPart {
+    private(set) var isHovered = false
+    @ObservationIgnored var frame: CGRect?
+
+    func update(_ point: CGPoint?) {
+        let now = point.map { frame?.contains($0) ?? false } ?? false
+        if isHovered != now { isHovered = now }
+    }
+}
+
+extension View {
+    /// The pointer over this part: in a list row that the list tracks
+    /// (`AtticRowHover`), told by the list; anywhere else, SwiftUI's own
+    /// hover region (`onHover`), as before.
+    func atticHover(_ action: @escaping (Bool) -> Void) -> some View {
+        modifier(AtticHoverModifier(action: action))
+    }
+}
+
+private struct AtticHoverModifier: ViewModifier {
+    @Environment(\.atticRowHover) private var rowHover
+    let action: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        if let rowHover {
+            // Measured only while the pointer is in the row: a row the
+            // pointer is not in has no hover region and no frame report.
+            content.background {
+                if rowHover.isPointerInside { AtticRowHoverProbe(row: rowHover, action: action) }
+            }
+        } else {
+            content.onHover(perform: action)
+        }
+    }
+}
+
+private struct AtticRowHoverProbe: View {
+    let row: AtticRowHover
+    let action: (Bool) -> Void
+    @State private var part = AtticRowHoverPart()
+
+    var body: some View {
+        Color.clear
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: row.space) } action: { [row, part] frame in
+                part.frame = frame
+                row.partMoved()
+            }
+            .onAppear { [row, part] in row.add(part) }
+            .onChange(of: part.isHovered) { _, hovered in action(hovered) }
+            .onDisappear { [row, part] in
+                row.remove(part)
+                // The pointer left the row: the part is not hovered.
+                if part.isHovered { part.update(nil) }
+                action(false)
+            }
+    }
 }
 
 struct AtticTaskRow: View {
@@ -1757,7 +1862,7 @@ struct AtticTaskRow: View {
             }
         }
         .contentShape(Rectangle())
-        .onHover { inside in pointer(inside, over: .row) { hovered = $0 } }
+        .atticHover { inside in pointer(inside, over: .row) { hovered = $0 } }
         .onTapGesture {
             guard isEnabled else { return }
             switch Self.clickRoute(clickCount: Self.currentClickCount, edits: actions.editTitle != nil && capture == nil) {
@@ -1811,7 +1916,7 @@ struct AtticTaskRow: View {
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
-                .onHover { inside in pointer(inside, over: .date) { dateHovered = $0 } }
+                .atticHover { inside in pointer(inside, over: .date) { dateHovered = $0 } }
                 .atticRowControl()
                 .help(String(localized: "Change the date"))
                 .accessibilityLabel(String(localized: "Due \(due.text)"))
@@ -1875,7 +1980,7 @@ struct AtticRowActionsButton: View {
         .buttonStyle(.plain)
         .focusable(false)
         .focusEffectDisabled()
-        .onHover { hovered = $0 }
+        .atticHover { hovered = $0 }
         .background(AtticMenuAnchor(holder: anchor))
         .atticRowControl()
         .help(String(localized: "Actions"))
@@ -1934,7 +2039,7 @@ struct AtticRowOpenButton: View {
                            radius: AtticShape.controlRadius(height: m.size), expectedRadius: m.size / 2)
         .focusable(false)
         .focusEffectDisabled()
-        .onHover { hovered = $0 }
+        .atticHover { hovered = $0 }
         .animation(design.reduceMotion ? AtticMotionScale.reducedChange : AtticMotionPreset.hover.animation(reduceMotion: false), value: hovered)
         .atticRowControl()
         .accessibilityLabel(String(localized: "Open page"))
@@ -2212,7 +2317,7 @@ private struct AtticDetailsTags: View {
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
-            .onHover { hovered = $0 }
+            .atticHover { hovered = $0 }
             .atticRowControl()
             .atticDropdown(isPresented: popover?.isPresented ?? .constant(false), label: String(localized: "Tags")) { popover?.content() }
             .help(tags.map { "#" + $0 }.joined(separator: " "))
@@ -2308,7 +2413,7 @@ private struct AtticDetailsCountButton: View {
         .focusEffectDisabled()
         .atticOwnFocusRing(.rounded(radius: radius, height: m.height))
         .disabled(disabled)
-        .onHover { hovered = $0 }
+        .atticHover { hovered = $0 }
         .padding(.horizontal, -m.horizontalPadding)
         .frame(height: AtticTaskRowMetrics.rowDetailsLineHeight)
         .atticRowControl()
@@ -2354,7 +2459,7 @@ struct AtticCompletedLine: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovered = $0 }
+        .atticHover { hovered = $0 }
         .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: isExpanded)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title), \(count)")
@@ -2489,7 +2594,7 @@ struct AtticSubtaskRow: View {
         .contentShape(Rectangle())
         .modifier(AtticSubtaskCommands(commands: managed && renaming == nil ? commands : [], focused: $focused,
                                        showActions: { showActions(in: nil) }))
-        .onHover { inside in if managed, hovered != inside { hovered = inside } }
+        .atticHover { inside in if managed, hovered != inside { hovered = inside } }
         .onChange(of: focused) { _, now in onFocusChange(now) }
         .onDisappear { if focused { onFocusChange(false) } }
         // A page's own Tab order reaches the line (A10).
@@ -2750,7 +2855,7 @@ struct AtticQuietAction: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovered = $0 }
+        .atticHover { hovered = $0 }
     }
 
     /// How far a leading symbol's ink starts inside its slot (the slot is
@@ -3055,6 +3160,7 @@ struct AtticSubtaskTitleField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSTextField {
         let field = Self.makeField()
         field.delegate = context.coordinator
+        PanelPageKeyboard.tag(field, context.environment)
         return field
     }
 

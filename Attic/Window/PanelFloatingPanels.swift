@@ -59,6 +59,8 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         uiState.updatePanelSize(frame.size)
         panel = AtticPanel(contentRect: CGRect(origin: .zero, size: frame.size),
                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        // Its page is shown here; the keyboard rule asks this panel's state.
+        panel.showsPageQuery = { [weak uiState] page in uiState.map { PanelPage($0.selectedSection) == page } ?? true }
         hostingView = AtticPanelHostingView(
             rootView: AtticPanelView(
                 store: deps.store, noteStore: deps.noteStore, canvasSession: deps.canvasSession,

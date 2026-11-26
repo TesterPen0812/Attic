@@ -2478,10 +2478,12 @@ private struct AtticDropdownModifier<Card: View>: ViewModifier {
     func body(content: Content) -> some View {
         // The anchor exists only while the card is asked for: a row at rest
         // costs nothing (no AppKit view per row).
+        // The card is in its own window: a row's list hover (frames in the
+        // row's page, `AtticRowHover`) never reaches it.
         content.background {
             if isPresented {
                 AtticDropdownAnchor(isPresented: $isPresented, prefer: prefer, label: label, takesKeyboard: takesKeyboard, contentHasCard: contentHasCard, contentHeight: contentHeight, contentWidth: contentWidth,
-                                    opaqueMotion: opaqueMotion, design: design, content: { AnyView(card()) })
+                                    opaqueMotion: opaqueMotion, design: design, content: { AnyView(card().environment(\.atticRowHover, nil)) })
                     .accessibilityHidden(true)
             }
         }

@@ -19,6 +19,25 @@ Looks are unchanged: the island and label frames match the trunk's
 at rest, at each step and once settled (CI, to the point). With Reduce
 Transparency the island is solid, has no sizer, and takes no size.
 
+## 2026-11-25 · Hover in the Tasks list comes from the list, not from each row
+
+A row in the Tasks list no longer carries a SwiftUI hover region for itself,
+its date, circle, ›, tags, subtask count, subtask lines or Add subtask, and
+the day headings, the next event and Completed today no longer carry one
+either. SwiftUI hit-tests every such region again after each layout of the
+list, a scroll's frames included. The page's own view (`TasksPointerProbeView`)
+now tracks the pointer and the list finds the row under it from the frames it
+already measures (`TasksPointer.updateHover`). Only the row the pointer enters
+or leaves is told (`AtticRowHover`). Its parts measure themselves only while
+the pointer is in it, and each is told whether the pointer is over it (`.atticHover`).
+What hover shows is unchanged: the tint, the ›, the date pill and the
+controls' own hover states. The tint hold is kept: nothing changes while
+the list scrolls live, and the row under the pointer is hovered when the
+scroll ends. A still pointer over a list that moves (wheel, reveal, a row
+going) lands on the row now under it. Leaving the list, hiding the panel or
+leaving Tasks clears it. Outside a tracked list (the gallery, cards, other
+pages, dropdown cards) `.atticHover` is SwiftUI's `onHover`, as before.
+
 ## 2026-11-25 · Task rows in a list that owns the keyboard (list-owned focus)
 
 A task row's list focus (`AtticTaskComponents.swift`) takes an optional focus state. With one (the Calendar
