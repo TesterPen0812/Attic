@@ -1578,7 +1578,7 @@ final class CalendarDayMarksTests: XCTestCase {
     }
 }
 
-// MARK: - Width steps (calendar-resize-cause.md causes 5, 6 and 3, 26 Nov)
+// MARK: - Width steps (calendar-resize-cause.md causes 5 and 3, 26 Nov)
 
 /// The page at a width the test changes, as a panel drag does: the window
 /// and its hosting view resize while the page's own inputs stay the same.
@@ -1707,6 +1707,80 @@ extension CalendarPageHostedTests {
             print("CALCOUNT cause5-first layout=\(firstLayout) drawn=\(firstDrawn) turn=\(afterTurn) settled=\(settled) shorter=\(shorter)")
             XCTAssertEqual(firstDrawn, settled, accuracy: 0.5, "the first drawn frame already fills the viewport")
             XCTAssertEqual(settled - shorter, 200, accuracy: 0.5, "the agenda's least height follows a height step")
+        }
+    }
+}
+
+extension CalendarPageHostedTests {
+    /// Cause 3: an event row's arrival writes no view state on a width step,
+    /// though the row's wrapped title changes its height. Below 1 its frame
+    /// is 0 whatever the height, so the height is never needed.
+    func testAWidthStepWritesNoEventArrivalState() throws {
+        try withResizablePage(events: resizeEvents) { page in
+            AgentEventArrival.heightStateWrites = 0
+            var rowHeights: [CGFloat] = []
+            for width in Self.resizeWidths {
+                resize(page, width: width)
+                let drawn = frames(page, ["calendar-event-", "calendar-tile-"])
+                logFrames("cause3", width: width, drawn)
+                rowHeights.append(drawn["calendar-event-long"]?.height ?? -1)
+            }
+            print("CALCOUNT cause3 heightStateWrites=\(AgentEventArrival.heightStateWrites) rowHeights=\(rowHeights)")
+            XCTAssertFalse(rowHeights.contains(-1), "the long event's row is drawn")
+            XCTAssertGreaterThan(Set(rowHeights).count, 1, "the long title wraps to another height at some width")
+            XCTAssertEqual(AgentEventArrival.heightStateWrites, 0, "a width step writes the event arrival's height state")
+        }
+    }
+
+    /// Cause 3 guard, the family: a row the agent hides takes no room, and
+    /// once grown it takes its full height again, whether it was drawn,
+    /// hidden or already growing when the page was built, and when the width
+    /// changed while it was hidden.
+    func testAnArrivingEventTakesNoRoomUntilShownAndItsFullHeightOnceGrown() throws {
+        let board = AgentWatchBoard.shared
+        let id = "arrive"
+        defer { board.settleEvent(id) }
+        let events = [titled(id, Self.longTitle, on: 29, hour: 15),
+                      titled("arrive-2", "Second", on: 29, hour: 16), titled("arrive-3", "Third", on: 29, hour: 17)]
+        let tile = "calendar-tile-\(day(2026, 10, 29).rawValue)"
+        func tileHeight(_ page: MountedPage) -> CGFloat { frames(page, [tile])[tile]?.height ?? -1 }
+        var full: [CGFloat: CGFloat] = [:]
+        // Drawn, then hidden, the width changed while hidden, then grown.
+        try withResizablePage(events: events) { page in
+            for width: CGFloat in [460, 320] {
+                resize(page, width: width)
+                full[width] = tileHeight(page)
+            }
+            board.hideEvent(id)
+            page.settle(0.3)
+            let hidden = tileHeight(page)
+            resize(page, width: 460)
+            board.growEvent(id)
+            page.settle(0.9)
+            let grown = tileHeight(page)
+            print("CALCOUNT cause3-family full=\(full) hidden=\(hidden) grown460=\(grown)")
+            XCTAssertGreaterThan(hidden, 0)
+            XCTAssertLessThan(hidden, (full[320] ?? 0) - 10, "a hidden row takes no room")
+            XCTAssertEqual(grown, full[460] ?? -1, accuracy: 0.5, "grown after a width step while hidden")
+            board.settleEvent(id)
+        }
+        // Hidden when the page is built, then grown.
+        board.hideEvent(id)
+        try withResizablePage(events: events) { page in
+            let hidden = tileHeight(page)
+            board.growEvent(id)
+            page.settle(0.9)
+            XCTAssertLessThan(hidden, (full[320] ?? 0) - 10, "built hidden: no room")
+            XCTAssertEqual(tileHeight(page), full[320] ?? -1, accuracy: 0.5, "built hidden, then grown")
+            board.settleEvent(id)
+        }
+        // Already growing when the page is built.
+        board.hideEvent(id)
+        board.growEvent(id)
+        try withResizablePage(events: events) { page in
+            page.settle(0.6)
+            XCTAssertEqual(tileHeight(page), full[320] ?? -1, accuracy: 0.5, "built growing, then grown")
+            board.settleEvent(id)
         }
     }
 }

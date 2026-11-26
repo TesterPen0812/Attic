@@ -221,12 +221,24 @@ struct AgentEventArrival: ViewModifier {
 
     init(id: String) { self.id = id }
 
+    #if DEBUG && ATTIC_UNIT_TEST_HOST
+    /// Test seam: how many times an arrival wrote its row's measured height
+    /// into view state.
+    static var heightStateWrites = 0
+    #endif
+
     func body(content: Content) -> some View {
         let growing = board.growingEvents.contains(id)
         let p: CGFloat = board.hiddenEvents.contains(id) ? 0 : growing && !design.reduceMotion ? grown : 1
         content
             .fixedSize(horizontal: false, vertical: true)
-            .onGeometryChange(for: CGFloat.self, of: \.size.height) { if $0 != height { height = $0 } }
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { new in
+                guard new != height else { return }
+                #if DEBUG && ATTIC_UNIT_TEST_HOST
+                Self.heightStateWrites += 1
+                #endif
+                height = new
+            }
             .agentWatchMark(AgentWatchBoard.eventKey(id))
             .offset(x: -7 * (1 - p))
             .opacity(Double(p))
