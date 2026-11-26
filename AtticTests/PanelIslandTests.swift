@@ -1599,6 +1599,45 @@ final class PanelIslandTests: XCTestCase {
 
     // MARK: Helpers
 
+    /// Resize geometry parity (26 Nov): through the panel tests' resize
+    /// steps, the island's window, its label's and the island's hosting
+    /// view keep the frames `PanelIslandWindows.layout` gives them from the
+    /// panel's frame, at rest, at each step and settled. Prints one
+    /// ISLAND_GEOM line a moment, so arms can be compared number for number.
+    func testTheIslandsGeometryFollowsThePanelThroughAResize() throws {
+        for spot in [standing, PanelIslandSpot.defaultSpot] {
+            try withController(configure: { $0.islandSpot = spot }) { controller, state, panel in
+                let windows = controller.islandWindowsForTesting
+                let host = try XCTUnwrap(windows.island.contentView)
+                let margin = PanelIslandLayout.windowMargin
+                func check(_ moment: String) {
+                    host.layoutSubtreeIfNeeded()
+                    let visible = panel.visibleContentFrame, island = windows.island.frame, label = windows.label.frame
+                    func rel(_ r: CGRect) -> String { "(\(r.minX - visible.minX), \(r.minY - visible.minY), \(r.width), \(r.height))" }
+                    print("ISLAND_GEOM spot=\(spot.rawValue) \(moment) island=\(island) label=\(label) host_bounds=\(host.bounds) host_fitting=\(host.fittingSize) panel=\(visible) island_rel=\(rel(island)) label_rel=\(rel(label))")
+                    let capsule = PanelIslandLayout.islandFrame(panelFrame: controller.panelVisibleFrameForTesting,
+                                                                corner: windows.corner, spot: windows.spot)
+                    XCTAssertEqual(island, capsule.insetBy(dx: -margin, dy: -margin), "\(spot) \(moment): the island window left its frame")
+                    XCTAssertEqual(label, PanelIslandLayout.labelWindowFrame(island: capsule, corner: windows.corner, spot: windows.spot),
+                                   "\(spot) \(moment): the label window left its frame")
+                    XCTAssertEqual(host.bounds.size, island.size, "\(spot) \(moment): the island's content is not laid out at its window's size")
+                }
+                check("rest")
+                for step in 1...5 {
+                    var frame = panel.visibleContentFrame
+                    frame.size.width += 14
+                    frame.size.height += step.isMultiple(of: 2) ? 6 : 0
+                    panel.setVisibleContentFrame(frame, display: true)
+                    state.updatePanelSize(panel.visibleContentFrame.size)
+                    spin(0.05)
+                    check("step\(step)")
+                }
+                spin(0.4)
+                check("settle")
+            }
+        }
+    }
+
     private func withController(reduceMotion: Bool = false, configure: (AppSettings) -> Void = { _ in },
                                 _ body: @MainActor (AtticPanelController, PanelUIState, AtticPanel) throws -> Void) throws {
         // GitHub's runners turn both on; these tests state them.
