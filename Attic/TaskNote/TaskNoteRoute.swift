@@ -89,6 +89,8 @@ struct TaskNoteRouteHost<Origin: View>: View {
                                       onLeaving: { leaving in growBack(taskID, leaving: leaving) }) {
                     Self.closeRoute(taskID, uiState: uiState, controller: noteDraft.pages)
                 }
+                .onAppear { onePiece.trace("page in") }
+                .onDisappear { onePiece.trace("page gone") }
                 // The page's own top row is this page's (its Find takes it, N4 B).
                 .environment(\.panelTopRowPage, page)
                 .opacity(pageShows ? 1 : 0)
@@ -311,13 +313,16 @@ struct TaskNoteRouteHost<Origin: View>: View {
             onePiece.landed(false)
         }
         let target: CGFloat = open ? 1 : 0
-        withAnimation(TaskPageOnePiece.spring) {
+        withAnimation(TaskPageOnePiece.spring, completionCriteria: .removed) {
             onePiece.progress = target
-            sharedChrome?.setGivingWay(target, page: page)
-        }
-        // A newer turn moves the generation on, so this landing is dropped.
-        DispatchQueue.main.asyncAfter(deadline: .now() + TaskPageOnePiece.settle) {
+        } completion: {
+            onePiece.trace("completion progress gen \(generation)")
             landedOnePiece(generation)
+        }
+        withAnimation(TaskPageOnePiece.spring, completionCriteria: .removed) {
+            sharedChrome?.setGivingWay(target, page: page)
+        } completion: {
+            onePiece.trace("completion givingWay gen \(generation)")
         }
     }
 

@@ -39,14 +39,15 @@ enum TaskPageOnePiece {
         .spring(duration: AtticMotionPreset.expand.duration, bounce: AtticMotionPreset.expand.bounce)
     }
 
-    /// How long that spring takes to settle from a turn (it keeps its speed
-    /// as it turns, so a turn round settles in about the same time). The
-    /// opening lands by this clock, not by SwiftUI's animation completion,
-    /// which a reverse over a page leaving the hierarchy never called (CI
-    /// run 45843849844: no landing after Back, the opening stayed on).
-    static var settle: TimeInterval {
-        Spring(duration: AtticMotionPreset.expand.duration, bounce: AtticMotionPreset.expand.bounce).settlingDuration
+    #if DEBUG
+    @MainActor private static var lastFrame: [String: CGFloat] = [:]
+    /// Tests: a part drew the motion's end value (0 or 1); logged once per change.
+    @MainActor static func frame(_ who: String, _ p: CGFloat) {
+        guard p == 0 || p == 1, lastFrame[who] != p else { if p != 0 && p != 1 { lastFrame[who] = p }; return }
+        lastFrame[who] = p
+        TaskPageMotion.currentForTesting?.trace("frame \(who) \(p)")
     }
+    #endif
 
     /// How far the bars drop and Back and Aa rise (the drawing's 24 px).
     nonisolated static let barTravel: CGFloat = 12
@@ -191,6 +192,9 @@ private struct TaskPageLineEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
+        #if DEBUG
+        let _ = TaskPageOnePiece.frame("line", progress)
+        #endif
         let p = progress, pose = pose
         content.visualEffect { effect, proxy in
             guard let pose, p != 0 else { return effect.offset(y: 0).opacity(1) }
@@ -240,6 +244,9 @@ private struct TaskPageRowPartEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
+        #if DEBUG
+        let _ = TaskPageOnePiece.frame("rowpart", progress)
+        #endif
         let p = pose == nil ? 0 : progress
         let pose = pose ?? .zero
         switch kind {
@@ -299,6 +306,9 @@ private struct TaskPageFadeEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
+        #if DEBUG
+        let _ = TaskPageOnePiece.frame("fade", progress)
+        #endif
         switch track {
         case .highlight: content.opacity(TaskPageOnePiece.highlightOpacity(progress))
         case .top: content.opacity(TaskPageOnePiece.topOpacity(progress))
@@ -317,6 +327,9 @@ struct TaskPageBarDrop: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
+        #if DEBUG
+        let _ = TaskPageOnePiece.frame("bar", progress)
+        #endif
         content.offset(y: TaskPageOnePiece.barTravel * TaskPageOnePiece.barAway(progress))
     }
 }
@@ -588,6 +601,9 @@ private struct TaskPageStandInPart: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
+        #if DEBUG
+        let _ = TaskPageOnePiece.frame("standin.\(part)", progress)
+        #endif
         let p = progress
         let O = TaskPageOnePiece.self
         switch part {
