@@ -1610,17 +1610,19 @@ final class PanelIslandTests: XCTestCase {
                 let windows = controller.islandWindowsForTesting
                 let host = try XCTUnwrap(windows.island.contentView)
                 let margin = PanelIslandLayout.windowMargin
-                func check(_ moment: String) {
+                @MainActor func check(_ moment: String) {
                     host.layoutSubtreeIfNeeded()
                     let visible = panel.visibleContentFrame, island = windows.island.frame, label = windows.label.frame
                     func rel(_ r: CGRect) -> String { "(\(r.minX - visible.minX), \(r.minY - visible.minY), \(r.width), \(r.height))" }
                     print("ISLAND_GEOM spot=\(spot.rawValue) \(moment) island=\(island) label=\(label) host_bounds=\(host.bounds) host_fitting=\(host.fittingSize) panel=\(visible) island_rel=\(rel(island)) label_rel=\(rel(label))")
                     let capsule = PanelIslandLayout.islandFrame(panelFrame: controller.panelVisibleFrameForTesting,
                                                                 corner: windows.corner, spot: windows.spot)
-                    XCTAssertEqual(island, capsule.insetBy(dx: -margin, dy: -margin), "\(spot) \(moment): the island window left its frame")
-                    XCTAssertEqual(label, PanelIslandLayout.labelWindowFrame(island: capsule, corner: windows.corner, spot: windows.spot),
-                                   "\(spot) \(moment): the label window left its frame")
-                    XCTAssertEqual(host.bounds.size, island.size, "\(spot) \(moment): the island's content is not laid out at its window's size")
+                    let islandExpected = capsule.insetBy(dx: -margin, dy: -margin)
+                    let labelExpected = PanelIslandLayout.labelWindowFrame(island: capsule, corner: windows.corner, spot: windows.spot)
+                    let bounds = host.bounds.size
+                    XCTAssertEqual(island, islandExpected, "\(spot) \(moment): the island window left its frame")
+                    XCTAssertEqual(label, labelExpected, "\(spot) \(moment): the label window left its frame")
+                    XCTAssertEqual(bounds, island.size, "\(spot) \(moment): the island's content is not laid out at its window's size")
                 }
                 check("rest")
                 for step in 1...5 {
