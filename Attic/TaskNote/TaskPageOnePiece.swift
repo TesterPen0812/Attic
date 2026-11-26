@@ -83,6 +83,71 @@ enum TaskPageOnePiece {
     nonisolated static func backBarIn(_ p: CGFloat) -> CGFloat { ramp(p, 0.25, 0.85) }
 }
 
+
+#if DEBUG
+/// DIAG (scratch only): a census of the motion's readers, one token each.
+@MainActor
+enum TaskPageProbe {
+    @MainActor final class Token {
+        let kind: String
+        var host = "-"
+        var hostDrawn = true
+        var appeared = false
+        var reads = 0, draws = 0, mids = 0
+        var readValue: CGFloat?, first: CGFloat?, last: CGFloat?
+        init(_ kind: String) {
+            self.kind = kind
+            TaskPageProbe.tokens.add(self)
+        }
+        func read(_ p: CGFloat?, host: KeptHostReference?) {
+            reads += 1
+            readValue = p
+            if let view = host?.host {
+                self.host = String(describing: ObjectIdentifier(view).hashValue % 10_000)
+                hostDrawn = view.isDrawn
+            }
+        }
+        func drew(_ p: CGFloat) {
+            draws += 1
+            if first == nil { first = p }
+            if p != 0, p != 1 { mids += 1 }
+            last = p
+        }
+    }
+    static let tokens = NSHashTable<Token>.weakObjects()
+    static var standInTokens: [String: Token] = [:]
+    static func standIn(_ part: TaskPageStandInPartKind, _ p: CGFloat) {
+        let key = "standin.\(part)"
+        let token = standInTokens[key] ?? Token(key)
+        standInTokens[key] = token
+        token.drew(p)
+    }
+    /// Reader kinds that do not read the motion (the bisect seam).
+    static var off: Set<String> = []
+    static var events: [String] = []
+    static var reporters: [String: Int] = [:]
+    static func reporter(_ who: String) { reporters[who, default: 0] += 1 }
+
+    static func mark(_ what: String) {
+        events.append(String(format: "%.3f ", CACurrentMediaTime()) + what)
+        for token in tokens.allObjects {
+            token.reads = 0; token.draws = 0; token.mids = 0; token.first = nil
+        }
+    }
+    static func event(_ what: String) { events.append(String(format: "%.3f ", CACurrentMediaTime()) + what) }
+
+    static func census(_ title: String) -> String {
+        var groups: [String: Int] = [:]
+        func f(_ v: CGFloat?) -> String { v.map { String(format: "%.3f", $0) } ?? "nil" }
+        for t in tokens.allObjects {
+            let key = "\(t.kind) host=\(t.host) drawn=\(t.hostDrawn) appeared=\(t.appeared) reads=\(min(t.reads, 3)) read=\(f(t.readValue)) draws=\(t.draws == 0 ? "0" : t.draws < 3 ? "1-2" : "3+") mids=\(t.mids > 0) first=\(f(t.first)) last=\(f(t.last))"
+            groups[key, default: 0] += 1
+        }
+        return "CENSUS \(title)\n" + groups.keys.sorted().map { "  \(groups[$0]!) x \($0)" }.joined(separator: "\n")
+    }
+}
+#endif
+
 // MARK: - Where things are
 
 /// The opening row and the page's head, in the route host's space.
@@ -165,16 +230,22 @@ extension EnvironmentValues {
 /// never laid out, so tab, scroll and selection are exactly as they were.
 struct TaskPageMakeWayLine: ViewModifier {
     @Environment(\.taskPageMotion) private var motion
+    @Environment(\.keptHost) private var keptHost
+    @State private var token = TaskPageProbe.Token("line")
 
     func body(content: Content) -> some View {
-        let way = motion?.way
-        return content.modifier(TaskPageLineEffect(progress: way?.progress ?? 0, pose: way?.pose))
+        let way = TaskPageProbe.off.contains("line") ? nil : motion?.way
+        let _ = token.read(way?.progress, host: keptHost)
+        return content.modifier(TaskPageLineEffect(progress: way?.progress ?? 0, pose: way?.pose, token: token))
+            .onAppear { token.appeared = true }
+            .onDisappear { token.appeared = false }
     }
 }
 
 private struct TaskPageLineEffect: ViewModifier, Animatable {
     var progress: CGFloat
     let pose: TaskPagePose?
+    let token: TaskPageProbe.Token
 
     var animatableData: CGFloat {
         get { progress }
@@ -183,6 +254,7 @@ private struct TaskPageLineEffect: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         let p = progress, pose = pose
+        let _ = token.drew(p)
         content.visualEffect { effect, proxy in
             guard let pose, p != 0 else { return effect.offset(y: 0).opacity(1) }
             let mid = proxy.frame(in: .named(TaskPageOnePiece.space)).midY
@@ -197,9 +269,12 @@ private struct TaskPageLineEffect: ViewModifier, Animatable {
 struct TaskPageRowLeaving: ViewModifier {
     let id: UUID
     @Environment(\.taskPageMotion) private var motion
+    @Environment(\.keptHost) private var keptHost
+    @State private var token = TaskPageProbe.Token("leaving")
 
     func body(content: Content) -> some View {
-        let way = motion?.way
+        let way = TaskPageProbe.off.contains("leaving") ? nil : motion?.way
+        let _ = token.read(way?.progress, host: keptHost)
         return content.environment(\.taskPageRowLeaving, way?.anchorID == id ? way : nil)
     }
 }
@@ -214,9 +289,11 @@ enum TaskPageRowPartKind: Sendable { case title, circle, rest }
 struct TaskPageRowPart: ViewModifier {
     let kind: TaskPageRowPartKind
     @Environment(\.taskPageRowLeaving) private var leaving
+    @State private var token = TaskPageProbe.Token("rowpart")
 
     func body(content: Content) -> some View {
-        content.modifier(TaskPageRowPartEffect(kind: kind, progress: leaving?.progress ?? 0, pose: leaving?.pose))
+        let _ = token.read(leaving?.progress, host: nil)
+        content.modifier(TaskPageRowPartEffect(kind: kind, progress: leaving?.progress ?? 0, pose: leaving?.pose, token: token))
     }
 }
 
@@ -224,6 +301,7 @@ private struct TaskPageRowPartEffect: ViewModifier, Animatable {
     let kind: TaskPageRowPartKind
     var progress: CGFloat
     let pose: TaskPagePose?
+    let token: TaskPageProbe.Token
 
     var animatableData: CGFloat {
         get { progress }
@@ -231,6 +309,7 @@ private struct TaskPageRowPartEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
+        let _ = token.drew(progress)
         let p = pose == nil ? 0 : progress
         let pose = pose ?? .zero
         switch kind {
@@ -259,21 +338,27 @@ extension TaskPagePose {
 /// The selection's highlight under the opening row fades by 0.4.
 struct TaskPageHighlightFade: ViewModifier {
     @Environment(\.taskPageMotion) private var motion
+    @Environment(\.keptHost) private var keptHost
+    @State private var token = TaskPageProbe.Token("highlight")
 
     func body(content: Content) -> some View {
-        let way = motion?.way
-        return content.modifier(TaskPageFadeEffect(progress: way?.progress ?? 0, track: .highlight))
+        let way = TaskPageProbe.off.contains("highlight") ? nil : motion?.way
+        let _ = token.read(way?.progress, host: keptHost)
+        return content.modifier(TaskPageFadeEffect(progress: way?.progress ?? 0, track: .highlight, token: token))
     }
 }
 
 /// Tasks' own top row (Now · Later · Done, ••• and Find) fades by 0.4.
 struct TaskPageTopRowFade: ViewModifier {
     @Environment(\.taskPageMotion) private var motion
+    @Environment(\.keptHost) private var keptHost
+    @State private var token = TaskPageProbe.Token("top")
 
     func body(content: Content) -> some View {
-        let way = motion?.way
+        let way = TaskPageProbe.off.contains("top") ? nil : motion?.way
+        let _ = token.read(way?.progress, host: keptHost)
         return content
-            .modifier(TaskPageFadeEffect(progress: way?.progress ?? 0, track: .top))
+            .modifier(TaskPageFadeEffect(progress: way?.progress ?? 0, track: .top, token: token))
             .allowsHitTesting(way == nil)
     }
 }
@@ -283,6 +368,7 @@ enum TaskPageFadeTrack: Sendable { case highlight, top }
 private struct TaskPageFadeEffect: ViewModifier, Animatable {
     var progress: CGFloat
     let track: TaskPageFadeTrack
+    let token: TaskPageProbe.Token
 
     var animatableData: CGFloat {
         get { progress }
@@ -290,6 +376,7 @@ private struct TaskPageFadeEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
+        let _ = token.drew(progress)
         switch track {
         case .highlight: content.opacity(TaskPageOnePiece.highlightOpacity(progress))
         case .top: content.opacity(TaskPageOnePiece.topOpacity(progress))
@@ -593,6 +680,7 @@ private struct TaskPageStandInPart: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         let p = progress
+        let _ = TaskPageProbe.standIn(part, p)
         let O = TaskPageOnePiece.self
         switch part {
         case .head:
@@ -808,6 +896,7 @@ struct TaskPageOnePieceLayer: View {
                 .allowsHitTesting(!parked)
                 .accessibilityHidden(parked)
                 .modifier(TaskPageLanding(progress: motion.progress, drewEnd: onDrewEnd))
+                .modifier(TaskPageLandingDrawn(progress: motion.progress))
                 .transition(.identity)
                 .onAppear(perform: onAppear)
         }
@@ -826,22 +915,35 @@ private struct TaskPageLanding: ViewModifier, Animatable {
 
     var animatableData: CGFloat {
         get { progress }
-        set { progress = newValue }
+        set {
+            progress = newValue
+            if Thread.isMainThread { MainActor.assumeIsolated { TaskPageProbe.reporter("bare.set") } }
+        }
     }
 
     func body(content: Content) -> some View {
         // A spring passes its ends only as nearby values; it draws one
         // exactly once it has settled there.
-        let _ = report(progress)
+        let _ = TaskPageProbe.reporter("bare.body")
         content
     }
 
-    private func report(_ p: CGFloat) {
-        #if DEBUG
-        TaskPageMotion.currentForTesting?.trace("landing drew " + String(format: "%.4f", p) + (p == 0 || p == 1 ? " END" : ""))
-        #endif
-        guard p == 0 || p == 1 else { return }
-        let drewEnd = drewEnd
-        DispatchQueue.main.async { drewEnd(p) }
+}
+
+/// DIAG: the same reporter with a body that takes the value.
+private struct TaskPageLandingDrawn: ViewModifier, Animatable {
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set {
+            progress = newValue
+            if Thread.isMainThread { MainActor.assumeIsolated { TaskPageProbe.reporter("drawn.set") } }
+        }
+    }
+
+    func body(content: Content) -> some View {
+        let _ = TaskPageProbe.reporter("drawn.body")
+        content.offset(y: progress * 0)
     }
 }

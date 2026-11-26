@@ -313,11 +313,17 @@ struct TaskNoteRouteHost<Origin: View>: View {
             onePiece.landed(false)
         }
         let target: CGFloat = open ? 1 : 0
-        onePiece.landingGeneration = generation
-        withAnimation(TaskPageOnePiece.spring) {
-            onePiece.progress = target
-            sharedChrome?.setGivingWay(target, page: page)
+        TaskPageProbe.mark("turn \(open) gen \(generation)")
+        var spring = Transaction(animation: TaskPageOnePiece.spring)
+        spring.addAnimationCompletion(criteria: .logicallyComplete) {
+            TaskPageProbe.event("completion logical gen \(generation)")
         }
+        spring.addAnimationCompletion(criteria: .removed) {
+            TaskPageProbe.event("completion removed gen \(generation)")
+            landedOnePiece(generation)
+        }
+        withTransaction(spring) { onePiece.progress = target }
+        withAnimation(TaskPageOnePiece.spring) { sharedChrome?.setGivingWay(target, page: page) }
     }
 
     /// The stand-in drew an end: the turn towards it has landed.

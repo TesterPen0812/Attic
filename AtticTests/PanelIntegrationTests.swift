@@ -889,6 +889,75 @@ final class PanelIntegrationTests: XCTestCase {
         }
     }
 
+    // MARK: DIAG (scratch only): who holds the spring's completion
+
+    private func diagCensus(_ name: String, rows: Int, scrollBy: CGFloat, off: Set<String>, idle: TimeInterval = 0.5) throws {
+        try withMotion(reduced: false) {
+            TaskPageProbe.off = off
+            defer { TaskPageProbe.off = [] }
+            let rig = try onePiecePanel((0..<rows).map { TaskDraft(title: "Row \($0)") })
+            spin(until: { !rig.model.agentRowFrames(nil).isEmpty })
+            if scrollBy > 0 {
+                let scroll = try XCTUnwrap(tasksScrollView(rig.model))
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: scrollBy))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            spin(idle)
+            let shown = rig.model.agentRowFrames(nil)
+            let target = try XCTUnwrap(shown.dropFirst(shown.count / 2).first?.id)
+            TaskPageProbe.events = []
+            TaskPageProbe.reporters = [:]
+            TaskPageMotion.traceForTesting = []
+            let hosts = { () -> String in
+                var all: [KeptContentHostingView] = []
+                func walk(_ view: NSView) {
+                    if let host = view as? KeptContentHostingView { all.append(host) }
+                    view.subviews.forEach(walk)
+                }
+                if let root = rig.panel.controller.panelForTesting.contentView { walk(root) }
+                return all.map { "\(ObjectIdentifier($0).hashValue % 10_000):drawn=\($0.isDrawn)" }.joined(separator: " ")
+            }
+            print("DIAG \(name) rows=\(rows) scroll=\(scrollBy) off=\(off.sorted()) shown=\(shown.count) hosts=[\(hosts())]")
+            rig.panel.uiState.openTaskNote(target, from: .tasks)
+            spin(until: { TaskPageMotion.currentForTesting?.taskID == target })
+            let motion = try XCTUnwrap(TaskPageMotion.currentForTesting)
+            spin(until: { motion.handedOver && rig.element("task-note-back") != nil }, timeout: 5)
+            print("DIAG \(name) OPEN landed=\(motion.handedOver) reporters=\(TaskPageProbe.reporters.sorted { $0.key < $1.key })")
+            print(TaskPageProbe.census("\(name) after open"))
+            guard motion.handedOver, let back = rig.element("task-note-back") else {
+                print("DIAG \(name) EVENTS\n" + TaskPageProbe.events.joined(separator: "\n"))
+                return
+            }
+            XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
+            spin(until: { rig.panel.uiState.openTaskNoteID == nil && !motion.isActive }, timeout: 4)
+            let landed = !motion.isActive
+            print("DIAG \(name) BACK landed=\(landed) hosts=[\(hosts())] reporters=\(TaskPageProbe.reporters.sorted { $0.key < $1.key })")
+            print(TaskPageProbe.census("\(name) after back"))
+            if !landed {
+                // Does a later scroll (rows placed again) let it land?
+                if let scroll = tasksScrollView(rig.model) {
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    spin(until: { !motion.isActive }, timeout: 2)
+                    print("DIAG \(name) AFTER SCROLL TO TOP landed=\(!motion.isActive)")
+                    print(TaskPageProbe.census("\(name) after scroll to top"))
+                }
+            }
+            print("DIAG \(name) EVENTS\n" + TaskPageProbe.events.joined(separator: "\n"))
+            print("DIAG \(name) TRACE\n" + TaskPageMotion.traceForTesting.suffix(40).joined(separator: "\n"))
+        }
+    }
+
+    func testDiagA60Scrolled() throws { try diagCensus("A", rows: 60, scrollBy: 300, off: []) }
+    func testDiagB60Top() throws { try diagCensus("B", rows: 60, scrollBy: 0, off: []) }
+    func testDiagC60ScrolledNoLine() throws { try diagCensus("C", rows: 60, scrollBy: 300, off: ["line"]) }
+    func testDiagD60ScrolledNoLeaving() throws { try diagCensus("D", rows: 60, scrollBy: 300, off: ["leaving"]) }
+    func testDiagE60ScrolledNoHighlight() throws { try diagCensus("E", rows: 60, scrollBy: 300, off: ["highlight"]) }
+    func testDiagF60ScrolledNoTop() throws { try diagCensus("F", rows: 60, scrollBy: 300, off: ["top"]) }
+    func testDiagG60ScrolledNoList() throws { try diagCensus("G", rows: 60, scrollBy: 300, off: ["line", "leaving", "highlight", "top"]) }
+    func testDiagH2Rows() throws { try diagCensus("H", rows: 2, scrollBy: 0, off: []) }
+    func testDiagI60ScrolledNoIdle() throws { try diagCensus("I", rows: 60, scrollBy: 300, off: [], idle: 0.05) }
+
     func testBugs4IdlePageBuildWaitsForTheActivePanelInteraction() throws {
         for reason in [PanelInteractionLockReason.panelSwipe, .menuTracking] {
             let panel = try makePanel()
