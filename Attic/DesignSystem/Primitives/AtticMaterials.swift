@@ -798,7 +798,13 @@ final class AtticGlassSizeSource {
     func set(_ new: CGSize) {
         guard new != size else { return }
         size = new
-        for sizer in sizers.allObjects { sizer.invalidateIntrinsicContentSize() }
+        for sizer in sizers.allObjects {
+            sizer.invalidateIntrinsicContentSize()
+            // The representable's new size reaches SwiftUI on its own next
+            // update; marking the window's content for layout has that
+            // update run in this display pass, with the window's frame.
+            sizer.window?.contentView?.needsLayout = true
+        }
     }
 
     fileprivate func add(_ sizer: AtticGlassSizeView) { sizers.add(sizer) }
