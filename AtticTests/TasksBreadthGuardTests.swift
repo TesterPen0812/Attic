@@ -1462,6 +1462,72 @@ final class TasksBreadthGuardTests: XCTestCase {
         XCTAssertEqual(large.arrow, small.arrow, "↓ ran the row builder \(large.arrow) times at 446 tasks against \(small.arrow) at 83")
     }
 
+    /// Date groups (Overdue, Today, later days, No date: header entries
+    /// between the rows), measured at the list's top and scrolled to its
+    /// end, where a lazy stack that cannot count each entry's views would
+    /// walk every entry above the shown rows. A store edit of a shown row
+    /// (a page pass) runs the row builder the same number of times with 83
+    /// and 446 open tasks.
+    func testAnEditRunsTheRowBuilderTheSameAt83And446GroupedTasksAtTopAndEnd() throws {
+        var results: [Int: [String: Int]] = [:]
+        for count in [83, 446] {
+            window?.close()
+            TasksCellBodyCounts.reset()
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let context = ModelContext(container)
+            let now = Date(), calendar = Calendar.current
+            var order: Int64 = 10_000_000
+            for index in 0..<count {
+                order -= 1_024
+                let item = TaskItem(title: "Open task \(index) with a longer title like the tracker's", status: .todo,
+                                    createdAt: now, manualOrder: order)
+                item.listOrderVersion = TaskItem.currentListOrderVersion
+                item.tags = ["tag\(index % 7)", "area\(index % 3)"]
+                let offsets: [Int?] = [-3, 0, 1, 3, 6, nil]
+                if let days = offsets[index % offsets.count] {
+                    item.dueDay = DueDay(date: calendar.date(byAdding: .day, value: days, to: now)!, calendar: calendar)
+                }
+                context.insert(item)
+            }
+            try context.save()
+            let store = TaskStore(container: container)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+            let pointer = TasksPointer()
+            let hosting = page(model, store, pointer: pointer)
+            let ids = model.rows(for: .now).map(\.id)
+            XCTAssertEqual(ids.count, count, "the seed's open rows")
+            XCTAssertGreaterThan(model.listSnapshot(for: .now).sections.groups.filter(\.showsHeader).count, 3, "the list has date headers")
+            var result: [String: Int] = [:]
+            func edit(_ place: String) throws {
+                let drawn = ids.filter { pointer.frame(for: TasksRowID(tab: .now, id: $0)) != nil }
+                let target = try XCTUnwrap(drawn.dropFirst(2).first, "a shown row")
+                let ran = builderPasses(hosting) {
+                    XCTAssertTrue(model.setPriority(result.isEmpty ? .high : .low, for: [target]).isApplied)
+                }
+                let all = ran.values.reduce(0, +)
+                print("ONE_VIEW_GROUPED n=\(count) \(place) entries=\(model.listSnapshot(for: .now).entries.count) drawn=\(drawn.count) edit_all=\(all)")
+                result[place] = all
+                result[place + "_drawn"] = drawn.count
+            }
+            try edit("top")
+            let scroll = try XCTUnwrap(scrollViews(in: hosting).first { !$0.isHidden }, "Now's list")
+            let end = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: end))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            settle(hosting)
+            settle(hosting)
+            try edit("end")
+            results[count] = result
+        }
+        let small = try XCTUnwrap(results[83]), large = try XCTUnwrap(results[446])
+        for place in ["top", "end"] {
+            XCTAssertGreaterThan(small[place, default: 0], 0, "the \(place) edit ran the row builder")
+            XCTAssertEqual(small[place + "_drawn"], large[place + "_drawn"], "the same rows on screen at both sizes (\(place))")
+            XCTAssertEqual(large[place], small[place],
+                           "an edit at the \(place) ran the row builder \(large[place] ?? -1) times at 446 tasks against \(small[place] ?? -1) at 83")
+        }
+    }
+
     /// The real routes (key window): a click on a row and ↓ through the
     /// page's own handlers, and a store edit of one row (a page pass for
     /// certain). Each runs the row builder the same number of times with 83
