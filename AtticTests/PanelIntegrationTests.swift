@@ -567,16 +567,20 @@ final class PanelIntegrationTests: XCTestCase {
     /// limits nothing reads (AppKit's constraint pass itself still runs).
     func testAnIslandUpdateAsksItsContentForNoUnboundedSize() throws {
         #if DEBUG
+        // The hook is read when an island root is built, so it is set first.
+        var queries = 0
+        PanelIslandSizingProbe.onSizeQuery = { queries += 1 }
+        defer { PanelIslandSizingProbe.onSizeQuery = nil }
         let rig = try makePanel()
         XCTAssertEqual(rig.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
         spin(0.6)
         let window = rig.controller.panelForTesting
-        PanelIslandSizingProbe.sizeQueries = 0
+        queries = 0
         for _ in 1...4 { resizeStep(rig, by: 12) }
-        let afterSteps = PanelIslandSizingProbe.sizeQueries
+        let afterSteps = queries
         rig.uiState.selectSection(.notes)
         spin(0.4)
-        let afterPage = PanelIslandSizingProbe.sizeQueries - afterSteps
+        let afterPage = queries - afterSteps
         print("ISLAND_SIZE_QUERIES steps=4 queries=\(afterSteps) page=\(afterPage) panel=\(window.visibleContentFrame.size)")
         XCTAssertEqual(afterSteps, 0, "a resize step asked the island's content for an unbounded or ideal size")
         XCTAssertEqual(afterPage, 0, "a page change asked the island's content for an unbounded or ideal size")
@@ -631,6 +635,13 @@ final class PanelIntegrationTests: XCTestCase {
         window.setVisibleContentFrame(frame, display: true)
         rig.uiState.updatePanelSize(window.visibleContentFrame.size)
         (window.contentView as? AtticPanelContentContainer)?.hostingView.layoutSubtreeIfNeeded()
+        // The island's windows are laid out now, not left to SwiftUI's cache
+        // or the next display pass.
+        let islands = rig.controller.islandWindowsForTesting
+        for host in [islands.island.contentView, islands.label.contentView].compactMap({ $0 }) {
+            host.needsLayout = true
+            host.layoutSubtreeIfNeeded()
+        }
         spin(0.05)
     }
 

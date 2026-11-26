@@ -690,9 +690,11 @@ struct PanelIslandView: View {
     #if DEBUG
     /// Allows a hosted test to observe the real native Tab focus binding.
     @MainActor static var focusProbe: ((FocusState<PanelIslandItem?>.Binding) -> Void)?
-    /// Tests: the capsule as laid out in its window's content, by model
-    /// (the island's, never the stand-in's).
-    @MainActor static var laidOutCapsule: [ObjectIdentifier: CGRect] = [:]
+    /// Tests: told where the capsule is laid out in its window's content,
+    /// with its model (the island's, never the stand-in's). Read when an
+    /// island is built: with no hook set then, nothing is observed.
+    @MainActor static var capsuleProbe: ((ObjectIdentifier, CGRect) -> Void)?
+    let capsuleReport: ((ObjectIdentifier, CGRect) -> Void)? = PanelIslandView.capsuleProbe
     #endif
     @ObservedObject var model: PanelIslandModel
     @ObservedObject var focusTracker: AtticKeyboardFocusTracker
@@ -744,7 +746,9 @@ struct PanelIslandView: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
-        .modifier(PanelIslandCapsuleProbe(model: isStandIn ? nil : model))
+        #if DEBUG
+        .modifier(PanelIslandCapsuleProbe(model: model, report: isStandIn ? nil : capsuleReport))
+        #endif
         .overlay {
             // A floating panel dragged near: a solid blue ring (the
             // design's 4 px at 55 %, outside the capsule).
@@ -1198,13 +1202,21 @@ private struct PanelIslandKeyed<Content: View>: View {
     let model: PanelIslandModel
     let uiState: PanelUIState
     let content: Content
+    #if DEBUG
+    /// Tests: read once, when the root is built.
+    let onSizeQuery = PanelIslandSizingProbe.onSizeQuery
+    #endif
 
     var body: some View {
         #if ATTIC_LOCAL_ONLY
         let _ = PanelInvalidationProbe.islandRoot?()
         #endif
         #if DEBUG
-        PanelIslandSizingQueryProbe { root }
+        if let onSizeQuery {
+            PanelIslandSizingQueryProbe(onQuery: onSizeQuery) { root }
+        } else {
+            root
+        }
         #else
         root
         #endif
@@ -1408,24 +1420,24 @@ struct PanelIslandPullTracker {
     }
 }
 
-/// Tests (DEBUG only): reports where the island's capsule is laid out.
+#if DEBUG
+/// Tests: reports where the island's capsule is laid out, only when a test
+/// set `PanelIslandView.capsuleProbe` before the island was built.
 private struct PanelIslandCapsuleProbe: ViewModifier {
-    let model: PanelIslandModel?
+    let model: PanelIslandModel
+    let report: ((ObjectIdentifier, CGRect) -> Void)?
 
     func body(content: Content) -> some View {
-        #if DEBUG
-        if let model {
-            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
-                PanelIslandView.laidOutCapsule[ObjectIdentifier(model)] = $0
+        if let report {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { [model] in
+                report(ObjectIdentifier(model), $0)
             }
         } else {
             content
         }
-        #else
-        content
-        #endif
     }
 }
+#endif
 
 /// A click on the island works on its first press, whichever app is active.
 /// Its window is sized by `PanelIslandWindows.layout` alone, so nothing
@@ -1454,17 +1466,19 @@ private final class PanelIslandHostingView<Root: View>: NSHostingView<Root> {
 /// sizes (proposals 0, unbounded and nil) to set its window's content-size
 /// limits; a layout at the window's size proposes the window's size only.
 @MainActor enum PanelIslandSizingProbe {
-    static var sizeQueries = 0
+    /// Told of each such query. Read when an island window's root is built:
+    /// with no hook set then, the root has no probe in its tree.
+    static var onSizeQuery: (() -> Void)?
 }
 
 /// Passes its one subview the proposal and places it as the hosting view
 /// would (centred, at its bounds); counts the sizing queries.
 private struct PanelIslandSizingQueryProbe: Layout {
+    let onQuery: () -> Void
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let unbounded = { (value: CGFloat?) in value.map { !$0.isFinite || $0 >= .greatestFiniteMagnitude / 2 } ?? true }
-        if unbounded(proposal.width) || unbounded(proposal.height) {
-            MainActor.assumeIsolated { PanelIslandSizingProbe.sizeQueries += 1 }
-        }
+        if unbounded(proposal.width) || unbounded(proposal.height) { onQuery() }
         return subviews.first?.sizeThatFits(proposal) ?? .zero
     }
 

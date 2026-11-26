@@ -241,6 +241,10 @@ final class PanelIslandPositionTests: XCTestCase {
     /// presses them; its capsule takes the pointer and its clear margin and
     /// the space around it pass clicks through.
     func testLyingFlatTheItemsSitInARowAndTheClearSpacePassesClicks() throws {
+        // The hook is read when the island is built, so it is set first.
+        var laidOut: [ObjectIdentifier: CGRect] = [:]
+        PanelIslandView.capsuleProbe = { laidOut[$0] = $1 }
+        defer { PanelIslandView.capsuleProbe = nil }
         try withController(configure: { $0.islandSpot = .acrossOpenEnd }) { controller, state, panel, _ in
             let windows = controller.islandWindowsForTesting
             let capsule = windows.islandFrame
@@ -249,7 +253,7 @@ final class PanelIslandPositionTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             // What is laid out (the hosting views send AppKit no fitting
             // size): the capsule, in the window's content, inside its margin.
-            let drawn = try XCTUnwrap(PanelIslandView.laidOutCapsule[ObjectIdentifier(windows.model)], "harness: the capsule was laid out")
+            let drawn = try XCTUnwrap(laidOut[ObjectIdentifier(windows.model)], "harness: the capsule was laid out")
             XCTAssertEqual(drawn.width + 2 * L.windowMargin, capsule.width + 2 * L.windowMargin, accuracy: 0.5, "the capsule lies flat")
             XCTAssertEqual(drawn.height + 2 * L.windowMargin, capsule.height + 2 * L.windowMargin, accuracy: 0.5)
             XCTAssertEqual(drawn.minX, L.windowMargin, accuracy: 0.5, "the capsule sits inside its margin")
