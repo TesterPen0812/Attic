@@ -311,10 +311,12 @@ struct TaskNoteRouteHost<Origin: View>: View {
             onePiece.landed(false)
         }
         let target: CGFloat = open ? 1 : 0
-        withAnimation(TaskPageOnePiece.spring, completionCriteria: .removed) {
+        withAnimation(TaskPageOnePiece.spring) {
             onePiece.progress = target
             sharedChrome?.setGivingWay(target, page: page)
-        } completion: {
+        }
+        // A newer turn moves the generation on, so this landing is dropped.
+        DispatchQueue.main.asyncAfter(deadline: .now() + TaskPageOnePiece.settle) {
             landedOnePiece(generation)
         }
     }

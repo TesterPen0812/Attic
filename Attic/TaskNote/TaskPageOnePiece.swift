@@ -39,6 +39,15 @@ enum TaskPageOnePiece {
         .spring(duration: AtticMotionPreset.expand.duration, bounce: AtticMotionPreset.expand.bounce)
     }
 
+    /// How long that spring takes to settle from a turn (it keeps its speed
+    /// as it turns, so a turn round settles in about the same time). The
+    /// opening lands by this clock, not by SwiftUI's animation completion,
+    /// which a reverse over a page leaving the hierarchy never called (CI
+    /// run 45843849844: no landing after Back, the opening stayed on).
+    static var settle: TimeInterval {
+        Spring(duration: AtticMotionPreset.expand.duration, bounce: AtticMotionPreset.expand.bounce).settlingDuration
+    }
+
     /// How far the bars drop and Back and Aa rise (the drawing's 24 px).
     nonisolated static let barTravel: CGFloat = 12
     /// The least the rows below are pushed (the drawing's 120 px).
