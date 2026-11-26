@@ -498,13 +498,30 @@ extension HiddenPageKeyboardTests {
         let board = try board(rig)
         let editor = try openNote(rig, [.text("Agenda title"), .text("Agenda body")])
         show(.calendar, rig, settle: 1.0)
+        // The first panel a test process shows can come up before the app
+        // is active, and an inactive app's key panel takes no Tab.
+        NSApp.activate(ignoringOtherApps: true)
         rig.panel.makeKey()
+        let deadline = Date().addingTimeInterval(3)
+        while !(NSApp.isActive && rig.panel.isKeyWindow), Date() < deadline { spin(0.05) }
         spin(0.3)
         rig.panel.makeFirstResponder(nil)
-        for _ in 0..<40 where AtticTaskRow.keyboardStates[task]?.focused != true {
+        var tabs = 0
+        var recalculated = false
+        while AtticTaskRow.keyboardStates[task]?.focused != true, tabs < 40 {
             queue("\t", code: 48, rig)
             assertNoHiddenPage(rig, board: board, editor: editor, "Tab to the row", file: file, line: line)
+            tabs += 1
+            if tabs == 4, AtticTaskRow.keyboardStates[task]?.focused != true, !recalculated {
+                var chain: [String] = []
+                var next = rig.panel.contentView?.nextValidKeyView
+                while let view = next, chain.count < 12 { chain.append(String(describing: type(of: view))); next = view.nextValidKeyView; if next === rig.panel.contentView?.nextValidKeyView { break } }
+                print("CAL_ROW rig stuck fr=\(responderName(rig.panel)) auto=\(rig.panel.autorecalculatesKeyViewLoop) chain=\(chain)")
+                rig.panel.recalculateKeyViewLoop()
+                recalculated = true
+            }
         }
+        print("CAL_ROW rig active=\(NSApp.isActive) key=\(rig.panel.isKeyWindow) tabs=\(tabs) recalculated=\(recalculated)")
         XCTAssertEqual(AtticTaskRow.keyboardStates[task]?.focused, true, "Tab reached the agenda's row", file: file, line: line)
         return AgendaRig(rig: rig, task: task, board: board, editor: editor)
     }
