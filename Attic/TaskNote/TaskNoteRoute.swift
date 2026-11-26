@@ -213,8 +213,6 @@ struct TaskNoteRouteHost<Origin: View>: View {
             let origin = uiState.taskNoteGrowOrigin
             uiState.taskNoteGrowOrigin = nil
             if old != new, startOnePiece(new, origin: origin) { return }
-            // Not in one piece: the list is hidden under its page as before.
-            if onePiece.drawsListUnderPage { onePiece.drawsListUnderPage = false }
             growStartedAt = CACurrentMediaTime()
             grow.open(from: origin, reduceMotion: design.reduceMotion, reducedStyle: reducedStyle)
             #if DEBUG
@@ -319,8 +317,9 @@ struct TaskNoteRouteHost<Origin: View>: View {
         TaskPageMotion.lineDrawsForTesting = []
         #endif
         // It lands when every spring this started is over. What holds one is
-        // drawn for the whole motion: the stand-in, Tasks' top row and the
-        // list the page opened from (`TaskPageListFollows`).
+        // the stand-in, Tasks' top row and the list the page opened from
+        // (`TaskPageListFollows`). On Back that list is drawn again when the
+        // route has closed, and its spring runs from then.
         withAnimation(TaskPageOnePiece.spring, completionCriteria: .removed) {
             onePiece.progress = target
         } completion: {
@@ -362,11 +361,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
         }
         var still = Transaction()
         still.disablesAnimations = true
-        withTransaction(still) {
-            onePiece.handedOver = true
-            // The list is covered now and stops being drawn.
-            if onePiece.drawsListUnderPage { onePiece.drawsListUnderPage = false }
-        }
+        withTransaction(still) { onePiece.handedOver = true }
         onePiece.trace("handedOver waits=\(waits)")
         onePieceProbe.stopWatchingEscape()
     }
@@ -384,10 +379,6 @@ struct TaskNoteRouteHost<Origin: View>: View {
         withTransaction(still) {
             onePiece.retarget(content: TaskPageStandInContent.make(taskID, store: taskStore), pose: pose)
             onePiece.rowGone = pose == nil
-            // The list is drawn again from Back's first frame, so it runs
-            // back with the page (it was first drawn when the route closed,
-            // and started its own spring then).
-            if !onePiece.drawsListUnderPage { onePiece.drawsListUnderPage = true }
         }
         // The bars come back on the way down.
         sharedChrome?.setCovered(false, page: page, onePiece: true)

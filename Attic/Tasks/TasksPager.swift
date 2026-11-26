@@ -664,11 +664,10 @@ struct TasksPagerPages<Page: View>: View {
     var body: some View {
         if let transit {
             TasksPagerOutgoingDraw(transit: transit) { drawsDeparting in
-                // A task's page going Back in one piece draws the list under it.
-                TaskPageDrawsList { underPage in pages(drawsDeparting: drawsDeparting || underPage) }
+                pages(drawsDeparting: drawsDeparting)
             }
         } else {
-            TaskPageDrawsList { underPage in pages(drawsDeparting: underPage) }
+            pages(drawsDeparting: false)
         }
     }
 

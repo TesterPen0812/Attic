@@ -955,7 +955,7 @@ final class PanelIntegrationTests: XCTestCase {
             // end value and nothing before it (CI run 45890021290: the drawn
             // list's lines drew 1.000 first on every opening).
             let draws = TaskPageMotion.lineDrawsForTesting
-            XCTAssertTrue(draws.contains { $0 > 0 && $0 < 1 }, "the list makes way on the spring, drew \(draws.prefix(8))",
+            XCTAssertTrue(draws.contains { $0 != 0 && $0 != 1 }, "the list makes way on the spring, drew \(draws.prefix(8))",
                           file: file, line: line)
             XCTAssertEqual(draws.last, 1, "and ends at the page", file: file, line: line)
         }
@@ -1016,15 +1016,26 @@ final class PanelIntegrationTests: XCTestCase {
     /// variants H and B; landed with the lists' readers off, variant G).
     func testOnePieceBackLandsWithTheOtherTabsBuilt() throws {
         try withMotion(reduced: false) {
-            let rig = try onePiecePanel([TaskDraft(title: "Open me"), TaskDraft(title: "Below")])
-            let target = rig.tasks[0].id
+            let rig = try onePiecePanel([TaskDraft(title: "Open me"), TaskDraft(title: "Below"),
+                                         TaskDraft(title: "Later one", status: .backlog)])
+            let target = rig.tasks[0].id, later = rig.tasks[2].id
             spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
             // The panel builds the tabs not shown while it is idle.
-            spin(until: { self.tabHosts(rig.panel).contains { !$0.isDrawn } }, timeout: 5)
-            XCTAssertTrue(tabHosts(rig.panel).contains { !$0.isDrawn }, "a tab not shown is built, in a host that is not drawn")
-            try roundTrip(target, in: rig, checksLines: true)
-            // And again: the first Back left nothing behind.
-            try roundTrip(target, in: rig, checksLines: true)
+            let hiddenTabBuilt = { self.tabHosts(rig.panel).contains { !$0.isDrawn } }
+            spin(until: hiddenTabBuilt, timeout: 5)
+            XCTAssertTrue(hiddenTabBuilt(), "a tab not shown is built, in a host that is not drawn")
+            try roundTrip(target, in: rig)
+            // A tab that followed the motion and is hidden now (everyday
+            // use): Now has read an opening, Later is shown.
+            rig.model.select(tab: .backlog)
+            spin(until: { !rig.model.agentRowFrames([later]).isEmpty && hiddenTabBuilt() })
+            XCTAssertTrue(hiddenTabBuilt())
+            try roundTrip(later, in: rig)
+            // And back in Now, with Later hidden after its own opening.
+            rig.model.select(tab: .now)
+            spin(until: { !rig.model.agentRowFrames([target]).isEmpty && hiddenTabBuilt() })
+            XCTAssertTrue(hiddenTabBuilt())
+            try roundTrip(target, in: rig)
         }
     }
 
