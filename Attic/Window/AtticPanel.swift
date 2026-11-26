@@ -190,7 +190,22 @@ final class AtticPanel: NSPanel {
     /// A view under a page that is not shown, or under a kept host out of
     /// use, never takes the keyboard (`PanelPageKeyboard`): the request is
     /// refused and the keyboard stays where it was.
+    #if DEBUG
+    /// SCRATCH (FKA hunt): print every key-view selection and hand-over.
+    static var traceKeyViews = false
+    static func keyViewName(_ view: NSView?) -> String {
+        guard let view else { return "nil" }
+        let frame = view.convert(view.bounds, to: nil)
+        return "\(type(of: view))@\(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))"
+    }
+    #endif
+
     override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        #if DEBUG
+        if Self.traceKeyViews {
+            print("KV makeFirstResponder \(responder.map { Self.keyViewName($0 as? NSView) + " " + String(describing: type(of: $0)) } ?? "nil") selecting=\(selectingKeyView)")
+        }
+        #endif
         if let view = responder as? NSView, view.window === self, !PanelPageKeyboard.mayTakeKeyboard(view) {
             if selectingKeyView { refusedKeyView = view }
             return false
@@ -212,6 +227,9 @@ final class AtticPanel: NSPanel {
     /// that may take the keyboard, so the loop keeps cycling on the page in
     /// use. Otherwise AppKit's own selection runs unchanged.
     override func selectKeyView(following view: NSView) {
+        #if DEBUG
+        if Self.traceKeyViews { print("KV selectKeyView(following: \(Self.keyViewName(view))) next=\(Self.keyViewName(view.nextKeyView)) nextValid=\(Self.keyViewName(view.nextValidKeyView))") }
+        #endif
         guard let next = view.nextValidKeyView, !PanelPageKeyboard.mayTakeKeyboard(next) else {
             return super.selectKeyView(following: view)
         }
@@ -219,6 +237,9 @@ final class AtticPanel: NSPanel {
     }
 
     override func selectKeyView(preceding view: NSView) {
+        #if DEBUG
+        if Self.traceKeyViews { print("KV selectKeyView(preceding: \(Self.keyViewName(view))) previousValid=\(Self.keyViewName(view.previousValidKeyView))") }
+        #endif
         guard let previous = view.previousValidKeyView, !PanelPageKeyboard.mayTakeKeyboard(previous) else {
             return super.selectKeyView(preceding: view)
         }
@@ -230,6 +251,9 @@ final class AtticPanel: NSPanel {
     /// view's next key view): a refused candidate would stop every Tab on
     /// it, so selection moves on from it to the next view that may.
     override func selectNextKeyView(_ sender: Any?) {
+        #if DEBUG
+        if Self.traceKeyViews { print("KV selectNextKeyView fr=\(firstResponder.map { String(describing: type(of: $0)) } ?? "nil")") }
+        #endif
         selectAcrossRefusal(forward: true) { super.selectNextKeyView(sender) }
     }
 
