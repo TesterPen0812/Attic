@@ -558,6 +558,8 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(pageHosts.count, 1, "one kept host claims no keyboard: Calendar's")
         let calendarHost = try XCTUnwrap(pageHosts.first)
         XCTAssertTrue(calendarHost.isInteractive, "shown, it is in use")
+        XCTAssertEqual(PanelPageKeyboard.membership(of: calendarHost), .page(.calendar), "the host carries Calendar's keyboard tag")
+        XCTAssertTrue(PanelPageKeyboard.mayTakeKeyboard(calendarHost), "shown, the rule lets it take the keyboard")
         XCTAssertFalse((window.firstResponder as? NSView).map { $0 === calendarHost || $0.isDescendant(of: calendarHost) } ?? false,
                        "shown, it does not take the keyboard")
         XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: true), .shown)
@@ -565,6 +567,7 @@ final class PanelIntegrationTests: XCTestCase {
         spin(0.5)
         XCTAssertFalse(calendarHost.isInteractive, "hidden, it is out of use")
         XCTAssertFalse(calendarHost.canBecomeKeyView, "and out of the key-view loop")
+        XCTAssertFalse(PanelPageKeyboard.mayTakeKeyboard(calendarHost), "hidden, the panel's rule refuses it the keyboard")
     }
 
     @MainActor

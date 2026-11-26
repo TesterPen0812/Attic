@@ -355,6 +355,53 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
+    /// Draw pulled out of the docked panel is shown in its own panel and its
+    /// keys act there. Both hosts share `DrawPageModel.shared`, and each
+    /// sets `isShown` on its own switch and disappear (hidden-draw-keys
+    /// review P3-5): the last one to run must not leave it hidden.
+    func testDrawPulledOutIsShownInItsPanelAndItsBoardTakesDelete() throws {
+        AtticDraw.enabledOverride = true
+        let previous = DrawPageModel.shared
+        let store = DrawInMemoryStore()
+        let model = DrawPageModel(store: store)
+        model.pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-pull-out-draw-\(UUID().uuidString)"))
+        DrawPageModel.replaceShared(model)
+        defer {
+            DrawPageModel.replaceShared(previous)
+            AtticDraw.enabledOverride = nil
+            model.pasteboard.releaseGlobally()
+        }
+        try withRig { rig in
+            rig.state.selectSection(.canvas)
+            spin(until: { model.isShown && model.canvasID != nil })
+            XCTAssertTrue(model.isShown, "docked, Draw is shown")
+            let id = try XCTUnwrap(model.canvasID)
+            let object = DrawObject(frame: DrawFrame(x: 50, y: 70), content: .shape(.rectangle))
+            model.performAcknowledged(.put([object]))
+            let drop = CGPoint(x: rig.workArea.midX - 200,
+                               y: rig.workArea.maxY - PanelPullOutLayout.screenInset - 21 - 20)
+            try pull(.canvas, in: rig, to: drop)
+            spin(0.5)
+            let floating = try XCTUnwrap(rig.pullOut.panel(for: .canvas))
+            XCTAssertEqual(floating.uiState.selectedSection, .canvas)
+            XCTAssertNotEqual(rig.state.selectedSection, .canvas, "the docked panel shows another page")
+            XCTAssertTrue(model.isShown, "pulled out, Draw is shown in its own panel")
+            func boards(_ view: NSView) -> [DrawBoardView] {
+                ((view as? DrawBoardView).map { [$0] } ?? []) + view.subviews.flatMap(boards)
+            }
+            let board = try XCTUnwrap(floating.panel.contentView.flatMap { boards($0).first }, "the board is in the floating panel")
+            XCTAssertTrue(floating.panel.makeFirstResponder(board))
+            model.select([object.id])
+            let delete = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: floating.panel.windowNumber, context: nil, characters: "\u{7F}",
+                charactersIgnoringModifiers: "\u{7F}", isARepeat: false, keyCode: DrawKey.deleteCode))
+            board.keyDown(with: delete)
+            XCTAssertFalse(try store.open(id).objects.contains { $0.id == object.id && $0.deletedAt == nil },
+                           "Delete acts on the pulled-out board")
+        }
+    }
+
     func testTheOutDotShowsAndAClickOrShortcutRaisesThePanel() throws {
         try withRig { rig in
             try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))

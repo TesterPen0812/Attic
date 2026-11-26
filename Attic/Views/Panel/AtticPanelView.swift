@@ -226,6 +226,9 @@ struct AtticPanelView: View {
                         // no size, so a resize hands no page a new value.
                         let layout = pageLayout
                         pageHost(page, layout: layout)
+                            // The page its AppKit views are tagged with, once
+                            // (PanelPageKeyboard): a constant per subtree.
+                            .environment(\.atticPanelPage, page)
                             // A hidden page keeps the size outside the drag.
                             .modifier(PanelKeptPageFrame(isCurrent: page == currentPage, settled: uiState.settledPanelSize))
                             .onAppear {
@@ -353,6 +356,7 @@ struct AtticPanelView: View {
                     openCalendarDay: openCalendarDay
                 )
             }
+            .atticFocusCheckProbe("tasks")
             .transition(pageTransition(.tasks))
         case .canvas:
             PanelCanvasNoticeAwareHost(
@@ -364,6 +368,7 @@ struct AtticPanelView: View {
                 headerControlRects: headerControlRects,
                 headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
             )
+            .atticFocusCheckProbe("canvas")
             .transition(pageTransition(.canvas))
         case .notes:
             NotesPageHost(
@@ -374,6 +379,7 @@ struct AtticPanelView: View {
                 layout: layout,
                 hasRestoredSession: hasRestoredNoteSession
             )
+            .atticFocusCheckProbe("notes")
             .transition(pageTransition(.notes))
         case .calendar:
             // In a host of its own (page-host-tech-note.md, Way 1): hidden,
@@ -386,6 +392,7 @@ struct AtticPanelView: View {
                                  composerState: composerState, toasts: toasts, layout: layout,
                                  isReady: hasRestoredNoteSession)
             }
+            .atticFocusCheckProbe("calendar")
             .transition(pageTransition(.calendar))
         }
     }

@@ -374,6 +374,10 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     /// Whether the host claims the keyboard when it comes into use
     /// (`KeptContentHostingView.claimsKeyboard`).
     var claimsKeyboard = true
+    /// The shell page this host holds whole, if it holds one: the host is
+    /// tagged with it (`PanelPageKeyboard`), so the panel's keyboard rule
+    /// knows the page from the host itself.
+    var page: PanelPage?
     /// The rows the content animates between by itself (a list's ids), if
     /// it has any. A drawn root that changes them is laid out in the pass
     /// that sets it; any other root is left to AppKit's pass (`setRoot`).
@@ -404,6 +408,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         host.autoresizingMask = [.width, .height]
         host.frame = container.bounds
         host.claimsKeyboard = claimsKeyboard
+        if let page { PanelPageKeyboard.tag(host, .page(page)) }
         container.host = host
         container.addSubview(host)
         context.coordinator.hiddenRootSet = !drawn
@@ -558,6 +563,11 @@ struct KeptEnvironment: ViewModifier {
         entry("atticProbesDisabled", \.atticProbesDisabled),
         // The panel's shell.
         entry("atticPanelPageIsCurrent", \.atticPanelPageIsCurrent),
+        // The page its content is part of, which our AppKit views take as
+        // their keyboard tag (PanelPageKeyboard). It arrives today without
+        // this line too (HiddenPageKeyboardTests.testAKeptHostHandsItsContentThePage
+        // passes without it); named here, it no longer rests on that.
+        entry("atticPanelPage", \.atticPanelPage),
         entry("atticPanelToasts", \.atticPanelToasts),
         entry("panelComposer", \.panelComposer),
         entry("panelComposerRoom", \.panelComposerRoom),

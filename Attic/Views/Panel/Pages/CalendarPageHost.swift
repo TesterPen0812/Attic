@@ -95,6 +95,8 @@ final class CalendarPageState: ObservableObject {
 /// page sat in the panel's own host, so Tab, Esc and ⌘Z take the trunk's
 /// path. Calendar has no list that owns keys, unlike the Tasks tab hosts;
 /// a click into Search or a field takes the keyboard the ordinary way.
+/// The host carries the page's keyboard tag, so while the page is hidden
+/// neither it nor anything under it is a key view (`PanelPageKeyboard`).
 struct PanelPageKeptHost<Content: View>: View {
     let page: PanelPage
     let isCurrent: Bool
@@ -110,7 +112,8 @@ struct PanelPageKeptHost<Content: View>: View {
 
     var body: some View {
         KeptContentHost(drawn: isCurrent || (transit.sliding && transit.departingPage == page),
-                        interactive: isCurrent, space: PanelPageLayout.coordinateSpace, claimsKeyboard: false) {
+                        interactive: isCurrent, space: PanelPageLayout.coordinateSpace, claimsKeyboard: false,
+                        page: page) {
             content
         }
     }

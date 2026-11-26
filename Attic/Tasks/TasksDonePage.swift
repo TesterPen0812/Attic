@@ -114,6 +114,7 @@ struct TasksDonePage<Cell: View>: View {
                                          folded: turn?.key == day.key ? turn?.headerFolded ?? day.folded : day.folded) {
                             toggleDay(day.key)
                         }
+                        .modifier(TasksLineHover(pointer: pointer, key: "done-day:" + day.key, tab: .done))
                     case let .row(row):
                         // A turning day's body closes or opens over its
                         // rows (fix round 2); every other row is open.

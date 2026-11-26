@@ -2732,6 +2732,7 @@ struct AtticNativeSearchInput: NSViewRepresentable {
     func makeNSView(context: Context) -> Field {
         let field = Field()
         field.cell = QueryCell(textCell: "")
+        PanelPageKeyboard.tag(field, context.environment)
         field.isBordered = false
         field.isBezeled = false
         field.drawsBackground = false

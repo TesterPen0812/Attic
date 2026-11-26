@@ -605,10 +605,24 @@ final class TasksGoingInHostedTests: XCTestCase {
     /// The pointer over a point of the page (nil: off every row): each
     /// tracking area's owner hears it enter, move and leave, as AppKit
     /// tells them when the real pointer moves.
+    ///
+    /// The list's hover tracker (`TasksPointer.updateHover`) takes the
+    /// crossing from its page view's tracking area but reads where the
+    /// pointer is from the window, not from the event (a still pointer
+    /// over a moving list has no event). A test cannot move the real
+    /// pointer, so the tracker is told the same point the events carry,
+    /// in its page view, and nothing while the window is not on screen,
+    /// as the window's own reading would (`TasksPointer.hoverPoint`).
     private func hover(_ hosted: Hosted, at point: CGPoint?, settle: TimeInterval = 0.6) throws {
         let content = try XCTUnwrap(hosted.window.contentView)
         content.layoutSubtreeIfNeeded()
         let location = point.map { CGPoint(x: $0.x, y: hosted.height - $0.y) } ?? CGPoint(x: -40, y: -40)
+        let probe = try XCTUnwrap(hosted.pointer.view, "the page's view the tracker reads the pointer in")
+        hosted.pointer.pointerLocation = { [weak probe, weak shown = hosted.window] in
+            guard point != nil, let probe, let shown, shown.isVisible else { return nil }
+            let local = probe.convert(location, from: nil)
+            return probe.bounds.contains(local) ? local : nil
+        }
         let now = ProcessInfo.processInfo.systemUptime, window = hosted.window.windowNumber
         func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
         let moved = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: location, modifierFlags: [], timestamp: now,
@@ -726,10 +740,16 @@ final class TasksGoingInHostedTests: XCTestCase {
         try hover(hosted, at: CGPoint(x: row.value.minX + TasksDesignMetrics.textX + 30,
                                       y: row.value.minY + TasksRowDesign.paddingY + TasksRowDesign.line / 2), settle: 0.3)
         XCTAssertNotEqual(AtticTaskRow.drawsOpen[row.key.id], true, "held while the list scrolls")
-        // Put away with no end of the scroll.
+        // Put away with no end of the scroll, as the panel is put away
+        // (`PanelFloatingPanels.swift`, `hide`: ordered out, then the page
+        // hears the hide) ...
         hosted.window.orderOut(nil)
+        hosted.model.pageDidHide()
         NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: hosted.window)
+        // ... and back as it comes back (`show`: ordered in, then the
+        // reveal, which looks again; a gate still holding keeps the row).
         hosted.window.orderFront(nil)
+        hosted.model.resetForReveal()
         hosted.spin(0.4)
         XCTAssertEqual(AtticTaskRow.drawsOpen[row.key.id], true, "the held change landed when the panel was put away")
     }
