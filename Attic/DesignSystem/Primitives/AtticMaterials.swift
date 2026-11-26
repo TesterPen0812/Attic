@@ -782,6 +782,64 @@ extension View {
 /// Frosted, live only), the palette-hued base at its foundation opacity, then
 /// the Tint. In capture mode the native material is replaced by the capture
 /// backdrop: a flat measured underlay, or a blurred stand-in wallpaper.
+/// A size for the native glass that AppKit owns and sets (the panel's,
+/// for a satellite in another window, such as the island). A change marks
+/// the glass's sizer for layout, which runs on the next display pass:
+/// no view state is written, so no view's body runs again.
+@MainActor
+final class AtticGlassSizeSource {
+    private(set) var size: CGSize
+    /// Each new size a sizer is laid out at (tests and probes).
+    var onLaidOut: ((CGSize) -> Void)?
+    private let sizers = NSHashTable<AtticGlassSizeView>.weakObjects()
+
+    init(size: CGSize) { self.size = size }
+
+    func set(_ new: CGSize) {
+        guard new != size else { return }
+        size = new
+        for sizer in sizers.allObjects { sizer.invalidateIntrinsicContentSize() }
+    }
+
+    fileprivate func add(_ sizer: AtticGlassSizeView) { sizers.add(sizer) }
+}
+
+/// Draws nothing; its intrinsic size is the source's. Never hit, never
+/// focused, never an accessibility element.
+final class AtticGlassSizeView: NSView {
+    let source: AtticGlassSizeSource
+    private var laidOut: CGSize = .zero
+
+    init(source: AtticGlassSizeSource) {
+        self.source = source
+        super.init(frame: .zero)
+        source.add(self)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var intrinsicContentSize: NSSize { source.size }
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        guard newSize != laidOut, newSize.width > 0, newSize.height > 0 else { return }
+        laidOut = newSize
+        source.onLaidOut?(newSize)
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func isAccessibilityElement() -> Bool { false }
+    override func accessibilityChildren() -> [Any]? { [] }
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? { nil }
+    override var acceptsFirstResponder: Bool { false }
+    override var canBecomeKeyView: Bool { false }
+}
+
+private struct AtticGlassSizer: NSViewRepresentable {
+    let source: AtticGlassSizeSource
+    func makeNSView(context: Context) -> AtticGlassSizeView { AtticGlassSizeView(source: source) }
+    func updateNSView(_ nsView: AtticGlassSizeView, context: Context) {}
+}
+
 struct AtticSurfaceBackground<S: Shape>: View {
     let model: AtticSurfaceModel
     let shape: S
@@ -794,6 +852,10 @@ struct AtticSurfaceBackground<S: Shape>: View {
     /// A small satellite crops the panel-sized material. Native regular glass
     /// switches to a dark control treatment at narrow dimensions.
     var nativeGlassSize: CGSize?
+    /// The same, set from AppKit (`AtticGlassSizeSource`): a change lays
+    /// the glass out again and writes no view state. Wins over
+    /// `nativeGlassSize`.
+    var nativeGlassSizeSource: AtticGlassSizeSource?
     /// The panel's lift leaves its top and bottom control bands
     /// (`AtticSurfaceModel.LiftControlBands`, Accepted 2026-11-13).
     var liftLeavesControlBands = false
@@ -868,7 +930,17 @@ struct AtticSurfaceBackground<S: Shape>: View {
                 .clipShape(shape)
         } else if model.kind == .glass {
             Group {
-                if let nativeGlassSize {
+                if let nativeGlassSizeSource {
+                    // The same glass at the same place: the sizer takes the
+                    // size AppKit sets, and the glass fills it.
+                    GeometryReader { proxy in
+                        AtticGlassSizer(source: nativeGlassSizeSource)
+                            .fixedSize()
+                            .background { shape.fill(Color.clear).glassEffect(.regular, in: shape) }
+                            .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                    }
+                    .clipShape(shape)
+                } else if let nativeGlassSize {
                     GeometryReader { proxy in
                         shape.fill(Color.clear).glassEffect(.regular, in: shape)
                             .frame(width: nativeGlassSize.width, height: nativeGlassSize.height)
