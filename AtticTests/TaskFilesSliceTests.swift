@@ -424,6 +424,55 @@ final class TaskFilesSliceTests: XCTestCase {
         XCTAssertEqual(notes.undoRoute.workspace(for: .taskWorkspace(taskID)).undoName, "Remove from Tasks")
     }
 
+    /// Board agent-tools-second-library (Opus R-1 on PR 21): applying an
+    /// agent's workspace proposal from Notes runs on the app's one library.
+    /// A second library would take over the stores' command route and every
+    /// tag inventory hook, then be freed, leaving tags and commands dead.
+    func testANotesAgentApplyKeepsTheAppsOneLibraryAndItsHooks() async throws {
+        // App-shaped, as AppCoordinator wires it: one library over tasks and
+        // notes, Notes on its Undo route. The MCP tools are given it too.
+        library = AtticLibrary(tasks: tasks, notes: notes.store)
+        notes.attachUndoRoute(library.undo)
+        let handler = agent()
+        func token(_ name: String, _ arguments: [String: Any]) throws -> String {
+            let intent = try AgentTaskTools(store: tasks, noteStore: notes.store, library: library)
+                .workspaceIntent(name: name, arguments: arguments)
+            let snapshot = try AgentWorkspaceReadSet.capture(taskID: intent.taskID, noteID: intent.noteID, in: ModelContext(container))
+            return try WorkspaceModelFields.encode(snapshot).base64EncodedString()
+        }
+        func assertOneLibrary(_ moment: String, tag: String, file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertTrue(tasks.commandLibrary === library, "\(moment): task commands route to the app's library", file: file, line: line)
+            XCTAssertTrue(notes.store.commandLibrary === library, "\(moment): note commands route to the app's library", file: file, line: line)
+            XCTAssertTrue(coordinator.lifecycleLibrary === library, "\(moment): workspace lifecycle uses the app's library", file: file, line: line)
+            XCTAssertNotNil(tasks.commit([TaskDraft(title: "Tagged \(moment)", tags: [tag])]), file: file, line: line)
+            XCTAssertEqual(library.tags.countsByName[tag], 1, "\(moment): the app's tag inventory sees a new tag", file: file, line: line)
+            XCTAssertEqual(notes.store.sharedTagCounts?(), library.tags.countsByName,
+                           "\(moment): Notes read the app's tag inventory", file: file, line: line)
+        }
+
+        let noteID = UUID()
+        _ = try notes.store.createDocumentNote(id: noteID, document: NoteDocument(blocks: [.text("Agent item")])).get()
+        let addArguments: [String: Any] = ["note_id": noteID.uuidString]
+        var arguments = addArguments
+        arguments["base_workspace_token"] = try token("add_to_tasks", addArguments)
+        let (added, addError) = try await call(handler, "add_to_tasks", arguments)
+        XCTAssertFalse(addError, added)
+        let taskID = try XCTUnwrap(ownNoteTask(noteID), added)
+        let stale = try AgentWorkspaceReadSet.capture(taskID: taskID, noteID: nil, in: ModelContext(container))
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "New task title"))
+        let (pending, pendingError) = try await call(handler, "remove_from_tasks", ["task_id": taskID.uuidString,
+            "base_workspace_token": try WorkspaceModelFields.encode(stale).base64EncodedString()])
+        XCTAssertFalse(pendingError, pending); XCTAssertTrue(pending.contains("pending"), pending)
+        let proposal = try XCTUnwrap(notes.workspaceProposals.first)
+        assertOneLibrary("before the apply", tag: "agentlibbefore")
+
+        // The apply the Notes page's Apply button makes.
+        let began = await notes.beginProposalReview(id: proposal.id); XCTAssertTrue(began)
+        let accepted = await notes.acceptProposal(); XCTAssertTrue(accepted, notes.proposalReviewNotice ?? "")
+        XCTAssertNil(tasks.task(withID: taskID))
+        assertOneLibrary("after the apply", tag: "agentlibafter")
+    }
+
     func testBAgentRemoveClosedPageLeavesPresentationUnchanged() async throws {
         for hasActiveNote in [false, true] {
             let (id, noteID) = try await taskWithOwnNote()
