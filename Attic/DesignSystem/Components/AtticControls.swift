@@ -1438,7 +1438,7 @@ struct AtticSmallButton: View {
         .accessibilityLabel(accessibilityLabel)
         .atticControlProbe("Small control", id: probeID, expectedSize: nil, radius: radius,
                            expectedRadius: floating ? AtticRadius.control(height: AtticTopGlassMetrics.height)
-                               : (barSize.map { AtticRadius.control(height: $0.height) } ?? 12))
+                               : AtticRadius.control(height: barSize?.height ?? AtticControlSize.smallHeight))
     }
 }
 
@@ -1687,7 +1687,8 @@ struct AtticSelectionBar: View {
         .accessibilityLabel(String(localized: "\(count) selected"))
         .accessibilityValue(summary ?? "")
         .atticControlProbe("Selection bar", id: probeID, expectedSize: nil, radius: radius,
-                           expectedRadius: inBar ? AtticShape.controlRadius(height: m.barHeight) : 15)
+                           expectedRadius: inBar ? AtticShape.controlRadius(height: m.barHeight)
+                               : AtticRadius.control(height: AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2))
     }
 
     /// The count's words in the bar: the tags' type, in the heading ink.
@@ -2514,7 +2515,8 @@ private struct AtticTitleMenuFace: View {
         .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill((hover ? design.tokens.chipHover : .clear).color))
         .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .onHover { hovered = $0 }
-        .atticControlProbe("Title menu", id: probeID, expectedSize: CGSize(width: 0, height: m.height), radius: radius, expectedRadius: 12)
+        .atticControlProbe("Title menu", id: probeID, expectedSize: CGSize(width: 0, height: m.height), radius: radius,
+                           expectedRadius: AtticRadius.control(height: AtticTitleMenuMetrics.height))
     }
 }
 
@@ -2566,7 +2568,8 @@ struct AtticPopoverRow: View {
         .onHover { hovered = $0 }
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])
         .accessibilityValue(checked == true ? String(localized: "Selected") : "")
-        .atticControlProbe("Pop-over row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 12)
+        .atticControlProbe("Pop-over row", id: probeID, expectedSize: nil, radius: radius,
+                           expectedRadius: AtticRadius.control(height: AtticControlSize.smallHeight))
     }
 }
 

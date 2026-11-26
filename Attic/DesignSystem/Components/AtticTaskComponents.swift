@@ -3123,7 +3123,8 @@ struct AtticTagChip: View {
                 .accessibilityLabel(String(localized: "Tag \(name)"))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .atticTagColourMenu(name)
-                .atticControlProbe("Tag", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 7.5)
+                .atticControlProbe("Tag", id: probeID, expectedSize: nil, radius: radius,
+                                   expectedRadius: AtticRadius.control(height: AtticControlSize.tagHeight))
         }
     }
 }
