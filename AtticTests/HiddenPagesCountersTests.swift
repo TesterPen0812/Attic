@@ -760,6 +760,71 @@ final class HiddenPagesCountersTests: XCTestCase {
         }
     }
 
+    /// Calendar's kept page host, if it has one (P1-b).
+    private func calendarHost(_ rig: Rig) -> KeptContentHostingView? {
+        func hosts(_ view: NSView) -> [KeptContentHostingView] {
+            ((view as? KeptContentHostingView).map { [$0] } ?? []) + view.subviews.flatMap(hosts)
+        }
+        return hosts(rig.content).first { PanelPageKeyboard.membership(of: $0) == .page(.calendar) }
+    }
+
+    /// P1-b's guard (review of PR 80, P1-1). With Calendar hidden behind
+    /// Tasks, through a live resize with its release, one size write
+    /// outside a drag and a switch from Tasks to Notes, Calendar's kept host
+    /// stays undrawn and is laid out no more, and Calendar's views do not
+    /// run through the resize. The PR's speed target itself is a time,
+    /// measured on the Air; on the trunk these views ran 0 times through
+    /// the resize as well (fka runs 45866976309 and 45867028693). The
+    /// guard was shown red with the hidden host forced drawn (scratch run,
+    /// see the PR body).
+    func testC5DHiddenCalendarRunsNothingThroughAResizeAWriteAndASwitch() throws {
+        try withRig { rig in
+            XCTAssertEqual(rig.state.selectedSection, .tasks, "harness: Tasks is shown")
+            let host = calendarHost(rig)
+            let layoutsBefore = host.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] }
+            var drawnAt: [String] = []
+            let start = rig.state.panelSize
+            var resizing: [String: Int] = [:]
+            @MainActor func add(_ label: String, _ counts: [String: Int]) {
+                resizing.merge(counts) { $0 + $1 }
+                if host?.isDrawn == true { drawnAt.append(label) }
+            }
+            add("lock-on", measure(rig, "C5D lock-on") { rig.state.setInteractionLock(.windowResize, isActive: true) })
+            for step in 1...Self.dragSteps {
+                add("write step=\(step)", measure(rig, "C5D write step=\(step)") { resize(rig, to: dragSize(start, step: step)) })
+            }
+            add("release", measure(rig, "C5D release") { release(rig) })
+            add("outside a drag", measure(rig, "C5D outside a drag") { resize(rig, to: dragSize(start, step: Self.dragSteps + 2)) })
+            XCTAssertEqual(PanelRootLayout.lastPlacedSize, dragSize(start, step: Self.dragSteps + 2),
+                           "harness: the write outside a drag reached the root's layout")
+            let switching = measure(rig, "C5D Tasks to Notes") { show(.notes, rig) }
+            if host?.isDrawn == true { drawnAt.append("Tasks to Notes") }
+            let layoutsAfter = host.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] }
+            print("HIDDEN_COUNTS C5D resize-total " + Self.line(resizing))
+            print("HIDDEN_COUNTS C5D guard host=\(host != nil) drawn_at=\(drawnAt) host_layouts=\(layoutsBefore ?? -1)->\(layoutsAfter ?? -1)")
+            for view in Self.hiddenPageViews[.calendar, default: []] {
+                XCTAssertEqual(resizing[view, default: 0], 0,
+                               "C5D: Calendar's \(view) ran while hidden through a resize and a write")
+            }
+            // CAL-RUNS-ON-NOTES-SWITCH (board): Notes' draft publishes on the
+            // switch and Calendar's route host, which observes it, runs its
+            // page once, on the trunk as well. Pinned at that count so it
+            // cannot grow; it goes to 0 when that fix lands.
+            let pinned = ["route.calendar": 1, "CalendarPageHost": 1, "CalendarPage": 1, "CalendarDayView": 0, "dayTimeline": 0]
+            for view in Self.hiddenPageViews[.calendar, default: []] {
+                XCTAssertEqual(switching[view, default: 0], pinned[view, default: 0],
+                               "C5D: Calendar's \(view) on the switch to Notes (CAL-RUNS-ON-NOTES-SWITCH)")
+            }
+            // Not thrown: a missing host must not cut the rig's teardown short.
+            if host != nil {
+                XCTAssertEqual(drawnAt, [], "C5D: hidden, Calendar's host was drawn")
+                XCTAssertEqual(layoutsAfter, layoutsBefore, "C5D: hidden, Calendar's host was laid out")
+            } else {
+                XCTFail("C5D: Calendar sits in a kept host of its own")
+            }
+        }
+    }
+
     /// The page-wide native views of a page, found again on each read:
     /// Notes' library scroll view, Calendar's (the other end keepers) and
     /// the Draw board.
@@ -946,6 +1011,12 @@ final class HiddenPagesCountersTests: XCTestCase {
     /// the shown tab is at the new width in the step's own frame; the swipe
     /// hears the width.
     func testRZ7ASizeStepRunsNoPagerPassAndUpdatesNoTabHost() throws {
+        // Reduce Motion off, stated (CI's runners have it on): hidden pages
+        // then rest a settled width to their side, so a write outside a
+        // drag moves them (review of PR 80, P2-1).
+        let previousReduceMotion = AtticMotionPreference.systemReduceMotionOverride
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = previousReduceMotion }
         try withRig { rig in
             XCTAssertEqual(rig.state.selectedSection, .tasks, "harness: Tasks is shown")
             let start = rig.state.panelSize
@@ -980,7 +1051,9 @@ final class HiddenPagesCountersTests: XCTestCase {
                 let roots = (KeptContentHostCounts.roots.on - before.2.on, KeptContentHostCounts.roots.off - before.2.off)
                 let environments = KeptContentHostCounts.environments.on - before.3.on
                 print("PAGER_SIZE_STEP \(label) width=\(size.width) pager=\(passes) updates=\(updates.0)/\(updates.1) roots=\(roots.0)/\(roots.1) "
-                      + "envs=\(environments) panel_layouts=\(AtticPanelHostingView.layoutPasses - before.4) first=\(first) swipe=\(rig.page.pagerSwipe.width)")
+                      + "envs=\(environments) panel_layouts=\(AtticPanelHostingView.layoutPasses - before.4) first=\(first) swipe=\(rig.page.pagerSwipe.width) "
+                      + "reduce=\(String(describing: AtticMotionPreference.systemReduceMotionOverride)) level=\(AtticMotionPreference.level) "
+                      + "travels=\(PanelPageMotion.current(reduceMotion: (AtticMotionPreference.systemReduceMotionOverride ?? false) || AtticMotionPreference.level == .reduced).travels)")
                 XCTAssertEqual(passes, 0, "\(label): a size write ran the pager's pages again")
                 XCTAssertEqual(updates.0, 0, "\(label): a size write updated the shown tab's host")
                 XCTAssertEqual(updates.1, 0, "\(label): a size write updated a hidden tab's host")
