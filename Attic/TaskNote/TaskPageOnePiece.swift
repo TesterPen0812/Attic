@@ -405,6 +405,10 @@ struct TaskPageStandIn: View {
     let pose: TaskPagePose
     let layout: PanelPageLayout
     let barShown: Bool
+    /// The built page has it: the stand-in stays in, unseen and with no
+    /// glass, so Back runs it from the page's places (a stand-in put back in
+    /// on Back drew the row's places at once, CI run 45858549846).
+    var parked = false
     let backTitle: String
     let back: () -> Void
 
@@ -548,7 +552,16 @@ struct TaskPageStandIn: View {
     }
 
     /// Back and Aa, as the page's bottom row draws them.
-    private var bar: some View {
+    @ViewBuilder private var bar: some View {
+        if parked {
+            // No glass while unseen (a glass group ignores an outside opacity).
+            Color.clear.frame(height: AtticControlSize.panelButton.height)
+        } else {
+            glassBar
+        }
+    }
+
+    private var glassBar: some View {
         AtticControlGroup {
             HStack(spacing: 0) {
                 PanelControlFold(folded: !barShown, animation: { folded in Self.barAnimation(folded: folded, reduceMotion: design.reduceMotion) }) {
@@ -805,11 +818,17 @@ struct TaskPageOnePieceLayer: View {
     let back: () -> Void
 
     var body: some View {
-        if motion.isActive, !motion.handedOver, let content = motion.content, let pose = motion.pose {
+        // In from the click until Back has landed: under the built page it is
+        // parked (unseen, untouchable), so every part keeps a drawn value for
+        // Back to run from.
+        if motion.isActive, let content = motion.content, let pose = motion.pose {
+            let parked = motion.handedOver
             TaskPageStandIn(progress: motion.progress, content: content, pose: pose, layout: layout,
-                            barShown: motion.open, backTitle: backTitle, back: back)
+                            barShown: motion.open, parked: parked, backTitle: backTitle, back: back)
                 // Back with the row gone: the page fades as the list comes back.
-                .opacity(motion.rowGone ? Double(max(0, min(1, motion.progress))) : 1)
+                .opacity(parked ? 0 : motion.rowGone ? Double(max(0, min(1, motion.progress))) : 1)
+                .allowsHitTesting(!parked)
+                .accessibilityHidden(parked)
                 .transition(.identity)
                 .onAppear(perform: onAppear)
         }

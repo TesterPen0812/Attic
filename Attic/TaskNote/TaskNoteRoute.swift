@@ -378,15 +378,10 @@ struct TaskNoteRouteHost<Origin: View>: View {
         }
         // The bars come back on the way down.
         sharedChrome?.setCovered(false, page: page, onePiece: true)
-        if onePiece.handedOver {
-            // The stand-in comes back in at the page's places; it starts the
-            // spring once it is in (`onePieceStandInAppeared`).
-            onePiece.open = false
-            withTransaction(still) { onePiece.handedOver = false }
-            onePiece.landed(false)
-        } else {
-            turnOnePiece(open: false)
-        }
+        // The parked stand-in shows again at the page's places, drawn there,
+        // and runs back from them.
+        if onePiece.handedOver { withTransaction(still) { onePiece.handedOver = false } }
+        turnOnePiece(open: false)
     }
 
     private func endOnePiece() {
