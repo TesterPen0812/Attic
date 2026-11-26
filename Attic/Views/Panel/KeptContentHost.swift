@@ -272,10 +272,21 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
 
     /// A host that does not claim the keyboard is a key view only under full
     /// keyboard access, as AppKit's own buttons are: with it off, Tab passes
-    /// the host by and stays where the window had it; with it on, Tab
-    /// reaches the content's controls. A click still hands it the keyboard.
+    /// the host by and stays where the window had it; with it on, the panel's
+    /// loop enters the host and Tab walks the content's controls, leaving by
+    /// the loop when they end. A click still hands it the keyboard.
+    ///
+    /// Such a host answers for itself, not through `super`: NSHostingView
+    /// accepts no first responder and stands its content's controls in with
+    /// `KeyViewProxy` views it adds only once it has held the keyboard, so a
+    /// host that never claims it had no stop at all, and the loop wrapped to
+    /// the panel's tab bar (fka lane run 45808976473, `canKey=false` on the
+    /// shown Calendar host; page-host-tech-note.md, "FKA entry into the
+    /// Calendar host").
     override var canBecomeKeyView: Bool {
-        isInteractive && (claimsKeyboard || NSApp.isFullKeyboardAccessEnabled) && super.canBecomeKeyView
+        guard isInteractive else { return false }
+        if claimsKeyboard { return super.canBecomeKeyView }
+        return NSApp.isFullKeyboardAccessEnabled && !isHiddenOrHasHiddenAncestor
     }
 
     override func isAccessibilityElement() -> Bool {
