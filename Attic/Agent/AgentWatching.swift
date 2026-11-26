@@ -215,15 +215,16 @@ struct AgentEventArrival: ViewModifier {
     let id: String
     @ObservedObject private var board = AgentWatchBoard.shared
     @Environment(\.atticDesign) private var design
-    @State private var height: CGFloat = 0
     /// Only read while growing: from nothing, the first frame included.
+    /// It is 0 or 1 as state; the grow between is the animated change.
     @State private var grown: CGFloat = 0
 
     init(id: String) { self.id = id }
 
     #if DEBUG && ATTIC_UNIT_TEST_HOST
     /// Test seam: how many times an arrival wrote its row's measured height
-    /// into view state.
+    /// into view state. It holds no height now, so this stays 0 (the guard
+    /// against measuring coming back).
     static var heightStateWrites = 0
     #endif
 
@@ -232,17 +233,14 @@ struct AgentEventArrival: ViewModifier {
         let p: CGFloat = board.hiddenEvents.contains(id) ? 0 : growing && !design.reduceMotion ? grown : 1
         content
             .fixedSize(horizontal: false, vertical: true)
-            .onGeometryChange(for: CGFloat.self, of: \.size.height) { new in
-                guard new != height else { return }
-                #if DEBUG && ATTIC_UNIT_TEST_HOST
-                Self.heightStateWrites += 1
-                #endif
-                height = new
-            }
             .agentWatchMark(AgentWatchBoard.eventKey(id))
             .offset(x: -7 * (1 - p))
             .opacity(Double(p))
-            .frame(height: p < 1 ? height * p : nil, alignment: .top)
+            // `p` is 0 or 1 in the body (state, never a value in between),
+            // so below 1 the row takes no room. It was `measured height × p`,
+            // and measuring wrote view state on every height change of the
+            // row, a width step included (calendar-resize-cause.md, cause 3).
+            .frame(height: p < 1 ? 0 : nil, alignment: .top)
             // Clipped only while it grows: a grown row keeps its focus ring.
             .mask { Rectangle().padding(p < 1 ? 0 : -60) }
             .onChange(of: growing, initial: true) { _, now in
