@@ -1780,37 +1780,45 @@ struct TasksPage: View {
                                 // a row leaving fades and shrinks on the exit.
                                 .transition(AtticMotionScale.rowTransition(reduceMotion: design.reduceMotion))
                         } else {
-                            if dateGroup.showsHeader {
-                                // A row dragged into this day marks its header
-                                // (Adaptive picks), read in the header's own body.
-                                TasksDayDropHeader(drop: pointer.dayDrop, key: dateGroup.key) { targeted in
-                                    TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
-                                                     overdue: dateGroup.isOverdue, isDropTarget: targeted) {
-                                        toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26))
+                            // One view per entry (scale-work audit #1): the
+                            // header and the next event share one root, so the
+                            // lazy list can count its entries without running
+                            // each one's builder; with 0, 1 or 2 views here a
+                            // page pass ran the row builder of every entry
+                            // above the shown rows.
+                            VStack(alignment: .leading, spacing: 0) {
+                                if dateGroup.showsHeader {
+                                    // A row dragged into this day marks its header
+                                    // (Adaptive picks), read in the header's own body.
+                                    TasksDayDropHeader(drop: pointer.dayDrop, key: dateGroup.key) { targeted in
+                                        TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
+                                                         overdue: dateGroup.isOverdue, isDropTarget: targeted) {
+                                            toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? AtticMotionScale.reducedChange : TasksDesignMetrics.curve(0.26))
+                                        }
                                     }
+                                    .modifier(TasksLineHover(pointer: pointer, key: "group:" + dateGroup.key, tab: tab))
+                                    .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.slotSpace(tab)) } action: { [pointer, tab, key = dateGroup.key] frame in
+                                        if tab == .now { pointer.setHeaderFrame(frame, for: key) }
+                                    }
+                                    .onDisappear { [pointer, tab, key = dateGroup.key] in
+                                        if tab == .now { pointer.setHeaderFrame(nil, for: key) }
+                                    }
+                                    .id("group:" + dateGroup.key)
+                                    .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
                                 }
-                                .modifier(TasksLineHover(pointer: pointer, key: "group:" + dateGroup.key, tab: tab))
-                                .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.slotSpace(tab)) } action: { [pointer, tab, key = dateGroup.key] frame in
-                                    if tab == .now { pointer.setHeaderFrame(frame, for: key) }
+                                // The next event at the top of Today (read-only; a
+                                // click opens that day on the Calendar page).
+                                if dateGroup.kind == .today, !folded, let event = model.nextEvent(on: tab) {
+                                    TasksNextEventRow(event: event, open: { model.openNextEvent() })
+                                        .modifier(TasksLineHover(pointer: pointer, key: "next-event", tab: tab))
+                                        .id("next-event")
                                 }
-                                .onDisappear { [pointer, tab, key = dateGroup.key] in
-                                    if tab == .now { pointer.setHeaderFrame(nil, for: key) }
-                                }
-                                .id("group:" + dateGroup.key)
-                                .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
-                                // A new day's heading comes in once the one
-                                // it replaces in that place has moved on
-                                // (Accepted 2026-11-04: one state at a time).
-                                .transition(PanelTakeTurns.transition(reduceMotion: design.reduceMotion,
-                                                                      after: AtticMotionPreset.settle.duration * 0.6))
-                        }
-                            // The next event at the top of Today (read-only; a
-                            // click opens that day on the Calendar page).
-                            if dateGroup.kind == .today, !folded, let event = model.nextEvent(on: tab) {
-                                TasksNextEventRow(event: event, open: { model.openNextEvent() })
-                                    .modifier(TasksLineHover(pointer: pointer, key: "next-event", tab: tab))
-                                    .id("next-event")
-                        }
+                            }
+                            // A new day's heading comes in once the one it
+                            // replaces in that place has moved on (Accepted
+                            // 2026-11-04: one state at a time).
+                            .transition(PanelTakeTurns.transition(reduceMotion: design.reduceMotion,
+                                                                  after: AtticMotionPreset.settle.duration * 0.6))
                         }
                     }
                     if !query.isEmpty, !sections.open.isEmpty, let count = model.listSearchCount(for: tab) {

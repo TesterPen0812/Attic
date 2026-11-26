@@ -1585,49 +1585,65 @@ final class TasksBreadthGuardTests: XCTestCase {
         }
     }
 
-    /// Done's list: a day heading or a row per line. A row click runs the
-    /// row builder the same number of times with 40 or 240 rows loaded and
-    /// the same rows on screen.
-    func testADoneRowClickRunsTheRowBuilderTheSameWith40Or240RowsLoaded() throws {
-        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        let context = ModelContext(container)
-        let now = Date()
-        for index in 0..<300 {
-            let item = TaskItem(title: "Finished task \(index) with a longer title", status: .todo, createdAt: now)
-            item.statusRaw = TaskStatus.done.rawValue
-            // Ten a day, so the list has day headings between its rows.
-            item.completedAt = now.addingTimeInterval(-Double(index / 10) * 86_400 - Double(index % 10) * 60 - 3_600)
-            item.doneLoggedAt = item.completedAt
-            context.insert(item)
-        }
-        try context.save()
-        let store = TaskStore(container: container)
-        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
-        let pointer = TasksPointer()
-        let hosting = page(model, store, pointer: pointer)
-        model.select(tab: .done)
-        settle(hosting, until: { model.pagerSwipe.motion.position == CGFloat(TasksTab.done.rawValue) })
-        func measure(_ name: String) throws -> Int {
+    /// Done's list: a day heading or a row per line. With every row
+    /// loaded and the list scrolled to its end (where a lazy stack that
+    /// cannot count each line's views walks every line above), a row click
+    /// runs the row builder the same number of times with 60 or 240 rows,
+    /// and the same rows on screen.
+    func testADoneRowClickAtTheEndRunsTheRowBuilderTheSameWith60Or240Rows() throws {
+        var results: [Int: (click: Int, drawn: Int)] = [:]
+        for count in [60, 240] {
+            window?.close()
+            TasksCellBodyCounts.reset()
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let context = ModelContext(container)
+            let now = Date()
+            for index in 0..<count {
+                let item = TaskItem(title: "Finished task \(index) with a longer title", status: .todo, createdAt: now)
+                item.statusRaw = TaskStatus.done.rawValue
+                // Ten a day, so the list has day headings between its rows.
+                item.completedAt = now.addingTimeInterval(-Double(index / 10) * 86_400 - Double(index % 10) * 60 - 3_600)
+                item.doneLoggedAt = item.completedAt
+                context.insert(item)
+            }
+            try context.save()
+            let store = TaskStore(container: container)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+            let pointer = TasksPointer()
+            let hosting = page(model, store, pointer: pointer)
+            model.select(tab: .done)
+            settle(hosting, until: { model.pagerSwipe.motion.position == CGFloat(TasksTab.done.rawValue) })
+            model.loadMoreDoneLog(limit: 400)
+            settle(hosting)
+            settle(hosting)
             let ids = model.doneDays().flatMap { $0.rows.map(\.id) }
-            XCTAssertGreaterThan(ids.count, 20, "Done loaded rows")
-            model.selectOnly(ids[1])
+            XCTAssertEqual(ids.count, count, "Done loaded every row")
+            XCTAssertFalse(model.doneLogHasMore, "nothing left to load")
+            // The list the pager shows (the others lie beside it, off the page).
+            let scroll = try XCTUnwrap(scrollViews(in: hosting).first { list in
+                let frame = list.convert(list.bounds, to: nil)
+                return !list.isHidden && frame.height > Self.size.height / 2 && frame.minX > -1 && frame.minX < Self.size.width / 2
+            }, "Done's list")
+            let end = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: end))
+            scroll.reflectScrolledClipView(scroll.contentView)
             settle(hosting)
             settle(hosting)
-            let drawn = ids.filter { pointer.frame(for: TasksRowID(tab: .done, id: $0)) != nil }.count
-            let click = builderPasses(hosting) { model.click(ids[3], modifiers: [], visible: ids) }
-            let again = builderPasses(hosting) { model.click(ids[5], modifiers: [], visible: ids) }
-            print("ONE_VIEW_DONE \(name) loaded=\(ids.count) drawn=\(drawn) click_done=\(click[.done, default: 0]) "
-                  + "click_all=\(click.values.reduce(0, +)) again_all=\(again.values.reduce(0, +))")
-            return again.values.reduce(0, +)
+            let shown = ids.filter { pointer.frame(for: TasksRowID(tab: .done, id: $0)) != nil }
+            XCTAssertGreaterThan(shown.count, 5, "Done drew rows at its end")
+            XCTAssertTrue(shown.contains(ids[ids.count - 1]), "the list is at its end")
+            model.selectOnly(shown[1])
+            settle(hosting)
+            settle(hosting)
+            let click = builderPasses(hosting) { model.click(shown[3], modifiers: [], visible: ids) }
+            let all = click.values.reduce(0, +)
+            print("ONE_VIEW_DONE_END n=\(count) lines=\(ids.count + model.doneDays().count) drawn=\(shown.count) click_all=\(all)")
+            results[count] = (all, shown.count)
         }
-        let first = try measure("first_page")
-        model.loadMoreDoneLog(limit: 200)
-        settle(hosting)
-        settle(hosting)
-        XCTAssertGreaterThanOrEqual(model.doneDays().flatMap(\.rows).count, 240, "the log loaded more rows")
-        let more = try measure("more_loaded")
-        XCTAssertGreaterThan(first, 0, "the click ran Done's row builder")
-        XCTAssertEqual(more, first, "a Done row click ran the row builder \(more) times with 240 rows loaded against \(first) with 40")
+        let small = try XCTUnwrap(results[60]), large = try XCTUnwrap(results[240])
+        XCTAssertEqual(small.drawn, large.drawn, "the same rows on screen at both sizes")
+        XCTAssertGreaterThan(small.click, 0, "the click ran Done's row builder")
+        XCTAssertEqual(large.click, small.click, "a Done row click at the end ran the row builder \(large.click) times with 240 rows against \(small.click) with 60")
     }
 
     // MARK: - Turns
