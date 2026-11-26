@@ -19,6 +19,12 @@ run every part back from where it is; a second click turns it round again.
 for the bars. Reduce Motion: the page opens at once, as before. Calendar's
 and Notes' task pages keep the grow.
 
+Only the list the page opened from follows the motion (`TaskPageListFollows`,
+one reader at the list's root; a hidden tab's list reads nothing), and the
+pager draws that list from Back's first frame. Back and Aa fold as the motion
+passes their part (`TaskPageBarFold`: in from 0.25, away from 0.85), and are
+there in Back's first frame.
+
 ## 2026-11-26 · A resize step writes only the view state it draws
 
 A step of a window resize wrote view state that draws nothing, and each
