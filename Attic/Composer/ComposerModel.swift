@@ -517,14 +517,18 @@ final class ComposerModel: ObservableObject {
                 self.services.openTaskPage(created.id)
             } else if case let .tasks(tab) = submittedPage {
                 if tab == .done || (tab == .backlog && status == .todo) {
-                    self.services.toast(String(localized: "Added to Now"), self.undoCreation())
+                    self.services.toast(String(localized: "Added to Now"), self.undoCreation(self.createdStep))
                 } else {
                     self.tasks.addedRequest = TasksPageModel.ScrollRequest(id: created.id)
                 }
             }
         }
-        tasks.createAcknowledged(draft, save: { [library = tasks.library] id in
-            library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
+        tasks.createAcknowledged(draft, save: { [weak self, library = tasks.library] id in
+            let (task, step) = library.undo.recordingStep(in: submittedPage.history) {
+                library.createTask(draft, writing: submittedWriting, in: submittedPage.history, id: id)
+            }
+            self?.createdStep = step
+            return task
         }, settled: settled)
         clearDraft()
         // The next task starts with the picked tags too (13 Nov).
@@ -599,7 +603,8 @@ final class ComposerModel: ObservableObject {
         let files = tasks.composerFilesForSave()
         var saving = draft
         saving.attachments = files.references
-        guard let task = tasks.library.createTask(saving, writing: writing, in: page.history) else { return false }
+        let (created, step) = tasks.library.undo.recordingStep(in: page.history) { tasks.library.createTask(saving, writing: writing, in: page.history) }
+        guard let task = created else { return false }
         tasks.addBar = finished
         tasks.composerFilesSaved(files, on: task.title)
         if let tab = page.tasksTab { tasks.keepInView(task.id, on: tab) }
@@ -607,7 +612,7 @@ final class ComposerModel: ObservableObject {
             services.openTaskPage(task.id)
         } else if case let .tasks(tab) = page {
             if tab == .done || (tab == .backlog && status == .todo) {
-                services.toast(String(localized: "Added to Now"), undoCreation())
+                services.toast(String(localized: "Added to Now"), undoCreation(step))
             } else {
                 tasks.addedRequest = TasksPageModel.ScrollRequest(id: task.id)
             }
@@ -675,9 +680,11 @@ final class ComposerModel: ObservableObject {
     private func createNote(openingPage: Bool) -> Bool {
         let values = values
         let title = values.title.isEmpty ? TaskDraftBuilder.collapsed(tasks.addBar.text) : values.title
-        guard let id = tasks.library.createNote(title: title, body: writing, tags: values.tags,
-                                                pinned: pinned, in: page.history) else { return false }
-        if openingPage { services.openNote(id) } else { services.toast(String(localized: "Added to Notes"), undoCreation()) }
+        let (created, step) = tasks.library.undo.recordingStep(in: page.history) {
+            tasks.library.createNote(title: title, body: writing, tags: values.tags, pinned: pinned, in: page.history)
+        }
+        guard let id = created else { return false }
+        if openingPage { services.openNote(id) } else { services.toast(String(localized: "Added to Notes"), undoCreation(step)) }
         return true
     }
 
@@ -730,11 +737,14 @@ final class ComposerModel: ObservableObject {
 
     /// The Undo a creation's toast offers: the history the creation went
     /// into, fixed now (the card may be on another page by the click).
-    private func undoCreation() -> @MainActor () -> CommandOutcome {
+    /// The creation's own step and nothing else (board id
+    /// toast-undo-obsolete-step); without one there is nothing to undo.
+    private func undoCreation(_ step: UUID?) -> @MainActor () -> CommandOutcome {
         let library = tasks.library
         let history = page.history
-        return { library.undo(in: history) }
+        return { step.map { library.undo(in: history, exactly: $0) } ?? ExactUndo.gone.outcome() }
     }
+    private var createdStep: UUID?
 
     func undoPage() {
         let history = page.history, library = tasks.library

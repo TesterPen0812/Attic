@@ -62,7 +62,11 @@ final class CalendarEventRowState: ObservableObject {
     enum Choice { case calendar, length }
     var canEdit: Bool { owned != nil }
     var canDelete: Bool { owned != nil }
-    var didWrite: (String) -> Void = { _ in }
+    /// A saved write and the step it recorded, which its toast's Undo
+    /// names (board id toast-undo-obsolete-step).
+    var didWrite: (String, UUID?) -> Void = { _, _ in }
+    /// The undo route whose steps `didWrite` reports.
+    weak var undoRoute: UndoRoute?
     private var writer: CalendarEventWriter?
     private let makeWriter: (() throws -> CalendarEventWriter)?
 
@@ -180,9 +184,9 @@ final class CalendarEventRowState: ObservableObject {
             if draft != owned.draft {
                 busy = true
                 defer { busy = false }
-                let saved = try await writer.edit(owned.id, draft: draft, expecting: owned.draft)
+                let (saved, step) = try await recordingStep { try await writer.edit(owned.id, draft: draft, expecting: owned.draft) }
                 self.owned = saved
-                didWrite(String(localized: "Event changed"))
+                didWrite(String(localized: "Event changed"), step)
                 // A held save cannot close or overwrite newer typing.
                 guard fields == submitted else { return false }
             }
@@ -196,14 +200,19 @@ final class CalendarEventRowState: ObservableObject {
         }
     }
 
+    private func recordingStep<T>(_ write: () async throws -> T) async throws -> (T, UUID?) {
+        guard let undoRoute else { return (try await write(), nil) }
+        return try await undoRoute.recordingStep(in: .calendar, write)
+    }
+
     func delete() async {
         guard !busy, let owned, let writer else { return }
         busy = true
         defer { busy = false }
         do {
-            try await writer.delete(owned.id, expecting: owned.draft)
+            let (_, step) = try await recordingStep { try await writer.delete(owned.id, expecting: owned.draft) }
             clear()
-            didWrite(String(localized: "Event deleted"))
+            didWrite(String(localized: "Event deleted"), step)
         } catch {
             failure = String(localized: "Couldn’t delete event. Your changes are kept. Try again.")
         }

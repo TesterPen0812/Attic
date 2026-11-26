@@ -501,8 +501,20 @@ final class WorkspaceHistory {
     /// Toasts retain a concrete entry identity; a later entry removes their
     /// authority. Native responder/menu binding belongs to slice 0b.
     func undoLatest(stepID: UUID) async -> UndoOutcome? {
-        guard route.undoStepID(in: historyID) == stepID else { return nil }
-        return await replay(redo: false)
+        switch await undoExactly(stepID) {
+        case .applied: .applied
+        case .failed: .failed
+        case .gone: .obsolete
+        case .alreadyUndone, .notNext, .refused: nil
+        }
+    }
+    /// An offer's own step, once, or nothing (board id
+    /// toast-undo-obsolete-step): never the step below it.
+    func undoExactly(_ stepID: UUID) async -> ExactUndo {
+        if let standing = route.standing(of: stepID, in: historyID) { return standing }
+        guard canUndo else { return .failed }
+        closeGroup()
+        return await route.replay(in: historyID, exactly: stepID)
     }
     @discardableResult func undo() -> Bool { closeGroup(); return canUndo && route.undo(in: historyID) }
     @discardableResult func redo() -> Bool { closeGroup(); return canRedo && route.redo(in: historyID) }

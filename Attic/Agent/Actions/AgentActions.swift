@@ -971,10 +971,10 @@ final class AgentActions {
                     }
                 } else { failures.append("\(entry.title): Calendar writer unavailable") }
             case let .history(history, expectedID, _):
-                if route.undoStepID(in: history) != expectedID {
+                if route.standing(of: expectedID, in: history) != nil {
                     failures.append("\(entry.title): a newer edit or missing undo step prevents reversal")
                 } else {
-                    let result = await route.replay(in: history, redo: false)
+                    let result = await route.replay(in: history, exactly: expectedID)
                     success = result == .applied
                     if !success { failures.append("\(entry.title): \(String(describing: result))") }
                 }

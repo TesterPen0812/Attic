@@ -122,9 +122,10 @@ struct CalendarPage: View {
                 model.setDayView(true)
             }
             #endif
-            model.eventRows.didWrite = { [weak library = model.store.commandLibrary, weak toasts = toasts] message in
-                guard let library else { return }
-                toasts?.show(message, performingAsync: { await library.replay(in: .calendar, redo: false) })
+            model.eventRows.undoRoute = model.store.commandLibrary?.undo
+            model.eventRows.didWrite = { [weak library = model.store.commandLibrary, weak toasts = toasts] message, step in
+                guard let library, let step else { return }
+                toasts?.show(message, performingAsync: { await library.replay(in: .calendar, exactly: step) })
             }
         }
         .onChange(of: isReallyVisible) { _, current in

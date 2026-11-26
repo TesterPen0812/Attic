@@ -33,6 +33,42 @@ enum UndoOutcome: Equatable, Error {
     case obsolete
 }
 
+/// What an Undo offer (a toast) got when it asked for its own step. The
+/// offer names one step; nothing below it is ever called (board id
+/// toast-undo-obsolete-step).
+enum ExactUndo: Equatable {
+    /// The step was the next undo and its undo saved.
+    case applied
+    /// The store refused or failed to save; the step stays for Retry.
+    case failed
+    /// The step can never apply again (its item is gone or changed), or the
+    /// history no longer holds it.
+    case gone
+    /// An undo already reversed the step (it waits for Redo).
+    case alreadyUndone
+    /// A newer step came after it.
+    case notNext
+    /// A step only the async form can replay, asked synchronously.
+    case refused
+
+    /// What the offer tells the person. `reported` is the store's own
+    /// sentence for this press, which wins for a gone step.
+    func outcome(reported: String? = nil) -> CommandOutcome {
+        switch self {
+        case .applied, .alreadyUndone:
+            .applied
+        case .failed:
+            .failed(CommandFailure(reported ?? String(localized: "Couldn’t undo. Try again.")))
+        case .gone:
+            .failed(CommandFailure(reported ?? String(localized: "Can’t undo: it was deleted or changed elsewhere."), canRetry: false))
+        case .notNext:
+            .failed(CommandFailure(String(localized: "Can’t undo: a newer change came after it."), canRetry: false))
+        case .refused:
+            .failed(CommandFailure(String(localized: "Couldn’t undo"), canRetry: false))
+        }
+    }
+}
+
 /// One undoable step: how to reverse it and how to apply it again.
 struct UndoStep {
     /// An item lifecycle command, independent of its translated display name.
@@ -210,12 +246,14 @@ final class UndoRoute: ObservableObject {
     }
 
     /// `undo(in:)` with what happened: nil when there was nothing to undo.
+    /// `only` names the one step an Undo offer may reverse: the loop stops
+    /// after it, whatever it answered.
     @discardableResult
-    func undoStep(in history: UndoHistoryID) -> UndoOutcome? {
+    func undoStep(in history: UndoHistoryID, only named: UUID? = nil) -> UndoOutcome? {
         let history = resolved(history)
         guard !replaying.contains(history), var entry = histories[history] else { return nil }
         var discardedObsolete = false
-        while let step = entry.undo.last, step.replay == nil {
+        while let step = entry.undo.last, step.replay == nil, named == nil || step.id == named {
             let outcome = step.undo()
             switch outcome {
             case .failed:
@@ -226,6 +264,7 @@ final class UndoRoute: ObservableObject {
                 revision &+= 1
                 onOwnershipChanged?()
                 discardedObsolete = true
+                if named != nil { return .obsolete }
             case .applied:
                 entry.undo.removeLast()
                 entry.redo.append(step)
@@ -237,6 +276,62 @@ final class UndoRoute: ObservableObject {
             }
         }
         return discardedObsolete ? .obsolete : nil
+    }
+
+    /// Runs a command whose toast may offer Undo and returns the last step
+    /// it recorded on this route: the one that toast names. An enclosing
+    /// recording (an agent's) still owns those steps too.
+    func recordingStep<T>(in history: UndoHistoryID, _ command: () throws -> T) rethrows -> (value: T, step: UUID?) {
+        let recording = ActionRecording(routeID: ownershipID), outer = Self.actionRecording
+        let value = try Self.$actionRecording.withValue(recording) { try command() }
+        adopt(recording, into: outer)
+        return (value, recording.steps.last { $0.history == resolved(history) }?.id)
+    }
+
+    func recordingStep<T>(in history: UndoHistoryID, _ command: () async throws -> T) async rethrows -> (value: T, step: UUID?) {
+        let recording = ActionRecording(routeID: ownershipID), outer = Self.actionRecording
+        let value = try await Self.$actionRecording.withValue(recording) { try await command() }
+        adopt(recording, into: outer)
+        return (value, recording.steps.last { $0.history == resolved(history) }?.id)
+    }
+
+    private func adopt(_ recording: ActionRecording, into outer: ActionRecording?) {
+        guard let outer, outer.routeID == ownershipID else { return }
+        recording.steps.forEach { outer.append(history: $0.history, id: $0.id) }
+    }
+
+    /// Where an offer's step stands: nil while it is the next undo.
+    func standing(of step: UUID, in history: UndoHistoryID) -> ExactUndo? {
+        let key = resolved(history)
+        if replaying.contains(key) { return .failed }
+        guard let entry = histories[key] else { return .gone }
+        if entry.undo.last?.id == step { return nil }
+        if entry.redo.contains(where: { $0.id == step }) { return .alreadyUndone }
+        return entry.undo.contains(where: { $0.id == step }) ? .notNext : .gone
+    }
+
+    /// An Undo offer's own step, and nothing else (board id
+    /// toast-undo-obsolete-step). ⌘Z and the menus keep `undoStep(in:)`,
+    /// which passes a step that can no longer apply.
+    func undoStep(in history: UndoHistoryID, exactly step: UUID) -> ExactUndo {
+        if let standing = standing(of: step, in: history) { return standing }
+        if histories[resolved(history)]?.undo.last?.replay != nil { return .refused }
+        return Self.exact(undoStep(in: history, only: step))
+    }
+
+    /// The async form, for histories whose steps replay (Calendar, a
+    /// workspace).
+    func replay(in history: UndoHistoryID, exactly step: UUID) async -> ExactUndo {
+        if let standing = standing(of: step, in: history) { return standing }
+        return Self.exact(await replay(in: history, redo: false, only: step))
+    }
+
+    private static func exact(_ outcome: UndoOutcome?) -> ExactUndo {
+        switch outcome {
+        case .applied?: .applied
+        case .failed?: .failed
+        case .obsolete?, nil: .gone
+        }
     }
 
     /// `redo(in:)` with what happened: nil when there was nothing to redo.
@@ -405,28 +500,29 @@ final class UndoRoute: ObservableObject {
     /// step commits the cursor, even when a later editor/index step fails. The
     /// pending gate refuses a second inverse; retry runs publication only.
     @discardableResult
-    func replay(in history: UndoHistoryID, redo: Bool) async -> UndoOutcome? {
+    func replay(in history: UndoHistoryID, redo: Bool, only named: UUID? = nil) async -> UndoOutcome? {
         // A stale asynchronous step must not eat ⌘Z either. Snapshot the
         // eligible entries so a command recorded while replay awaits cannot
-        // become the next action reversed by this same key press.
+        // become the next action reversed by this same key press. An offer
+        // (`only`) is eligible for its own step alone.
         let key = resolved(history)
-        let eligibleIDs = Set((redo ? histories[key]?.redo : histories[key]?.undo)?.map(\.id) ?? [])
+        let eligibleIDs = named.map { [$0] } ?? Set((redo ? histories[key]?.redo : histories[key]?.undo)?.map(\.id) ?? [])
         var discardedObsolete = false
         while let step = (redo ? histories[key]?.redo : histories[key]?.undo)?.last {
             guard eligibleIDs.contains(step.id) else { return discardedObsolete ? .obsolete : nil }
-            let outcome = await replayTop(in: key, redo: redo)
+            let outcome = await replayTop(in: key, redo: redo, only: named)
             guard outcome == .obsolete else { return outcome }
             discardedObsolete = true
         }
         return discardedObsolete ? .obsolete : nil
     }
 
-    private func replayTop(in history: UndoHistoryID, redo: Bool) async -> UndoOutcome? {
+    private func replayTop(in history: UndoHistoryID, redo: Bool, only named: UUID? = nil) async -> UndoOutcome? {
         let key = resolved(history)
         guard !replaying.contains(key), let entry = histories[key],
               let step = (redo ? entry.redo : entry.undo).last else { return nil }
         guard let replay = step.replay else {
-            return redo ? redoStep(in: key) : undoStep(in: key)
+            return redo ? redoStep(in: key) : undoStep(in: key, only: named)
         }
         replaying.insert(key)
         defer {

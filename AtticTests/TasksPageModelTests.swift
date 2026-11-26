@@ -1474,6 +1474,77 @@ final class ToastUndoExactStepTests: XCTestCase {
         return (calls, s.id)
     }
 
+    /// Test 2 · trunk: compile-only (new API). The exact form never calls
+    /// the step below, and says where the step stands.
+    func testExactUndoNeverCallsTheStepBelow() {
+        let route = UndoRoute()
+        let (calls, s) = syntheticSteps(on: route, in: .tasks)
+        XCTAssertEqual(route.undoStep(in: .tasks, exactly: s), .gone)
+        XCTAssertEqual(calls.r, 0)
+        XCTAssertEqual(route.undoCount(in: .tasks), 1, "only S left")
+        XCTAssertFalse(route.canRedo(in: .tasks))
+        let r = try! XCTUnwrap(route.undoStepID(in: .tasks))
+        route.record(UndoStep(name: "N", undo: { true }, redo: { true }), in: .tasks)
+        XCTAssertEqual(route.undoStep(in: .tasks, exactly: r), .notNext)
+        XCTAssertEqual(calls.r, 0)
+        XCTAssertTrue(route.undo(in: .tasks))
+        XCTAssertEqual(route.undoStep(in: .tasks, exactly: r), .applied)
+        XCTAssertEqual(calls.r, 1)
+        XCTAssertEqual(route.undoStep(in: .tasks, exactly: r), .alreadyUndone)
+        XCTAssertEqual(calls.r, 1)
+    }
+
+    /// Test 3 · trunk: compile-only. The async form stops after its own
+    /// replay step.
+    func testExactReplayStopsAfterNamedStep() async {
+        let route = UndoRoute()
+        let calls = Calls()
+        var r = UndoStep(name: "R", undoOutcome: { .failed }, redoOutcome: { .applied })
+        r.replay = { _, commit in calls.r += 1; try? commit(); return .applied }
+        route.record(r, in: .calendar)
+        var s = UndoStep(name: "S", undoOutcome: { .failed }, redoOutcome: { .applied })
+        s.replay = { _, _ in .obsolete }
+        route.record(s, in: .calendar)
+        XCTAssertEqual(route.undoStep(in: .calendar, exactly: s.id), .refused, "the sync form refuses a replay step")
+        let outcome = await route.replay(in: .calendar, exactly: s.id)
+        XCTAssertEqual(outcome, .gone)
+        XCTAssertEqual(calls.r, 0)
+        XCTAssertEqual(route.undoStepID(in: .calendar), r.id)
+    }
+
+    /// Test 6 · trunk: compile-only. The toast names the step its own
+    /// command recorded; a command that recorded none offers no Undo.
+    func testToastNamesItsCommandsRecordedStep() throws {
+        start()
+        let a = try add("A"), b = try add("B")
+        let (value, step) = library.undo.recordingStep(in: .tasks) { library.updateTask(a, title: "A2") }
+        XCTAssertTrue(value.isApplied)
+        XCTAssertEqual(step, library.undo.undoStepID(in: .tasks))
+        let (_, none) = library.undo.recordingStep(in: .tasks) { library.updateTask(a, title: "A2") }
+        XCTAssertNil(none, "nothing changed, nothing recorded")
+        XCTAssertTrue(model.setPriority(.high, for: [b]).isApplied)
+        XCTAssertEqual(toasts.current?.actionTitle, "Undo")
+        XCTAssertEqual(toasts.performAction(), .applied)
+        XCTAssertEqual(store.task(withID: b)?.priority, TaskPriority.none)
+        XCTAssertEqual(store.task(withID: a)?.title, "A2", "the toast undid its own step only")
+    }
+
+    /// ⌘Z while the page's toast offers Undo is the toast's Undo; under
+    /// its failure message ⌘Z is the history's again.
+    func testCmdZFollowsTheOfferOnlyWhileItOffersUndo() throws {
+        start()
+        let a = try add("A"), b = try add("B")
+        let (r, _) = try twoSteps(a: a, b: b)
+        deleteElsewhere(b)
+        XCTAssertEqual(model.undo().failure?.canRetry, false, "⌘Z on the offer: the gone step, nothing below it")
+        XCTAssertEqual(store.task(withID: a)?.title, "A2")
+        XCTAssertEqual(toasts.current?.isFailure, true)
+        XCTAssertEqual(toasts.current?.answersUndoKey, false, "OK never takes ⌘Z")
+        XCTAssertEqual(library.undo.undoStepID(in: .tasks), r)
+        XCTAssertTrue(model.undo().isApplied, "⌘Z under the failure message is the history's")
+        XCTAssertEqual(store.task(withID: a)?.title, "A")
+    }
+
     /// Test 9, `undoLatest` (Task note, panel and purge toasts) · trunk: RED.
     func testUndoLatestStopsAtItsStep() async {
         let route = UndoRoute()

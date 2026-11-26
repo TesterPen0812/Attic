@@ -110,7 +110,7 @@ final class RoundO1RenderTests: XCTestCase {
             for (label, clearance) in [("before", Optional(old)), ("after", nil)] {
                 let page = try Page(mode: mode, context: ctx, focused: false, clearance: clearance)
                 defer { page.window.close() }
-                page.model.showToast("Tagged #work")
+                page.model.toasts.show("Tagged #work") {}
                 spin(1)
                 try save(try XCTUnwrap(page.window.contentView), "o17-02-toast-\(label)-\(mode.rawValue)")
             }
@@ -118,7 +118,7 @@ final class RoundO1RenderTests: XCTestCase {
             let page = try Page(mode: mode, context: ctx, focused: true, clearance: nil)
             defer { page.window.close() }
             page.model.addBarState.text.text = "Pay rent"
-            page.model.showToast("Tagged #work")
+            page.model.toasts.show("Tagged #work") {}
             spin(1)
             try save(try XCTUnwrap(page.window.contentView), "o17-02-toast-after-strip-\(mode.rawValue)")
         }

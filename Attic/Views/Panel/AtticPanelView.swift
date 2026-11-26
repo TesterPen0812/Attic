@@ -574,14 +574,13 @@ struct AtticPanelView: View {
                         uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
                     }
                     toasts.show(String(localized: "Added to Now"), answersUndoKey: false, performingAsync: { [weak pages, weak uiState, weak history] in
-                        guard let pages, let uiState, let history, let stepID,
-                              history.route.undoStepID(in: history.historyID) == stepID else { return .applied }
+                        guard let pages, let uiState, let history, let stepID else { return .applied }
+                        if let standing = history.route.standing(of: stepID, in: history.historyID) { return standing.outcome() }
                         if let open = TaskNotePresenter.open(for: taskID), !open.page.retainsAcrossItemChanges, !(await open.close()) {
                             return .failed(CommandFailure(String(localized: "Couldn't undo: the note is in use")))
                         }
                         TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState)
-                        return await history.undoLatest(stepID: stepID) == .applied ? .applied
-                            : .failed(CommandFailure(String(localized: "Couldn't undo")))
+                        return await history.undoExactly(stepID).outcome()
                     })
                 case let .refused(reason):
                     pages.active?.showNotice(NoteNotice(kind: .didntWork, detail: reason))
@@ -1307,9 +1306,8 @@ extension AtticPanelView {
             let history = pages.undoRoute.workspace(for: .taskWorkspace(parentID))
             let message = recovery.map { String(localized: "Made note checkbox") + " · " + $0 } ?? String(localized: "Made note checkbox")
             toasts?.show(message, answersUndoKey: false, performingAsync: { [weak history] in
-                guard let history, history.route.undoStepID(in: history.historyID) == entryID else { return .applied }
-                return await history.undoLatest(stepID: entryID) == .applied ? .applied
-                    : .failed(CommandFailure(String(localized: "Can't undo: the line was edited since")))
+                guard let history else { return .applied }
+                return await history.undoExactly(entryID).outcome()
             })
         case let .refused(reason):
             report(reason)
@@ -1347,11 +1345,10 @@ extension AtticPanelView {
             let history = pages.undoRoute.workspace(for: .taskWorkspace(taskID))
             let entry = history.route.undoStepID(in: history.historyID)
             toasts?.show(String(localized: "Removed from Tasks"), answersUndoKey: false, performingAsync: { [weak pages, weak history, weak uiState] in
-                guard let pages, let history, let uiState, let entry,
-                      history.route.undoStepID(in: history.historyID) == entry else { return .applied }
-                guard await history.undoLatest(stepID: entry) == .applied else {
-                    return .failed(CommandFailure(String(localized: "Couldn't undo")))
-                }
+                guard let pages, let history, let uiState, let entry else { return .applied }
+                if let standing = history.route.standing(of: entry, in: history.historyID) { return standing.outcome() }
+                let undone = await history.undoExactly(entry)
+                guard undone == .applied else { return undone.outcome() }
                 await pages.retireConvertedNote(noteID, installingCommittedForm: false)
                 if pages.retainsWindowSession(pages.workspaceSessionIfCached(noteID)) { return .applied }
                 uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))

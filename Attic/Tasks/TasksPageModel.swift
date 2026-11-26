@@ -3100,11 +3100,13 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         settlePendingCompletionAcknowledgements()
         let changing = ids.filter { store.listedTask(withID: $0).map { $0.priority != priority } == true }
         guard !changing.isEmpty else { return .applied }
-        let outcome = reachesDoneLog(changing)
-            ? library.updateListedTasks(changing, priority: priority)
-            : changing.count == 1
-                ? library.updateTask(changing[0], priority: priority)
-                : library.updateTasks(changing, priority: priority)
+        let outcome = recordingToastStep {
+            reachesDoneLog(changing)
+                ? library.updateListedTasks(changing, priority: priority)
+                : changing.count == 1
+                    ? library.updateTask(changing[0], priority: priority)
+                    : library.updateTasks(changing, priority: priority)
+        }
         if reachesDoneLogAfterEdit(changing) { reloadDoneLogAfterEdit() }
         guard outcome.isApplied else { return outcome }
         pruneInvisibleSelection(on: tab)
@@ -3119,9 +3121,11 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         settlePendingCompletionAcknowledgements()
         let movable = ids.filter { store.task(withID: $0).map { $0.listedStatus != .backlog } == true }
         guard !movable.isEmpty else { return .applied }
-        let succeeded = movable.count == 1
-            ? library.updateTask(movable[0], status: .backlog, allowingUnfinishedSubtasks: true)
-            : library.updateTasks(movable, status: .backlog)
+        let succeeded = recordingToastStep {
+            movable.count == 1
+                ? library.updateTask(movable[0], status: .backlog, allowingUnfinishedSubtasks: true)
+                : library.updateTasks(movable, status: .backlog)
+        }
         guard succeeded.isApplied else { return succeeded }
         selection.subtract(movable)
         pruneInvisibleSelection(on: tab)
@@ -3135,9 +3139,9 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         settlePendingCompletionAcknowledgements()
         let movable = ids.filter { store.task(withID: $0)?.listedStatus == .backlog }
         guard !movable.isEmpty else { return .applied }
-        let succeeded = movable.count == 1
-            ? library.updateTask(movable[0], status: .todo)
-            : library.updateTasks(movable, status: .todo)
+        let succeeded = recordingToastStep {
+            movable.count == 1 ? library.updateTask(movable[0], status: .todo) : library.updateTasks(movable, status: .todo)
+        }
         guard succeeded.isApplied else { return succeeded }
         selection.subtract(movable)
         pruneInvisibleSelection(on: tab)
@@ -3158,7 +3162,7 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     func restoreToNow(_ ids: [UUID]) -> CommandOutcome {
         settlePendingCompletionAcknowledgements()
         guard !ids.isEmpty else { return .applied }
-        let outcome = library.restoreToNow(ids)
+        let outcome = recordingToastStep { library.restoreToNow(ids) }
         guard outcome.isApplied else { return outcome }
         selection.subtract(ids)
         if tab == .done {
@@ -3182,7 +3186,7 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         guard !live.isEmpty else { return .failed(.taskGone) }
         let title = live.count == 1 ? store.listedTask(withID: live[0])?.title : nil
         let archived = reachesDoneLog(live)
-        let outcome = archived ? library.deleteListedTasks(live) : library.deleteTasks(live)
+        let outcome = recordingToastStep { archived ? library.deleteListedTasks(live) : library.deleteTasks(live) }
         guard outcome.isApplied else { return outcome }
         AtticSounds.play(.trashed)
         if archived || tab == .done { reloadDoneLogAfterEdit() }
@@ -3524,7 +3528,7 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         let files = composerFilesForSave()
         var saving = draft
         saving.attachments = files.references
-        guard let task = library.createTasks([saving])?.first else { return nil }
+        guard let task = recordingToastStep({ library.createTasks([saving]) })?.first else { return nil }
         composerFilesSaved(files, on: task.title)
         addBarState.clearDraft()
         keepInView(task.id, on: tab)
@@ -3571,7 +3575,7 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
         let files = composerFilesForSave()
         var saving = drafts
         if !saving.isEmpty { saving[0].attachments = files.references }
-        guard let created = library.createTasks(saving) else {
+        guard let created = recordingToastStep({ library.createTasks(saving) }) else {
             failedSave = .paste
             lastPasteAsOne = asOne
             return
@@ -3616,12 +3620,22 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     /// notice (Astra 23).
     @discardableResult
     func undo() -> CommandOutcome {
+        // While this page's toast offers Undo, ⌘Z is that toast's button
+        // (it says "Undo with Command-Z"): its own step, or why not. A
+        // tick still waiting to save is newer than the toast: ⌘Z is its.
+        let waiting = acknowledgedTaskCommand != nil || !completingAfterAcknowledgement.isEmpty
+        return !waiting && toastOffersUndo ? toasts.performAction() : undo(exactly: nil)
+    }
+
+    /// ⌘Z, and the toast's Undo (`step`): the toast's own step and nothing
+    /// else, while it offers it (board id toast-undo-obsolete-step).
+    private func undo(exactly step: UUID?) -> CommandOutcome {
         let hadPending = acknowledgedTaskCommand != nil || !completingAfterAcknowledgement.isEmpty
         let savedPending = settlePendingCompletionAcknowledgements()
         // A failed acknowledged click never acquired an Undo step. Do not
         // let ⌘Z reach back into an unrelated earlier saved task edit.
         if hadPending && !savedPending { return .applied }
-        let outcome = library.undo(in: .tasks)
+        let outcome = step.map { library.undo(in: .tasks, exactly: $0) } ?? library.undo(in: .tasks)
         if outcome.isApplied {
             // Undo may restore a still-held completed row. Show its genuine
             // status immediately instead of keeping a false checked tick.
@@ -3686,19 +3700,38 @@ final class TasksPageModel: ObservableObject, StoredListInputOwner {
     /// agent's edit) takes the toast away, and its button never reaches
     /// past the step it names.
     func showToast(_ message: String) {
-        let step = library.undo.undoStepID(in: .tasks)
+        // The step the command just recorded; a command that recorded none
+        // has nothing to offer.
+        guard let step = toastStep else { return }
+        toastStep = nil
         postedToastStep = step
         postedToastID = toasts.show(message, performing: { [weak self] in
-            // Only the step the toast named: anything newer makes it stale.
-            self?.settlePendingCompletionAcknowledgements()
-            guard let self, let step, self.library.undo.undoStepID(in: .tasks) == step else { return .applied }
-            let outcome = self.library.undo(in: .tasks)
+            guard let self else { return .applied }
+            let outcome = self.undo(exactly: step)
             // The toast says it where the Undo was pressed; the same
             // sentence is not repeated in the panel's notice.
             if let failure = outcome.failure, self.store.lastErrorMessage == failure.message { self.store.dismissError() }
             return outcome
         }).id
     }
+
+    /// This page's toast still offers Undo: not once it says why one
+    /// failed, nor once a newer step superseded it (its watch takes it
+    /// down a turn later).
+    private var toastOffersUndo: Bool {
+        guard let current = toasts.current, current.id == postedToastID, !current.isFailure else { return false }
+        return library.undo.undoStepID(in: .tasks) == postedToastStep
+    }
+
+    /// Runs a command whose toast may offer Undo, and keeps the step it
+    /// recorded in the Tasks history for `showToast`.
+    private func recordingToastStep<T>(_ command: () -> T) -> T {
+        let (value, step) = library.undo.recordingStep(in: .tasks, command)
+        toastStep = step
+        return value
+    }
+
+    private var toastStep: UUID?
 
     /// A change after the toast's step (or an undo of it) makes the toast
     /// stale: it goes.

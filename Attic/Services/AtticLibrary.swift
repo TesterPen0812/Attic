@@ -539,6 +539,25 @@ final class AtticLibrary {
         return historyOutcome(undo.redoStep(in: history), since: serial, verb: String(localized: "redo"))
     }
 
+    /// An Undo offer's own step (a toast): that step once, or nothing, said
+    /// in the offer's words (board id toast-undo-obsolete-step).
+    @discardableResult
+    func undo(in history: UndoHistoryID, exactly step: UUID) -> CommandOutcome {
+        let serial = tasks.errorSerial
+        return exactOutcome(undo.undoStep(in: history, exactly: step), since: serial)
+    }
+
+    @discardableResult
+    func replay(in history: UndoHistoryID, exactly step: UUID) async -> CommandOutcome {
+        let serial = tasks.errorSerial
+        return exactOutcome(await undo.replay(in: history, exactly: step), since: serial)
+    }
+
+    private func exactOutcome(_ exact: ExactUndo, since serial: UInt64) -> CommandOutcome {
+        let outcome = exact.outcome(reported: tasks.errorSerial != serial ? tasks.lastErrorMessage : nil)
+        return outcome.failure.map { recordFailure($0) } ?? outcome
+    }
+
     /// Calendar's EventKit steps await their serial worker; ordinary steps
     /// still use the same route and outcome mapping.
     @discardableResult

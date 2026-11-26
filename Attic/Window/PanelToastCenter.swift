@@ -107,7 +107,7 @@ final class PanelToastCenter: ObservableObject {
         case let .failed(failure):
             let toast = Toast(id: pressed.id, message: failure.message,
                               actionTitle: failure.canRetry ? String(localized: "Retry") : String(localized: "OK"),
-                              isFailure: true, answersUndoKey: pressed.answersUndoKey)
+                              isFailure: true, answersUndoKey: false)
             present(toast, action: nil, asyncAction: failure.canRetry ? asyncAction : nil)
             AccessibilityNotification.Announcement(failure.message).post()
         }
@@ -140,7 +140,9 @@ final class PanelToastCenter: ObservableObject {
                 message: failure.message,
                 actionTitle: failure.canRetry ? String(localized: "Retry") : String(localized: "OK"),
                 isFailure: true,
-                answersUndoKey: current?.answersUndoKey ?? true
+                // ⌘Z belongs to Undo, never to OK or Retry
+                // (toast-undo-obsolete-step).
+                answersUndoKey: false
             )
             present(toast, action: failure.canRetry ? action : nil)
             AccessibilityNotification.Announcement(failure.message).post()

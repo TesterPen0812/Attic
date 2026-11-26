@@ -661,9 +661,7 @@ struct TaskNotePage: View {
             guard let stepID, let presenter else { return }
             toasts?.show(Self.completionMessage(subtasks: subtasks), performingAsync: {
                 guard presenter.lease != nil else { return .applied }
-                let history = presenter.page.history
-                guard history.route.undoStepID(in: history.historyID) == stepID else { return .applied }
-                return history.undo() ? .applied : .failed(CommandFailure(String(localized: "Couldn't undo")))
+                return await presenter.page.history.undoExactly(stepID).outcome()
             })
         }
     }
@@ -853,9 +851,8 @@ struct TaskNotePage: View {
     /// anything newer makes it stale.
     static func showUndoToast(_ message: String, entryID: UUID, presenter: TaskNotePresenter, toasts: PanelToastCenter?) {
         toasts?.show(message, performingAsync: { [weak presenter] in
-            guard let presenter, presenter.lease != nil, let outcome = await presenter.page.history.undoLatest(stepID: entryID) else { return .applied }
-            return outcome == .applied ? .applied
-                : .failed(CommandFailure(String(localized: "Can't undo: the line was edited since")))
+            guard let presenter, presenter.lease != nil else { return .applied }
+            return await presenter.page.history.undoExactly(entryID).outcome()
         })
     }
 
@@ -1068,14 +1065,15 @@ struct TaskNotePage: View {
                 guard let controller else { return .applied }
                 // Only the step the toast named: anything newer makes it stale.
                 let historyID = UndoHistoryID.taskWorkspace(taskID)
-                guard let step = restored.stepID, controller.undoRoute.undoStepID(in: historyID) == step else { return .applied }
+                guard let step = restored.stepID else { return .applied }
+                if let standing = controller.undoRoute.standing(of: step, in: historyID) { return standing.outcome() }
                 // The page lets go of the note before it leaves again.
                 if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) {
                     return .failed(CommandFailure(String(localized: "Couldn't undo: the note is in use")))
                 }
-                let undone = controller.undoRoute.undo(in: historyID)
+                let undone = await controller.undoRoute.replay(in: historyID, exactly: step)
                 reopen()
-                return undone ? .applied : .failed(CommandFailure(String(localized: "Couldn't undo the restore")))
+                return undone.outcome()
             })
         }
     }

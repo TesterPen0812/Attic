@@ -4424,8 +4424,9 @@ extension NotesPageController {
     @discardableResult
     func undoLibraryDurably(expectedStepID: UUID? = nil) async -> Bool {
         await performAfterRecovery {
-            guard expectedStepID == nil || libraryUndoStepID == expectedStepID else { return false }
-            return undoLibrary()
+            // A toast's step, and never the one below it.
+            guard let expectedStepID else { return undoLibrary() }
+            return undoRoute.undoStep(in: .notesLibrary, exactly: expectedStepID) == .applied
         }
     }
     func redoLibraryDurably() async -> Bool { await performAfterRecovery { redoLibrary() } }
