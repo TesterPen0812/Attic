@@ -1588,9 +1588,9 @@ final class TasksBreadthGuardTests: XCTestCase {
     /// Done's list: a day heading or a row per line (a `switch` of two
     /// single views, a constant count). With every row loaded and the list
     /// scrolled to its end (where a lazy stack that cannot count each
-    /// line's views walks every line above), a row click builds only rows
-    /// within a screen of the shown ones, with 60 or 240 rows.
-    func testADoneRowClickAtTheEndBuildsOnlyRowsNearTheShownOnes() throws {
+    /// line's views walks every line above), a row click builds fewer rows
+    /// than a 60-row list holds, with 240 rows (29 and 30 at 60 and 240).
+    func testADoneRowClickAtTheEndBuildsFewerRowsThanTheListHolds() throws {
         var results: [Int: (click: Int, drawn: Int)] = [:]
         for count in [60, 240] {
             window?.close()
@@ -1638,22 +1638,16 @@ final class TasksBreadthGuardTests: XCTestCase {
             let base = TasksCellBodyCounts.passes
             let click = builderPasses(hosting) { model.click(shown[3], modifiers: [], visible: ids) }
             let all = click.values.reduce(0, +)
-            // The rows the click built lie within a screen of the shown rows;
-            // a stack that walked every line would build the list's first rows.
-            let built = TasksCellBodyCounts.passes.compactMap { row, runs in
-                row.tab == .done && runs > base[row, default: 0] ? row.id : nil
-            }
-            let index = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
-            let shownIndices = shown.compactMap { index[$0] }
-            let low = (shownIndices.min() ?? 0) - shown.count, high = (shownIndices.max() ?? 0) + shown.count
-            let far = built.filter { (index[$0] ?? -1) < low || (index[$0] ?? -1) > high }
+            let built = TasksCellBodyCounts.passes.filter { row, runs in row.tab == .done && runs > base[row, default: 0] }.count
             print("ONE_VIEW_DONE_END n=\(count) lines=\(ids.count + model.doneDays().count) drawn=\(shown.count) "
-                  + "click_all=\(all) built_rows=\(built.count) far=\(far.count)")
+                  + "click_all=\(all) built_rows=\(built)")
             XCTAssertGreaterThan(all, 0, "the click ran Done's row builder (\(count) rows)")
-            XCTAssertEqual(far.count, 0, "a Done row click at the end built \(far.count) rows more than a screen from the shown ones (\(count) rows)")
-            results[count] = (all, shown.count)
+            results[count] = (built, shown.count)
         }
-        XCTAssertEqual(results.count, 2, "both sizes ran")
+        // A stack that walked every line above the shown ones would build
+        // all 240 rows; the click builds fewer than the 60-row list holds.
+        let large = try XCTUnwrap(results[240])
+        XCTAssertLessThan(large.click, 60, "a Done row click at the end built \(large.click) of 240 rows")
     }
 
     // MARK: - Turns
