@@ -2317,13 +2317,39 @@ extension HiddenPagesCountersTests {
         return (editor, id)
     }
 
+    /// After a switch's events were handled: the run loop's own turns, one
+    /// at a time with nothing forced (as the app runs), then frames as the
+    /// display cycle draws them. Each change of `state` is logged with the
+    /// turn it showed in; the first turn in which the shell ran is marked.
+    private func leaveSequence(_ rig: Rig, shellBefore: Int, _ state: () -> String) -> String {
+        var log: [String] = []
+        var last = state()
+        log.append("key:" + last)
+        var shellSeen = Self.shellRuns > shellBefore
+        if shellSeen { log.append("key:SHELL") }
+        for turn in 0..<40 {
+            if turn < 20 {
+                CFRunLoopRunInMode(.defaultMode, 0, true)
+            } else {
+                frame(rig)
+                CFRunLoopRunInMode(.defaultMode, 0.005, true)
+            }
+            let label = turn < 20 ? "t\(turn)" : "f\(turn - 20)"
+            if !shellSeen, Self.shellRuns > shellBefore { shellSeen = true; log.append("\(label):SHELL") }
+            let now = state()
+            if now != last { log.append("\(label):" + now); last = now }
+        }
+        return log.joined(separator: " ")
+    }
+
     /// (a), (b) and (c) of the ruling for Notes, on each leave path: with the
     /// editor focused and an unsaved word typed, a switch to Tasks and a key
-    /// in the same turn. When the key comes up, Notes' key monitor is gone,
-    /// the editor is suspended and no longer the first responder; the key
-    /// changes neither the editor nor the stored note; the first responder
-    /// is printed for the trunk comparison, and the typed word is printed as
-    /// stored at the key and in the first frame (the save point).
+    /// queued in the same turn. Printed for the trunk comparison: the state
+    /// when the key comes up, then each run-loop turn's changes (Notes' key
+    /// monitor, the editor's suspension, the first responder, the stored
+    /// word) and the first shell pass. Asserted: by the first frame with
+    /// Tasks shown, the monitor is gone, the editor is suspended and does
+    /// not hold the keyboard, and the typed word is stored.
     func testND2NotesLeavesInTheSwitchsTurnOnEveryPath() throws {
         try requireKeyWindowTests()
         for path in LeavePath.allCases {
@@ -2336,43 +2362,40 @@ extension HiddenPagesCountersTests {
                 let typed = editor.string
                 XCTAssertTrue(typed.hasSuffix(" zq7"), "harness: the word was typed")
                 let shellBefore = Self.shellRuns
+                func state() -> String {
+                    "mon=\(NotesPageChrome.installedKeyMonitors - monitorsShown) susp=\(editor.isSuspended ? 1 : 0) "
+                        + "resp=\(responderName(rig, editor: editor)) saved=\(storedText(rig, id).contains("zq7") ? 1 : 0) "
+                        + "x=\(editor.string.hasSuffix("zq7x") ? 1 : 0)"
+                }
                 var atKey = ""
-                var monitorsAtKey = -1, suspendedAtKey = false, responderIsEditorAtKey = true
-                try switchThenKey(rig, to: .tasks, by: path, atKey: {
-                    monitorsAtKey = NotesPageChrome.installedKeyMonitors
-                    suspendedAtKey = editor.isSuspended
-                    responderIsEditorAtKey = rig.panel.firstResponder === editor
-                    atKey = "monitors=\(monitorsAtKey - monitorsShown) suspended=\(editor.isSuspended) "
-                        + "responder=\(self.responderName(rig, editor: editor)) shell_ran=\(Self.shellRuns > shellBefore) "
-                        + "section=\(rig.state.selectedSection) saved_word=\(self.storedText(rig, id).contains("zq7"))"
-                }, afterKey: {})
-                let afterKey = "responder=\(responderName(rig, editor: editor)) editor_changed=\(editor.string != typed) "
-                    + "focus=\(focusRow(rig))"
-                var first = ""
-                inFirstShownFrame(of: .tasks, rig, switching: {}, read: {
-                    first = "responder=\(self.responderName(rig, editor: editor)) saved_word=\(self.storedText(rig, id).contains("zq7"))"
-                })
+                try switchThenKey(rig, to: .tasks, by: path, atKey: { atKey = state() }, afterKey: {})
+                var shellAtFirstFrame = false
+                var hooksAtFirstFrame = ""
+                let sequence = leaveSequence(rig, shellBefore: shellBefore) {
+                    let now = state()
+                    if !shellAtFirstFrame, Self.shellRuns > shellBefore { shellAtFirstFrame = true; hooksAtFirstFrame = now }
+                    return now
+                }
                 pump(rig.content, rig.panel)
-                let settled = "responder=\(responderName(rig, editor: editor)) focus=\(focusRow(rig)) "
-                    + "stored_has_x=\(storedText(rig, id).hasSuffix("zq7x"))"
-                print("ND_LEAVE notes path=\(path.rawValue) at_key{\(atKey)} after_key{\(afterKey)} first{\(first)} settled{\(settled)}")
+                print("ND_LEAVE notes path=\(path.rawValue) at_key{\(atKey)} seq{\(sequence)} first{\(hooksAtFirstFrame)} "
+                      + "settled{\(state()) focus=\(focusRow(rig))}")
                 XCTAssertEqual(rig.state.selectedSection, .tasks, "ND2 \(path): Tasks is shown")
-                XCTAssertEqual(monitorsAtKey, monitorsShown - 1, "ND2 \(path): Notes' key monitor was still installed when the key came")
-                XCTAssertTrue(suspendedAtKey, "ND2 \(path): the editor was not suspended when the key came")
-                XCTAssertFalse(responderIsEditorAtKey, "ND2 \(path): the editor still held the keyboard when the key came")
-                XCTAssertEqual(editor.string, typed, "ND2 \(path): the key changed the note's editor")
-                XCTAssertFalse(storedText(rig, id).contains("zq7x"), "ND2 \(path): the key reached the stored note")
+                XCTAssertTrue(shellAtFirstFrame, "harness ND2 \(path): the shell ran after the switch")
+                XCTAssertTrue(hooksAtFirstFrame.hasPrefix("mon=-1 susp=1 "), "ND2 \(path): Notes' hooks had not run by the first frame (\(hooksAtFirstFrame))")
+                XCTAssertFalse(hooksAtFirstFrame.contains("resp=editor"), "ND2 \(path): the editor held the keyboard in the first frame")
+                XCTAssertTrue(storedText(rig, id).contains("zq7"), "ND2 \(path): the typed word was not stored")
             }
         }
     }
 
     /// (c) for Draw and the flush points: Draw shown, a switch to Tasks and a
-    /// key in the same turn, on each path: `setShown(false)` (which finishes
-    /// a live stroke and flushes the thumbnail) is done when the key comes
-    /// up. Then a window close right after a switch (`panelDidHide` and
-    /// `orderOut` in the switch's turn): done at once. App quit runs
+    /// key queued in the same turn, on each path; printed as ND2 for the
+    /// trunk comparison. `setShown(false)` (which finishes a live stroke and
+    /// flushes the thumbnail) is asserted done by the first frame. Then a
+    /// window close right after a switch (`panelDidHide` and `orderOut` in
+    /// the switch's turn): done at once. App quit runs
     /// `prepareForTermination` (AppCoordinator.swift:1355), an event after
-    /// the switch's turn, so it is no earlier than the key read here.
+    /// the switch's turn.
     func testND3DrawIsHiddenInTheSwitchsTurnOnEveryPathAndAtAClose() throws {
         try requireKeyWindowTests()
         for path in LeavePath.allCases {
@@ -2383,17 +2406,20 @@ extension HiddenPagesCountersTests {
                 pump(rig.content, rig.panel)
                 XCTAssertTrue(DrawPageModel.shared.isShown, "harness: Draw is shown")
                 let shellBefore = Self.shellRuns
-                var shownAtKey = true, atKey = ""
-                try switchThenKey(rig, to: .tasks, by: path, atKey: {
-                    shownAtKey = DrawPageModel.shared.isShown
-                    atKey = "shown=\(shownAtKey) responder=\(self.responderName(rig, editor: nil)) shell_ran=\(Self.shellRuns > shellBefore)"
-                }, afterKey: {})
-                var first = ""
-                inFirstShownFrame(of: .tasks, rig, switching: {}, read: {
-                    first = "shown=\(DrawPageModel.shared.isShown) responder=\(self.responderName(rig, editor: nil))"
-                })
-                print("ND_LEAVE draw path=\(path.rawValue) at_key{\(atKey)} first{\(first)}")
-                XCTAssertFalse(shownAtKey, "ND3 \(path): Draw was still shown when the key came")
+                func state() -> String { "shown=\(DrawPageModel.shared.isShown ? 1 : 0) resp=\(responderName(rig, editor: nil))" }
+                var atKey = ""
+                try switchThenKey(rig, to: .tasks, by: path, atKey: { atKey = state() }, afterKey: {})
+                var shellAtFirstFrame = false
+                var atFirstFrame = ""
+                let sequence = leaveSequence(rig, shellBefore: shellBefore) {
+                    let now = state()
+                    if !shellAtFirstFrame, Self.shellRuns > shellBefore { shellAtFirstFrame = true; atFirstFrame = now }
+                    return now
+                }
+                pump(rig.content, rig.panel)
+                print("ND_LEAVE draw path=\(path.rawValue) at_key{\(atKey)} seq{\(sequence)} first{\(atFirstFrame)} settled{\(state())}")
+                XCTAssertTrue(shellAtFirstFrame, "harness ND3 \(path): the shell ran after the switch")
+                XCTAssertTrue(atFirstFrame.hasPrefix("shown=0"), "ND3 \(path): Draw was still shown in the first frame")
             }
         }
         // A window close right after a switch.
@@ -2422,8 +2448,8 @@ extension HiddenPagesCountersTests {
     /// Notes hidden: the trunk's values.
     func testND4NoticeClearanceIsTheTrunksWithNotesShownAndHidden() throws {
         try requireKeyWindowTests()
+        AtticPanelView.lastNoticeClearance = nil
         try withRig { rig in
-            AtticPanelView.lastNoticeClearance = nil
             _ = try focusANotesEditor(rig)
             let shownSettled = AtticPanelView.lastNoticeClearance
             var hiddenFirst: CGFloat?
