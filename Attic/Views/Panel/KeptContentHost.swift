@@ -524,7 +524,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         // A leaving page's root, and its first hidden one (the slide over),
         // are laid out here, so its leave actions and removals apply where
         // they did in the panel's own host (`laysOutOnLeave`).
-        let leaving = laysOutOnLeave && ((host.isInteractive && !interactive) || (!drawn && !coordinator.hiddenRootSet))
+        let leaving = laysOutOnLeave && host.isInteractive && !interactive
         if drawn || !coordinator.hiddenRootSet {
             let root = root(context)
             host.setRoot(root, laidOut: leaving || Self.movesRows(from: coordinator.drawnRows, to: drawn ? rows : nil),
