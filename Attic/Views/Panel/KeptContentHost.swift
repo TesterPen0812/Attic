@@ -60,9 +60,26 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     private var holdsLayout = false
     private var owesLayout = false
 
+    #if DEBUG
+    static var probeConsToLayout = false
+    static var probeConsSets = 0
+    static var probeLayoutSets = 0
+    static var probeInLayout = 0
+    override var needsUpdateConstraints: Bool {
+        get { super.needsUpdateConstraints }
+        set {
+            if newValue { Self.probeConsSets += 1 }
+            if newValue, Self.probeConsToLayout { needsLayout = true; return }
+            super.needsUpdateConstraints = newValue
+        }
+    }
+    #endif
     override var needsLayout: Bool {
         get { super.needsLayout }
         set {
+            #if DEBUG
+            if newValue { Self.probeLayoutSets += 1 }
+            #endif
             if newValue, holdsLayout {
                 owesLayout = true
                 return
@@ -236,6 +253,10 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
             owesLayout = true
             return
         }
+        #if DEBUG
+        Self.probeInLayout += 1
+        defer { Self.probeInLayout -= 1 }
+        #endif
         AtticOverlayHierarchy.layoutPass { super.layout() }
         if !isDrawn, !bounds.isEmpty { holdsLayout = true }
     }

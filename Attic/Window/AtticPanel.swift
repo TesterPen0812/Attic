@@ -2123,6 +2123,26 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     #if DEBUG
     /// Test seam (HiddenPagesCountersTests): the panel root's layout passes.
     static var layoutPasses = 0
+    static var probeWho = false
+    static var probeWhoCounts: [String: Int] = [:]
+    static var probeWhoStacks: [String: [String]] = [:]
+    override var needsLayout: Bool {
+        get { super.needsLayout }
+        set {
+            if newValue, Self.probeWho, !super.needsLayout {
+                let frames = Array(Thread.callStackSymbols.dropFirst(1).prefix(40))
+                let names = frames.map { line -> String in
+                    let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+                    return parts.count > 3 ? parts[3...].joined(separator: " ") : line
+                }
+                let place = KeptContentHostingView.probeInLayout > 0 ? "keptlayout" : "outside"
+                let key = place + " :: " + names.prefix(12).map { String($0.prefix(90)) }.joined(separator: " | ")
+                Self.probeWhoCounts[key, default: 0] += 1
+                if Self.probeWhoStacks[key] == nil { Self.probeWhoStacks[key] = names.map { String($0.prefix(160)) } }
+            }
+            super.needsLayout = newValue
+        }
+    }
     #endif
     private struct ResizeSession {
         let edges: PanelResizeEdges

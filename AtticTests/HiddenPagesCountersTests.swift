@@ -2201,3 +2201,86 @@ extension HiddenPagesCountersTests {
         }
     }
 }
+
+// MARK: - SCRATCH probe (never merged): what lays out the panel root on a Tasks scroll step
+
+extension HiddenPagesCountersTests {
+    private func probeKeptHosts(_ rig: Rig) -> [KeptContentHostingView] {
+        var found: [KeptContentHostingView] = []
+        func walk(_ view: NSView) {
+            if let host = view as? KeptContentHostingView { found.append(host) }
+            view.subviews.forEach(walk)
+        }
+        walk(rig.content)
+        return found
+    }
+
+    private func probeArm(_ name: String, _ list: NSScrollView, _ rig: Rig) {
+        var hist: [Int: Int] = [:]
+        var keptHist: [Int: Int] = [:]
+        let start = (AtticPanelHostingView.layoutPasses, KeptContentHostCounts.layouts.on + KeptContentHostCounts.layouts.off,
+                     KeptContentHostingView.probeConsSets, KeptContentHostingView.probeLayoutSets,
+                     KeptContentHostCounts.updates.on + KeptContentHostCounts.updates.off,
+                     KeptContentHostCounts.roots.on + KeptContentHostCounts.roots.off,
+                     Self.shellRuns, TasksPageRenderProbe.bodyRuns)
+        AtticPanelHostingView.probeWhoCounts = [:]
+        AtticPanelHostingView.probeWhoStacks = [:]
+        AtticPanelHostingView.probeWho = true
+        let ys = (1...Self.scrollSteps).map { CGFloat($0) * 14 } + (0..<Self.scrollSteps).reversed().map { CGFloat($0) * 14 }
+        for y in ys {
+            let root0 = AtticPanelHostingView.layoutPasses
+            let kept0 = KeptContentHostCounts.layouts.on + KeptContentHostCounts.layouts.off
+            list.contentView.scroll(to: CGPoint(x: 0, y: y))
+            list.reflectScrolledClipView(list.contentView)
+            pump(rig.content, rig.panel, seconds: 0.024)
+            hist[AtticPanelHostingView.layoutPasses - root0, default: 0] += 1
+            keptHist[KeptContentHostCounts.layouts.on + KeptContentHostCounts.layouts.off - kept0, default: 0] += 1
+        }
+        AtticPanelHostingView.probeWho = false
+        let steps = ys.count
+        func h(_ d: [Int: Int]) -> String { d.keys.sorted().map { "\($0):\(d[$0]!)" }.joined(separator: ",") }
+        print("SCRPROBE arm=\(name) steps=\(steps) root=[\(h(hist))] kept=[\(h(keptHist))] "
+              + "rootTotal=\(AtticPanelHostingView.layoutPasses - start.0) keptTotal=\(KeptContentHostCounts.layouts.on + KeptContentHostCounts.layouts.off - start.1) "
+              + "keptCons=\(KeptContentHostingView.probeConsSets - start.2) keptNeedsLayout=\(KeptContentHostingView.probeLayoutSets - start.3) "
+              + "keptUpdates=\(KeptContentHostCounts.updates.on + KeptContentHostCounts.updates.off - start.4) "
+              + "keptRoots=\(KeptContentHostCounts.roots.on + KeptContentHostCounts.roots.off - start.5) "
+              + "shell=\(Self.shellRuns - start.6) tasksBody=\(TasksPageRenderProbe.bodyRuns - start.7) "
+              + "y=\(list.contentView.bounds.origin.y)")
+        for (key, count) in AtticPanelHostingView.probeWhoCounts.sorted(by: { $0.value > $1.value }).prefix(4) {
+            print("SCRWHO arm=\(name) n=\(count) \(key.prefix(20))")
+            for (i, frame) in (AtticPanelHostingView.probeWhoStacks[key] ?? []).enumerated() {
+                print("SCRWHO arm=\(name)   #\(i) \(frame)")
+            }
+        }
+    }
+
+    func testSCRATCHProbeWhatLaysOutThePanelRootOnATasksScrollStep() throws {
+        Self.scrollSeed = true
+        defer { Self.scrollSeed = false; KeptContentHostingView.probeConsToLayout = false }
+        try withRig { rig in
+            rig.state.panelDidReveal()
+            pump(rig.content, rig.panel)
+            let list = try tasksList(rig)
+            let hosts = probeKeptHosts(rig)
+            print("SCRPROBE hosts=\(hosts.count) bridging=\(hosts.map { $0.sceneBridgingOptions.rawValue }) safe=\(hosts.map { $0.safeAreaRegions.rawValue })")
+            let bridging = hosts.map { $0.sceneBridgingOptions }, safe = hosts.map { $0.safeAreaRegions }
+            func restore() { for (i, host) in hosts.enumerated() { host.sceneBridgingOptions = bridging[i]; host.safeAreaRegions = safe[i] } }
+            probeArm("warm", list, rig)
+            probeArm("base", list, rig)
+            hosts.forEach { $0.sceneBridgingOptions = [] }
+            probeArm("nobridging", list, rig)
+            restore()
+            hosts.forEach { $0.safeAreaRegions = [] }
+            probeArm("nosafearea", list, rig)
+            restore()
+            KeptContentHostingView.probeConsToLayout = true
+            probeArm("constolayout", list, rig)
+            hosts.forEach { $0.sceneBridgingOptions = []; $0.safeAreaRegions = [] }
+            probeArm("combined", list, rig)
+            restore()
+            KeptContentHostingView.probeConsToLayout = false
+            probeArm("baseagain", list, rig)
+            XCTAssertGreaterThan(AtticPanelHostingView.layoutPasses, 0, "harness: the root layout counter is live")
+        }
+    }
+}
