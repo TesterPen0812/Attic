@@ -210,6 +210,36 @@ final class PanelSquircleSettingsTests: XCTestCase {
         _ = kept
     }
 
+    /// Scroll trace 27 Nov, stage 1: the panel's glass outline
+    /// (`AtticControlOutline.path`, AtticMaterials.swift:458) built its
+    /// squircle on every root layout pass. It goes through `Squircle.path`,
+    /// so at an unchanged size every pass after the first builds nothing; a
+    /// new size or inset builds once; the continuous corner builds no
+    /// squircle; and the kept outline is the fresh one.
+    @MainActor
+    func testTheGlassOutlineBuildsItsSquircleOncePerSize() {
+        let cache = SquirclePathCache.shared
+        cache.removeAll()
+        let outline = AtticControlOutline(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent)
+        let rect = CGRect(x: 0, y: 0, width: 340, height: 560)
+        var builds = cache.buildCount
+        let kept = outline.path(in: rect)
+        for _ in 0..<120 { _ = outline.path(in: rect) }
+        XCTAssertEqual(cache.buildCount - builds, 1, "120 passes at an unchanged size build the outline once")
+        builds = cache.buildCount
+        for _ in 0..<20 { _ = outline.path(in: CGRect(x: 0, y: 0, width: 340, height: 600)) }
+        XCTAssertEqual(cache.buildCount - builds, 1, "a new size builds once")
+        builds = cache.buildCount
+        for _ in 0..<20 { _ = outline.inset(by: 0.5).path(in: rect) }
+        XCTAssertEqual(cache.buildCount - builds, 1, "an inset outline (a rim) builds once")
+        builds = cache.buildCount
+        for _ in 0..<20 { _ = AtticControlOutline(cornerRadius: 52, exponent: nil).path(in: rect) }
+        XCTAssertEqual(cache.buildCount - builds, 0, "the continuous corner builds no squircle")
+        cache.isEnabled = false
+        defer { cache.isEnabled = true }
+        XCTAssertEqual(kept, outline.path(in: rect), "the kept outline is the fresh one")
+    }
+
     /// The route the trace named: `AtticPanelContentContainer.hitTest` into
     /// the panel's SwiftUI content, which is clipped to and hit-tests inside
     /// the squircle (`PanelShellSurface`). Many hit tests at unchanged bounds
