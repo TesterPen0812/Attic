@@ -860,6 +860,7 @@ jobs:
             "${identity_flags[@]}" \
             "${shard_flags[@]}" \
             "${skip_flags[@]}" \
+            -test-iterations 5 \
             test
 
       - name: Print macOS UI-test summary
