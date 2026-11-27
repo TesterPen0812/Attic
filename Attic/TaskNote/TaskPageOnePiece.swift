@@ -728,7 +728,7 @@ private struct TaskPageStandInPart: ViewModifier, Animatable {
         let p = progress
         let O = TaskPageOnePiece.self
         #if DEBUG
-        if part == .head { TaskPageMotion.drew("S", p) }
+        let _ = part == .head ? TaskPageMotion.drew("S", p) : ()
         #endif
         switch part {
         case .head:
