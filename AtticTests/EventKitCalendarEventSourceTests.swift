@@ -1,11 +1,27 @@
+import AppKit
 import CoreGraphics
 import EventKit
+import SwiftUI
 import XCTest
 @testable import Attic
 
 /// A fake behind the `EKEventStore` seam: no real EventKit, no prompt.
-private final class FakeCalendarEventStore: CalendarEventStoring {
-    var status: EKAuthorizationStatus
+private final class FakeCalendarEventStore: CalendarEventStoring, @unchecked Sendable {
+    /// The status is read on the source's worker queue and changed by tests on
+    /// the main thread (access granted or revoked while the app runs).
+    private let lock = NSLock()
+    private var _status: EKAuthorizationStatus
+    private var _mainThreadStatusReads = 0
+    private var _workerStatusReads = 0
+    var status: EKAuthorizationStatus {
+        get { lock.withLock { _status } }
+        set { lock.withLock { _status = newValue } }
+    }
+    /// Each `authorizationStatus()` is the synchronous calaccessd call
+    /// (`+[EKEventStore authorizationStatusForEntityType:]`); on the main
+    /// thread it blocks the panel's update.
+    var mainThreadStatusReads: Int { lock.withLock { _mainThreadStatusReads } }
+    var workerStatusReads: Int { lock.withLock { _workerStatusReads } }
     var statusAfterRequest: EKAuthorizationStatus
     var stored: [CalendarStoreOccurrence] = []
     private(set) var requestCount = 0
@@ -13,11 +29,18 @@ private final class FakeCalendarEventStore: CalendarEventStoring {
     var onFetch: (() -> Void)?
 
     init(status: EKAuthorizationStatus = .fullAccess, statusAfterRequest: EKAuthorizationStatus = .fullAccess) {
-        self.status = status
+        self._status = status
         self.statusAfterRequest = statusAfterRequest
     }
 
-    func authorizationStatus() -> EKAuthorizationStatus { status }
+    func authorizationStatus() -> EKAuthorizationStatus {
+        if Thread.isMainThread {
+            lock.withLock { _mainThreadStatusReads += 1 }
+        } else {
+            lock.withLock { _workerStatusReads += 1 }
+        }
+        return status
+    }
 
     func requestFullAccess(_ completion: @escaping @Sendable (Result<Bool, Error>) -> Void) {
         requestCount += 1
@@ -25,7 +48,11 @@ private final class FakeCalendarEventStore: CalendarEventStoring {
         completion(.success(status == .fullAccess))
     }
 
+    private var _mainThreadFetches = 0
+    var mainThreadFetches: Int { lock.withLock { _mainThreadFetches } }
+
     func occurrences(from start: Date, to end: Date) -> [CalendarStoreOccurrence] {
+        if Thread.isMainThread { lock.withLock { _mainThreadFetches += 1 } }
         onFetch?()
         queries.append(DateInterval(start: start, end: end))
         // Like EventKit: anything touching the span, inclusive at both ends.
@@ -686,5 +713,206 @@ final class EventKitCalendarEventSourceTests: XCTestCase {
         XCTAssertTrue(CalendarEventSources.makeDefault(environment: uiTesting) is CalendarEventSourceStub)
         let app = AppRuntimeEnvironment(environment: [:])
         XCTAssertTrue(CalendarEventSources.makeDefault(environment: app) is EventKitCalendarEventSource)
+    }
+
+    // MARK: The switch to Tasks makes no calaccessd call on the main thread
+
+    // Every ⌘1 to Tasks read `EKEventStore.authorizationStatus` (a
+    // synchronous XPC to calaccessd) on the main thread, inside the panel's
+    // update: 16–18 ms a switch, 113 ms when calaccessd was busy
+    // (felt-pr85.md, "Trace: ⌘1 from Notes"). These run the real EventKit
+    // source over the fake store, inside the real Tasks host.
+
+    private final class Current: ObservableObject { @Published var value = true }
+
+    private struct Shell: View {
+        @ObservedObject var current: Current
+        let make: (Bool) -> TasksPageHost
+        var body: some View { make(current.value) }
+    }
+
+    @MainActor
+    private final class SwitchRig {
+        let backend: FakeCalendarEventStore
+        let center: NotificationCenter
+        let feed: TasksNextEventFeed
+        let model: TasksPageModel
+        let current: Current
+        let uiState: PanelUIState
+        let window: NSWindow
+        /// Every row the feed published after setup (title, or nil for none).
+        var published: [String?] = []
+
+        init(backend: FakeCalendarEventStore, center: NotificationCenter, feed: TasksNextEventFeed,
+             model: TasksPageModel, current: Current, uiState: PanelUIState, window: NSWindow) {
+            self.backend = backend; self.center = center; self.feed = feed; self.model = model
+            self.current = current; self.uiState = uiState; self.window = window
+        }
+
+        func close() {
+            feed.setActive(false)
+            window.close()
+        }
+    }
+
+    private var switchMorning: Date {
+        calendar.date(bySettingHour: 9, minute: 0, second: 0, of: Date().addingTimeInterval(7 * 86_400))!
+    }
+
+    private func makeSwitchRig(status: EKAuthorizationStatus) async throws -> SwitchRig {
+        let suite = "CalendarAuthSwitch.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let store = try makeTestStore()
+        let morning = switchMorning
+        let calendar = calendar
+        let backend = FakeCalendarEventStore(status: status)
+        backend.stored = [occurrence("standup", "Stand-up", morning.addingTimeInterval(600), morning.addingTimeInterval(3_600))]
+        let center = NotificationCenter()
+        let feed = TasksNextEventFeed(source: source(backend, center: center), now: { morning }, calendar: { calendar })
+        let state = TasksPageState(nextEventFeed: feed)
+        let current = Current()
+        let uiState = PanelUIState()
+        uiState.panelDidReveal()
+        let size = CGSize(width: AtticLayout.panelSize.width, height: 520)
+        let shell = Shell(current: current) { isCurrent in
+            TasksPageHost(store: store, uiState: uiState, settings: AppSettings(defaults: defaults), state: state,
+                          layout: PanelPageLayout(cornerSize: 24, panelSize: size), chromeInteractionState: PanelChromeInteractionState(),
+                          primaryInputFocusRequest: 0, isCurrent: isCurrent)
+        }
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: shell.frame(width: size.width, height: size.height))
+        window.orderFront(nil)
+        await XCTAssertTrueAsync(await waitUntil { feed.onUpdate != nil }, "the host follows the feed")
+        let rig = SwitchRig(backend: backend, center: center, feed: feed, model: state.model(for: store, toasts: nil),
+                            current: current, uiState: uiState, window: window)
+        let shown = feed.onUpdate
+        feed.onUpdate = { [weak rig] in rig?.published.append($0?.title); shown?($0) }
+        await feed.waitForReadForTesting()
+        if status == .fullAccess {
+            await XCTAssertTrueAsync(await waitUntil { rig.model.nextEvent?.title == "Stand-up" }, "setup: the row")
+        }
+        return rig
+    }
+
+    /// Shows or hides Tasks as the panel's page switch does, and returns once
+    /// the host's `onChange(of: isCurrent)` has run (it sets `isPageShown`
+    /// and then the feed's `setActive` in one pass).
+    private func setTasksCurrent(_ rig: SwitchRig, _ current: Bool) async {
+        rig.current.value = current
+        await XCTAssertTrueAsync(await waitUntil { rig.model.isPageShown == current }, "the switch reached the host")
+    }
+
+    /// One page switch away from Tasks and back, settled.
+    private func switchAwayAndBack(_ rig: SwitchRig) async {
+        await setTasksCurrent(rig, false)
+        await setTasksCurrent(rig, true)
+        await rig.feed.waitForReadForTesting()
+    }
+
+    func testSwitchingToTasksMakesNoMainThreadCalendarAuthorizationRead() async throws {
+        let rig = try await makeSwitchRig(status: .fullAccess)
+        defer { rig.close() }
+        let setupReads = rig.backend.mainThreadStatusReads
+        let switches = 3
+        for _ in 0..<switches { await switchAwayAndBack(rig) }
+        let switchReads = rig.backend.mainThreadStatusReads - setupReads
+        XCTAssertEqual(switchReads, 0,
+                       "\(switchReads) synchronous calaccessd reads on the main thread over \(switches) switches to Tasks")
+        // The panel's hide and reveal reach the same feed (`revealCount`).
+        rig.uiState.panelDidHide()
+        await XCTAssertTrueAsync(await waitUntil { rig.feed.nextWake == nil }, "hidden: the feed rests")
+        let beforeReveal = rig.backend.mainThreadStatusReads
+        rig.uiState.panelDidReveal()
+        await XCTAssertTrueAsync(await waitUntil { rig.feed.nextWake != nil }, "revealed: read and woke")
+        await rig.feed.waitForReadForTesting()
+        XCTAssertEqual(rig.backend.mainThreadStatusReads - beforeReveal, 0, "a reveal onto Tasks: no main-thread calaccessd read")
+        XCTAssertEqual(setupReads, 0, "not even the first build reads it on the main thread")
+        XCTAssertEqual(rig.backend.mainThreadFetches, 0, "occurrences are read off the main thread")
+        XCTAssertEqual(rig.model.nextEvent?.title, "Stand-up")
+    }
+
+    /// The row is right in the first frame after a switch: the kept row is
+    /// never withdrawn while the read runs, and a page without access never
+    /// shows one.
+    func testTheNextEventRowIsRightInTheFirstFrameAfterASwitch() async throws {
+        let rig = try await makeSwitchRig(status: .fullAccess)
+        defer { rig.close() }
+        for _ in 0..<3 {
+            await setTasksCurrent(rig, false)
+            XCTAssertNil(rig.feed.nextWake, "behind another page, the feed rests")
+            XCTAssertEqual(rig.model.nextEvent?.title, "Stand-up", "behind another page, the row is kept for the return")
+            await setTasksCurrent(rig, true)
+            XCTAssertEqual(rig.model.nextEvent?.title, "Stand-up", "the switch's first frame shows the row")
+            await rig.feed.waitForReadForTesting()
+            XCTAssertEqual(rig.model.nextEvent?.title, "Stand-up")
+            XCTAssertNotNil(rig.feed.nextWake)
+        }
+        XCTAssertFalse(rig.published.contains(where: { $0 == nil }), "the row never blinks out across a switch: \(rig.published)")
+
+        let denied = try await makeSwitchRig(status: .denied)
+        defer { denied.close() }
+        for _ in 0..<2 {
+            await setTasksCurrent(denied, false)
+            await setTasksCurrent(denied, true)
+            XCTAssertNil(denied.model.nextEvent, "no access: no row in the switch's first frame")
+            await denied.feed.waitForReadForTesting()
+            XCTAssertNil(denied.model.nextEvent, "no access: no row")
+        }
+        XCTAssertFalse(denied.published.contains(where: { $0 != nil }), "\(denied.published)")
+        XCTAssertTrue(denied.backend.queries.isEmpty, "no occurrence read without access")
+    }
+
+    /// Calendar access granted or revoked while the app runs shows by the
+    /// next switch to Tasks, as on the trunk, and a calendar change while
+    /// Tasks shows rechecks it.
+    func testAccessChangedWhileTasksIsAwayShowsByTheNextSwitch() async throws {
+        let rig = try await makeSwitchRig(status: .denied)
+        defer { rig.close() }
+        XCTAssertNil(rig.model.nextEvent, "no access: no row")
+        await setTasksCurrent(rig, false)
+        rig.backend.status = .fullAccess  // granted on the Calendar page or in System Settings
+        await setTasksCurrent(rig, true)
+        await XCTAssertTrueAsync(await waitUntil { rig.model.nextEvent?.title == "Stand-up" }, "granted: the row on return")
+
+        await setTasksCurrent(rig, false)
+        rig.backend.status = .denied  // revoked in System Settings
+        await setTasksCurrent(rig, true)
+        await XCTAssertTrueAsync(await waitUntil { rig.model.nextEvent == nil }, "revoked: the row goes on return")
+
+        rig.backend.status = .fullAccess
+        rig.center.post(name: .EKEventStoreChanged, object: nil)
+        await XCTAssertTrueAsync(await waitUntil { rig.model.nextEvent?.title == "Stand-up" }, "a calendar change while shown rechecks access")
+        rig.backend.status = .denied
+        rig.center.post(name: .EKEventStoreChanged, object: nil)
+        await XCTAssertTrueAsync(await waitUntil { rig.model.nextEvent == nil }, "and hides it again")
+    }
+
+    /// Access revoked while a read is on the worker: the late result is
+    /// rejected, on the real source (the HeldCalendarReader tests cover the
+    /// feed's default path).
+    func testNextEventRejectsAReadWhoseAccessWasRevokedMidRead() async {
+        let backend = FakeCalendarEventStore(status: .fullAccess)
+        let morning = switchMorning
+        let calendar = calendar
+        backend.stored = [occurrence("standup", "Stand-up", morning.addingTimeInterval(600), morning.addingTimeInterval(3_600))]
+        let gate = StoreReadGate()
+        backend.onFetch = { gate.holdFirstRead() }
+        let feed = TasksNextEventFeed(source: source(backend), now: { morning }, calendar: { calendar })
+        defer { feed.setEnabled(false) }
+        feed.setEnabled(true)
+        await XCTAssertTrueAsync(await gate.waitForRead(), "the read reached the store")
+        backend.status = .denied
+        gate.release()
+        await feed.waitForReadForTesting()
+        XCTAssertNil(feed.current, "revoked mid-read: no row")
+        XCTAssertNil(feed.nextWake)
+        backend.status = .fullAccess
+        feed.refresh()
+        await feed.waitForReadForTesting()
+        XCTAssertEqual(feed.current?.title, "Stand-up")
+        XCTAssertEqual(backend.mainThreadFetches, 0)
     }
 }
