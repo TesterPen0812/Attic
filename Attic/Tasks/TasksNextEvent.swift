@@ -76,7 +76,16 @@ final class TasksNextEventFeed {
 
     /// Pause the retained page's Calendar work while Tasks is out of view.
     /// Keep the last row until return, when a fresh read replaces it.
+    #if DEBUG
+    /// Test seam: calls of `setActive` and `refresh`, across feeds.
+    static var setActiveCalls = 0
+    static var refreshCalls = 0
+    #endif
+
     func setActive(_ on: Bool) {
+        #if DEBUG
+        Self.setActiveCalls += 1
+        #endif
         guard active != on else { return }
         active = on
         refresh()
@@ -85,6 +94,9 @@ final class TasksNextEventFeed {
     /// Reads today's events again: on a calendar change, when the page
     /// shows, when the shown event ends and at midnight.
     func refresh() {
+        #if DEBUG
+        Self.refreshCalls += 1
+        #endif
         readGeneration += 1
         readTask?.cancel()
         timer?.invalidate()
