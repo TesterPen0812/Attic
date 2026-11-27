@@ -208,6 +208,7 @@ struct TasksPage: View {
     var body: some View {
         #if DEBUG
         let _ = TasksPageRenderProbe.rendered(model.tab)
+        let _ = TaskPageMotion.mark("body tasks page")
         let _ = TasksPageRenderProbe.readHeld(model, list: false)
         #endif
         // The link writes only the tab in use (§5.1, KB-CLAIM-RACE).

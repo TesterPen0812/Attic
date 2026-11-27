@@ -2231,6 +2231,8 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     override func layout() {
         #if DEBUG
         Self.layoutPasses += 1
+        TaskPageMotion.mark("panel layout begin")
+        defer { TaskPageMotion.mark("panel layout end") }
         #endif
         IdleLatencyTrace.span("panel_host_layout") {
             AtticOverlayHierarchy.layoutPass { super.layout() }

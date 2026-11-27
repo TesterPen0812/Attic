@@ -137,6 +137,9 @@ final class PanelSharedChrome: ObservableObject {
     /// `onePiece`: the bars give way (and come back) on a task page's
     /// one-piece motion; otherwise at once, as every other covering.
     func setCovered(_ isCovered: Bool, page: PanelPage, onePiece: Bool = false) {
+        #if DEBUG
+        TaskPageMotion.mark("setCovered \(isCovered)")
+        #endif
         if onePiece { onePieceCover.insert(page) } else if onePieceCover.contains(page) {
             onePieceCover.remove(page)
             if givingWay[page] != nil { givingWay[page] = nil }
@@ -320,6 +323,7 @@ struct PanelSharedBottomBar: View {
     var body: some View {
         #if DEBUG
         let _ = Self.bodyEvaluations += 1
+        let _ = TaskPageMotion.mark("body shared bar")
         #endif
         let look = chrome.bar(for: page)
         let actions = chrome.barActions(for: page)

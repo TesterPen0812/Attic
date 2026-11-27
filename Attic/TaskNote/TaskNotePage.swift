@@ -416,6 +416,9 @@ struct TaskNotePage: View {
     private var leaveTitle: String { placement == .window ? String(localized: "Move to Panel") : backTitle }
 
     var body: some View {
+        #if DEBUG
+        let _ = TaskPageMotion.mark("body task page")
+        #endif
         ZStack(alignment: .bottom) {
             TaskNoteHostRepresentable(presenter: presenter, chrome: chrome, columnInset: columnInset,
                                       topInset: topInset, bottomInset: bottomInset, design: design,
@@ -1245,6 +1248,10 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        #if DEBUG
+        TaskPageMotion.mark("editor updateNSView")
+        defer { TaskPageMotion.mark("editor updateNSView end") }
+        #endif
         guard presenter.lease != nil else { return }
         configureControls(context.coordinator)
         context.coordinator.scrollIndicators.bind(scrollView, transit: pageTransit)
@@ -1386,16 +1393,31 @@ struct TaskNotePageContainer: View {
     /// Back keeps the page when the session refuses to let go (a
     /// composition, a save not yet durable); it never loses the draft.
     private func back() {
+        #if DEBUG
+        TaskPageMotion.mark("back()")
+        #endif
         guard !closing else { return }
         guard let presenter else { onLeaving?(true); onClose(); return }
         closing = true
         onLeaving?(true)
+        #if DEBUG
+        TaskPageMotion.mark("onLeaving returned")
+        #endif
         let shrinks = onLeaving != nil && !design.reduceMotion
         Task { @MainActor in
+            #if DEBUG
+            TaskPageMotion.mark("close task began")
+            #endif
             // The shrink's first frame goes out before the save holds the
             // main thread (the page lets go durably, as before).
             if shrinks { await AtticGrowDriver.yieldFirstFrame(.grow) }
+            #if DEBUG
+            TaskPageMotion.mark("close begin (yielded)")
+            #endif
             let closed = await presenter.close()
+            #if DEBUG
+            TaskPageMotion.mark("close end")
+            #endif
             closing = false
             if closed { onClose() } else { onLeaving?(false) }
         }

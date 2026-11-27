@@ -480,6 +480,9 @@ struct TaskPageStandIn: View {
     private typealias M = TaskNoteMetrics
 
     var body: some View {
+        #if DEBUG
+        let _ = TaskPageMotion.mark("body stand-in parked=\(parked)")
+        #endif
         let head = TaskPagePose.head(layout)
         ZStack(alignment: .topLeading) {
             GeometryReader { proxy in
@@ -888,6 +891,16 @@ final class TaskPageMotion {
         // The log keeps the list that follows the motion only.
         if following { drew("L", p) }
     }
+    /// Diagnosis of Back's and Open's first frames: named work with times,
+    /// only while a test turns it on.
+    static var timingForTesting = false
+    static var timeLogForTesting: [(time: CFTimeInterval, what: String)] = []
+    static func mark(_ what: @autoclosure () -> String) {
+        guard timingForTesting, timeLogForTesting.count < 4000 else { return }
+        timeLogForTesting.append((CACurrentMediaTime(), what()))
+    }
+    /// The page opens as before (the grow), not in one piece.
+    static var onePieceOffForTesting = false
     /// What the stand-in ("S", its head) and the list's lines ("L") drew,
     /// in order, with the time: Back's list is judged against the stand-in.
     static var drawLogForTesting: [(time: CFTimeInterval, kind: Character, p: CGFloat)] = []

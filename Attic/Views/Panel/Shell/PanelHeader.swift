@@ -40,6 +40,7 @@ struct PanelHeader: View {
     var body: some View {
         #if DEBUG
         let _ = Self.bodyEvaluations += 1
+        let _ = TaskPageMotion.mark("body header")
         #endif
         let flat = design.effectiveControls != .liquidGlass
         AtticControlGroup {
