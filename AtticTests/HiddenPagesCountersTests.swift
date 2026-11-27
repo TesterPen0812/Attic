@@ -512,25 +512,40 @@ final class HiddenPagesCountersTests: XCTestCase {
             rig.calendarModel.setDayView(true)
             pump(rig.content, rig.panel)
             XCTAssertEqual(rig.state.selectedSection, .tasks, "harness: Tasks is still current")
+            // Calendar sits in a kept host of its own (PR 80), not laid out
+            // while hidden: the day it switched to is mounted in its first
+            // frame shown. Mounted so, it goes back behind Tasks.
+            showAndHideCalendar(rig)
             let onDay = Self.roomScrolls(in: rig.content)
             let day = try XCTUnwrap(onDay.first { scroll in !onGrid.contains { $0 === scroll } },
                                     "harness: the day's scroll view is mounted behind Tasks")
-            XCTAssertGreaterThan(CalendarDayView.timelineBuilds - timelineBefore, 0, "harness: the hidden day built its timeline")
-            assertOnlyTheMarginTakesTheRoom(rig, day, "C1b day", timeline: true)
+            XCTAssertGreaterThan(CalendarDayView.timelineBuilds - timelineBefore, 0, "harness: the day built its timeline")
+            assertOnlyTheMarginTakesTheRoomOnFirstShow(rig, day, "C1b day", timeline: true)
 
             rig.calendarModel.setDayView(false)
             pump(rig.content, rig.panel)
+            showAndHideCalendar(rig)
             let grid = try XCTUnwrap(Self.roomScrolls(in: rig.content).first { scroll in !onDay.contains { $0 === scroll } },
                                      "harness: the grid's scroll view is mounted behind Tasks again")
-            assertOnlyTheMarginTakesTheRoom(rig, grid, "C1b grid", timeline: false)
+            assertOnlyTheMarginTakesTheRoomOnFirstShow(rig, grid, "C1b grid", timeline: false)
         }
     }
 
-    /// Opens the card, then folds it, each as one measured interval: the room changes in it, `scroll`'s native bottom inset gains the
-    /// card's room past the bar's row and then gives it back, and no hidden page's clearance closure (nor, with `timeline`, the day's
-    /// timeline) runs.
-    private func assertOnlyTheMarginTakesTheRoom(_ rig: Rig, _ scroll: NSScrollView, _ label: String, timeline: Bool,
-                                                 file: StaticString = #filePath, line: UInt = #line) {
+    private func showAndHideCalendar(_ rig: Rig) {
+        rig.state.switchPage(to: PanelPage.calendar.section, motion: .instant)
+        pump(rig.content, rig.panel)
+        rig.state.switchPage(to: PanelPage.tasks.section, motion: .instant)
+        pump(rig.content, rig.panel)
+        XCTAssertEqual(rig.state.selectedSection, .tasks, "harness: Tasks is current again")
+    }
+
+    /// `assertOnlyTheMarginTakesTheRoom` for Calendar in its kept host
+    /// (PR 80): hidden, the card's room change reaches none of it (no
+    /// clearance closure, no timeline); in its first frame shown with the
+    /// card open, `scroll`'s native bottom inset has the card's room past
+    /// the bar's row.
+    private func assertOnlyTheMarginTakesTheRoomOnFirstShow(_ rig: Rig, _ scroll: NSScrollView, _ label: String, timeline: Bool,
+                                                            file: StaticString = #filePath, line: UInt = #line) {
         closeCard(rig)
         pump(rig.content, rig.panel)
         let closedInset = scroll.contentInsets.bottom
@@ -539,11 +554,22 @@ final class HiddenPagesCountersTests: XCTestCase {
         XCTAssertTrue(rig.composer.isOpen, "harness: \"+\" opened the card", file: file, line: line)
         let extra = PanelComposerScrollRoom.extra(height: rig.composerState.room.height)
         XCTAssertGreaterThan(extra, 0, "harness: the open card is taller than the bar's row", file: file, line: line)
-        XCTAssertEqual(scroll.contentInsets.bottom - closedInset, extra, accuracy: 1,
-                       "\(label): the native bottom inset took the card's room", file: file, line: line)
+        let shellBefore = Self.shellRuns
+        rig.state.switchPage(to: PanelPage.calendar.section, motion: .instant)
+        var firstInset: CGFloat?
+        waitForTestOperation("the first frame with Calendar shown") {
+            rig.content.layoutSubtreeIfNeeded()
+            rig.panel.displayIfNeeded()
+            guard Self.shellRuns > shellBefore else { return false }
+            firstInset = scroll.contentInsets.bottom
+            return true
+        }
+        XCTAssertTrue(rig.composer.isOpen, "harness: the card stayed open through the switch", file: file, line: line)
+        XCTAssertEqual((firstInset ?? -1) - closedInset, extra, accuracy: 1,
+                       "\(label): in Calendar's first frame shown, the native bottom inset has the card's room", file: file, line: line)
+        rig.state.switchPage(to: PanelPage.tasks.section, motion: .instant)
+        pump(rig.content, rig.panel)
         steps.append(("fold", measure(rig, "\(label) fold") { closeCard(rig) }))
-        XCTAssertEqual(scroll.contentInsets.bottom, closedInset, accuracy: 1,
-                       "\(label): the native bottom inset gave the room back", file: file, line: line)
         for (step, counts) in steps {
             XCTAssertGreaterThan(counts["room.$height", default: 0], 0,
                                  "harness: \(label) \(step): the card's room changed in the measured interval", file: file, line: line)
@@ -852,6 +878,38 @@ final class HiddenPagesCountersTests: XCTestCase {
         nativeViews(of: page, rig).mapValues(\.bounds.width)
     }
 
+    /// A hidden page's native view widths in the first layout pass with it
+    /// shown (as C5B reads them): a page whose host is not laid out while
+    /// hidden (Calendar, PR 80) must be right there.
+    private func firstShownWidths(of page: PanelPage, _ rig: Rig) -> [ObjectIdentifier: CGFloat]? {
+        let shellBefore = Self.shellRuns
+        rig.state.switchPage(to: page.section, motion: .instant)
+        var first: [ObjectIdentifier: CGFloat]?
+        waitForTestOperation("the first frame with \(page) shown") {
+            rig.content.layoutSubtreeIfNeeded()
+            rig.panel.displayIfNeeded()
+            guard Self.shellRuns > shellBefore else { return false }
+            first = widths(of: page, rig)
+            return true
+        }
+        return first
+    }
+
+    /// A hidden page not laid out while hidden has, in its first frame
+    /// shown, every native view grown by `grown` from `before`.
+    private func assertFirstShownFrameTookTheSize(_ page: PanelPage, _ rig: Rig, before: [ObjectIdentifier: CGFloat], grown: CGFloat,
+                                                  _ label: String, file: StaticString = #filePath, line: UInt = #line) {
+        let expected = widths(of: page, rig).keys
+        XCTAssertFalse(expected.isEmpty, "harness: hidden \(page) has a native view to read", file: file, line: line)
+        let first = firstShownWidths(of: page, rig) ?? [:]
+        XCTAssertEqual(rig.state.selectedSection, page.section, "harness: \(page) is shown", file: file, line: line)
+        XCTAssertEqual(Set(first.keys), Set(expected), "harness: \(page) kept its native views", file: file, line: line)
+        for (id, width) in first {
+            XCTAssertEqual(width - (before[id] ?? -1), grown, accuracy: 0.5,
+                           "\(label): \(page) does not have the size in its first frame shown", file: file, line: line)
+        }
+    }
+
     /// A page's page-wide native views: each is as wide as its page, so
     /// shown it is as wide as the window. (PR 69 review: a width that only
     /// moves by the step would pass for a page that stays too narrow.)
@@ -860,7 +918,13 @@ final class HiddenPagesCountersTests: XCTestCase {
             (view.className.hasSuffix(name) ? [view] : []) + view.subviews.flatMap { find(name, in: $0) }
         }
         switch page {
-        case .tasks: return find("KeptContentContainer", in: rig.content).filter { !$0.isHiddenOrHasHiddenAncestor }.map(\.bounds.width)
+        case .tasks:
+            // Tasks' tab hosts only: Calendar's page sits in a kept host of
+            // its own, which keeps its settled size while hidden (PR 80).
+            return find("KeptContentContainer", in: rig.content).filter { view in
+                guard let host = (view as? KeptContentContainer)?.host else { return false }
+                return !view.isHiddenOrHasHiddenAncestor && PanelPageKeyboard.membership(of: host) != .page(.calendar)
+            }.map(\.bounds.width)
         case .notes: return find("NotesPageSwipeView", in: rig.content).map(\.bounds.width)
         case .calendar: return find("CalendarPageInput5Input", in: rig.content).map(\.bounds.width)
         case .canvas: return find("DrawBoardView", in: rig.content).map(\.bounds.width)
@@ -1530,14 +1594,18 @@ extension HiddenPagesCountersTests {
             }
             release(rig)
             let grown = dragSize(start, step: Self.dragSteps).width - start.width
+            // Calendar's kept host is not laid out while hidden (PR 80): it
+            // takes the final size in its first frame shown, read below.
+            let laidOutHidden = hidden.filter { $0 != .calendar }
             waitForTestOperation("the hidden pages take the final size") {
                 oneFrame(rig)
-                return hidden.allSatisfy { page in
+                return laidOutHidden.allSatisfy { page in
                     let now = widths(of: page, rig)
                     return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - grown) < 0.5 }
                 }
             }
             XCTAssertNil(rig.state.retainedPageSizeDuringLiveResize)
+            assertFirstShownFrameTookTheSize(.calendar, rig, before: before, grown: grown, "RZ3")
         }
     }
 
@@ -1554,13 +1622,17 @@ extension HiddenPagesCountersTests {
             }
             let start = rig.state.panelSize
             resize(rig, to: CGSize(width: start.width + 24, height: start.height + 12))
+            // Calendar's kept host is not laid out while hidden (PR 80): it
+            // takes the size in its first frame shown, read below.
+            let laidOutHidden = hidden.filter { $0 != .calendar }
             waitForTestOperation("the hidden pages take a size written outside a drag") {
                 oneFrame(rig)
-                return hidden.allSatisfy { page in
+                return laidOutHidden.allSatisfy { page in
                     let now = widths(of: page, rig)
                     return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - 24) < 0.5 }
                 }
             }
+            assertFirstShownFrameTookTheSize(.calendar, rig, before: before, grown: 24, "RZ4A")
         }
     }
 

@@ -298,20 +298,29 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
         }
     }
 
-    /// A corner change gives every page a new layout, which the hidden
-    /// Calendar host, page and route host read: the counters are live. (A
+    /// A corner change gives every page a new layout, which the Calendar
+    /// host, page and route host read once Calendar is shown: the counters
+    /// are live. (A
     /// panel size change was the control until the layout stopped carrying
     /// the size: ops/design/resize-cause.md, cause 1. A size change now
     /// hands no page a new value, so it can no longer show a live counter.)
     private func assertCalendarColumnsAreLive(_ rig: Rig, file: StaticString = #filePath, line: UInt = #line) {
         let original = rig.settings.panelCornerSize
         let changed = original == PanelCornerSize.large.rawValue ? PanelCornerSize.extraLarge.rawValue : PanelCornerSize.large.rawValue
-        let control = measure(rig, "panel corner changed", { rig.settings.panelCornerSize = changed },
-                              saved: { rig.settings.panelCornerSize == changed })
+        // Calendar sits in a kept host of its own (PR 80): hidden, it takes
+        // no new root, so its views do not run on the change. Shown, the
+        // host takes the change it held, and the same settle sees the
+        // Calendar host, page and route host run: the counters are live.
+        _ = measure(rig, "panel corner changed", { rig.settings.panelCornerSize = changed },
+                    saved: { rig.settings.panelCornerSize == changed })
+        let control = measure(rig, "Calendar shown after the corner change", { rig.state.selectSection(.calendar) },
+                              saved: { rig.state.selectedSection == .calendar })
         for key in ["CalendarPageHost", "CalendarPage", "route.calendar"] {
-            XCTAssertGreaterThan(control[key, default: 0], 0, "harness: the settle sees the hidden \(key) run",
+            XCTAssertGreaterThan(control[key, default: 0], 0, "harness: the settle sees the Calendar \(key) run",
                                  file: file, line: line)
         }
+        rig.state.selectSection(.tasks)
+        settle(rig)
         rig.settings.panelCornerSize = original
         settle(rig)
     }
