@@ -708,17 +708,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             target = view.superview
         }
         let local = convert(point, from: nil)
-        let kinds = engine?.objectKinds ?? []
-        var looked: Int?
-        func insertionIndex() -> Int {
-            if let looked { return looked }
-            let index = characterIndexForInsertion(at: local)
-            looked = index
-            return index
-        }
-        if isEditable, kinds.contains(.checklist), checkboxLocation(at: local, insertionIndex: insertionIndex) != nil { return .arrow }
-        if let engine, kinds.contains(.payload) {
-            let index = insertionIndex()
+        if isEditable, checkboxLocation(at: local) != nil { return .arrow }
+        let index = characterIndexForInsertion(at: local)
+        if let engine {
             for location in [index, max(0, index - 1)] {
                 if let object = engine.object(at: location),
                    object is NoteImageAttachment || object is NoteFileAttachment,
@@ -731,7 +723,6 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             // Insertion indices also resolve in the blank margin. Only the
             // linked glyph itself is a link target; check both sides of a caret.
             if let storage = textStorage, let engine {
-                let index = insertionIndex()
                 for location in [index, max(0, index - 1)] where location < storage.length {
                     if storage.attribute(.link, at: location, effectiveRange: nil) != nil {
                         let range = (storage.string as NSString).rangeOfComposedCharacterSequence(at: location)
