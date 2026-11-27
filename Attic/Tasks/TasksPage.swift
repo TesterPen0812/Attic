@@ -1777,6 +1777,7 @@ struct TasksPage: View {
                         let folded = Self.shownFolded(turning ? turn : nil, folded: model.folded(on: tab).contains(dateGroup.key))
                         if let row = entry.row {
                             cell(row, tab: tab, run: selectionRuns[row.id] ?? .single, drawn: drawn)
+                                .modifier(TaskPageIdentityStamp(name: "row"))
                                 .id(row.id)
                                 .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
                                 // A moved row pops back in with the feel (1, none, in Calm).
@@ -1863,6 +1864,7 @@ struct TasksPage: View {
                         if model.completedTodayExpanded {
                             ForEach(sections.done) { row in
                                 cell(row, tab: tab, run: selectionRuns[row.id] ?? .single, drawn: drawn)
+                                .modifier(TaskPageIdentityStamp(name: "row"))
                                     .id(row.id)
                                     .transition(.asymmetric(
                                         insertion: .identity,
@@ -1881,6 +1883,7 @@ struct TasksPage: View {
                 }
                 // This list's one reader of a task page's motion.
                 .modifier(TaskPageListFollows(tab: tab))
+                .modifier(TaskPageIdentityStamp(name: "list \(tab)"))
                 .animation(reorderFade.isEmpty ? AtticMotionScale.gapClose(travel, afterRowsLeave: rowsLeaving) : nil, value: ids)
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
@@ -1976,6 +1979,7 @@ struct TasksPage: View {
         let _ = state.setDrawn(drawn)
         #if DEBUG
         let _ = TasksCellBodyCounts.notePass(TasksRowID(tab: tab, id: id), palette: tagColouring.palette)
+        let _ = TaskPageMotion.mark("cell pass")
         #endif
         // The wrapper is skipped by a page pass that changes nothing in its
         // key (slice 1a), and then keeps the closures of the pass that last

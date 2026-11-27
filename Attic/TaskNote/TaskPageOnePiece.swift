@@ -225,6 +225,28 @@ struct TaskPageListFollows: ViewModifier {
     }
 }
 
+/// Diagnosis (DEBUG): a view's identity across Back. A new identity takes
+/// a new serial (its state is new) and appears again.
+struct TaskPageIdentityStamp: ViewModifier {
+    let name: String
+    #if DEBUG
+    @State private var serial = TaskPageIdentityStamp.next()
+    @MainActor private static var count = 0
+    @MainActor private static func next() -> Int { count += 1; return count }
+    #endif
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        let _ = TaskPageMotion.mark("stamp \(name)")
+        content
+            .onAppear { [serial, name] in TaskPageMotion.mark("appear \(name) #\(serial)") }
+            .onDisappear { [serial, name] in TaskPageMotion.mark("disappear \(name) #\(serial)") }
+        #else
+        content
+        #endif
+    }
+}
+
 /// Tells the motion which Tasks tab is shown, as it changes (long before a
 /// click, so the lists have taken it by then).
 struct TaskPageListTab: ViewModifier {

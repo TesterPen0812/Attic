@@ -1217,7 +1217,8 @@ final class PanelIntegrationTests: XCTestCase {
         var out: [String] = []
         var turnStart: CFTimeInterval?
         var inTurn: [(time: CFTimeInterval, what: String)] = []
-        let events = ["press", "back()", "onLeaving", "close", "reverse", "growRoute", "standIn", "setCovered"]
+        let events = ["press", "back()", "onLeaving", "close", "reverse", "growRoute", "standIn", "setCovered",
+                      "appear list", "disappear list"]
         for entry in log {
             if entry.what == "RL wake" { turnStart = entry.time; inTurn = []; continue }
             if entry.what == "RL sleep" {
@@ -1235,7 +1236,7 @@ final class PanelIntegrationTests: XCTestCase {
                                 spans.append("\(key) \(ms(b))+\(String(format: "%.1f", (m.time - b) * 1000))")
                             }
                         }
-                        let key = m.what.components(separatedBy: " host=").first ?? m.what
+                        let key = (m.what.components(separatedBy: " host=").first ?? m.what).components(separatedBy: " #").first ?? m.what
                         if events.contains(where: { m.what.contains($0) }) { order.append("\(ms(m.time)) \(m.what)") }
                         if counts[key] == nil { order.append("#\(key)") }
                         counts[key, default: 0] += 1
@@ -1254,7 +1255,14 @@ final class PanelIntegrationTests: XCTestCase {
             }
             inTurn.append(entry)
         }
-        return out.prefix(60).joined(separator: "\n")
+        var totals: [String: Int] = [:]
+        for entry in log where entry.what.hasPrefix("appear") || entry.what.hasPrefix("disappear") || entry.what == "cell pass" {
+            totals[entry.what.components(separatedBy: " #").first ?? entry.what, default: 0] += 1
+        }
+        let rows = log.filter { $0.what.hasPrefix("appear row") || $0.what.hasPrefix("disappear row") }
+        out.append("TOTALS " + totals.sorted { $0.key < $1.key }.map { "\($0.key) x\($0.value)" }.joined(separator: ", ")
+                   + "; row serials " + (rows.first.map { $0.what } ?? "-") + " .. " + (rows.last.map { $0.what } ?? "-"))
+        return out.prefix(70).joined(separator: "\n")
     }
 
     func testOnePieceOpensFromNowLaterDoneAndASearch() throws {
