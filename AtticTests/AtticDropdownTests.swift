@@ -3561,7 +3561,9 @@ extension AtticDropdownTests {
     /// runner and only after a 30 ms spin had ended on a loaded one (CI run
     /// 45966992872). The keyboard claim and the unfold's start are stamped as
     /// they happen, so the order is checked, not the runner's speed. The
-    /// arrow goes in as the unfold starts, by construction mid-unfold.
+    /// arrow goes in one main-queue hop after the unfold starts (the queue is
+    /// FIFO, so the reveal block has finished: `shown` and `revealed` are
+    /// stored), and its time is checked against the unfold's end.
     func testR13AnOpeningMenuTakesTheKeyboardBeforeItsUnfoldEnds() throws {
         let window = makeUnshownWindow()
         defer { window.close() }
@@ -3581,25 +3583,32 @@ extension AtticDropdownTests {
         let claims = presenter.stage.$focusRequest.sink { request in
             if request > 0, claimedAt == nil, window.firstResponder === presenter.host { claimedAt = clock() }
         }
-        // The unfold starts as `shown` turns true; the arrow goes in then.
+        // The unfold starts as `shown` turns true. `@Published` sends in
+        // willSet, before `shown` is stored, so the arrow waits one hop.
         var unfoldStartedAt: TimeInterval?
+        var arrowAt: TimeInterval?
         var arrowTaken = false
         let unfolds = presenter.stage.$shown.sink { shown in
             guard shown, unfoldStartedAt == nil else { return }
             unfoldStartedAt = clock()
-            arrowTaken = presenter.handleKey(down) == nil
+            DispatchQueue.main.async {
+                arrowAt = clock()
+                arrowTaken = presenter.stage.shown && presenter.handleKey(down) == nil
+            }
         }
         defer { claims.cancel(); unfolds.cancel() }
         presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
         XCTAssertIdentical(window.firstResponder, presenter.host, "the host has the keyboard as the card opens")
-        wait(timeout: 10) { claimedAt != nil && unfoldStartedAt != nil && presenter.stage.shown }
+        wait(timeout: 10) { claimedAt != nil && arrowAt != nil }
         XCTAssertTrue(presenter.stage.shown, "the unfold is under way")
         let claimed = try XCTUnwrap(claimedAt, "the host claimed the keyboard")
         let started = try XCTUnwrap(unfoldStartedAt, "the unfold started")
-        XCTAssertLessThan(claimed, started + AtticDropdownReveal.openDuration, "the keyboard is claimed before the unfold ends")
+        let unfoldEnds = started + AtticDropdownReveal.openDuration
+        XCTAssertLessThan(claimed, unfoldEnds, "the keyboard is claimed before the unfold ends")
+        XCTAssertLessThan(try XCTUnwrap(arrowAt, "the arrow went in"), unfoldEnds, "the arrow goes in mid-unfold")
         XCTAssertTrue(arrowTaken, "the card takes the arrow mid-unfold")
         XCTAssertEqual(keys, [125])
-        presenter.close(restoreFocus: false, immediately: true)
     }
 
     /// O14-08: a menu's shortcut column shows only while ⌥ is held; other
