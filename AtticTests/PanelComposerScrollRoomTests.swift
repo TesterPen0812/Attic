@@ -49,13 +49,12 @@ final class PanelComposerScrollRoomTests: XCTestCase {
 
     // MARK: First frame
 
-    /// Notes' library, built behind Tasks with the card closed, takes the
-    /// room while hidden in one layout: the scroll view a switch shows is
-    /// the same object, so its first shown margin is the hidden one.
-    /// Calendar's page sits in a kept host of its own (PR 80), which does no
-    /// work while hidden: the room's change is held there, so the grid's
-    /// margin does not move behind Tasks, and the first frame shown takes the
-    /// room as it is then (pr80-hidden-inputs.md, "Card room", run 45915810295).
+    /// Notes' library and Calendar's grid, built behind Tasks with the card
+    /// closed. Each page sits in a kept host of its own (Calendar, PR 80;
+    /// Notes, page-host-notes-draw), which does no work while hidden: the
+    /// room's change is held there, so the margin does not move behind
+    /// Tasks, and the first frame shown takes the room as it is then
+    /// (pr80-hidden-inputs.md, "Card room", run 45915810295).
     ///
     /// The user's path: the card is open on Tasks and they switch to
     /// Calendar (its tab). The switch closes the card at once, so Calendar's
@@ -78,10 +77,9 @@ final class PanelComposerScrollRoomTests: XCTestCase {
             let gridClosed = grid.contentInsets.bottom
 
             rig.room.set(height: cardHeight, open: true)
-            rig.host.layoutSubtreeIfNeeded() // one layout, no run-loop turn
-            XCTAssertEqual(library.contentInsets.bottom - libraryClosed, extra, accuracy: 1,
-                           "the hidden library's margin already has the card's room")
             settle(rig.host, times: 3)
+            XCTAssertEqual(library.contentInsets.bottom, libraryClosed, accuracy: 0.5,
+                           "harness: Notes' hidden library holds the room's change until it is shown (page-host-notes-draw)")
             XCTAssertEqual(grid.contentInsets.bottom, gridClosed, accuracy: 0.5,
                            "harness: Calendar's hidden grid holds the room's change until it is shown (PR 80)")
 

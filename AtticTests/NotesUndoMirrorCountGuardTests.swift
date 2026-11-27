@@ -431,14 +431,18 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
                 XCTAssertGreaterThan(padded, 0, "\(label): the notices took the new clearance")
             }
             // Liveness (PR52 B3): a new layout (a corner change; a size
-            // change no longer makes one) reaches the hidden Canvas host, so
-            // its counter and the shell's probe run.
-            let canvasBefore = PanelCanvasNoticeAwareHost.bodyEvaluations
+            // change no longer makes one) runs the shell's probe. Draw sits
+            // in a kept host of its own (page-host-notes-draw), as Calendar:
+            // hidden, it takes no new root, so the Canvas host's counter is
+            // shown live by showing Draw, which takes the change it held.
             let shellBefore = shellRuns
             assertCalendarColumnsAreLive(rig)
+            let canvasBefore = PanelCanvasNoticeAwareHost.bodyEvaluations
+            _ = measure(rig, "Draw shown after the corner change", { rig.state.selectSection(.canvas) },
+                        saved: { rig.state.selectedSection == .canvas })
             let canvasLive = PanelCanvasNoticeAwareHost.bodyEvaluations - canvasBefore
             print("CLEARANCE_SHELL_COUNTS panel corner changed shell=\(shellRuns - shellBefore) canvasHost=\(canvasLive)")
-            XCTAssertGreaterThan(canvasLive, 0, "harness: a new layout runs the hidden Canvas host")
+            XCTAssertGreaterThan(canvasLive, 0, "harness: Draw shown, the Canvas host runs")
             #if ATTIC_LOCAL_ONLY
             XCTAssertGreaterThan(shellRuns - shellBefore, 0, "harness: a new layout runs the shell")
             #endif

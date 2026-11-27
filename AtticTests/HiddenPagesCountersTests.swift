@@ -940,11 +940,12 @@ final class HiddenPagesCountersTests: XCTestCase {
         }
         switch page {
         case .tasks:
-            // Tasks' tab hosts only: Calendar's page sits in a kept host of
-            // its own, which keeps its settled size while hidden (PR 80).
+            // Tasks' tab hosts only: Calendar, Notes and Draw each sit in a
+            // kept host of their own, which keeps its settled size while
+            // hidden (PR 80; speed/page-host-notes-draw).
             return find("KeptContentContainer", in: rig.content).filter { view in
                 guard let host = (view as? KeptContentContainer)?.host else { return false }
-                return !view.isHiddenOrHasHiddenAncestor && PanelPageKeyboard.membership(of: host) != .page(.calendar)
+                return !view.isHiddenOrHasHiddenAncestor && Self.isTasksHost(host)
             }.map(\.bounds.width)
         case .notes: return find("NotesPageSwipeView", in: rig.content).map(\.bounds.width)
         case .calendar: return find("CalendarPageInput5Input", in: rig.content).map(\.bounds.width)
@@ -1387,7 +1388,12 @@ final class HiddenPagesCountersTests: XCTestCase {
             XCTAssertGreaterThan(actions, 0, "harness: the hidden Notes library built its rows' •••")
             XCTAssertEqual(notesRows, 0, "a Notes row's body holds the •••'s focus state (a reader re-checked per click)")
 
-            // The control: the keyboard drives, and the rings hold their focus state again.
+            // The control: the keyboard drives, and the rings hold their
+            // focus state again. Read on a shown page: hidden, Notes, Draw and
+            // Calendar sit in kept hosts that hold their environment, so a
+            // hidden page's rings no longer re-run (page-host-notes-draw).
+            show(.notes, rig)
+            AtticFocusReaderCensus.rings = [:]
             tracker.noteKeyboardNavigation()
             pump(rig.content, rig.panel)
             let keyboardRings = AtticFocusReaderCensus.rings.values.filter(\.keyboardFocusVisible).count
@@ -1636,7 +1642,8 @@ extension HiddenPagesCountersTests {
     }
 
     /// Kept behaviour (criterion 5): a hidden page keeps the drag's start
-    /// size through every step and takes the final size on release.
+    /// size through every step and has the final size in its first frame
+    /// shown after the release.
     func testRZ3HiddenPagesKeepTheDragsStartSizeAndCatchUpOnRelease() throws {
         try withRig { rig in
             let hidden = [PanelPage.notes, .calendar, .canvas]
@@ -1660,24 +1667,18 @@ extension HiddenPagesCountersTests {
             }
             release(rig)
             let grown = dragSize(start, step: Self.dragSteps).width - start.width
-            // Calendar's kept host is not laid out while hidden (PR 80): it
-            // takes the final size in its first frame shown, read below.
-            let laidOutHidden = hidden.filter { $0 != .calendar }
-            waitForTestOperation("the hidden pages take the final size") {
-                oneFrame(rig)
-                return laidOutHidden.allSatisfy { page in
-                    let now = widths(of: page, rig)
-                    return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - grown) < 0.5 }
-                }
-            }
+            oneFrame(rig)
             XCTAssertNil(rig.state.retainedPageSizeDuringLiveResize)
-            assertFirstShownFrameTookTheSize(.calendar, rig, before: before, grown: grown, "RZ3")
+            // Each hidden page sits in a kept host that is not laid out while
+            // hidden (Calendar, PR 80; Notes and Draw, page-host-notes-draw):
+            // it takes the final size in its first frame shown.
+            for page in hidden { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: grown, "RZ3") }
         }
     }
 
     /// Criterion 6: a size change that is not our drag (a reveal, a display
     /// change, a programmatic frame; `windowDidResize`) still reaches the
-    /// hidden pages.
+    /// hidden pages, by their first frame shown.
     func testRZ4ASizeChangeOutsideADragReachesTheHiddenPages() throws {
         try withRig { rig in
             let hidden = [PanelPage.notes, .calendar, .canvas]
@@ -1688,17 +1689,11 @@ extension HiddenPagesCountersTests {
             }
             let start = rig.state.panelSize
             resize(rig, to: CGSize(width: start.width + 24, height: start.height + 12))
-            // Calendar's kept host is not laid out while hidden (PR 80): it
-            // takes the size in its first frame shown, read below.
-            let laidOutHidden = hidden.filter { $0 != .calendar }
-            waitForTestOperation("the hidden pages take a size written outside a drag") {
-                oneFrame(rig)
-                return laidOutHidden.allSatisfy { page in
-                    let now = widths(of: page, rig)
-                    return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - 24) < 0.5 }
-                }
-            }
-            assertFirstShownFrameTookTheSize(.calendar, rig, before: before, grown: 24, "RZ4A")
+            oneFrame(rig)
+            // Each hidden page sits in a kept host that is not laid out while
+            // hidden (Calendar, PR 80; Notes and Draw, page-host-notes-draw):
+            // it takes the size in its first frame shown.
+            for page in hidden { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: 24, "RZ4A") }
         }
     }
 
@@ -1740,7 +1735,16 @@ extension HiddenPagesCountersTests {
         #if ATTIC_LOCAL_ONLY
         try withRig { rig in
             var handed: [CGFloat] = []
-            PanelInvalidationProbe.rowPageWidth = { row, width in if row == "notes-editor" { handed.append(width) } }
+            var staleStack: [String] = []
+            var watchStale: CGFloat?
+            PanelInvalidationProbe.rowPageWidth = { row, width in
+                guard row == "notes-editor" else { return }
+                handed.append(width)
+                // ND diagnostic (page-host-notes-draw, temporary): where a stale width is handed from.
+                if let stale = watchStale, abs(width - stale) < 0.5, staleStack.isEmpty {
+                    staleStack = Thread.callStackSymbols.prefix(40).map { String($0.dropFirst(4).prefix(150)) }
+                }
+            }
             defer { PanelInvalidationProbe.rowPageWidth = nil }
             rig.state.switchPage(to: .notes, motion: .instant)
             pump(rig.content, rig.panel, seconds: 1.0)
@@ -1766,10 +1770,12 @@ extension HiddenPagesCountersTests {
             }
             let live = dragSize(start, step: Self.dragSteps).width
             handed.removeAll()
+            watchStale = start.width
             rig.state.switchPage(to: .notes, motion: .instant)
             oneFrame(rig)
             XCTAssertEqual(try XCTUnwrap(handed.last, "shown mid-drag, the row is laid out in the first frame"), live, accuracy: 0.5,
                            "shown mid-drag, the row has the window's width in its first frame")
+            for line in staleStack { print("ND_STALE " + line) }
             XCTAssertEqual(handed.filter { abs($0 - live) >= 0.5 }, [], "shown mid-drag, the row was handed a stale width")
             release(rig)
             pump(rig.content, rig.panel)
@@ -1805,12 +1811,19 @@ extension HiddenPagesCountersTests {
     /// list too: the walk found it first and scrolled the hidden Calendar
     /// itself (run 45923411211, `C9GEO`: the hidden host's agenda clip went
     /// 14, 28 … 126 with the steps).
+    /// A Tasks tab host: a kept host that carries no other page's tag
+    /// (Calendar's, Notes' and Draw's hosts carry theirs).
+    private static func isTasksHost(_ host: KeptContentHostingView) -> Bool {
+        guard let membership = PanelPageKeyboard.membership(of: host) else { return true }
+        return membership == .page(.tasks)
+    }
+
     private func tasksList(_ rig: Rig) throws -> NSScrollView {
         var found: [NSScrollView] = []
         func walk(_ view: NSView) {
             if let scroll = view as? NSScrollView, !scroll.isHiddenOrHasHiddenAncestor,
                let host = KeptContentHostingView.enclosing(scroll),
-               PanelPageKeyboard.membership(of: host) != .page(.calendar),
+               Self.isTasksHost(host),
                let document = scroll.documentView, document.bounds.height > scroll.contentView.bounds.height + 200 {
                 found.append(scroll)
             }
@@ -2463,7 +2476,7 @@ extension HiddenPagesCountersTests {
                 rig.panel.makeKey()
                 rig.state.panelDidReveal()
                 pump(rig.content, rig.panel)
-                func go(_ page: PanelPage) throws {
+                @MainActor func go(_ page: PanelPage) throws {
                     switch path {
                     case .shortcut:
                         let (code, digit) = try XCTUnwrap(Self.switchDigits[page])
@@ -2544,7 +2557,7 @@ extension HiddenPagesCountersTests {
         rig.panel.makeFirstResponder(responder)
         pump(rig.content, rig.panel)
         func count(_ element: Any, depth: Int) -> Int {
-            guard depth < 14, let children = (element as? NSAccessibilityProtocol)?.accessibilityChildren?() else { return 0 }
+            guard depth < 14, let children = (element as? NSAccessibilityProtocol)?.accessibilityChildren() else { return 0 }
             return children.reduce(children.count) { $0 + count($1, depth: depth + 1) }
         }
         return (keys, count(rig.content, depth: 0))
