@@ -396,7 +396,7 @@ struct AtticPanelView: View {
         case .notes:
             // In a host of its own, as Calendar (pr80-hidden-inputs.md, "Notes and Draw").
             PanelPageKeptHost(page: .notes, isCurrent: page == currentPage, transit: uiState.pageTransit,
-                              laysOutOnLeave: true) {
+                              laysOutOnLeave: false) {
                 NotesPageHost(
                     noteStore: noteStore,
                     taskStore: store,
@@ -408,7 +408,6 @@ struct AtticPanelView: View {
             }
             // A preference does not cross Notes' host: the shell sets Notes'
             // clearance here, from the same layout (pr80-hidden-inputs.md).
-            .preference(key: PanelPageNoticeClearancePreferenceKey.self, value: NotesEditorPage.noticeClearance(for: layout))
             .atticFocusCheckProbe("notes")
             .transition(pageTransition(.notes))
         case .calendar:

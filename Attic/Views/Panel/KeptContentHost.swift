@@ -60,7 +60,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
             guard isDrawn != oldValue else { return }
             guard isDrawn else {
                 // A host made hidden has not laid out yet: its first pass runs anyway.
-                if takesTheHideTurn, window != nil { openTheHideTurn() }
+                if window != nil { openTheHideTurn() }
                 return
             }
             hideTurnPassesLeft = 0
@@ -91,7 +91,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         hideTurnPassesLeft = Self.hideTurnPasses
         guard !hideTurnIsOpen else { return }
         hideTurnIsOpen = true
-        let activities = CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.afterWaiting.rawValue
+        let activities = CFRunLoopActivity.beforeWaiting.rawValue
         let observer = CFRunLoopObserverCreateWithHandler(nil, activities, false, CFIndex.max) { [weak self] _, _ in
             MainActor.assumeIsolated {
                 self?.hideTurnPassesLeft = 0
