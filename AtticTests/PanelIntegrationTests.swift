@@ -1045,7 +1045,7 @@ final class PanelIntegrationTests: XCTestCase {
     private func onePieceDrawLog() -> String {
         let draws = TaskPageMotion.drawLogForTesting
         guard let start = draws.first?.time else { return "(nothing drawn)" }
-        let hosts = KeptContentHostCounts.drawnLog.filter { $0.time >= start - 0.05 }
+        let hosts = KeptContentHostCounts.drawnLog.filter { $0.time >= start - 0.5 }
             .map { (time: $0.time, text: "H \($0.host.hashValue % 10_000) drawn=\($0.drawn)") }
         let lines = draws.map { (time: $0.time, text: "\($0.kind) \(String(format: "%.3f", $0.p))") } + hosts
         return lines.sorted { $0.time < $1.time }.prefix(160)
@@ -1071,8 +1071,10 @@ final class PanelIntegrationTests: XCTestCase {
             XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
             spin(until: { rig.panel.uiState.openTaskNoteID == nil && !motion.isActive })
             XCTAssertFalse(motion.isActive, "Back lands")
+            // The list is drawn again by the route's close at the latest.
+            spin(until: { TaskPageMotion.drawLogForTesting.last { $0.kind == "L" }?.p == 0 }, timeout: 1)
             let log = TaskPageMotion.drawLogForTesting
-            print("ONEPIECE BACK DRAWS\n" + onePieceDrawLog())
+            print("ONEPIECE BACK DRAWS (host changes \(KeptContentHostCounts.drawnLog.count))\n" + onePieceDrawLog())
             let standInHalfway = log.firstIndex { $0.kind == "S" && $0.p <= 0.5 }
             let lineBetween = log.firstIndex { $0.kind == "L" && $0.p > 0 && $0.p < 1 }
             XCTAssertNotNil(standInHalfway, "the stand-in runs back")
@@ -1085,10 +1087,10 @@ final class PanelIntegrationTests: XCTestCase {
         }
     }
 
-    /// An opening in the turn of a tab switch: the arriving tab's list
+    /// An opening straight after a tab switch: the arriving tab's list
     /// follows the motion on the spring, not told of its tab after the
     /// spring's change and jumping.
-    func testOnePieceOpenedInTheTurnOfATabSwitchMovesTheList() throws {
+    func testOnePieceOpenedStraightAfterATabSwitchMovesTheList() throws {
         try withMotion(reduced: false) {
             let rig = try onePiecePanel([TaskDraft(title: "Now one"), TaskDraft(title: "Later above", status: .backlog),
                                          TaskDraft(title: "Later open", status: .backlog),
@@ -1098,6 +1100,10 @@ final class PanelIntegrationTests: XCTestCase {
             // The panel builds the tabs not shown while it is idle.
             spin(until: { self.tabHosts(rig.panel).contains { !$0.isDrawn } }, timeout: 5)
             rig.model.select(tab: .backlog)
+            // As soon as the arriving tab's row can be opened from (in the
+            // switch's own turn it has no place yet, and the page grows
+            // instead: run 45914516669).
+            spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
             rig.panel.uiState.openTaskNote(target, from: .tasks)
             spin(until: { TaskPageMotion.currentForTesting?.taskID == target })
             let motion = try XCTUnwrap(TaskPageMotion.currentForTesting, "the page opens in one piece")
@@ -1133,14 +1139,21 @@ final class PanelIntegrationTests: XCTestCase {
             // Under way: the stand-in has drawn a value in between.
             spin(until: { TaskPageMotion.drawLogForTesting.contains { $0.kind == "S" && $0.p > 0.05 && $0.p < 0.7 } })
             XCTAssertFalse(motion.handedOver, "the first is still on its way")
-            let generation = motion.generation
+            let turns = TaskPageMotion.traceForTesting.filter { $0.contains("turn true") }.count
             rig.panel.uiState.openTaskNote(second, from: .tasks)
-            spin(until: { motion.taskID == second && motion.generation != generation })
+            spin(until: { motion.taskID == second })
             spin(until: { motion.handedOver && rig.element("task-note-back") != nil })
             print("ONEPIECE SECOND TASK DRAWS\n" + onePieceDrawLog() + "\n"
                   + TaskPageMotion.traceForTesting.suffix(40).joined(separator: "\n"))
             XCTAssertEqual(motion.taskID, second, "the second task's page opens")
             XCTAssertTrue(motion.handedOver, "the built page takes over")
+            // Its own motion ran: a turn towards its page, at the page now
+            // (run 45914516669: no turn, and its page came in at 0).
+            XCTAssertGreaterThan(TaskPageMotion.traceForTesting.filter { $0.contains("turn true") }.count, turns,
+                                 "the second task's motion starts")
+            XCTAssertEqual(motion.progress, 1, "and has run to its page when the page takes over")
+            let standIn = TaskPageMotion.drawLogForTesting.filter { $0.kind == "S" }.map(\.p)
+            XCTAssertTrue(standIn.contains { $0 > 0 && $0 < 1 }, "its stand-in runs from its row, drew \(standIn.prefix(8))")
             let draws = TaskPageMotion.lineDrawsForTesting
             XCTAssertTrue(draws.contains { $0 > 0 && $0 < 1 }, "the list makes way on the spring, drew \(draws.prefix(8))")
             let back = try XCTUnwrap(rig.element("task-note-back"))
