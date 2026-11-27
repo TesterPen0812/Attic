@@ -24,6 +24,12 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         didSet {
             guard isInteractive != oldValue else { return }
             if isInteractive {
+                #if DEBUG
+                if probeTarget, Self.probeArm != nil, isDrawn {
+                    holdsLayout = false
+                    if owesLayout { owesLayout = false; super.needsLayout = true }
+                }
+                #endif
                 cameIntoUse = true
                 claimKeyboard()
                 joinAccessibilityAfterTheFirstFrame()
@@ -60,24 +66,37 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     private var holdsLayout = false
     private var owesLayout = false
     #if DEBUG
-    /// ND probe (temporary): an owed layout is let through once at hide.
-    static var probeOwedOnce = false
-    static var probeInTurn = 0
-    static var probeLate = 0
-    static var probeOwesAfterSet = false
-    private var probeAllowance = 0
-    var debugHold: String { "drawn=\(isDrawn) holds=\(holdsLayout) owes=\(owesLayout) needs=\(super.needsLayout)" } // ND diagnostic (temporary)
+    /// ND knock-out probe (temporary). Applies to a `laysOutOnLeave` host only.
+    struct ProbeArm { var hold: Bool; var hidden: Bool; var drives: Bool }
+    static var probeArm: ProbeArm?
+    static var probeRan = 0
+    static var probeHeld = 0
+    static var probeDriven = 0
+    var probeTarget = false
+    var debugHold: String { "drawn=\(isDrawn) interactive=\(isInteractive) holds=\(holdsLayout) owes=\(owesLayout)" }
+    private var engagesHold: Bool {
+        guard probeTarget, let arm = Self.probeArm else { return !isDrawn }
+        if !arm.hold { return false }
+        return arm.hidden ? !isDrawn : !isInteractive
+    }
+    #else
+    private var engagesHold: Bool { !isDrawn }
     #endif
 
     override var needsLayout: Bool {
         get { super.needsLayout }
         set {
             #if DEBUG
-            if newValue, holdsLayout, probeAllowance > 0 {
-                probeAllowance -= 1
-                Self.probeLate += 1
+            if newValue, holdsLayout, probeTarget, let arm = Self.probeArm, arm.drives, Self.probeDriven < 3 {
+                Self.probeDriven += 1
                 holdsLayout = false
                 super.needsLayout = true
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.layoutSubtreeIfNeeded()
+                    self.displayIfNeeded()
+                    if self.engagesHold { self.holdsLayout = true }
+                }
                 return
             }
             #endif
@@ -230,9 +249,6 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     func setRoot(_ root: AnyView, laidOut: Bool, under transaction: Transaction) {
         // A hidden root is taken in one pass (`isDrawn`).
         if !isDrawn { holdsLayout = false }
-        #if DEBUG
-        if !isDrawn { probeAllowance = Self.probeOwedOnce ? 1 : 0 }
-        #endif
         withTransaction(transaction) {
             rootView = root
             if laidOut, window != nil {
@@ -240,19 +256,6 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
                 KeptContentHostCounts.laidOutInSet += 1
                 #endif
                 layoutSubtreeIfNeeded()
-                #if DEBUG
-                if !isDrawn {
-                    Self.probeOwesAfterSet = owesLayout
-                    if probeAllowance > 0, owesLayout {
-                        probeAllowance -= 1
-                        Self.probeInTurn += 1
-                        holdsLayout = false
-                        owesLayout = false
-                        super.needsLayout = true
-                        layoutSubtreeIfNeeded()
-                    }
-                }
-                #endif
             }
         }
     }
@@ -268,10 +271,16 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         // AppKit reached a host that holds (a request it marked itself).
         if holdsLayout {
             owesLayout = true
+            #if DEBUG
+            if probeTarget { Self.probeHeld += 1 }
+            #endif
             return
         }
         AtticOverlayHierarchy.layoutPass { super.layout() }
-        if !isDrawn, !bounds.isEmpty { holdsLayout = true }
+        #if DEBUG
+        if probeTarget { Self.probeRan += 1 }
+        #endif
+        if engagesHold, !bounds.isEmpty { holdsLayout = true }
     }
 
     /// HB-09 (host-boundary.md §5.1, hb09-key-note §1): whether a focus
@@ -474,6 +483,14 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    /// `drawn`, or drawn for the ND probe's not-hidden arms (temporary).
+    private var shown: Bool {
+        #if DEBUG
+        if laysOutOnLeave, let arm = KeptContentHostingView.probeArm, !arm.hidden { return true }
+        #endif
+        return drawn
+    }
+
     func makeNSView(context: Context) -> KeptContentContainer {
         let container = KeptContentContainer()
         let host = KeptContentHostingView(rootView: root(context))
@@ -484,6 +501,9 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         host.frame = container.bounds
         host.claimsKeyboard = claimsKeyboard
         if let page { PanelPageKeyboard.tag(host, .page(page)) }
+        #if DEBUG
+        host.probeTarget = laysOutOnLeave
+        #endif
         container.host = host
         container.addSubview(host)
         context.coordinator.hiddenRootSet = !drawn
@@ -496,6 +516,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
 
     func updateNSView(_ container: KeptContentContainer, context: Context) {
         guard let host = container.host else { return }
+        let drawn = shown
         let coordinator = context.coordinator
         #if DEBUG
         KeptContentHostCounts.update(drawn: drawn)
@@ -537,7 +558,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         // A new root brings its own values: the environment a hidden root
         // handed its content is not handed to the next one.
         context.coordinator.hold.output = nil
-        let forwarded = KeptEnvironment(source: context.environment, hold: context.coordinator.hold, holding: !drawn)
+        let forwarded = KeptEnvironment(source: context.environment, hold: context.coordinator.hold, holding: !shown)
         // Inside the forwarded environment, which would replace it.
         let known = content().environment(\.keptHost, context.coordinator.reference)
         if let space {

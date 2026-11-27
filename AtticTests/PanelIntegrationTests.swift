@@ -1252,6 +1252,48 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(session.engine.document(), before, "a queued slash click cannot insert on hidden Notes")
     }
 
+    // ND knock-out probe (temporary): the route test in four arms.
+    func testNDProbeArmAHoldOffHidden() async throws { try await ndRouteProbe("A", .init(hold: false, hidden: true, drives: false)) }
+    func testNDProbeArmBHoldOnNotHidden() async throws { try await ndRouteProbe("B", .init(hold: true, hidden: false, drives: false)) }
+    func testNDProbeArmCHoldOffNotHidden() async throws { try await ndRouteProbe("C", .init(hold: false, hidden: false, drives: false)) }
+    func testNDProbeArmDHoldOnHiddenDriven() async throws { try await ndRouteProbe("D", .init(hold: true, hidden: true, drives: true)) }
+
+    private func ndRouteProbe(_ name: String, _ arm: KeptContentHostingView.ProbeArm) async throws {
+        KeptContentHostingView.probeArm = arm
+        defer { KeptContentHostingView.probeArm = nil }
+        let (panel, _, _) = try await followupNotes()
+        let task = try XCTUnwrap(panel.store.commit([TaskDraft(title: "Task note")])?.first)
+        panel.uiState.openTaskNote(task.id, from: .notes, backTitle: "Back to Notes")
+        spin(until: { panel.noteDraft.pages.taskNotePresenter?.host.textView.window != nil })
+        let presenter = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter)
+        let editor = presenter.host.textView
+        XCTAssertNotNil(editor.window)
+        var chain: [String] = []
+        var walker: NSView? = editor
+        while let current = walker { chain.append(String("\(type(of: current))".prefix(48))); walker = current.superview }
+        KeptContentHostingView.probeRan = 0
+        KeptContentHostingView.probeHeld = 0
+        KeptContentHostingView.probeDriven = 0
+        TaskNoteHostRepresentable.probeDismantles = 0
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        let started = CACurrentMediaTime()
+        func at() -> String { "\(Int((CACurrentMediaTime() - started) * 1000))ms:window=\(editor.window != nil)" }
+        var marks = ["switch-turn:window=\(editor.window != nil)"]
+        CFRunLoopRunInMode(.defaultMode, 0.017, true)
+        marks.append("first-frame@" + at())
+        while CACurrentMediaTime() - started < 0.04 { CFRunLoopRunInMode(.defaultMode, 0.005, true) }
+        marks.append("+40@" + at())
+        while CACurrentMediaTime() - started < 0.4 { CFRunLoopRunInMode(.defaultMode, 0.01, true) }
+        marks.append("+400@" + at())
+        let host = (chain.isEmpty ? nil : { () -> KeptContentHostingView? in
+            var v: NSView? = presenter.host.textView.enclosingScrollView
+            while let c = v, !(c is KeptContentHostingView) { v = c.superview }
+            return v as? KeptContentHostingView }())
+        print("ND_ARM \(name) \(marks.joined(separator: " ")) ran=\(KeptContentHostingView.probeRan) held=\(KeptContentHostingView.probeHeld) driven=\(KeptContentHostingView.probeDriven) dismantles=\(TaskNoteHostRepresentable.probeDismantles) host=\(host?.debugHold ?? "none") chain=\(chain.suffix(9))")
+        followupSwitch(panel, to: .notes)
+        spin(until: { editor.window != nil })
+    }
+
     func testFollowupNotesTaskRouteKeepsItsWarmOwnerButUnmountsNativeInput() async throws {
         let (panel, _, _) = try await followupNotes()
         let task = try XCTUnwrap(panel.store.commit([TaskDraft(title: "Task note")])?.first)
@@ -1260,28 +1302,10 @@ final class PanelIntegrationTests: XCTestCase {
         let presenter = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter)
         let editor = presenter.host.textView
         XCTAssertNotNil(editor.window)
-        let bodiesBefore = NotesPageHost.bodyEvaluations
-        // ND probe (temporary): the owed layout let through once at hide.
-        KeptContentHostingView.probeOwedOnce = ProcessInfo.processInfo.environment["ND_PROBE_OFF"] == nil
-        defer { KeptContentHostingView.probeOwedOnce = false }
-        KeptContentHostingView.probeInTurn = 0
-        KeptContentHostingView.probeLate = 0
-        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
-        var probe = ["switch-turn:window=\(editor.window != nil)"]
-        let started = CACurrentMediaTime()
-        for turn in 1...8 {
-            CFRunLoopRunInMode(.defaultMode, 0.017, true)
-            probe.append("t\(turn)@\(Int((CACurrentMediaTime() - started) * 1000))ms:window=\(editor.window != nil)")
-        }
-        print("ND_PROBE \(probe.joined(separator: " ")) owesAfterSet=\(KeptContentHostingView.probeOwesAfterSet) inTurn=\(KeptContentHostingView.probeInTurn) late=\(KeptContentHostingView.probeLate)")
-        spin(0.4)
+        followupSwitch(panel, to: .tasks)
         XCTAssertTrue(panel.uiState.builtPages.contains(.notes))
         // The outgoing page's spring may retain its native hierarchy until it settles.
         spin(until: { editor.window == nil })
-        // ND diagnostic (temporary).
-        var hostView: NSView? = editor
-        while let v = hostView, !(v is KeptContentHostingView) { hostView = v.superview }
-        print("ND_ROUTE2 bodies=\(NotesPageHost.bodyEvaluations - bodiesBefore) state=\(NotesPageHost.lastContentState) host=\((hostView as? KeptContentHostingView)?.debugHold ?? "none") laidOutInSet=\(KeptContentHostCounts.laidOutInSet)")
         XCTAssertNil(editor.window, "the task-note route retains its original native unmount boundary")
         XCTAssertNotNil(presenter.lease, "the pre-existing warm workspace owner stays retained")
         followupSwitch(panel, to: .notes)

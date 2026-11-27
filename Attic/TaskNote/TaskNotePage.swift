@@ -1255,7 +1255,13 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         context.coordinator.objects?.applyLook()
     }
 
+    #if DEBUG
+    static var probeDismantles = 0 // ND probe (temporary)
+    #endif
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        #if DEBUG
+        probeDismantles += 1
+        #endif
         coordinator.invalidate()
     }
 }
