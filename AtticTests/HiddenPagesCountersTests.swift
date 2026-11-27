@@ -2383,13 +2383,11 @@ extension HiddenPagesCountersTests {
         log.append("key:" + last)
         var shellSeen = Self.shellRuns > shellBefore
         if shellSeen { log.append("key:SHELL") }
+        // On purpose, turn by turn: the log is of what each run-loop turn
+        // changes (ND2), so this cannot wait on a condition.
         for turn in 0..<40 {
-            if turn < 20 {
-                CFRunLoopRunInMode(.defaultMode, 0, true)
-            } else {
-                frame(rig)
-                CFRunLoopRunInMode(.defaultMode, 0.005, true)
-            }
+            if turn >= 20 { frame(rig) }
+            CFRunLoopRunInMode(.defaultMode, turn < 20 ? 0 : 0.005, true)
             let label = turn < 20 ? "t\(turn)" : "f\(turn - 20)"
             if !shellSeen, Self.shellRuns > shellBefore { shellSeen = true; log.append("\(label):SHELL") }
             let now = state()
@@ -2626,14 +2624,14 @@ extension HiddenPagesCountersTests {
                 let before = KeptContentHostCounts.layoutsByHost[id, default: 0]
                 let passesBefore = KeptContentHostCounts.passesOfTheHide[id, default: 0]
                 rig.state.selectSection(.tasks)
-                let deadline = Date().addingTimeInterval(2)
-                repeat {
-                    CFRunLoopRunInMode(.defaultMode, 0.005, true)
+                waitForTestOperation("\(page) is hidden", timeout: 2) {
                     rig.content.layoutSubtreeIfNeeded()
                     rig.panel.displayIfNeeded()
-                } while host.isDrawn && Date() < deadline
+                    return !host.isDrawn
+                }
                 XCTAssertFalse(host.isDrawn, "harness: \(page) was hidden")
-                // The hide's turn ends (the run loop waits once).
+                // On purpose: the hide's turn ends where the run loop waits, so
+                // the loop waits once before the resize (ND7).
                 CFRunLoopRunInMode(.defaultMode, 0.02, false)
                 let atHide = KeptContentHostCounts.layoutsByHost[id, default: 0] - before
                 let views = snapshot(rig)

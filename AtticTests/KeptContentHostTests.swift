@@ -733,6 +733,14 @@ final class KeptContentHostTests: XCTestCase {
         return (host, window)
     }
 
+    /// One run of the main run loop that waits, on purpose: the hide's turn
+    /// ends where the loop waits or wakes, which is what the hide-turn tests
+    /// (`testAHidingHostTakesItsTurnsPassesThenHoldsAndCountsTheNext`,
+    /// `testAHideMadeAsTheLoopIsAboutToWaitEndsBeforeTheNextWakesWork`) test.
+    private func waitOnce(_ seconds: CFTimeInterval) {
+        CFRunLoopRunInMode(.defaultMode, seconds, false)
+    }
+
     /// Hides `host` and runs its hidden root's pass, as `setRoot` does.
     private func hide(_ host: KeptContentHostingView) {
         host.isDrawn = false
@@ -760,7 +768,7 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertEqual(KeptContentHostCounts.heldPastTheHide[id, default: 0], 1, "the request past the cap was held and counted")
         XCTAssertFalse(host.needsLayout, "the request past the cap is owed, not run")
 
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        waitOnce(0.05)
         host.needsLayout = true
         XCTAssertFalse(host.needsLayout, "after the hide's turn, the host holds")
         XCTAssertEqual(KeptContentHostCounts.passesOfTheHide[id, default: 0], KeptContentHostingView.hideTurnPasses, "no pass after the turn")
@@ -810,7 +818,7 @@ final class KeptContentHostTests: XCTestCase {
             }
         }
         CFRunLoopAddTimer(CFRunLoopGetMain(), timer, .commonModes)
-        CFRunLoopRunInMode(.defaultMode, 0.2, false)
+        waitOnce(0.2)
         CFRunLoopTimerInvalidate(timer)
         if !hidden { CFRunLoopRemoveObserver(CFRunLoopGetMain(), hider, .commonModes) }
         XCTAssertTrue(hidden && askedAfterWake, "harness: the host was hidden in the callout and a layout asked for after a wait")
