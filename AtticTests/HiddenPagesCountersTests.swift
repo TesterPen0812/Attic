@@ -2480,6 +2480,50 @@ extension HiddenPagesCountersTests {
         }
     }
 
+    /// A plain switch away from Calendar and from Notes: the layouts each
+    /// host takes from the switch until its hide's turn has ended (reported
+    /// against the trunk's rule), and a resize straight after that turn,
+    /// which neither host takes: no layout, no hidden view run.
+    func testND7APlainSwitchsHideLayoutsAndAResizeStraightAfter() throws {
+        try withRig { rig in
+            for page in [PanelPage.calendar, .notes] {
+                rig.state.selectSection(page.section)
+                pump(rig.content, rig.panel)
+                guard let host = keptHost(page, rig) else {
+                    XCTFail("ND7: \(page) sits in a kept host of its own")
+                    continue
+                }
+                let id = ObjectIdentifier(host)
+                let before = KeptContentHostCounts.layoutsByHost[id, default: 0]
+                rig.state.selectSection(.tasks)
+                let deadline = Date().addingTimeInterval(2)
+                repeat {
+                    CFRunLoopRunInMode(.defaultMode, 0.005, true)
+                    rig.content.layoutSubtreeIfNeeded()
+                    rig.panel.displayIfNeeded()
+                } while host.isDrawn && Date() < deadline
+                XCTAssertFalse(host.isDrawn, "harness: \(page) was hidden")
+                // The hide's turn ends (the run loop waits once).
+                CFRunLoopRunInMode(.defaultMode, 0.02, false)
+                let atHide = KeptContentHostCounts.layoutsByHost[id, default: 0] - before
+                let views = snapshot(rig)
+                let layouts = KeptContentHostCounts.layoutsByHost[id, default: 0]
+                let size = rig.state.panelSize
+                resize(rig, to: CGSize(width: size.width + 8, height: size.height + 4))
+                pump(rig.content, rig.panel)
+                let ran = Self.diff(snapshot(rig), views)
+                let resizeLayouts = KeptContentHostCounts.layoutsByHost[id, default: 0] - layouts
+                print("ND_HIDECOUNT \(page) switch_to_hide_end_layouts=\(atHide) resize_after_layouts=\(resizeLayouts) views=\(Self.line(ran))")
+                XCTAssertEqual(resizeLayouts, 0, "ND7: hidden, \(page)'s host was laid out by a resize straight after the switch")
+                for view in Self.hiddenPageViews[page, default: []] {
+                    XCTAssertEqual(ran[view, default: 0], 0, "ND7: \(page)'s \(view) ran while hidden through a resize straight after the switch")
+                }
+                resize(rig, to: size)
+                pump(rig.content, rig.panel)
+            }
+        }
+    }
+
     /// The first frame shown of the gate's common Notes paths: a note open
     /// in the editor changed in the store while Notes was hidden (as the
     /// composer's or the agent's write lands), and a note opened from Tasks

@@ -46,9 +46,21 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// host is marked for layout in the update that draws it, so the pass
     /// before its first frame takes the current size, environment and root
     /// together.
+    ///
+    /// The hold starts when the hide has settled: in the turn the host stops
+    /// being drawn, it takes up to `hideTurnPasses` layouts its content asks
+    /// for after the hidden root's pass (a task note's editor leaving Notes
+    /// takes two: run 45984030524), then holds as above. A request past
+    /// them in that turn is held and counted (`KeptContentHostCounts.heldPastTheHide`).
     var isDrawn = true {
         didSet {
-            guard isDrawn != oldValue, isDrawn else { return }
+            guard isDrawn != oldValue else { return }
+            guard isDrawn else {
+                // A host made hidden has not laid out yet: its first pass runs anyway.
+                if window != nil { openTheHideTurn() }
+                return
+            }
+            hideTurnPassesLeft = 0
             holdsLayout = false
             if owesLayout {
                 owesLayout = false
@@ -59,11 +71,49 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// Hidden, and its hidden root laid out: a layout is owed, not run.
     private var holdsLayout = false
     private var owesLayout = false
+    static let hideTurnPasses = 3
+    /// Layouts the hide's turn may still take (0 once the turn has ended).
+    private var hideTurnPassesLeft = 0
+    private var hideTurnIsOpen = false
+
+    /// The turn ends where AppKit's own display pass of it has run: the
+    /// first time the main run loop is about to wait, after every other
+    /// observer of that moment (the display cycle among them).
+    private func openTheHideTurn() {
+        hideTurnPassesLeft = Self.hideTurnPasses
+        guard !hideTurnIsOpen else { return }
+        hideTurnIsOpen = true
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, false,
+                                                          CFIndex.max) { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                self?.hideTurnPassesLeft = 0
+                self?.hideTurnIsOpen = false
+            }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+    }
+
+    /// Whether a layout asked for while the host holds is one of the hide's
+    /// own (it then runs); otherwise it is owed.
+    private func takesAPassOfTheHide() -> Bool {
+        guard hideTurnPassesLeft > 0 else {
+            #if DEBUG
+            if hideTurnIsOpen { KeptContentHostCounts.heldPastTheHide += 1 }
+            #endif
+            return false
+        }
+        hideTurnPassesLeft -= 1
+        holdsLayout = false
+        #if DEBUG
+        KeptContentHostCounts.passesOfTheHide += 1
+        #endif
+        return true
+    }
 
     override var needsLayout: Bool {
         get { super.needsLayout }
         set {
-            if newValue, holdsLayout {
+            if newValue, holdsLayout, !takesAPassOfTheHide() {
                 owesLayout = true
                 return
             }
@@ -232,7 +282,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         KeptContentHostCounts.layout(interactive: isInteractive, host: self)
         #endif
         // AppKit reached a host that holds (a request it marked itself).
-        if holdsLayout {
+        if holdsLayout, !takesAPassOfTheHide() {
             owesLayout = true
             return
         }
@@ -471,10 +521,10 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         host.isDrawn = drawn
         // Two hidden updates in a row set nothing (as `TasksKeptPage`'s
         // equality, which this boundary carries across the host).
-        // A leaving page's root, and its first hidden one (the slide over),
-        // are laid out here, so its leave actions and removals apply where
-        // they did in the panel's own host (`laysOutOnLeave`).
-        let leaving = laysOutOnLeave && ((host.isInteractive && !interactive) || (!drawn && !coordinator.hiddenRootSet))
+        // A leaving page's root is laid out here, so its leave actions and
+        // removals apply where they did in the panel's own host
+        // (`laysOutOnLeave`).
+        let leaving = laysOutOnLeave && host.isInteractive && !interactive
         if drawn || !coordinator.hiddenRootSet {
             let root = root(context)
             host.setRoot(root, laidOut: leaving || Self.movesRows(from: coordinator.drawnRows, to: drawn ? rows : nil),
@@ -709,6 +759,10 @@ enum KeptContentHostCounts {
     }
 
     static var layouts = Split()
+    /// Layouts a hiding host took in its hide's turn, and requests it held
+    /// past `KeptContentHostingView.hideTurnPasses` in that turn.
+    static var passesOfTheHide = 0
+    static var heldPastTheHide = 0
     /// Root sets that laid the host out in their own pass.
     static var laidOutInSet = 0
     static var roots = Split()
@@ -725,6 +779,8 @@ enum KeptContentHostCounts {
     static func reset() {
         layoutsByHost = [:]
         layouts = Split()
+        passesOfTheHide = 0
+        heldPastTheHide = 0
         laidOutInSet = 0
         roots = Split()
         updates = Split()

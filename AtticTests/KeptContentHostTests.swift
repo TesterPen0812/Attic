@@ -721,6 +721,45 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertFalse(Host.movesRows(from: AnyHashable([1, 2]), to: nil), "a hidden root, or content with no rows")
     }
 
+    /// The hide's turn (`KeptContentHostingView.hideTurnPasses`): a host
+    /// that stops being drawn takes the layouts its content asks for in that
+    /// turn, up to the cap, then holds; a request past the cap is held and
+    /// counted. Once the turn has ended, a request is held and not counted.
+    func testAHidingHostTakesItsTurnsPassesThenHoldsAndCountsTheNext() {
+        let host = KeptContentHostingView(rootView: AnyView(Text("kept")))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 300), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        host.frame = window.contentLayoutRect
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        let passes = KeptContentHostCounts.passesOfTheHide
+        let held = KeptContentHostCounts.heldPastTheHide
+
+        host.isDrawn = false
+        host.needsLayout = true
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide, passes, "the hidden root's own pass is not one of the turn's")
+        for _ in 0..<(KeptContentHostingView.hideTurnPasses + 1) {
+            host.needsLayout = true
+            host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide - passes, KeptContentHostingView.hideTurnPasses,
+                       "the hide's turn took the layouts asked for, up to the cap")
+        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide - held, 1, "the request past the cap was held and counted")
+        XCTAssertFalse(host.needsLayout, "the request past the cap is owed, not run")
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        host.needsLayout = true
+        XCTAssertFalse(host.needsLayout, "after the hide's turn, the host holds")
+        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide - passes, KeptContentHostingView.hideTurnPasses, "no pass after the turn")
+        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide - held, 1, "a request after the turn is held as before, not counted")
+
+        host.isDrawn = true
+        XCTAssertTrue(host.needsLayout, "drawn again, the owed layout is asked for")
+    }
+
     func testANestedHostsOwnUpdateRunsInsideTheOverlayLayoutGuard() {
         let fixture = makeFixture()
         defer { fixture.window.close() }
