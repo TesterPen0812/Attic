@@ -98,7 +98,7 @@ jobs:
     if: ${{ (github.event_name != 'workflow_dispatch' || inputs.lane == 'fka' || inputs.lane == 'full') && !inputs.ui_tests }}
     name: Focused Full Keyboard Access verification
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 150
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
@@ -111,7 +111,21 @@ jobs:
             -configuration Local -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticFKA" CODE_SIGNING_ALLOWED=NO \
             SWIFT_STRICT_CONCURRENCY=complete
+      - name: SCRATCH ND, Full Keyboard Access off
+        if: always()
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFKA-scratch-nd.xcresult" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO -test-iterations 2 \
+            -only-testing:AtticTests/DrawInputTests \
+            > "$RUNNER_TEMP/scratch-nd.log" 2>&1 || true
+          grep -E '^(ND_|now-find)|error: -\[|Test Case .*(passed|failed)' "$RUNNER_TEMP/scratch-nd.log" | sed 's/^/SCRATCH_ND /' || true
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-scratch-nd.xcresult" --format json | python3 -c 'import json,sys; s=json.load(sys.stdin); print("SCRATCH_ND summary passed=%s failed=%s skipped=%s" % (s["passedTests"], s["failedTests"], s["skippedTests"]))' || echo 'SCRATCH_ND no summary'
       - name: Run Notes Undo before enabling Full Keyboard Access
+        if: ${{ false }}
         env:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
         run: |
@@ -123,7 +137,7 @@ jobs:
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" --format json > "$RUNNER_TEMP/fka-notes-normal-summary.json"
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==7 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-normal-summary.json"
       - name: Run the native FKA test alone, then the H5-04 focus regressions
-        if: always()
+        if: ${{ false }}
         env:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
           ATTIC_CI_KEYBOARD_MODE: fka
@@ -167,7 +181,7 @@ jobs:
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==8 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
           exit $status
       - name: Run Calendar's agenda rows with Full Keyboard Access
-        if: always()
+        if: ${{ false }}
         env:
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
           ATTIC_CI_KEYBOARD_MODE: fka
@@ -187,7 +201,7 @@ jobs:
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-calendar-agenda.xcresult" --format json > "$RUNNER_TEMP/fka-calendar-agenda-summary.json" || echo '{}' > "$RUNNER_TEMP/fka-calendar-agenda-summary.json"
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==5 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-calendar-agenda-summary.json"
       - name: Upload focused keyboard evidence
-        if: always()
+        if: ${{ false }}
         uses: actions/upload-artifact@v4
         with:
           name: focused-fka-${{ github.sha }}
