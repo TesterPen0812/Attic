@@ -265,8 +265,16 @@ final class HiddenPagesCountersTests: XCTestCase {
         }
 
         // Notes visited and left on its library; every page built; Tasks current.
+        // Its first show ever (built as the current page): the shell's notice
+        // clearance in that first frame, and Notes' own once settled (ND4).
+        AtticPanelView.lastNoticeClearance = nil
+        NotesEditorPage.lastOwnNoticeClearance = nil
         state.selectSection(.notes)
+        content.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        let firstShowShellClearance = AtticPanelView.lastNoticeClearance
         pump(content, panel, seconds: 1.0)
+        Self.firstEverNotesShow = (firstShowShellClearance, NotesEditorPage.lastOwnNoticeClearance)
         XCTAssertTrue(draft.pages.showLibrary(), "harness: Notes goes to its library")
         pump(content, panel, seconds: 0.5)
         let notesScrolls = Set(Self.roomScrolls(in: content).map(ObjectIdentifier.init))
@@ -710,6 +718,13 @@ final class HiddenPagesCountersTests: XCTestCase {
             XCTAssertTrue(isShown(deleted, rig), "harness: Undo brought the task back to the list")
             XCTAssertTrue(storeHasLiveTask(deleted, rig), "harness: Undo brought the store row back")
 
+            // One change of the shell's environment: the window's appearance.
+            let appearance = rig.panel.appearance
+            let dark = rig.panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            run("appearance") { rig.panel.appearance = NSAppearance(named: dark ? .aqua : .darkAqua) }
+            rig.panel.appearance = appearance
+            pump(rig.content, rig.panel)
+
             let shown = ["NotesPageHost", "NotesEditorPage", "NotesLibraryView", "CalendarPageHost", "CalendarPage",
                          "CalendarDayView", "DrawPageHost", "CanvasPageHost", "PanelCanvasNoticeAwareHost",
                          "clear.notesPage", "clear.notesLeaf", "clear.calendarGrid", "clear.calendarDay", "room.$height",
@@ -723,6 +738,13 @@ final class HiddenPagesCountersTests: XCTestCase {
             // Asserted only for the triggers a merged fix owns; the rest of the table is recorded. Mechanism 2 owns "+" and the
             // add bar's room change (the card folding back into the bar's row); each must change the room inside its interval.
             // The add bar's own task creation still re-runs Notes' list (mechanism 1's trigger, not owned yet): recorded only.
+            // Hidden behind Tasks, Notes sits in a kept host (page-host-notes-draw): a store change
+            // from Tasks' rows and a change of the shell's environment run none of its views.
+            for (name, counts) in table where ["tick", "tag", "delete", "appearance"].contains(name) {
+                for view in Self.hiddenPageViews[.notes, default: []] {
+                    XCTAssertEqual(counts[view, default: 0], 0, "C4 \(name): hidden Notes' \(view) ran")
+                }
+            }
             for (name, counts) in table where name == "plus" || name == "add-bar" {
                 XCTAssertGreaterThan(counts["room.$height", default: 0], 0,
                                      "harness: C4 \(name): the card's room changed in the measured interval")
@@ -1667,12 +1689,20 @@ extension HiddenPagesCountersTests {
             }
             release(rig)
             let grown = dragSize(start, step: Self.dragSteps).width - start.width
-            oneFrame(rig)
+            // Draw is laid out while hidden: it takes the final size hidden.
+            let laidOutHidden: [PanelPage] = [.canvas]
+            waitForTestOperation("the hidden pages take the final size") {
+                oneFrame(rig)
+                return laidOutHidden.allSatisfy { page in
+                    let now = widths(of: page, rig)
+                    return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - grown) < 0.5 }
+                }
+            }
             XCTAssertNil(rig.state.retainedPageSizeDuringLiveResize)
-            // Calendar and Notes sit in kept hosts that are not laid out while
-            // hidden (PR 80; page-host-notes-draw); Draw is laid out hidden. Each:
-            // it takes the final size in its first frame shown.
-            for page in hidden { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: grown, "RZ3") }
+            // Notes and Calendar sit in kept hosts that are not laid out while
+            // hidden (page-host-notes-draw; PR 80): each takes the final size
+            // in its first frame shown.
+            for page in [PanelPage.notes, .calendar] { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: grown, "RZ3") }
         }
     }
 
@@ -1689,11 +1719,19 @@ extension HiddenPagesCountersTests {
             }
             let start = rig.state.panelSize
             resize(rig, to: CGSize(width: start.width + 24, height: start.height + 12))
-            oneFrame(rig)
-            // Calendar and Notes sit in kept hosts that are not laid out while
-            // hidden (PR 80; page-host-notes-draw); Draw is laid out hidden. Each:
-            // it takes the size in its first frame shown.
-            for page in hidden { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: 24, "RZ4A") }
+            // Draw is laid out while hidden: it takes the size hidden.
+            let laidOutHidden: [PanelPage] = [.canvas]
+            waitForTestOperation("the hidden pages take a size written outside a drag") {
+                oneFrame(rig)
+                return laidOutHidden.allSatisfy { page in
+                    let now = widths(of: page, rig)
+                    return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - 24) < 0.5 }
+                }
+            }
+            // Notes and Calendar sit in kept hosts that are not laid out while
+            // hidden (page-host-notes-draw; PR 80): each takes the size in its
+            // first frame shown.
+            for page in [PanelPage.notes, .calendar] { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: 24, "RZ4A") }
         }
     }
 
@@ -2358,7 +2396,8 @@ extension HiddenPagesCountersTests {
     /// monitor, the editor's suspension, the first responder, the stored
     /// word) and the first shell pass. Asserted: by the first frame with
     /// Tasks shown, the monitor is gone, the editor is suspended and does
-    /// not hold the keyboard, and the typed word is stored.
+    /// not hold the keyboard, and the typed word is stored; settled, the
+    /// keyboard is Tasks', as on the trunk.
     func testND2NotesLeavesInTheSwitchsTurnOnEveryPath() throws {
         try requireKeyWindowTests()
         for path in LeavePath.allCases {
@@ -2393,6 +2432,7 @@ extension HiddenPagesCountersTests {
                 XCTAssertTrue(hooksAtFirstFrame.hasPrefix("mon=-1 susp=1 "), "ND2 \(path): Notes' hooks had not run by the first frame (\(hooksAtFirstFrame))")
                 XCTAssertFalse(hooksAtFirstFrame.contains("resp=editor"), "ND2 \(path): the editor held the keyboard in the first frame")
                 XCTAssertTrue(storedText(rig, id).contains("zq7"), "ND2 \(path): the typed word was not stored")
+                XCTAssertTrue(responderIsTasks(rig), "ND2 \(path): settled on Tasks, the keyboard is not Tasks' (\(responderName(rig, editor: editor)))")
                 // (a): red on the trunk too (fka runs 45951126247 and 45951136189).
                 // The fix is its own keyboard-ownership pull request; it deletes this marker.
                 XCTExpectFailure("NOTES-KEY-AFTER-LEAVE-SAVED (board): a key queued behind the switch reaches the note's editor "
@@ -2404,33 +2444,107 @@ extension HiddenPagesCountersTests {
         }
     }
 
-    /// The shell's notice clearance (its `onPreferenceChange`, read through
-    /// `AtticPanelView.lastNoticeClearance`) in the first frame with Notes
-    /// shown on its editor, then in the first frame with Tasks shown and
-    /// Notes hidden: the trunk's values.
-    func testND4NoticeClearanceIsTheTrunksWithNotesShownAndHidden() throws {
+    /// Whether the first responder is Tasks' (a Tasks tab host, or a view in one), as on the trunk after a switch to Tasks.
+    private func responderIsTasks(_ rig: Rig) -> Bool {
+        var walker = rig.panel.firstResponder as? NSView
+        while let view = walker {
+            if let host = view as? KeptContentHostingView { return Self.isTasksHost(host) }
+            walker = view.superview
+        }
+        return false
+    }
+
+    /// Notes leaves in the panel's own update, before any pass of its host
+    /// (`KeptContentHost.laysOutOnLeave`): with the switch made and only the
+    /// panel's host laid out, the editor is already suspended and no longer
+    /// holds the keyboard.
+    func testND8NotesLeavesInThePanelsOwnUpdate() throws {
         try requireKeyWindowTests()
-        AtticPanelView.lastNoticeClearance = nil
         try withRig { rig in
-            _ = try focusANotesEditor(rig)
-            let shownSettled = AtticPanelView.lastNoticeClearance
+            let (editor, _) = try focusANotesEditor(rig)
+            func panelHost(_ view: NSView) -> AtticPanelHostingView? {
+                (view as? AtticPanelHostingView) ?? view.subviews.lazy.compactMap(panelHost).first
+            }
+            let host = try XCTUnwrap(rig.panel.contentView.flatMap(panelHost), "harness: the panel's host")
+            XCTAssertFalse(editor.isSuspended, "harness: the editor is live before the switch")
+            rig.state.selectSection(.tasks)
+            host.layout()
+            let suspended = editor.isSuspended
+            let responder = responderName(rig, editor: editor)
+            print("ND_INTURN susp=\(suspended ? 1 : 0) resp=\(responder)")
+            XCTAssertTrue(suspended, "ND8: after the panel's update alone, Notes' editor was not suspended")
+            XCTAssertNotEqual(responder, "editor", "ND8: after the panel's update alone, the editor held the keyboard")
+            pump(rig.content, rig.panel)
+        }
+    }
+
+    /// Notes' library stops its keys by the first frame after a switch
+    /// away (`NotesLibraryView`, `onChange(of: isCurrent)`), as its editor's
+    /// hooks do (ND2).
+    func testND9NotesLibraryStopsItsKeysByTheFirstFrameAway() throws {
+        try requireKeyWindowTests()
+        var keys: [NotesLibraryKeys] = []
+        NotesLibraryView.lifetimeProbe = { keys.append($0) }
+        defer { NotesLibraryView.lifetimeProbe = nil }
+        try withRig { rig in
+            rig.panel.makeKey()
+            rig.state.panelDidReveal()
+            inFirstShownFrame(of: .notes, rig, switching: { rig.state.island.click(.notes) }, read: {})
+            pump(rig.content, rig.panel)
+            let shownKeys = try XCTUnwrap(keys.last, "harness: Notes' library appeared")
+            XCTAssertNotNil(shownKeys.handler, "harness: Notes is shown on its library, with its keys on")
+            var handlerAtFirstFrame = true
+            inFirstShownFrame(of: .tasks, rig, switching: { rig.state.island.click(.tasks) }, read: {
+                handlerAtFirstFrame = shownKeys.handler != nil
+            })
+            print("ND_LIBKEYS keys_on_at_first_frame_away=\(handlerAtFirstFrame)")
+            XCTAssertFalse(handlerAtFirstFrame, "ND9: Notes' library still had its keys in the first frame away")
+        }
+    }
+
+    /// Notes' first show ever, recorded by the rig: the shell's clearance in
+    /// that first frame, and Notes' own once settled.
+    private static var firstEverNotesShow: (shell: CGFloat?, own: CGFloat?) = (nil, nil)
+
+    /// The shell's notice clearance (`AtticPanelView.lastNoticeClearance`)
+    /// with Notes shown is Notes' own (`NotesEditorPage.noticeClearance`),
+    /// in the first frame shown: on Notes' first show ever, and on the first
+    /// show after a resize while it was hidden. Notes' value is not the key's
+    /// default, so a shell that lost it fails. With Notes hidden, Tasks'
+    /// first frame has its settled value.
+    func testND4NoticeClearanceIsNotesOwnFromItsFirstFrameShown() throws {
+        try requireKeyWindowTests()
+        try withRig { rig in
+            let first = Self.firstEverNotesShow
             var hiddenFirst: CGFloat?
             inFirstShownFrame(of: .tasks, rig, switching: { rig.state.island.click(.tasks) }, read: {
                 hiddenFirst = AtticPanelView.lastNoticeClearance
             })
             pump(rig.content, rig.panel)
             let hiddenSettled = AtticPanelView.lastNoticeClearance
+            let size = rig.state.panelSize
+            resize(rig, to: CGSize(width: size.width + 40, height: size.height + 30))
+            pump(rig.content, rig.panel)
             var shownFirst: CGFloat?
             inFirstShownFrame(of: .notes, rig, switching: { rig.state.island.click(.notes) }, read: {
                 shownFirst = AtticPanelView.lastNoticeClearance
             })
             pump(rig.content, rig.panel)
-            let shownAgain = AtticPanelView.lastNoticeClearance
-            print("ND_CLEAR notes_shown=\(shownSettled.map { "\($0)" } ?? "nil") tasks_first=\(hiddenFirst.map { "\($0)" } ?? "nil") "
-                  + "tasks_settled=\(hiddenSettled.map { "\($0)" } ?? "nil") notes_first=\(shownFirst.map { "\($0)" } ?? "nil") "
-                  + "notes_settled=\(shownAgain.map { "\($0)" } ?? "nil")")
-            XCTAssertEqual(shownFirst, shownAgain, "ND4: Notes' first frame shown has another clearance than when settled")
+            let own = NotesEditorPage.lastOwnNoticeClearance
+            let shownSettled = AtticPanelView.lastNoticeClearance
+            func text(_ value: CGFloat?) -> String { value.map { "\($0)" } ?? "nil" }
+            print("ND_CLEAR first_ever shell=\(text(first.shell)) own=\(text(first.own)) tasks_first=\(text(hiddenFirst)) "
+                  + "tasks_settled=\(text(hiddenSettled)) after_resize notes_first=\(text(shownFirst)) own=\(text(own)) "
+                  + "notes_settled=\(text(shownSettled))")
+            XCTAssertNotNil(first.own, "harness: Notes' page reported its clearance on its first show")
+            XCTAssertNotEqual(first.own, PanelPageNoticeClearancePreferenceKey.defaultValue,
+                              "harness: Notes' clearance is not the key's default, so the check means something")
+            XCTAssertEqual(first.shell, first.own, "ND4: on Notes' first show ever, the shell's first frame has another clearance than Notes'")
+            XCTAssertEqual(shownFirst, own, "ND4: after a resize while hidden, Notes' first frame shown has another clearance than Notes'")
+            XCTAssertEqual(shownSettled, own, "ND4: settled on Notes, the shell's clearance is not Notes'")
             XCTAssertEqual(hiddenFirst, hiddenSettled, "ND4: Tasks' first frame has another clearance than when settled")
+            resize(rig, to: size)
+            pump(rig.content, rig.panel)
         }
     }
 
@@ -2495,6 +2609,7 @@ extension HiddenPagesCountersTests {
                 }
                 let id = ObjectIdentifier(host)
                 let before = KeptContentHostCounts.layoutsByHost[id, default: 0]
+                let passesBefore = KeptContentHostCounts.passesOfTheHide[id, default: 0]
                 rig.state.selectSection(.tasks)
                 let deadline = Date().addingTimeInterval(2)
                 repeat {
@@ -2513,7 +2628,11 @@ extension HiddenPagesCountersTests {
                 pump(rig.content, rig.panel)
                 let ran = Self.diff(snapshot(rig), views)
                 let resizeLayouts = KeptContentHostCounts.layoutsByHost[id, default: 0] - layouts
-                print("ND_HIDECOUNT \(page) switch_to_hide_end_layouts=\(atHide) resize_after_layouts=\(resizeLayouts) views=\(Self.line(ran))")
+                let passes = KeptContentHostCounts.passesOfTheHide[id, default: 0] - passesBefore
+                print("ND_HIDECOUNT \(page) switch_to_hide_end_layouts=\(atHide) hide_turn_passes=\(passes) resize_after_layouts=\(resizeLayouts) views=\(Self.line(ran))")
+                if page == .calendar {
+                    XCTAssertEqual(passes, 0, "ND7: a switch away from Calendar gave its host passes of a hide turn")
+                }
                 XCTAssertEqual(resizeLayouts, 0, "ND7: hidden, \(page)'s host was laid out by a resize straight after the switch")
                 for view in Self.hiddenPageViews[page, default: []] {
                     XCTAssertEqual(ran[view, default: 0], 0, "ND7: \(page)'s \(view) ran while hidden through a resize straight after the switch")

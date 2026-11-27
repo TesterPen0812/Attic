@@ -1260,13 +1260,16 @@ final class PanelIntegrationTests: XCTestCase {
         let presenter = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter)
         let editor = presenter.host.textView
         XCTAssertNotNil(editor.window)
-        let heldPastTheHide = KeptContentHostCounts.heldPastTheHide
+        var notesHost: NSView? = editor
+        while let view = notesHost, !(view is KeptContentHostingView) { notesHost = view.superview }
+        let hostID = ObjectIdentifier(try XCTUnwrap(notesHost, "harness: the editor sits in Notes' kept host"))
+        let heldPastTheHide = KeptContentHostCounts.heldPastTheHide[hostID, default: 0]
         followupSwitch(panel, to: .tasks)
         XCTAssertTrue(panel.uiState.builtPages.contains(.notes))
         // The outgoing page's spring may retain its native hierarchy until it settles.
         spin(until: { editor.window == nil })
         XCTAssertNil(editor.window, "the task-note route retains its original native unmount boundary")
-        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide, heldPastTheHide,
+        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide[hostID, default: 0], heldPastTheHide,
                        "the hide settled within its turn's passes (KeptContentHostingView.hideTurnPasses)")
         XCTAssertNotNil(presenter.lease, "the pre-existing warm workspace owner stays retained")
         followupSwitch(panel, to: .notes)

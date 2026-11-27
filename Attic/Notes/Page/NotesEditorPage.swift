@@ -130,9 +130,22 @@ struct NotesEditorPage: View {
     private var editorEdges: AtticFloatingEdges { AtticFloatingEdges(top: layout.headerBottom, bottom: bottomControls) }
 
 
-    private var noticeClearance: CGFloat {
-        max(0, layout.chromeInsets.bottom + buttonHeight + AtticSpacing.s8 - layout.contentInsets.bottom)
+    /// The room the shell's notices keep above Notes' bottom row. A function
+    /// of the layout alone: the shell sets it outside Notes' host, where
+    /// Notes' own preference does not reach.
+    static func noticeClearance(for layout: PanelPageLayout) -> CGFloat {
+        max(0, layout.chromeInsets.bottom + NotesBarMetrics.control + AtticSpacing.s8 - layout.contentInsets.bottom)
     }
+    private var noticeClearance: CGFloat {
+        #if DEBUG
+        Self.lastOwnNoticeClearance = Self.noticeClearance(for: layout)
+        #endif
+        return Self.noticeClearance(for: layout)
+    }
+    #if DEBUG
+    /// Test seam (ND4): the clearance Notes computed in its last body run.
+    static var lastOwnNoticeClearance: CGFloat?
+    #endif
 
     private var pageContent: some View {
         ZStack(alignment: .bottom) {

@@ -108,7 +108,8 @@ final class PanelComposerScrollRoomTests: XCTestCase {
             settle(rig.host)
             assertFirstShownMargin(rig, .calendar, day, closed: dayClosed, "the day")
 
-            // The library through the same path: its hidden margin had the room.
+            // The library through the same path: in its own kept host it holds
+            // the room while hidden, and the switch to it closes the card.
             rig.state.selectSection(.tasks)
             settle(rig.host, times: 2)
             rig.room.set(height: cardHeight, open: true)

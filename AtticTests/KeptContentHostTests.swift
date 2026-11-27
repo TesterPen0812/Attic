@@ -721,43 +721,102 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertFalse(Host.movesRows(from: AnyHashable([1, 2]), to: nil), "a hidden root, or content with no rows")
     }
 
-    /// The hide's turn (`KeptContentHostingView.hideTurnPasses`): a host
-    /// that stops being drawn takes the layouts its content asks for in that
-    /// turn, up to the cap, then holds; a request past the cap is held and
-    /// counted. Once the turn has ended, a request is held and not counted.
-    func testAHidingHostTakesItsTurnsPassesThenHoldsAndCountsTheNext() {
+    private func hidingHost(takesTheHideTurn: Bool) -> (KeptContentHostingView, NSWindow) {
         let host = KeptContentHostingView(rootView: AnyView(Text("kept")))
+        host.takesTheHideTurn = takesTheHideTurn
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 300), styleMask: [.borderless],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        defer { window.close() }
         host.frame = window.contentLayoutRect
         window.contentView?.addSubview(host)
         host.layoutSubtreeIfNeeded()
-        let passes = KeptContentHostCounts.passesOfTheHide
-        let held = KeptContentHostCounts.heldPastTheHide
+        return (host, window)
+    }
 
+    /// Hides `host` and runs its hidden root's pass, as `setRoot` does.
+    private func hide(_ host: KeptContentHostingView) {
         host.isDrawn = false
         host.needsLayout = true
         host.layoutSubtreeIfNeeded()
-        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide, passes, "the hidden root's own pass is not one of the turn's")
+    }
+
+    /// The hide's turn (`KeptContentHostingView.hideTurnPasses`): a host
+    /// that takes one and stops being drawn takes the layouts its content
+    /// asks for in that turn, up to the cap, then holds; a request past the
+    /// cap is held and counted. Once the turn has ended, a request is held
+    /// and not counted.
+    func testAHidingHostTakesItsTurnsPassesThenHoldsAndCountsTheNext() {
+        let (host, window) = hidingHost(takesTheHideTurn: true)
+        defer { window.close() }
+        let id = ObjectIdentifier(host)
+        hide(host)
+        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide[id, default: 0], 0, "the hidden root's own pass is not one of the turn's")
         for _ in 0..<(KeptContentHostingView.hideTurnPasses + 1) {
             host.needsLayout = true
             host.layoutSubtreeIfNeeded()
         }
-        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide - passes, KeptContentHostingView.hideTurnPasses,
+        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide[id, default: 0], KeptContentHostingView.hideTurnPasses,
                        "the hide's turn took the layouts asked for, up to the cap")
-        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide - held, 1, "the request past the cap was held and counted")
+        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide[id, default: 0], 1, "the request past the cap was held and counted")
         XCTAssertFalse(host.needsLayout, "the request past the cap is owed, not run")
 
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         host.needsLayout = true
         XCTAssertFalse(host.needsLayout, "after the hide's turn, the host holds")
-        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide - passes, KeptContentHostingView.hideTurnPasses, "no pass after the turn")
-        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide - held, 1, "a request after the turn is held as before, not counted")
+        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide[id, default: 0], KeptContentHostingView.hideTurnPasses, "no pass after the turn")
+        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide[id, default: 0], 1, "a request after the turn is held as before, not counted")
 
         host.isDrawn = true
         XCTAssertTrue(host.needsLayout, "drawn again, the owed layout is asked for")
+    }
+
+    /// A host that takes no hide turn (Calendar's, a Tasks tab's) holds
+    /// from its hidden root's pass on, as on the trunk.
+    func testAHostWithNoHideTurnHoldsFromItsHiddenRootsPass() {
+        let (host, window) = hidingHost(takesTheHideTurn: false)
+        defer { window.close() }
+        let id = ObjectIdentifier(host)
+        hide(host)
+        host.needsLayout = true
+        XCTAssertFalse(host.needsLayout, "the request after the hidden root's pass is owed, not run")
+        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide[id, default: 0], 0, "no pass of a hide turn")
+        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide[id, default: 0], 0, "nothing counted past a turn it has not got")
+    }
+
+    /// The hide's turn ends before the work of the next wake, also when the
+    /// host is hidden inside a callout of the moment the run loop is about
+    /// to wait (SwiftUI's flush and the display cycle run there): a layout
+    /// asked for after one wait is held, not taken as one of the turn's.
+    func testAHideMadeAsTheLoopIsAboutToWaitEndsBeforeTheNextWakesWork() {
+        let (host, window) = hidingHost(takesTheHideTurn: true)
+        defer { window.close() }
+        let id = ObjectIdentifier(host)
+        var hidden = false
+        var askedAfterWake = false
+        let hider = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, false, 0) { _, _ in
+            MainActor.assumeIsolated {
+                self.hide(host)
+                hidden = true
+            }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), hider, .commonModes)
+        // The wake's work: a timer that fires after the loop has waited. One
+        // run of the loop, so no other round ends the turn before it.
+        let timer = CFRunLoopTimerCreateWithHandler(nil, CFAbsoluteTimeGetCurrent() + 0.03, 0, 0, 0) { _ in
+            MainActor.assumeIsolated {
+                guard hidden else { return }
+                host.needsLayout = true
+                askedAfterWake = true
+            }
+        }
+        CFRunLoopAddTimer(CFRunLoopGetMain(), timer, .commonModes)
+        CFRunLoopRunInMode(.defaultMode, 0.2, false)
+        CFRunLoopTimerInvalidate(timer)
+        if !hidden { CFRunLoopRemoveObserver(CFRunLoopGetMain(), hider, .commonModes) }
+        XCTAssertTrue(hidden && askedAfterWake, "harness: the host was hidden in the callout and a layout asked for after a wait")
+        XCTAssertEqual(KeptContentHostCounts.passesOfTheHide[id, default: 0], 0,
+                       "a layout asked for after the wait was taken as one of the hide's turn")
+        XCTAssertFalse(host.needsLayout, "the layout asked for after the wait is owed, not run")
     }
 
     func testANestedHostsOwnUpdateRunsInsideTheOverlayLayoutGuard() {
