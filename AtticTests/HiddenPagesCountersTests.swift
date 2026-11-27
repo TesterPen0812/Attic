@@ -2384,6 +2384,13 @@ extension HiddenPagesCountersTests {
                 XCTAssertTrue(hooksAtFirstFrame.hasPrefix("mon=-1 susp=1 "), "ND2 \(path): Notes' hooks had not run by the first frame (\(hooksAtFirstFrame))")
                 XCTAssertFalse(hooksAtFirstFrame.contains("resp=editor"), "ND2 \(path): the editor held the keyboard in the first frame")
                 XCTAssertTrue(storedText(rig, id).contains("zq7"), "ND2 \(path): the typed word was not stored")
+                // (a): red on the trunk too (fka runs 45951126247 and 45951136189).
+                // The fix is its own keyboard-ownership pull request; it deletes this marker.
+                XCTExpectFailure("NOTES-KEY-AFTER-LEAVE-SAVED (board): a key queued behind the switch reaches the note's editor "
+                                 + "and is saved, on the trunk as well", strict: true) {
+                    XCTAssertFalse(editor.string.hasSuffix("zq7x"), "ND2 \(path): the key queued behind the switch reached the note's editor")
+                    XCTAssertFalse(storedText(rig, id).contains("zq7x"), "ND2 \(path): the key queued behind the switch reached the stored note")
+                }
             }
         }
     }
@@ -2440,6 +2447,107 @@ extension HiddenPagesCountersTests {
             XCTAssertFalse(shownAtClose, "ND3 close: Draw was still shown when the window closed right after a switch")
             XCTAssertFalse(DrawPageModel.shared.isShown, "ND3 close: Draw is shown after the close")
         }
+    }
+
+    /// Accepted change (lead, 27 Nov): a page that hides with the keyboard
+    /// gives it up (HB-02), Draw now too. On the trunk the hidden Draw board
+    /// kept it (run 45951136189). On each switch path: leaving Draw gives the
+    /// keyboard to what leaving Notes gives it to; a key right after lands on
+    /// Tasks and leaves Draw's document alone; back on Draw, the board takes
+    /// the keyboard and its first key works (as on the trunk); and neither
+    /// page loses a key-view or accessibility element over the round trip.
+    func testND6LeavingDrawGivesTheKeyboardAsLeavingNotesAndLosesNoControl() throws {
+        try requireKeyWindowTests()
+        for path in [LeavePath.shortcut, .click] {
+            try withRig { rig in
+                rig.panel.makeKey()
+                rig.state.panelDidReveal()
+                pump(rig.content, rig.panel)
+                func go(_ page: PanelPage) throws {
+                    switch path {
+                    case .shortcut:
+                        let (code, digit) = try XCTUnwrap(Self.switchDigits[page])
+                        post(rig, try keyEvents(rig, code: code, digit, .command))
+                    case .click, .state:
+                        rig.state.island.click(page)
+                    }
+                    pump(rig.content, rig.panel)
+                    XCTAssertEqual(rig.state.selectedSection, page.section, "harness \(path): \(page) is shown")
+                }
+                let tasksBefore = controls(rig)
+                try go(.canvas)
+                let board = try XCTUnwrap(nativeViews(of: .canvas, rig).values.first as? DrawBoardView, "harness: Draw's board")
+                XCTAssertTrue(holds(rig, board), "harness \(path): shown, the Draw board holds the keyboard")
+                let drawBefore = controls(rig)
+                let objects = DrawPageModel.shared.objects.count, selection = DrawPageModel.shared.selection
+                let tool = DrawPageModel.shared.tool
+
+                try go(.tasks)
+                let afterDraw = rig.panel.firstResponder
+                try rowKey(rig, 125, "\u{F701}")
+                pump(rig.content, rig.panel)
+                let focusAfterKey = rig.page.keyboardFocus
+                XCTAssertEqual(DrawPageModel.shared.objects.count, objects, "ND6 \(path): a key on Tasks changed Draw's objects")
+                XCTAssertEqual(DrawPageModel.shared.selection, selection, "ND6 \(path): a key on Tasks changed Draw's selection")
+                XCTAssertEqual(DrawPageModel.shared.tool, tool, "ND6 \(path): a key on Tasks changed Draw's tool")
+                XCTAssertNotNil(focusAfterKey, "ND6 \(path): ↓ right after leaving Draw did not land on Tasks")
+                let tasksAfter = controls(rig)
+
+                try go(.canvas)
+                XCTAssertTrue(holds(rig, board), "ND6 \(path): back on Draw, the board did not take the keyboard "
+                              + "(\(responderName(rig, editor: nil)))")
+                try rowKey(rig, 14, "e")
+                XCTAssertEqual(DrawPageModel.shared.tool, .eraser, "ND6 \(path): back on Draw, its first key did not reach the board")
+                DrawPageModel.shared.setTool(tool)
+                pump(rig.content, rig.panel)
+                let drawAfter = controls(rig)
+
+                try go(.notes)
+                let id = rig.seed.freeNotes[0]
+                XCTAssertEqual(wait { await rig.draft.pages.openFromLibrary(noteID: id) }, true, "harness: the note opened")
+                rig.notesLibrary.dismissAfterOpenedNote(rig.draft.pages, requestedQuery: "")
+                pump(rig.content, rig.panel)
+                let editor = try XCTUnwrap(editors(rig).first { !$0.isSuspended }, "harness: the open note's editor")
+                XCTAssertTrue(rig.panel.makeFirstResponder(editor), "harness: the editor took the keyboard")
+                try go(.tasks)
+                let afterNotes = rig.panel.firstResponder
+
+                print("ND_KEYS path=\(path.rawValue) fka=\(NSApp.isFullKeyboardAccessEnabled) after_draw=\(afterDraw.map { "\(type(of: $0))" } ?? "nil") "
+                      + "after_notes=\(afterNotes.map { "\(type(of: $0))" } ?? "nil") same=\(afterDraw === afterNotes) focus=\(focusRow(rig)) "
+                      + "tasks=\(tasksBefore.keys.count)/\(tasksBefore.ax)->\(tasksAfter.keys.count)/\(tasksAfter.ax) "
+                      + "draw=\(drawBefore.keys.count)/\(drawBefore.ax)->\(drawAfter.keys.count)/\(drawAfter.ax)")
+                XCTAssertTrue(afterDraw != nil && afterDraw === afterNotes,
+                              "ND6 \(path): leaving Draw gave the keyboard elsewhere than leaving Notes")
+                XCTAssertEqual(tasksAfter.keys, tasksBefore.keys, "ND6 \(path): Tasks' key-view loop changed over the round trip")
+                XCTAssertEqual(tasksAfter.ax, tasksBefore.ax, "ND6 \(path): Tasks' accessibility elements changed over the round trip")
+                XCTAssertEqual(drawAfter.keys, drawBefore.keys, "ND6 \(path): Draw's key-view loop changed over the round trip")
+                XCTAssertEqual(drawAfter.ax, drawBefore.ax, "ND6 \(path): Draw's accessibility elements changed over the round trip")
+            }
+        }
+    }
+
+    private func holds(_ rig: Rig, _ view: NSView) -> Bool {
+        (rig.panel.firstResponder as? NSView)?.isDescendant(of: view) == true
+    }
+
+    /// The shown page's controls as the keyboard and VoiceOver reach them:
+    /// the views a Tab walk from no responder lands on (24 steps each way),
+    /// and the panel's accessibility elements, counted to a fixed depth.
+    private func controls(_ rig: Rig) -> (keys: Set<ObjectIdentifier>, ax: Int) {
+        let responder = rig.panel.firstResponder
+        rig.panel.makeFirstResponder(nil)
+        var keys: Set<ObjectIdentifier> = []
+        for step in 0..<48 {
+            if step < 24 { rig.panel.selectNextKeyView(nil) } else { rig.panel.selectPreviousKeyView(nil) }
+            if let view = rig.panel.firstResponder as? NSView, view !== rig.panel.contentView { keys.insert(ObjectIdentifier(view)) }
+        }
+        rig.panel.makeFirstResponder(responder)
+        pump(rig.content, rig.panel)
+        func count(_ element: Any, depth: Int) -> Int {
+            guard depth < 14, let children = (element as? NSAccessibilityProtocol)?.accessibilityChildren?() else { return 0 }
+            return children.reduce(children.count) { $0 + count($1, depth: depth + 1) }
+        }
+        return (keys, count(rig.content, depth: 0))
     }
 
     /// The shell's notice clearance (its `onPreferenceChange`, read through
