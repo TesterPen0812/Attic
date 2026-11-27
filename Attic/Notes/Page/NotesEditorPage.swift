@@ -340,7 +340,6 @@ struct NotesEditorPage: View {
                 finishFileRequest(controller.active?.id == sourceSession && !urls.isEmpty ? .success(urls) : nil)
             }
         }
-        .preference(key: PanelPageNoticeClearancePreferenceKey.self, value: noticeClearance)
         // A group, so its identifier never replaces its controls' own.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("notes-editor-page")
