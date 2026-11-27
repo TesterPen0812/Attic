@@ -579,9 +579,9 @@ struct AtticDropdownRow: View {
     var shortcutHintsShown: Bool?
     /// Typed text to embolden in the name (the `/` list's filter).
     var match: String?
-    /// The row's one id: its `.id` (what the viewport scrolls to), the
-    /// highlight it publishes and the id the pointer reports. A row in a
-    /// `ForEach` keyed by Strings passes that same String: on macOS 27 a
+    /// The row's one id: its `.id` (what the viewport scrolls to) and the
+    /// highlight it publishes, whether the keyboard or the pointer moved it.
+    /// A row in a `ForEach` keyed by Strings passes that same String: on macOS 27 a
     /// String `.id` that differs from its `ForEach`'s String id is never
     /// found by `scrollTo`. Nil falls back to the title.
     var scrollID: String?

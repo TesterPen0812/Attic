@@ -11,8 +11,8 @@ the list stays. macOS 26 found such rows. Two lists' rows had no
 
 ↑ and ↓ moved the highlight past the bottom row there and the list never
 followed it. Each row now passes its `ForEach` id as its `scrollID`, so its
-`.id`, the highlight it publishes and the id the pointer reports are the
-same value. The row reads the same to VoiceOver (its title, and a tag's
+`.id` and the highlight it publishes (moved by the keyboard or the pointer)
+are the same value. The row reads the same to VoiceOver (its title, and a tag's
 count), and a highlight move rebuilds no row. A row that keeps its id while
 its title changes is no longer rebuilt.
 
