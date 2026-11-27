@@ -328,8 +328,11 @@ final class KeptContentHostTests: XCTestCase {
         // inside the host (`TasksReorderCell`), above the menus that read it.
         // The list's hover for a row or line (`AtticRowHover`), set on each
         // cell and line inside the host.
+        // A dropdown list's highlight origin (`atticHighlightOrigin`), set
+        // only by `AtticDropdownViewport` on its own rows
+        // (AtticDropdown.swift:2679); rows outside a viewport read nil.
         let setInside: Set<String> = ["atticMenuEntranceTime", "atticMaterialProbeID", "atticContextMenuCountTag",
-                                      "atticRowHover"]
+                                      "atticRowHover", "atticHighlightOrigin"]
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Attic")
         let folders = ["Tasks", "DesignSystem", "Design"].map { root.appendingPathComponent($0) }

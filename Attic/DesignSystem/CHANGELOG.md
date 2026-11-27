@@ -29,6 +29,31 @@ by the host itself). A row beside the card still hovers: a click there acts.
 The row under a still pointer hovers again as the card closes. Nothing else
 in hover's look changes.
 
+## 2026-11-26 · Lists scroll to the keyboard's highlight, never to a hover
+
+A scrolling list (`AtticDropdownViewport`) brings a highlight into view only
+when the keyboard or typing made it. It no longer reads `NSApp.currentEvent`
+to tell them apart: a stale mouse move left over from an earlier event made a
+key press look like a hover, and the list never reached the last tag (PF-43).
+The viewport knows the source from the change itself, through
+`AtticHighlightOrigin`:
+
+- A row the pointer lit never scrolls any viewport. A picker inside a
+  presenter's persistent, height-limited card has two viewports; they share
+  one origin, so the hover scrolls neither.
+- Only a hover that moves the highlight counts as the pointer's. Rows with no
+  `onHover` (the Notes tag suggestions) leave the keyboard's highlight to
+  scroll its row into view even when the pointer rests on it.
+- A click on ‹ or › in a date card cut short to fit the panel turns the month
+  without scrolling the card; an accessibility press, or a key that turns the
+  month, still scrolls to the day it lights.
+- A tag row's id, the id it publishes for the highlight and the id the
+  pointer reports are one: the tag's name.
+
+The rows' own hover handlers still use `NSApp.currentEvent` to ignore a row
+sliding under a resting pointer as the keyboard scrolls; that is unchanged.
+No look, motion, size or token changes.
+
 ## 2026-11-26 · A resize step writes only the view state it draws
 
 A step of a window resize wrote view state that draws nothing, and each

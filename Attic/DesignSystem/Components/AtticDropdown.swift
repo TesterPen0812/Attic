@@ -595,6 +595,7 @@ struct AtticDropdownRow: View {
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticHighlightOrigin) private var highlightOrigin
     @State private var hovered = false
 
     init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, dot: AtticInk? = nil, checkGlyph: String? = nil,
@@ -706,9 +707,14 @@ struct AtticDropdownRow: View {
             switch phase {
             case .active:
                 guard AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
+                // Only a hover that moves the highlight is the pointer's: a
+                // row with no `onHover` (the Notes tag suggestions) leaves
+                // the keyboard's highlight to scroll its row into view.
+                if onHover != nil { highlightOrigin?.pointerEntered(scrollID ?? title) }
                 if !hovered { hovered = true }
                 onHover?(true)
             case .ended:
+                highlightOrigin?.pointerLeft(scrollID ?? title)
                 if hovered { hovered = false }
                 onHover?(false)
             }
@@ -2603,6 +2609,49 @@ extension EnvironmentValues {
     }
 }
 
+/// Where a scrolling list's highlight came from, known from the change
+/// itself and not inferred from `NSApp.currentEvent` (which a stale mouse
+/// event from an earlier test, or a stray move between a key press and
+/// SwiftUI's update, leaves looking like a pointer). A row the pointer lit
+/// says so (`pointerEntered`) before it moves the highlight; the viewport
+/// then leaves the list where it is, as the row is under the pointer already.
+/// Any other change of the highlight is the keyboard's (or typing's), and
+/// is brought into view.
+@MainActor
+final class AtticHighlightOrigin {
+    /// The row the pointer is on and lit (its scroll id), until the pointer
+    /// leaves it or the highlight goes elsewhere.
+    private(set) var pointerRow: String?
+
+    func pointerEntered(_ id: String) { pointerRow = id }
+
+    func pointerLeft(_ id: String) { if pointerRow == id { pointerRow = nil } }
+
+    /// The highlight is now `id`: whether to scroll it into view.
+    func shouldScroll(toHighlight id: String?) -> Bool {
+        guard let id else {
+            pointerRow = nil
+            return false
+        }
+        if pointerRow == id { return false }
+        pointerRow = nil
+        return true
+    }
+}
+
+private struct AtticHighlightOriginKey: EnvironmentKey {
+    static let defaultValue: AtticHighlightOrigin? = nil
+}
+
+extension EnvironmentValues {
+    /// The enclosing `AtticDropdownViewport`'s highlight origin, for the rows
+    /// the pointer lights.
+    var atticHighlightOrigin: AtticHighlightOrigin? {
+        get { self[AtticHighlightOriginKey.self] }
+        set { self[AtticHighlightOriginKey.self] = newValue }
+    }
+}
+
 struct AtticDropdownHighlightKey: PreferenceKey {
     static let defaultValue: String? = nil
     static func reduce(value: inout String?, nextValue: () -> String?) {
@@ -2622,11 +2671,17 @@ struct AtticDropdownViewport<Content: View>: View {
     /// Rows cut off above and below (U-22): that edge fades, so a list cut
     /// short shows that it scrolls.
     @State private var cut = AtticDropdownViewportCut()
+    @State private var ownOrigin = AtticHighlightOrigin()
+    /// A viewport inside another (a picker in a presenter's persistent
+    /// card) shares the outer one's origin: a row reports the pointer once,
+    /// and every viewport its highlight reaches knows it was the pointer's.
+    @Environment(\.atticHighlightOrigin) private var inheritedOrigin
 
     var body: some View {
+        let origin = inheritedOrigin ?? ownOrigin
         if height != nil || persistent {
             ScrollViewReader { proxy in
-                ScrollView(.vertical) { content.modifier(AtticUnfoldContent(scrolls: true)) }
+                ScrollView(.vertical) { content.modifier(AtticUnfoldContent(scrolls: true)).environment(\.atticHighlightOrigin, origin) }
                     .scrollIndicators(.never)
                     .scrollEdgeEffectHidden(true, for: .all)
                     .onScrollGeometryChange(for: AtticDropdownViewportCut.self) { geometry in
@@ -2643,12 +2698,15 @@ struct AtticDropdownViewport<Content: View>: View {
                     .frame(height: height)
                     .fixedSize(horizontal: false, vertical: height == nil)
                     .onAppear { if let highlighted { proxy.scrollTo(highlighted) } }
+                    // A highlight the pointer made is on a row under the pointer:
+                    // the list stays. Any other change is the keyboard's, whatever
+                    // the last event was (`AtticHighlightOrigin`).
                     .onChange(of: highlighted) { _, id in
-                        guard let id, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
+                        guard origin.shouldScroll(toHighlight: id), let id else { return }
                         proxy.scrollTo(id)
                     }
                     .onPreferenceChange(AtticDropdownHighlightKey.self) { title in
-                        guard let title, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
+                        guard origin.shouldScroll(toHighlight: title), let title else { return }
                         proxy.scrollTo(title)
                     }
             }
