@@ -2516,6 +2516,8 @@ extension HiddenPagesCountersTests {
         try requireKeyWindowTests()
         try withRig { rig in
             let first = Self.firstEverNotesShow
+            rig.state.island.click(.notes)
+            pump(rig.content, rig.panel)
             var hiddenFirst: CGFloat?
             inFirstShownFrame(of: .tasks, rig, switching: { rig.state.island.click(.tasks) }, read: {
                 hiddenFirst = AtticPanelView.lastNoticeClearance
