@@ -2142,6 +2142,7 @@ final class AtticDropdownPresenter {
             if AtticDropdownDiagnostics.enabled { AtticDropdownDiagnostics.reveals += 1 }
             #endif
             self.stage.shown = true
+            self.mutationRevealStart = ProcessInfo.processInfo.systemUptime
             self.stage.revealed = true
             PerformanceSignposts.watchFrames("DropdownUnfold", seconds: 0.3)
         }
@@ -2400,7 +2401,10 @@ final class AtticDropdownPresenter {
     }
 
     /// Let the active input method cancel composition before dismissing.
+    /// SCRATCH mutation: when the reveal ran.
+    var mutationRevealStart: TimeInterval = 0
     func handleKey(_ event: NSEvent) -> NSEvent? {
+        if stage.shown, ProcessInfo.processInfo.systemUptime - mutationRevealStart < AtticDropdownReveal.openDuration { return event }
         guard isOpen, event.type == .keyDown, event.window === host?.window,
               (event.window?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return event }
         if contentKeyHandler?(event) == true { return nil }

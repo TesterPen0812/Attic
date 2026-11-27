@@ -3611,6 +3611,47 @@ extension AtticDropdownTests {
         XCTAssertEqual(keys, [125])
     }
 
+    /// SCRATCH: a9efd3a9's in-sink version, to show it misses the mutation.
+    func testR13OldInSinkArrowCopy() throws {
+        let window = makeUnshownWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 20, y: 300, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext()
+        XCTAssertFalse(presenter.design.reduceMotion, "the motion runs")
+        var keys: [UInt16] = []
+        presenter.content = AnyView(KeyProbe { keys.append($0) })
+        let down = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                  windowNumber: window.windowNumber, context: nil, characters: "\u{F701}",
+                                                  charactersIgnoringModifiers: "\u{F701}", isARepeat: false, keyCode: 125))
+        let clock = { ProcessInfo.processInfo.systemUptime }
+        // The claim: the host is first responder and the card is told so.
+        var claimedAt: TimeInterval?
+        let claims = presenter.stage.$focusRequest.sink { request in
+            if request > 0, claimedAt == nil, window.firstResponder === presenter.host { claimedAt = clock() }
+        }
+        // The unfold starts as `shown` turns true; the arrow goes in then.
+        var unfoldStartedAt: TimeInterval?
+        var arrowTaken = false
+        let unfolds = presenter.stage.$shown.sink { shown in
+            guard shown, unfoldStartedAt == nil else { return }
+            unfoldStartedAt = clock()
+            arrowTaken = presenter.handleKey(down) == nil
+        }
+        defer { claims.cancel(); unfolds.cancel() }
+        presenter.present(from: anchor)
+        XCTAssertIdentical(window.firstResponder, presenter.host, "the host has the keyboard as the card opens")
+        wait(timeout: 10) { claimedAt != nil && unfoldStartedAt != nil && presenter.stage.shown }
+        XCTAssertTrue(presenter.stage.shown, "the unfold is under way")
+        let claimed = try XCTUnwrap(claimedAt, "the host claimed the keyboard")
+        let started = try XCTUnwrap(unfoldStartedAt, "the unfold started")
+        XCTAssertLessThan(claimed, started + AtticDropdownReveal.openDuration, "the keyboard is claimed before the unfold ends")
+        XCTAssertTrue(arrowTaken, "the card takes the arrow mid-unfold")
+        XCTAssertEqual(keys, [125])
+        presenter.close(restoreFocus: false, immediately: true)
+    }
+
     /// O14-08: a menu's shortcut column shows only while ⌥ is held; other
     /// trailing details (a date, a count) always show.
     func testR13ShortcutHintsShowOnlyWhileOptionIsHeld() {
