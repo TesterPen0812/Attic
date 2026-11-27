@@ -3557,7 +3557,12 @@ extension AtticDropdownTests {
     /// The unfold never holds the keyboard back: the opening card's host
     /// has it at once, and an arrow key reaches the card while it unfolds.
     func testR13AnOpeningMenuTakesTheKeyboardBeforeItsUnfoldEnds() throws {
+        AtticDropdownDiagnostics.trace = []
+        defer { AtticDropdownDiagnostics.trace = nil }
+        let inMainQueue = Thread.callStackSymbols.contains { $0.contains("SERVICING_THE_MAIN_DISPATCH_QUEUE") }
+        AtticDropdownDiagnostics.mark("test.start inMainQueue=\(inMainQueue) mode=\(RunLoop.current.currentMode?.rawValue ?? "nil")")
         let window = makeUnshownWindow()
+        AtticDropdownDiagnostics.mark("window.made")
         defer { window.close() }
         let anchor = NSView(frame: CGRect(x: 20, y: 300, width: 60, height: 28))
         window.contentView?.addSubview(anchor)
@@ -3568,8 +3573,19 @@ extension AtticDropdownTests {
         presenter.content = AnyView(KeyProbe { keys.append($0) })
         presenter.present(from: anchor)
         XCTAssertIdentical(window.firstResponder, presenter.host, "the host has the keyboard as the card opens")
+        DispatchQueue.main.async { AtticDropdownDiagnostics.mark("probe.ran") }
+        AtticDropdownDiagnostics.mark("spin.start")
         spin(0.03)
-        XCTAssertTrue(presenter.stage.shown, "the unfold is under way")
+        AtticDropdownDiagnostics.mark("spin.end shown=\(presenter.stage.shown) isOpen=\(presenter.isOpen) ")
+        let shownAtSpinEnd = presenter.stage.shown
+        if !shownAtSpinEnd {
+            let deadline = Date().addingTimeInterval(5)
+            while !presenter.stage.shown, Date() < deadline { spin(0.005) }
+            AtticDropdownDiagnostics.mark("poll.end shown=\(presenter.stage.shown) ")
+        }
+        let timeline = (AtticDropdownDiagnostics.trace ?? []).joined(separator: " | ")
+        print("R13_TRACE shown@spinEnd=\(shownAtSpinEnd) " + timeline)
+        XCTAssertTrue(shownAtSpinEnd, "the unfold is under way; R13_TRACE " + timeline)
         let down = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                                                   windowNumber: window.windowNumber, context: nil, characters: "\u{F701}",
                                                   charactersIgnoringModifiers: "\u{F701}", isARepeat: false, keyCode: 125))

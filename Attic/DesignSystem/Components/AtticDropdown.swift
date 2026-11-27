@@ -443,6 +443,12 @@ enum AtticDropdownDiagnostics {
     static var reveals = 0
     static var contentMaskBuilds = 0
     static var contentMaskBuildsByOwner: [UUID: Int] = [:]
+    /// SCRATCH R13: a timestamped trace while non-nil.
+    static var trace: [String]?
+    static func mark(_ event: String) {
+        guard trace != nil else { return }
+        trace?.append(String(format: "%.4f ", ProcessInfo.processInfo.systemUptime) + event)
+    }
 }
 #endif
 
@@ -2088,6 +2094,10 @@ final class AtticDropdownPresenter {
 
     /// Opens the card from `anchor`.
     func present(from anchor: NSView) {
+        #if DEBUG
+        AtticDropdownDiagnostics.mark("present.enter isOpen=\(isOpen)")
+        defer { AtticDropdownDiagnostics.mark("present.exit") }
+        #endif
         guard !isOpen, let window = anchor.window, let space = AtticDropdownSpace(around: anchor) else { return }
         removal?.cancel()
         removal = nil
@@ -2097,6 +2107,9 @@ final class AtticDropdownPresenter {
         // This opening's host has not taken the keyboard yet: an earlier
         // opening's request must not focus the new card early (R3-01).
         stage.focusRequest = 0
+        #if DEBUG
+        AtticDropdownDiagnostics.mark("shown=false@present")
+        #endif
         stage.shown = false
         stage.revealed = false
         stage.width = nil
@@ -2136,10 +2149,14 @@ final class AtticDropdownPresenter {
         // pass) takes it on the next turn.
         if takesKeyboard, host.window != nil { takeKeyboard() }
         DispatchQueue.main.async { [weak self] in
+            #if DEBUG
+            AtticDropdownDiagnostics.mark("block self=\(self != nil) isOpen=\(self?.isOpen ?? false)")
+            #endif
             guard let self, self.isOpen else { return }
             if self.takesKeyboard, self.stage.focusRequest == 0 { self.takeKeyboard() }
             #if DEBUG
             if AtticDropdownDiagnostics.enabled { AtticDropdownDiagnostics.reveals += 1 }
+            AtticDropdownDiagnostics.mark("shown=true")
             #endif
             self.stage.shown = true
             self.stage.revealed = true
@@ -2249,6 +2266,9 @@ final class AtticDropdownPresenter {
 
     /// Closes the card (the binding went false, or the anchor went away).
     func close(restoreFocus: Bool, immediately: Bool = false) {
+        #if DEBUG
+        AtticDropdownDiagnostics.mark("close restore=\(restoreFocus) immediately=\(immediately) isOpen=\(isOpen)")
+        #endif
         pendingClose?.cancel()
         pendingClose = nil
         wantsOpen = false
@@ -2289,6 +2309,9 @@ final class AtticDropdownPresenter {
             self.host = nil
             return
         }
+        #if DEBUG
+        AtticDropdownDiagnostics.mark("shown=false@close")
+        #endif
         stage.shown = false
         let work = DispatchWorkItem { [weak self, weak host] in
             if let host { AtticOverlayHierarchy.remove(host) }
