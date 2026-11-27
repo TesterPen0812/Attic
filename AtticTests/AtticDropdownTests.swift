@@ -3556,6 +3556,12 @@ extension AtticDropdownTests {
 
     /// The unfold never holds the keyboard back: the opening card's host
     /// has it at once, and an arrow key reaches the card while it unfolds.
+    /// Timed by the opening's own events, not a fixed spin: the unfold starts
+    /// on a later main-queue turn, served 15-26 ms into the spin on a quiet
+    /// runner and only after a 30 ms spin had ended on a loaded one (CI run
+    /// 45966992872). The keyboard claim and the unfold's start are stamped as
+    /// they happen, so the order is checked, not the runner's speed. The
+    /// arrow goes in as the unfold starts, by construction mid-unfold.
     func testR13AnOpeningMenuTakesTheKeyboardBeforeItsUnfoldEnds() throws {
         let window = makeUnshownWindow()
         defer { window.close() }
@@ -3566,14 +3572,32 @@ extension AtticDropdownTests {
         XCTAssertFalse(presenter.design.reduceMotion, "the motion runs")
         var keys: [UInt16] = []
         presenter.content = AnyView(KeyProbe { keys.append($0) })
-        presenter.present(from: anchor)
-        XCTAssertIdentical(window.firstResponder, presenter.host, "the host has the keyboard as the card opens")
-        spin(0.03)
-        XCTAssertTrue(presenter.stage.shown, "the unfold is under way")
         let down = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                                                   windowNumber: window.windowNumber, context: nil, characters: "\u{F701}",
                                                   charactersIgnoringModifiers: "\u{F701}", isARepeat: false, keyCode: 125))
-        XCTAssertNil(presenter.handleKey(down), "the card takes the arrow mid-unfold")
+        let clock = { ProcessInfo.processInfo.systemUptime }
+        // The claim: the host is first responder and the card is told so.
+        var claimedAt: TimeInterval?
+        let claims = presenter.stage.$focusRequest.sink { request in
+            if request > 0, claimedAt == nil, window.firstResponder === presenter.host { claimedAt = clock() }
+        }
+        // The unfold starts as `shown` turns true; the arrow goes in then.
+        var unfoldStartedAt: TimeInterval?
+        var arrowTaken = false
+        let unfolds = presenter.stage.$shown.sink { shown in
+            guard shown, unfoldStartedAt == nil else { return }
+            unfoldStartedAt = clock()
+            arrowTaken = presenter.handleKey(down) == nil
+        }
+        defer { claims.cancel(); unfolds.cancel() }
+        presenter.present(from: anchor)
+        XCTAssertIdentical(window.firstResponder, presenter.host, "the host has the keyboard as the card opens")
+        wait(timeout: 10) { claimedAt != nil && unfoldStartedAt != nil && presenter.stage.shown }
+        XCTAssertTrue(presenter.stage.shown, "the unfold is under way")
+        let claimed = try XCTUnwrap(claimedAt, "the host claimed the keyboard")
+        let started = try XCTUnwrap(unfoldStartedAt, "the unfold started")
+        XCTAssertLessThan(claimed, started + AtticDropdownReveal.openDuration, "the keyboard is claimed before the unfold ends")
+        XCTAssertTrue(arrowTaken, "the card takes the arrow mid-unfold")
         XCTAssertEqual(keys, [125])
         presenter.close(restoreFocus: false, immediately: true)
     }
