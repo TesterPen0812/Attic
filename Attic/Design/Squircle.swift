@@ -177,7 +177,7 @@ final class SquirclePathCache: @unchecked Sendable {
     func path(for key: Key, build: () -> Path) -> Path {
         lock.lock()
         #if DEBUG
-        let enabled = isEnabled
+        let enabled = isEnabled && false
         #else
         let enabled = true
         #endif
