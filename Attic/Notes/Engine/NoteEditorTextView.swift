@@ -690,7 +690,14 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         hostedCursor(atWindowPoint: event.locationInWindow)?.set()
     }
 
-    private func hostedCursor(atWindowPoint point: CGPoint) -> NSCursor? {
+    /// The cursor the text view's own objects ask for at `point`, or nil
+    /// for the text's I-beam. AppKit asks on every scroll frame (its tracking
+    /// areas' cursor update, and the cursor-update event), so the
+    /// insertion-index lookup, which hit-tests the whole window, runs at most
+    /// once per ask and only when the note holds an object it could find
+    /// (scroll trace 27 Nov: twice per ask in a long plain note, 12.8% of the
+    /// main thread).
+    func hostedCursor(atWindowPoint point: CGPoint) -> NSCursor? {
         var target = super.hitTest(convert(point, from: nil))
         while let view = target, view !== self {
             if let control = view as? AtticNoteTableControlView { return control.hoverCursor }
@@ -701,9 +708,17 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             target = view.superview
         }
         let local = convert(point, from: nil)
-        if isEditable, checkboxLocation(at: local) != nil { return .arrow }
-        let index = characterIndexForInsertion(at: local)
-        if let engine {
+        let kinds = engine?.objectKinds ?? []
+        var looked: Int?
+        func insertionIndex() -> Int {
+            if let looked { return looked }
+            let index = insertionIndexForCursor(at: local)
+            looked = index
+            return index
+        }
+        if isEditable, kinds.contains(.checklist), checkboxLocation(at: local, insertionIndex: insertionIndex) != nil { return .arrow }
+        if let engine, kinds.contains(.payload) {
+            let index = insertionIndex()
             for location in [index, max(0, index - 1)] {
                 if let object = engine.object(at: location),
                    object is NoteImageAttachment || object is NoteFileAttachment,
@@ -716,6 +731,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             // Insertion indices also resolve in the blank margin. Only the
             // linked glyph itself is a link target; check both sides of a caret.
             if let storage = textStorage, let engine {
+                let index = insertionIndex()
                 for location in [index, max(0, index - 1)] where location < storage.length {
                     if storage.attribute(.link, at: location, effectiveRange: nil) != nil {
                         let range = (storage.string as NSString).rangeOfComposedCharacterSequence(at: location)
@@ -726,6 +742,18 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             return .arrow
         }
         return nil
+    }
+
+    #if DEBUG
+    /// Insertion-index lookups made for the cursor, for count tests.
+    private(set) var cursorInsertionLookups = 0
+    #endif
+
+    private func insertionIndexForCursor(at point: NSPoint) -> Int {
+        #if DEBUG
+        cursorInsertionLookups += 1
+        #endif
+        return characterIndexForInsertion(at: point)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -1768,13 +1796,20 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     func checkboxLocation(at point: NSPoint) -> Int? {
-        guard let engine else { return nil }
+        checkboxLocation(at: point) { self.characterIndexForInsertion(at: point) }
+    }
+
+    /// `insertionIndex` gives `characterIndexForInsertion(at: point)`; the
+    /// cursor passes one it shares with its other checks. A note without a
+    /// checkbox answers nil at once, as the full lookup would.
+    private func checkboxLocation(at point: NSPoint, insertionIndex: () -> Int) -> Int? {
+        guard let engine, engine.objectKinds.contains(.checklist) else { return nil }
         if let range = engine.checkboxRange(near: point), let rect = engine.rect(for: range) {
             let hit = NSRect(x: rect.minX - 4, y: rect.minY - 4,
                              width: NoteChecklistAttachment.boxSize + 8, height: rect.height + 8)
             if hit.contains(point) { return range.location }
         }
-        let index = characterIndexForInsertion(at: point)
+        let index = insertionIndex()
         let candidates = [index, max(0, index - 1)]
         for location in candidates {
             let line = engine.lineRange(at: location)
