@@ -679,17 +679,31 @@ struct TasksFoldBody: ViewModifier, Animatable {
 struct TasksFoldLayout: Layout {
     var visible: CGFloat?
 
+    #if DEBUG
+    /// The layout's own measures of its row, and its size asks, for count tests.
+    nonisolated(unsafe) static var rowMeasures = 0
+    nonisolated(unsafe) static var sizeAsks = 0
+    #endif
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let row = subviews.first else { return .zero }
+        #if DEBUG
+        Self.sizeAsks += 1
+        Self.rowMeasures += 1
+        #endif
         let size = row.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
         guard let visible else { return size }
         return CGSize(width: size.width, height: min(size.height, max(0, visible)))
     }
 
+    /// The row takes its own height at this width, the one `sizeThatFits`
+    /// measured: one proposal per row per pass. Measuring it again here and
+    /// placing it at that fixed height made a second measure and a second
+    /// proposal for every row on every scroll frame (scroll trace 27 Nov:
+    /// this layout's `sizeThatFits` was 10.3% of Tasks' main thread).
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard let row = subviews.first else { return }
-        let size = row.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
-        row.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: size.height))
+        row.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
     }
 }
 
