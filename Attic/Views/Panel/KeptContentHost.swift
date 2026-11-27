@@ -60,12 +60,27 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     private var holdsLayout = false
     private var owesLayout = false
     #if DEBUG
+    /// ND probe (temporary): an owed layout is let through once at hide.
+    static var probeOwedOnce = false
+    static var probeInTurn = 0
+    static var probeLate = 0
+    static var probeOwesAfterSet = false
+    private var probeAllowance = 0
     var debugHold: String { "drawn=\(isDrawn) holds=\(holdsLayout) owes=\(owesLayout) needs=\(super.needsLayout)" } // ND diagnostic (temporary)
     #endif
 
     override var needsLayout: Bool {
         get { super.needsLayout }
         set {
+            #if DEBUG
+            if newValue, holdsLayout, probeAllowance > 0 {
+                probeAllowance -= 1
+                Self.probeLate += 1
+                holdsLayout = false
+                super.needsLayout = true
+                return
+            }
+            #endif
             if newValue, holdsLayout {
                 owesLayout = true
                 return
@@ -215,6 +230,9 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     func setRoot(_ root: AnyView, laidOut: Bool, under transaction: Transaction) {
         // A hidden root is taken in one pass (`isDrawn`).
         if !isDrawn { holdsLayout = false }
+        #if DEBUG
+        if !isDrawn { probeAllowance = Self.probeOwedOnce ? 1 : 0 }
+        #endif
         withTransaction(transaction) {
             rootView = root
             if laidOut, window != nil {
@@ -222,6 +240,19 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
                 KeptContentHostCounts.laidOutInSet += 1
                 #endif
                 layoutSubtreeIfNeeded()
+                #if DEBUG
+                if !isDrawn {
+                    Self.probeOwesAfterSet = owesLayout
+                    if probeAllowance > 0, owesLayout {
+                        probeAllowance -= 1
+                        Self.probeInTurn += 1
+                        holdsLayout = false
+                        owesLayout = false
+                        super.needsLayout = true
+                        layoutSubtreeIfNeeded()
+                    }
+                }
+                #endif
             }
         }
     }

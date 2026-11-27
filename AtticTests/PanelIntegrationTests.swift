@@ -1261,7 +1261,20 @@ final class PanelIntegrationTests: XCTestCase {
         let editor = presenter.host.textView
         XCTAssertNotNil(editor.window)
         let bodiesBefore = NotesPageHost.bodyEvaluations
-        followupSwitch(panel, to: .tasks)
+        // ND probe (temporary): the owed layout let through once at hide.
+        KeptContentHostingView.probeOwedOnce = ProcessInfo.processInfo.environment["ND_PROBE_OFF"] == nil
+        defer { KeptContentHostingView.probeOwedOnce = false }
+        KeptContentHostingView.probeInTurn = 0
+        KeptContentHostingView.probeLate = 0
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        var probe = ["switch-turn:window=\(editor.window != nil)"]
+        let started = CACurrentMediaTime()
+        for turn in 1...8 {
+            CFRunLoopRunInMode(.defaultMode, 0.017, true)
+            probe.append("t\(turn)@\(Int((CACurrentMediaTime() - started) * 1000))ms:window=\(editor.window != nil)")
+        }
+        print("ND_PROBE \(probe.joined(separator: " ")) owesAfterSet=\(KeptContentHostingView.probeOwesAfterSet) inTurn=\(KeptContentHostingView.probeInTurn) late=\(KeptContentHostingView.probeLate)")
+        spin(0.4)
         XCTAssertTrue(panel.uiState.builtPages.contains(.notes))
         // The outgoing page's spring may retain its native hierarchy until it settles.
         spin(until: { editor.window == nil })
