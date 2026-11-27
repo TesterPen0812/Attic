@@ -1702,7 +1702,16 @@ extension HiddenPagesCountersTests {
     /// that (scroll-takeover-notes.md, Opus build). With Calendar hidden
     /// behind Tasks through its build and a scroll of the list: no agenda
     /// day's body runs, and the now line holds no minute clock.
+    static var c9KnockHidden = false
+    func testC9AKnockOutHiddenHostIsHidden() throws {
+        Self.c9KnockHidden = true
+        defer { Self.c9KnockHidden = false }
+        CalendarAgendaDay.stacks = []
+        try testC9AHiddenCalendarDoesNoClockOrAgendaWorkThroughATasksScroll()
+    }
+
     func testC9AHiddenCalendarDoesNoClockOrAgendaWorkThroughATasksScroll() throws {
+        print("C9DIAG arm knockHidden=\(Self.c9KnockHidden)")
         Self.scrollSeed = true
         defer { Self.scrollSeed = false }
         let linesBefore = CalendarNowLine.bodyEvaluations
@@ -1722,14 +1731,43 @@ extension HiddenPagesCountersTests {
             let panelBefore = AtticPanelHostingView.layoutPasses
             let calHost = calendarHost(rig)
             print("C9DIAG before-scroll agenda=\(CalendarAgendaDay.bodyEvaluationsByDay.values.reduce(0, +) - agendaBefore) host=\(calHost != nil) drawn=\(calHost?.isDrawn ?? false) layouts=\(calHost.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] } ?? -1) rootsOff=\(KeptContentHostCounts.roots.off) updOff=\(KeptContentHostCounts.updates.off) bounds=\(calHost?.bounds.size ?? .zero)")
+            if Self.c9KnockHidden { calHost?.isHidden = true }
+            func geo(_ tag: String) {
+                guard let calHost else { return }
+                var scrolls: [NSScrollView] = []
+                func walk(_ v: NSView) { if let s = v as? NSScrollView { scrolls.append(s) }; v.subviews.forEach(walk) }
+                walk(calHost)
+                let s = scrolls.map { "\(type(of: $0)) clip=\($0.contentView.bounds.origin.y) dvr=\($0.documentVisibleRect.integral) vr=\($0.visibleRect.integral)" }.joined(separator: "; ")
+                print("C9GEO \(tag) hostVR=\(calHost.visibleRect.integral) inWin=\(calHost.convert(calHost.bounds, to: nil).integral) encl=\(calHost.enclosingScrollView.map { "\(type(of: $0))" } ?? "nil") scrolls=[\(s)]")
+            }
+            var chain: [String] = []
+            var up: NSView? = calHost
+            while let v = up { chain.append("\(type(of: v))"); up = v.superview }
+            print("C9GEO chain \(chain.joined(separator: " < "))")
+            print("C9GEO tasksList encl=\(type(of: list)) inWin=\(list.convert(list.bounds, to: nil).integral)")
+            geo("before")
+            CalendarAgendaDay.stackProbe = true
+            defer { CalendarAgendaDay.stackProbe = false }
+            // Idle arm: the same pumps, no scroll.
+            for turn in 1...Self.scrollSteps {
+                let a0 = CalendarAgendaDay.bodyEvaluationsByDay
+                pump(rig.content, rig.panel, seconds: 0.024)
+                let ran = CalendarAgendaDay.bodyEvaluationsByDay.filter { $0.value != a0[$0.key, default: 0] }.map { "\($0.key)" }
+                if !ran.isEmpty { print("C9DIAG idle=\(turn) ran=\(ran) layouts=\(calHost.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] } ?? -1) updOff=\(KeptContentHostCounts.updates.off)") }
+            }
+            print("C9DIAG idle-done agenda=\(CalendarAgendaDay.bodyEvaluationsByDay.values.reduce(0, +) - agendaBefore) days=\(rig.calendarModel.snapshot.groups.count)")
             for step in 1...Self.scrollSteps {
                 let a0 = CalendarAgendaDay.bodyEvaluationsByDay
                 scrollStep(list, rig, step: step)
                 let a1 = CalendarAgendaDay.bodyEvaluationsByDay
                 let ran = a1.filter { $0.value != a0[$0.key, default: 0] }.map { "\($0.key)" }
+                if step <= 9 { geo("step=\(step)") }
                 if !ran.isEmpty || step <= 2 {
                     print("C9DIAG step=\(step) ran=\(ran) layouts=\(calHost.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] } ?? -1) rootsOff=\(KeptContentHostCounts.roots.off) updOff=\(KeptContentHostCounts.updates.off) envOff=\(KeptContentHostCounts.environments.off) drawn=\(calHost?.isDrawn ?? false)")
                 }
+            }
+            for (i, stack) in CalendarAgendaDay.stacks.enumerated() {
+                for frame in stack.split(separator: "\n") { print("C9DIAG stack\(i) \(frame)") }
             }
             let agenda = CalendarAgendaDay.bodyEvaluationsByDay.values.reduce(0, +) - agendaBefore
             let panel = AtticPanelHostingView.layoutPasses - panelBefore

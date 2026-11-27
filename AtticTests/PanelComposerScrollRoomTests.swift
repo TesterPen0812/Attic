@@ -75,6 +75,9 @@ final class PanelComposerScrollRoomTests: XCTestCase {
 
             rig.room.set(height: cardHeight, open: true)
             rig.host.layoutSubtreeIfNeeded() // one layout, no run-loop turn
+            print("ROOMDIAG t1 oneLayout libClosed=\(libraryClosed) lib=\(library.contentInsets.bottom) gridClosed=\(gridClosed) grid=\(grid.contentInsets.bottom) extra=\(extra) room=\(rig.room.height)")
+            settle(rig.host, times: 3)
+            print("ROOMDIAG t1 threeSettles lib=\(library.contentInsets.bottom) grid=\(grid.contentInsets.bottom) room=\(rig.room.height)")
             XCTAssertEqual(library.contentInsets.bottom - libraryClosed, extra, accuracy: 1,
                            "the hidden library's margin already has the card's room")
             XCTAssertEqual(grid.contentInsets.bottom - gridClosed, extra, accuracy: 1,
@@ -82,8 +85,10 @@ final class PanelComposerScrollRoomTests: XCTestCase {
 
             // Calendar's day, first built while the card is open and Calendar hidden.
             rig.calendarModel.setDayView(true)
+            print("ROOMDIAG t1 setDayView-hidden")
             let day = try XCTUnwrap(firstLaidOut(in: rig.host, besides: &known), "Calendar's day scroll view")
             let dayFirst = day.contentInsets.bottom
+            print("ROOMDIAG t1 dayFirst=\(dayFirst) room=\(rig.room.height) selected=\(rig.state.selectedSection)")
             settle(rig.host)
 
             // The switch closes the card; whatever the room is on the first
@@ -104,6 +109,7 @@ final class PanelComposerScrollRoomTests: XCTestCase {
             rig.room.set(height: 0, open: false)
             settle(rig.host, times: 2)
             let dayClosed = day.contentInsets.bottom
+            print("ROOMDIAG t1 dayAtSwitch=\(dayAtSwitch) roomAtSwitch=\(roomAtSwitch) dayClosed=\(dayClosed)")
             XCTAssertEqual(dayFirst - dayClosed, extra, accuracy: 1, "the day's first layout had the card's room")
             assertShownMargin(dayAtSwitch - dayClosed, roomAtRead: roomAtSwitch, "the day")
         }
@@ -125,6 +131,7 @@ final class PanelComposerScrollRoomTests: XCTestCase {
             rig.state.prepareBuiltPage(PanelPage(.calendar))
             let grid = try XCTUnwrap(firstLaidOut(in: rig.host, besides: &known), "Calendar's grid scroll view")
             let gridFirst = grid.contentInsets.bottom
+            print("ROOMDIAG t2 libFirst=\(libraryFirst) gridFirst=\(gridFirst) room=\(rig.room.height) extra=\(extra)")
             settle(rig.host)
 
             rig.state.selectSection(.notes)
@@ -136,6 +143,12 @@ final class PanelComposerScrollRoomTests: XCTestCase {
             settle(rig.host, times: 2)
             let libraryClosed = library.contentInsets.bottom
             let gridClosed = grid.contentInsets.bottom
+            print("ROOMDIAG t2 libClosed=\(libraryClosed) gridClosedHidden=\(gridClosed) libAtSwitch=\(libraryAtSwitch) roomAtSwitch=\(roomAtSwitch)")
+            rig.state.selectSection(.calendar)
+            settle(rig.host, times: 3)
+            print("ROOMDIAG t2 gridClosedShown=\(grid.contentInsets.bottom) room=\(rig.room.height) selected=\(rig.state.selectedSection)")
+            rig.state.selectSection(.notes)
+            settle(rig.host, times: 2)
             XCTAssertEqual(libraryFirst - libraryClosed, extra, accuracy: 1, "the library's first layout had the card's room")
             XCTAssertEqual(gridFirst - gridClosed, extra, accuracy: 1, "the grid's first layout had the card's room")
             assertShownMargin(libraryAtSwitch - libraryClosed, roomAtRead: roomAtSwitch, "the library")
