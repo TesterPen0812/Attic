@@ -7,6 +7,7 @@ struct NotesPageHost: View {
     #if DEBUG
     /// Test seam (HiddenPagesCountersTests): how many times the body has run.
     static var bodyEvaluations = 0
+    static var lastContentState = "" // ND diagnostic (temporary)
     #endif
     @ObservedObject var noteStore: NoteStore
     let taskStore: TaskStore
@@ -20,6 +21,7 @@ struct NotesPageHost: View {
     var body: some View {
         #if DEBUG
         let _ = Self.bodyEvaluations += 1
+        let _ = Self.lastContentState = "cur=\(isCurrent) origin=\(String(describing: uiState.taskNoteOrigin)) open=\(uiState.openTaskNoteID != nil) pres=\(noteDraft.pages.taskNotePresenter != nil)"
         #endif
         let _ = routeStateRevision
         #if ATTIC_LOCAL_ONLY

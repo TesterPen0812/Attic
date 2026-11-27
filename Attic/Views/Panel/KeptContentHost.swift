@@ -59,6 +59,9 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// Hidden, and its hidden root laid out: a layout is owed, not run.
     private var holdsLayout = false
     private var owesLayout = false
+    #if DEBUG
+    var debugHold: String { "drawn=\(isDrawn) holds=\(holdsLayout) owes=\(owesLayout) needs=\(super.needsLayout)" } // ND diagnostic (temporary)
+    #endif
 
     override var needsLayout: Bool {
         get { super.needsLayout }

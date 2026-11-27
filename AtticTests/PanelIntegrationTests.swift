@@ -1260,15 +1260,15 @@ final class PanelIntegrationTests: XCTestCase {
         let presenter = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter)
         let editor = presenter.host.textView
         XCTAssertNotNil(editor.window)
+        let bodiesBefore = NotesPageHost.bodyEvaluations
         followupSwitch(panel, to: .tasks)
         XCTAssertTrue(panel.uiState.builtPages.contains(.notes))
         // The outgoing page's spring may retain its native hierarchy until it settles.
         spin(until: { editor.window == nil })
-        // ND diagnostic (page-host-notes-draw, temporary).
-        var chain: [String] = []
-        var walker: NSView? = editor
-        while let current = walker { chain.append(String("\(type(of: current))".prefix(60)) + ((current as? KeptContentHostingView).map { "[drawn=\($0.isDrawn) interactive=\($0.isInteractive)]" } ?? "")); walker = current.superview }
-        print("ND_ROUTEDIAG window=\(editor.window != nil) chain=\(chain.suffix(12))")
+        // ND diagnostic (temporary).
+        var hostView: NSView? = editor
+        while let v = hostView, !(v is KeptContentHostingView) { hostView = v.superview }
+        print("ND_ROUTE2 bodies=\(NotesPageHost.bodyEvaluations - bodiesBefore) state=\(NotesPageHost.lastContentState) host=\((hostView as? KeptContentHostingView)?.debugHold ?? "none") laidOutInSet=\(KeptContentHostCounts.laidOutInSet)")
         XCTAssertNil(editor.window, "the task-note route retains its original native unmount boundary")
         XCTAssertNotNil(presenter.lease, "the pre-existing warm workspace owner stays retained")
         followupSwitch(panel, to: .notes)
