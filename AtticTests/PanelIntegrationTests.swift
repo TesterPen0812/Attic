@@ -1232,7 +1232,19 @@ final class PanelIntegrationTests: XCTestCase {
         let presenter = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter)
         let editor = presenter.host.textView
         XCTAssertNotNil(editor.window)
-        followupSwitch(panel, to: .tasks)
+        // ND trunk probe (temporary): the turn the view leaves.
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        let started = CACurrentMediaTime()
+        var marks = ["switch-turn:window=\(editor.window != nil)"]
+        var turn = 0
+        while CACurrentMediaTime() - started < 0.4 {
+            turn += 1
+            CFRunLoopRunInMode(.defaultMode, 0.017, true)
+            let w = editor.window != nil
+            if turn <= 3 || !w && marks.last?.hasSuffix("true") == true { marks.append("t\(turn)@\(Int((CACurrentMediaTime() - started) * 1000))ms:window=\(w)") }
+        }
+        marks.append("+400:window=\(editor.window != nil)")
+        print("ND_TRUNK \(marks.joined(separator: " "))")
         XCTAssertTrue(panel.uiState.builtPages.contains(.notes))
         // The outgoing page's spring may retain its native hierarchy until it settles.
         spin(until: { editor.window == nil })
