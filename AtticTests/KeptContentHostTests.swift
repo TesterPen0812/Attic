@@ -419,57 +419,58 @@ final class KeptContentHostTests: XCTestCase {
         XCTAssertEqual(seen.inside, seen.outside, "inside the host as just outside it")
     }
 
-    /// A task page's one-piece motion places a Tasks list's lines in the
-    /// route host's named space (`TaskPageOnePiece.space`) from inside the
-    /// tab's own host (`TaskPageLineEffect`). That space is declared in the
-    /// panel's host, outside the kept host: inside, it must resolve to the
-    /// same place, or the lines are sorted above and below the opening row
-    /// by the wrong origin.
-    func testTheRouteHostsNamedSpaceResolvesInsideAKeptHost() {
-        final class Seen { var named: CGRect?; var global: CGRect?; var outsideNamed: CGRect? }
+    /// A task page's one-piece motion sorts a Tasks list's lines above and
+    /// below the opening row in the route host's space, from inside the
+    /// tab's own host (`TaskPageLineEffect`). The route host's named space
+    /// does not resolve there: asked for it, SwiftUI gave the global frame
+    /// (CI run 45914516669: 100 where the space put the line at 50). The
+    /// lines place themselves by the route host's top in the global space
+    /// instead (`TaskPageOnePiece.lineMid`), the way the route host keeps it.
+    func testALineInsideAKeptHostFindsItsPlaceInTheRouteHostsSpace() {
+        final class Seen { var line: CGRect?; var spaceTop: CGFloat?; var outside: CGRect? }
         let seen = Seen()
         let window = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 200, height: 300),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let space = TaskPageOnePiece.space
-        window.contentView = NSHostingView(rootView: VStack(spacing: 0) {
-            // Outside the kept host: where the space puts this line.
+        let host = NSHostingView(rootView: VStack(spacing: 0) {
+            // Outside the kept host: the line's place in the route's space.
             Color.clear.frame(height: 30)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(space)) } action: { seen.outsideNamed = $0 }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { seen.outside = $0 }
             KeptContentHost(drawn: true, interactive: true) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: 20)
                     Color.clear.frame(height: 10)
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(space)) } action: { seen.named = $0 }
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { seen.global = $0 }
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { seen.line = $0 }
                     Spacer(minLength: 0)
                 }
             }
             .frame(height: 150)
             .padding(.leading, 15)
         }
-            // The space starts 50 pt below the panel host's top and 7 pt in,
-            // so it differs from the window's, the panel host's and the
-            // kept host's own origins.
-            .coordinateSpace(.named(space))
+            // The route's space starts 50 pt below the panel host's top, and
+            // the panel host 20 pt below the window's.
+            .coordinateSpace(.named(TaskPageOnePiece.space))
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { seen.spaceTop = $0 }
             .padding(.top, 50)
-            .padding(.leading, 7)
-            .frame(width: 200, height: 300, alignment: .topLeading))
+            .frame(width: 200, height: 280, alignment: .topLeading))
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 300))
+        host.frame = CGRect(x: 0, y: 0, width: 200, height: 280)
+        container.addSubview(host)
+        window.contentView = container
         window.orderFront(nil)
         waitForTestOperation("the probes' first frames") {
-            window.contentView?.layoutSubtreeIfNeeded()
+            host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
-            return seen.named != nil && seen.outsideNamed != nil && seen.global != nil
+            return seen.line != nil && seen.outside != nil && seen.spaceTop != nil
         }
-        // The rig tells the spaces apart: outside the host the space puts
-        // the first line at its own origin.
-        XCTAssertEqual(seen.outsideNamed?.minY ?? -1, 0, accuracy: 0.5, "outside: the space's own origin")
-        XCTAssertEqual(seen.outsideNamed?.minX ?? -1, 0, accuracy: 0.5)
-        // Inside: 30 (the line above the host) + 20 down, 15 in.
-        print("NAMED SPACE inside named=\(String(describing: seen.named)) global=\(String(describing: seen.global))")
-        XCTAssertEqual(seen.named?.minY ?? -1, 50, accuracy: 0.5, "the route host's space resolves inside a kept host")
-        XCTAssertEqual(seen.named?.minX ?? -1, 15, accuracy: 0.5, "the route host's space resolves inside a kept host")
+        let spaceTop = seen.spaceTop ?? -1
+        // Outside the host the line above it sits at the space's top.
+        XCTAssertEqual(TaskPageOnePiece.lineMid(seen.outside ?? .null, spaceTop: spaceTop), 15, accuracy: 0.5,
+                       "outside: the space's own top, the rig places lines")
+        // Inside: 30 (the line above the host) + 20 + half of 10.
+        XCTAssertEqual(TaskPageOnePiece.lineMid(seen.line ?? .null, spaceTop: spaceTop), 55, accuracy: 0.5,
+                       "a line inside a kept host finds its place in the route host's space")
     }
 
     /// §4.2 and the lead's ruling (19 Nov): a host that is not drawn takes

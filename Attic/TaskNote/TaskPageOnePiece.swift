@@ -44,6 +44,16 @@ enum TaskPageOnePiece {
     /// The least the rows below are pushed (the drawing's 120 px).
     nonisolated static let leastPush: CGFloat = 60
 
+    /// A line's middle in the route host's space, from its frame in the
+    /// global space. The line is drawn in its tab's own host, where the
+    /// route host's named space does not resolve: asked for it, SwiftUI gave
+    /// the global frame (CI run 45914516669, `KeptContentHostTests`: 100
+    /// where the space put it at 50). The global space is the same on both
+    /// sides of the host, so the route host's top in it places the line.
+    nonisolated static func lineMid(_ frameInGlobal: CGRect, spaceTop: CGFloat) -> CGFloat {
+        frameInGlobal.midY - spaceTop
+    }
+
     nonisolated static func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
 
     /// 0 before `from`, 1 after `to`, linear between (on the spring's progress).
@@ -149,6 +159,8 @@ struct TaskPageMakeWay: Equatable, Sendable {
     var pose: TaskPagePose
     /// 0 at the row, 1 at the page (animated on the size spring).
     var progress: CGFloat
+    /// The route host's top in the global space (`TaskPageMotion.spaceTop`).
+    var spaceTop: CGFloat = 0
 }
 
 extension EnvironmentValues {
@@ -178,7 +190,7 @@ struct TaskPageMakeWayLine: ViewModifier {
     @Environment(\.taskPageWay) private var way
 
     func body(content: Content) -> some View {
-        content.modifier(TaskPageLineEffect(progress: way?.progress ?? 0, pose: way?.pose))
+        content.modifier(TaskPageLineEffect(progress: way?.progress ?? 0, pose: way?.pose, spaceTop: way?.spaceTop ?? 0))
     }
 }
 
@@ -209,7 +221,7 @@ struct TaskPageListFollows: ViewModifier {
         guard let motion, motion.listTab == tab else { return nil }
         let progress = motion.progress
         guard let place = motion.place else { return nil }
-        return TaskPageMakeWay(anchorID: place.anchorID, pose: place.pose, progress: progress)
+        return TaskPageMakeWay(anchorID: place.anchorID, pose: place.pose, progress: progress, spaceTop: motion.spaceTop)
     }
 }
 
@@ -247,6 +259,7 @@ struct TaskPageDrawsList<Content: View>: View {
 private struct TaskPageLineEffect: ViewModifier, Animatable {
     var progress: CGFloat
     let pose: TaskPagePose?
+    let spaceTop: CGFloat
 
     var animatableData: CGFloat {
         get { progress }
@@ -254,13 +267,13 @@ private struct TaskPageLineEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        let p = progress, pose = pose
+        let p = progress, pose = pose, spaceTop = spaceTop
         #if DEBUG
         let _ = TaskPageMotion.lineDrew(p, following: pose != nil)
         #endif
         content.visualEffect { effect, proxy in
             guard let pose, p != 0 else { return effect.offset(y: 0).opacity(1) }
-            let mid = proxy.frame(in: .named(TaskPageOnePiece.space)).midY
+            let mid = TaskPageOnePiece.lineMid(proxy.frame(in: .global), spaceTop: spaceTop)
             if mid >= pose.rowTop, mid <= pose.rowBottom { return effect.offset(y: 0).opacity(1) }
             let dy = mid < pose.rowTop ? pose.rise * p : pose.push * TaskPageOnePiece.linePush(p)
             return effect.offset(y: dy).opacity(TaskPageOnePiece.lineOpacity(p))
@@ -843,6 +856,9 @@ final class TaskPageMotion {
     /// The row and the head for the list, read without being observed: the
     /// list's readers are told of the progress only (`TaskPageListFollows`).
     @ObservationIgnored private(set) var place: (anchorID: UUID, pose: TaskPagePose)?
+    /// The route host's top in the global space, where the list's lines find
+    /// their place (`TaskPageOnePiece.lineMid`); kept by the route host.
+    @ObservationIgnored var spaceTop: CGFloat = 0
     /// Each turn of the motion; a landing from an older one is ignored.
     @ObservationIgnored var generation = 0
     /// The motion is back at the row while the route is still closing.

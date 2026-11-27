@@ -115,6 +115,8 @@ struct TaskNoteRouteHost<Origin: View>: View {
                 .zIndex(2)
         }
         .coordinateSpace(.named(TaskPageOnePiece.space))
+        // Where the list's lines, in their tabs' own hosts, find this space.
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { onePiece.spaceTop = $0 }
         .background(TaskPageOnePieceProbe(box: onePieceProbe).accessibilityHidden(true))
         .onChange(of: requestedID, initial: true) { old, new in growRoute(from: old, to: new) }
         .onChange(of: shown != nil, initial: true) { _, covered in
