@@ -2134,10 +2134,15 @@ final class AtticDropdownPresenter {
         // after the first Tab, and it put the keyboard back in the field
         // (H5-04, CI). A host still waiting to join the window (a layout
         // pass) takes it on the next turn.
-        if takesKeyboard, host.window != nil { takeKeyboard() }
+        // SCRATCH: the claim deliberately lands after the unfold ends.
+        if takesKeyboard {
+            DispatchQueue.main.asyncAfter(deadline: .now() + AtticDropdownReveal.openDuration + 0.2) { [weak self] in
+                guard let self, self.isOpen else { return }
+                self.takeKeyboard()
+            }
+        }
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isOpen else { return }
-            if self.takesKeyboard, self.stage.focusRequest == 0 { self.takeKeyboard() }
             #if DEBUG
             if AtticDropdownDiagnostics.enabled { AtticDropdownDiagnostics.reveals += 1 }
             #endif
