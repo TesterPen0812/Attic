@@ -440,6 +440,7 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
             let canvasBefore = PanelCanvasNoticeAwareHost.bodyEvaluations
             _ = measure(rig, "Draw shown after the corner change", { rig.state.selectSection(.canvas) },
                         saved: { rig.state.selectedSection == .canvas })
+            settle(rig)
             let canvasLive = PanelCanvasNoticeAwareHost.bodyEvaluations - canvasBefore
             print("CLEARANCE_SHELL_COUNTS panel corner changed shell=\(shellRuns - shellBefore) canvasHost=\(canvasLive)")
             XCTAssertGreaterThan(canvasLive, 0, "harness: Draw shown, the Canvas host runs")

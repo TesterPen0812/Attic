@@ -471,7 +471,10 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         host.isDrawn = drawn
         // Two hidden updates in a row set nothing (as `TasksKeptPage`'s
         // equality, which this boundary carries across the host).
-        let leaving = laysOutOnLeave && host.isInteractive && !interactive
+        // A leaving page's root, and its first hidden one (the slide over),
+        // are laid out here, so its leave actions and removals apply where
+        // they did in the panel's own host (`laysOutOnLeave`).
+        let leaving = laysOutOnLeave && ((host.isInteractive && !interactive) || (!drawn && !coordinator.hiddenRootSet))
         if drawn || !coordinator.hiddenRootSet {
             let root = root(context)
             host.setRoot(root, laidOut: leaving || Self.movesRows(from: coordinator.drawnRows, to: drawn ? rows : nil),
