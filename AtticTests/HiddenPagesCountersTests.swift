@@ -2362,7 +2362,7 @@ extension HiddenPagesCountersTests {
                 let typed = editor.string
                 XCTAssertTrue(typed.hasSuffix(" zq7"), "harness: the word was typed")
                 let shellBefore = Self.shellRuns
-                func state() -> String {
+                @MainActor func state() -> String {
                     "mon=\(NotesPageChrome.installedKeyMonitors - monitorsShown) susp=\(editor.isSuspended ? 1 : 0) "
                         + "resp=\(responderName(rig, editor: editor)) saved=\(storedText(rig, id).contains("zq7") ? 1 : 0) "
                         + "x=\(editor.string.hasSuffix("zq7x") ? 1 : 0)"
@@ -2406,7 +2406,7 @@ extension HiddenPagesCountersTests {
                 pump(rig.content, rig.panel)
                 XCTAssertTrue(DrawPageModel.shared.isShown, "harness: Draw is shown")
                 let shellBefore = Self.shellRuns
-                func state() -> String { "shown=\(DrawPageModel.shared.isShown ? 1 : 0) resp=\(responderName(rig, editor: nil))" }
+                @MainActor func state() -> String { "shown=\(DrawPageModel.shared.isShown ? 1 : 0) resp=\(responderName(rig, editor: nil))" }
                 var atKey = ""
                 try switchThenKey(rig, to: .tasks, by: path, atKey: { atKey = state() }, afterKey: {})
                 var shellAtFirstFrame = false
