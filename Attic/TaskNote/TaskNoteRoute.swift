@@ -53,6 +53,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
     var body: some View {
         #if DEBUG
         let _ = TaskNoteRouteHostCounts.bodyEvaluations[page, default: 0] += 1
+        let _ = TaskPageMotion.mark("body route \(page)")
         #endif
         let _ = routeStateRevision
         let shown = isReady ? displayedTaskID : nil
@@ -199,6 +200,10 @@ struct TaskNoteRouteHost<Origin: View>: View {
     /// The route asked for changed: a page opening grows from its row; one
     /// closed without Back (a refused handoff, a purge) shrinks back.
     private func growRoute(from old: UUID?, to new: UUID?) {
+        #if DEBUG
+        TaskPageMotion.mark("growRoute \(old == nil ? "nil" : "id") -> \(new == nil ? "nil" : "id")")
+        defer { TaskPageMotion.mark("growRoute end") }
+        #endif
         if let new {
             if onePiece.isActive {
                 if onePiece.taskID == new {
@@ -256,7 +261,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
     /// Reduce Motion: instant), so the page opens as before.
     private func startOnePiece(_ id: UUID, origin: AtticGrowOrigin?) -> Bool {
         #if DEBUG
-        if AtticGrowTrace.disabled { return false }
+        if AtticGrowTrace.disabled || TaskPageMotion.onePieceOffForTesting { return false }
         #endif
         guard page == .tasks, !design.reduceMotion, presentedTaskID == nil, let origin,
               let view = onePieceProbe.view,
@@ -290,6 +295,9 @@ struct TaskNoteRouteHost<Origin: View>: View {
     /// The stand-in came in (the click, or Back from the built page): the
     /// spring runs from where everything is now.
     private func onePieceStandInAppeared() {
+        #if DEBUG
+        TaskPageMotion.mark("standIn appeared")
+        #endif
         onePiece.trace("standInAppeared")
         guard onePiece.isActive else { return }
         if onePiece.open, onePiece.progress < 1 { turnOnePiece(open: true) }
@@ -370,6 +378,10 @@ struct TaskNoteRouteHost<Origin: View>: View {
     /// Back: the stand-in takes the page's place again (the same places) and
     /// runs into the row as it is now, or fades when the row is gone.
     private func reverseOnePiece(_ taskID: UUID) {
+        #if DEBUG
+        TaskPageMotion.mark("reverse begin")
+        defer { TaskPageMotion.mark("reverse end") }
+        #endif
         onePiece.trace("reverse")
         guard onePiece.taskID == taskID, onePiece.open else { return }
         onePieceProbe.stopWatchingEscape()

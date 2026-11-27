@@ -1150,6 +1150,100 @@ final class PanelIntegrationTests: XCTestCase {
         }
     }
 
+    /// Diagnosis (prints only): what the main thread does between Back's
+    /// press and the reverse's first frame, and between the open and the
+    /// opening's first frame, in one piece and in the grow, at 300 rows.
+    /// Each run-loop turn longer than 4 ms is printed with the work it held.
+    func testOnePieceBackAndOpenFirstFramesDiagnosis() throws {
+        try withMotion(reduced: false) {
+            let rig = try onePiecePanel((0..<300).map { TaskDraft(title: "Row \($0) with a longer title to wrap") })
+            let target = try XCTUnwrap(rig.tasks.dropFirst(4).first?.id)
+            spin(until: { !rig.model.agentRowFrames([target]).isEmpty })
+            spin(until: { self.tabHosts(rig.panel).contains { !$0.isDrawn } }, timeout: 5)
+            let observer = CFRunLoopObserverCreateWithHandler(
+                nil, CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue, true, 0
+            ) { _, activity in
+                MainActor.assumeIsolated { TaskPageMotion.mark(activity == .afterWaiting ? "RL wake" : "RL sleep") }
+            }
+            CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+            defer {
+                CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes)
+                TaskPageMotion.timingForTesting = false
+                TaskPageMotion.onePieceOffForTesting = false
+            }
+            for (rep, arm) in ["one-piece", "grow", "one-piece", "grow"].enumerated() {
+                TaskPageMotion.onePieceOffForTesting = arm == "grow"
+                TaskPageMotion.timeLogForTesting = []
+                TaskPageMotion.timingForTesting = true
+                TaskPageMotion.mark("OPEN press")
+                rig.panel.uiState.openTaskNote(target, from: .tasks)
+                spin(until: { rig.element("task-note-back") != nil
+                    && (arm == "grow" || TaskPageMotion.currentForTesting?.handedOver == true) })
+                spin(until: { false }, timeout: 0.3)
+                print("FRAMES \(arm) \(rep) OPEN\n" + Self.framesSummary(TaskPageMotion.timeLogForTesting))
+                let back = try XCTUnwrap(rig.element("task-note-back"))
+                TaskPageMotion.timeLogForTesting = []
+                TaskPageMotion.mark("BACK press")
+                XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
+                spin(until: { rig.panel.uiState.openTaskNoteID == nil && TaskPageMotion.currentForTesting?.isActive != true
+                    && rig.element("task-note-back") == nil })
+                spin(until: { false }, timeout: 0.3)
+                print("FRAMES \(arm) \(rep) BACK\n" + Self.framesSummary(TaskPageMotion.timeLogForTesting))
+                TaskPageMotion.timingForTesting = false
+                XCTAssertNil(rig.panel.uiState.openTaskNoteID)
+            }
+        }
+    }
+
+    /// The log as turns: each marked event with its time from the first
+    /// mark; each run-loop turn over 4 ms with its length and the work in it
+    /// (counts, and the length of each layout pass).
+    private static func framesSummary(_ log: [(time: CFTimeInterval, what: String)]) -> String {
+        guard let start = log.first?.time else { return "(empty)" }
+        func ms(_ t: CFTimeInterval) -> String { String(format: "%7.1f", (t - start) * 1000) }
+        var out: [String] = []
+        var turnStart: CFTimeInterval?
+        var inTurn: [(time: CFTimeInterval, what: String)] = []
+        let events = ["press", "back()", "onLeaving", "close", "reverse", "growRoute", "standIn", "setCovered"]
+        for entry in log {
+            if entry.what == "RL wake" { turnStart = entry.time; inTurn = []; continue }
+            if entry.what == "RL sleep" {
+                if let t0 = turnStart, entry.time - t0 > 0.004 || inTurn.contains(where: { m in events.contains { m.what.contains($0) } }) {
+                    var counts: [String: Int] = [:]
+                    var order: [String] = []
+                    var opened: [String: CFTimeInterval] = [:]
+                    var spans: [String] = []
+                    for m in inTurn {
+                        if m.what.contains(" begin") && m.what.contains("layout") || m.what.hasPrefix("editor updateNSView") && !m.what.hasSuffix("end") {
+                            opened[m.what.components(separatedBy: " begin").first ?? m.what] = m.time
+                        } else if m.what.hasSuffix(" end"), m.what.contains("layout") || m.what.hasPrefix("editor") {
+                            let key = m.what.hasPrefix("editor") ? "editor updateNSView" : String(m.what.dropLast(4))
+                            if let b = opened.removeValue(forKey: key) {
+                                spans.append("\(key) \(ms(b))+\(String(format: "%.1f", (m.time - b) * 1000))")
+                            }
+                        }
+                        let key = m.what.components(separatedBy: " host=").first ?? m.what
+                        if events.contains(where: { m.what.contains($0) }) { order.append("\(ms(m.time)) \(m.what)") }
+                        if counts[key] == nil { order.append("#\(key)") }
+                        counts[key, default: 0] += 1
+                    }
+                    let work = order.filter { $0.hasPrefix("#") }.map { k in "\(k.dropFirst()) x\(counts[String(k.dropFirst())] ?? 0)" }
+                    out.append("TURN \(ms(t0)) +\(String(format: "%.1f", (entry.time - t0) * 1000)) ms")
+                    out += order.filter { !$0.hasPrefix("#") }.map { "   " + $0 }
+                    out.append("   work: " + work.joined(separator: ", "))
+                    if !spans.isEmpty { out.append("   spans: " + spans.prefix(12).joined(separator: "; ")) }
+                }
+                turnStart = nil
+                continue
+            }
+            if turnStart == nil, ["press", "back()", "close"].contains(where: { entry.what.contains($0) }) {
+                out.append("OUTSIDE \(ms(entry.time)) \(entry.what)")
+            }
+            inTurn.append(entry)
+        }
+        return out.prefix(60).joined(separator: "\n")
+    }
+
     func testOnePieceOpensFromNowLaterDoneAndASearch() throws {
         let cases: [(String, TaskStatus, TasksTab, String?)] = [
             ("Now", .todo, .now, nil), ("Later", .backlog, .backlog, nil),

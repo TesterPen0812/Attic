@@ -217,6 +217,9 @@ struct AtticPanelView: View {
         ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
 
     var body: some View {
+        #if DEBUG
+        let _ = TaskPageMotion.mark("body panel view")
+        #endif
         let _ = relevantSettings
         let _ = relevantUIState
         #if ATTIC_LOCAL_ONLY

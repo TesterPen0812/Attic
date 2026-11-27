@@ -241,6 +241,10 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
             owesLayout = true
             return
         }
+        #if DEBUG
+        TaskPageMotion.mark("tab host layout begin drawn=\(isDrawn) host=\(ObjectIdentifier(self).hashValue % 10_000)")
+        defer { TaskPageMotion.mark("tab host layout end") }
+        #endif
         AtticOverlayHierarchy.layoutPass { super.layout() }
         if !isDrawn, !bounds.isEmpty { holdsLayout = true }
     }
