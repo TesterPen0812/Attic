@@ -940,7 +940,7 @@ final class HiddenPagesCountersTests: XCTestCase {
         }
         switch page {
         case .tasks:
-            // Tasks' tab hosts only: Calendar, Notes and Draw each sit in a
+            // Tasks' tab hosts only: Calendar and Notes each sit in a
             // kept host of their own, which keeps its settled size while
             // hidden (PR 80; speed/page-host-notes-draw).
             return find("KeptContentContainer", in: rig.content).filter { view in
@@ -1389,7 +1389,7 @@ final class HiddenPagesCountersTests: XCTestCase {
             XCTAssertEqual(notesRows, 0, "a Notes row's body holds the •••'s focus state (a reader re-checked per click)")
 
             // The control: the keyboard drives, and the rings hold their
-            // focus state again. Read on a shown page: hidden, Notes, Draw and
+            // focus state again. Read on a shown page: hidden, Notes and
             // Calendar sit in kept hosts that hold their environment, so a
             // hidden page's rings no longer re-run (page-host-notes-draw).
             show(.notes, rig)
@@ -1669,8 +1669,8 @@ extension HiddenPagesCountersTests {
             let grown = dragSize(start, step: Self.dragSteps).width - start.width
             oneFrame(rig)
             XCTAssertNil(rig.state.retainedPageSizeDuringLiveResize)
-            // Each hidden page sits in a kept host that is not laid out while
-            // hidden (Calendar, PR 80; Notes and Draw, page-host-notes-draw):
+            // Calendar and Notes sit in kept hosts that are not laid out while
+            // hidden (PR 80; page-host-notes-draw); Draw is laid out hidden. Each:
             // it takes the final size in its first frame shown.
             for page in hidden { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: grown, "RZ3") }
         }
@@ -1690,8 +1690,8 @@ extension HiddenPagesCountersTests {
             let start = rig.state.panelSize
             resize(rig, to: CGSize(width: start.width + 24, height: start.height + 12))
             oneFrame(rig)
-            // Each hidden page sits in a kept host that is not laid out while
-            // hidden (Calendar, PR 80; Notes and Draw, page-host-notes-draw):
+            // Calendar and Notes sit in kept hosts that are not laid out while
+            // hidden (PR 80; page-host-notes-draw); Draw is laid out hidden. Each:
             // it takes the size in its first frame shown.
             for page in hidden { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: 24, "RZ4A") }
         }
@@ -1770,7 +1770,7 @@ extension HiddenPagesCountersTests {
             // shows it mid-drag hands the row the start width once before
             // the live one (AtticPanelHostingView.layout, run 45958590350);
             // the frame drawn has the live width (asserted above).
-            XCTExpectFailure("NOTES-SHOWN-MID-DRAG-STALE-ROW-WIDTH (board): shown mid-drag, the row is handed the start width "
+            XCTExpectFailure("PR-NOTES-RZ6A-MIDDRAG (board): shown mid-drag, the row is handed the start width "
                              + "once in the frame's layout", strict: true) {
                 XCTAssertEqual(handed.filter { abs($0 - live) >= 0.5 }, [], "shown mid-drag, the row was handed a stale width")
             }
@@ -1809,7 +1809,7 @@ extension HiddenPagesCountersTests {
     /// itself (run 45923411211, `C9GEO`: the hidden host's agenda clip went
     /// 14, 28 … 126 with the steps).
     /// A Tasks tab host: a kept host that carries no other page's tag
-    /// (Calendar's, Notes' and Draw's hosts carry theirs).
+    /// (Calendar's and Notes' hosts carry theirs).
     private static func isTasksHost(_ host: KeptContentHostingView) -> Bool {
         guard let membership = PanelPageKeyboard.membership(of: host) else { return true }
         return membership == .page(.tasks)
@@ -2214,13 +2214,12 @@ extension HiddenPagesCountersTests {
 
 // MARK: - Notes and Draw in kept hosts (speed/page-host-notes-draw; the lead's ruling, 27 Nov)
 
-/// The lead's conditions for moving Notes and Draw into hosts of their own:
-/// every leave hook runs in the switch's own run-loop turn, before the new
-/// page's first frame and before a key pressed in that turn is handled;
-/// the first responder after the switch is the trunk's; Draw's finish and
-/// thumbnail flush (`DrawPageModel.setShown(false)`) is never later; the
-/// shell's notice clearance is the trunk's with Notes shown and hidden; and
-/// the common paths are right in their first frame shown.
+/// The lead's conditions for moving Notes into a host of its own (Draw
+/// follows in its own pull request): every leave hook runs no later than on
+/// the trunk, by the new page's first frame; the first responder after the
+/// switch is the trunk's; the shell's notice clearance is the trunk's with
+/// Notes shown and hidden; and the common paths are right in their first
+/// frame shown.
 @MainActor
 extension HiddenPagesCountersTests {
     /// The ways a switch leaves a page: ⌘-digit (the header's shortcut),
@@ -2405,169 +2404,6 @@ extension HiddenPagesCountersTests {
         }
     }
 
-    /// (c) for Draw and the flush points: Draw shown, a switch to Tasks and a
-    /// key queued in the same turn, on each path; printed as ND2 for the
-    /// trunk comparison. `setShown(false)` (which finishes a live stroke and
-    /// flushes the thumbnail) is asserted done by the first frame. Then a
-    /// window close right after a switch (`panelDidHide` and `orderOut` in
-    /// the switch's turn): done at once. App quit runs
-    /// `prepareForTermination` (AppCoordinator.swift:1355), an event after
-    /// the switch's turn.
-    func testND3DrawIsHiddenInTheSwitchsTurnOnEveryPathAndAtAClose() throws {
-        try requireKeyWindowTests()
-        for path in LeavePath.allCases {
-            try withRig { rig in
-                rig.panel.makeKey()
-                rig.state.panelDidReveal()
-                rig.state.island.click(.canvas)
-                pump(rig.content, rig.panel)
-                XCTAssertTrue(DrawPageModel.shared.isShown, "harness: Draw is shown")
-                let shellBefore = Self.shellRuns
-                @MainActor func state() -> String { "shown=\(DrawPageModel.shared.isShown ? 1 : 0) resp=\(responderName(rig, editor: nil))" }
-                var atKey = ""
-                try switchThenKey(rig, to: .tasks, by: path, atKey: { atKey = state() }, afterKey: {})
-                var shellAtFirstFrame = false
-                var atFirstFrame = ""
-                let sequence = leaveSequence(rig, shellBefore: shellBefore) {
-                    let now = state()
-                    if !shellAtFirstFrame, Self.shellRuns > shellBefore { shellAtFirstFrame = true; atFirstFrame = now }
-                    return now
-                }
-                pump(rig.content, rig.panel)
-                print("ND_LEAVE draw path=\(path.rawValue) at_key{\(atKey)} seq{\(sequence)} first{\(atFirstFrame)} settled{\(state())}")
-                XCTAssertTrue(shellAtFirstFrame, "harness ND3 \(path): the shell ran after the switch")
-                XCTAssertTrue(atFirstFrame.hasPrefix("shown=0"), "ND3 \(path): Draw was still shown in the first frame")
-            }
-        }
-        // A window close right after a switch.
-        try withRig { rig in
-            rig.panel.makeKey()
-            rig.state.panelDidReveal()
-            rig.state.island.click(.canvas)
-            pump(rig.content, rig.panel)
-            XCTAssertTrue(DrawPageModel.shared.isShown, "harness: Draw is shown")
-            rig.state.island.click(.tasks)
-            rig.state.panelDidHide()
-            let shownAtClose = DrawPageModel.shared.isShown
-            rig.panel.orderOut(nil)
-            Hosted.pumpEvents()
-            let shownAfterTurn = DrawPageModel.shared.isShown
-            pump(rig.content, rig.panel)
-            print("ND_LEAVE draw close at_close{shown=\(shownAtClose)} after_turn{shown=\(shownAfterTurn)} settled{shown=\(DrawPageModel.shared.isShown)}")
-            XCTAssertFalse(shownAtClose, "ND3 close: Draw was still shown when the window closed right after a switch")
-            XCTAssertFalse(DrawPageModel.shared.isShown, "ND3 close: Draw is shown after the close")
-        }
-    }
-
-    /// Accepted change (lead, 27 Nov): a page that hides with the keyboard
-    /// gives it up (HB-02), Draw now too. On the trunk the hidden Draw board
-    /// kept it (run 45951136189). On each switch path: leaving Draw gives the
-    /// keyboard to what leaving Notes gives it to; a key right after lands on
-    /// Tasks and leaves Draw's document alone; back on Draw, the board takes
-    /// the keyboard and its first key works (as on the trunk); and neither
-    /// page loses a key-view or accessibility element over the round trip.
-    func testND6LeavingDrawGivesTheKeyboardAsLeavingNotesAndLosesNoControl() throws {
-        try requireKeyWindowTests()
-        for path in [LeavePath.shortcut, .click] {
-            try withRig { rig in
-                rig.panel.makeKey()
-                rig.state.panelDidReveal()
-                pump(rig.content, rig.panel)
-                @MainActor func go(_ page: PanelPage) throws {
-                    switch path {
-                    case .shortcut:
-                        let (code, digit) = try XCTUnwrap(Self.switchDigits[page])
-                        post(rig, try keyEvents(rig, code: code, digit, .command))
-                    case .click, .state:
-                        rig.state.island.click(page)
-                    }
-                    pump(rig.content, rig.panel)
-                    XCTAssertEqual(rig.state.selectedSection, page.section, "harness \(path): \(page) is shown")
-                }
-                let tasksBefore = controls(rig)
-                try go(.canvas)
-                let board = try XCTUnwrap(nativeViews(of: .canvas, rig).values.first as? DrawBoardView, "harness: Draw's board")
-                XCTAssertTrue(holds(rig, board), "harness \(path): shown, the Draw board holds the keyboard")
-                let drawBefore = controls(rig)
-                let objects = DrawPageModel.shared.objects.count, selection = DrawPageModel.shared.selection
-                let tool = DrawPageModel.shared.tool
-
-                try go(.tasks)
-                let afterDraw = rig.panel.firstResponder
-                try rowKey(rig, 125, "\u{F701}")
-                pump(rig.content, rig.panel)
-                let focusAfterKey = rig.page.keyboardFocus
-                XCTAssertEqual(DrawPageModel.shared.objects.count, objects, "ND6 \(path): a key on Tasks changed Draw's objects")
-                XCTAssertEqual(DrawPageModel.shared.selection, selection, "ND6 \(path): a key on Tasks changed Draw's selection")
-                XCTAssertEqual(DrawPageModel.shared.tool, tool, "ND6 \(path): a key on Tasks changed Draw's tool")
-                XCTAssertNotNil(focusAfterKey, "ND6 \(path): ↓ right after leaving Draw did not land on Tasks")
-                let tasksAfter = controls(rig)
-
-                try go(.canvas)
-                XCTAssertTrue(holds(rig, board), "ND6 \(path): back on Draw, the board did not take the keyboard "
-                              + "(\(responderName(rig, editor: nil)))")
-                try rowKey(rig, 14, "e")
-                XCTAssertEqual(DrawPageModel.shared.tool, .eraser, "ND6 \(path): back on Draw, its first key did not reach the board")
-                DrawPageModel.shared.setTool(tool)
-                pump(rig.content, rig.panel)
-                let drawAfter = controls(rig)
-
-                try go(.notes)
-                let id = rig.seed.freeNotes[0]
-                XCTAssertEqual(wait { await rig.draft.pages.openFromLibrary(noteID: id) }, true, "harness: the note opened")
-                rig.notesLibrary.dismissAfterOpenedNote(rig.draft.pages, requestedQuery: "")
-                pump(rig.content, rig.panel)
-                let editor = try XCTUnwrap(editors(rig).first { !$0.isSuspended }, "harness: the open note's editor")
-                XCTAssertTrue(rig.panel.makeFirstResponder(editor), "harness: the editor took the keyboard")
-                try go(.tasks)
-                let afterNotes = rig.panel.firstResponder
-
-                print("ND_KEYS path=\(path.rawValue) fka=\(NSApp.isFullKeyboardAccessEnabled) after_draw=\(afterDraw.map { "\(type(of: $0))" } ?? "nil") "
-                      + "after_notes=\(afterNotes.map { "\(type(of: $0))" } ?? "nil") same=\(afterDraw === afterNotes) focus=\(focusRow(rig)) "
-                      + "tasks=\(tasksBefore.keys.count)/\(tasksBefore.ax)->\(tasksAfter.keys.count)/\(tasksAfter.ax) "
-                      + "draw=\(drawBefore.keys.count)/\(drawBefore.ax)->\(drawAfter.keys.count)/\(drawAfter.ax) "
-                      + "draw_keys=\(drawBefore.keys)->\(drawAfter.keys)")
-                XCTAssertTrue(afterDraw != nil && afterDraw === afterNotes,
-                              "ND6 \(path): leaving Draw gave the keyboard elsewhere than leaving Notes")
-                XCTAssertEqual(tasksAfter.keys, tasksBefore.keys, "ND6 \(path): Tasks' key-view loop changed over the round trip")
-                XCTAssertEqual(tasksAfter.ax, tasksBefore.ax, "ND6 \(path): Tasks' accessibility elements changed over the round trip")
-                XCTAssertEqual(drawAfter.keys, drawBefore.keys, "ND6 \(path): Draw's key-view loop changed over the round trip")
-                XCTAssertEqual(drawAfter.ax, drawBefore.ax, "ND6 \(path): Draw's accessibility elements changed over the round trip")
-            }
-        }
-    }
-
-    private func holds(_ rig: Rig, _ view: NSView) -> Bool {
-        (rig.panel.firstResponder as? NSView)?.isDescendant(of: view) == true
-    }
-
-    /// The shown page's controls as the keyboard and VoiceOver reach them:
-    /// the views a Tab walk from no responder lands on (24 steps each way),
-    /// and the panel's accessibility elements, counted to a fixed depth.
-    /// Key views are told apart by class and place, not identity: SwiftUI
-    /// makes its focus views anew.
-    private func controls(_ rig: Rig) -> (keys: [String], ax: Int) {
-        let responder = rig.panel.firstResponder
-        rig.panel.makeFirstResponder(nil)
-        var seen: Set<ObjectIdentifier> = []
-        var keys: [String] = []
-        for step in 0..<48 {
-            if step < 24 { rig.panel.selectNextKeyView(nil) } else { rig.panel.selectPreviousKeyView(nil) }
-            if let view = rig.panel.firstResponder as? NSView, view !== rig.panel.contentView, seen.insert(ObjectIdentifier(view)).inserted {
-                let frame = view.convert(view.bounds, to: nil)
-                keys.append("\(type(of: view))@\(Int(frame.minX)),\(Int(frame.minY))")
-            }
-        }
-        keys.sort()
-        rig.panel.makeFirstResponder(responder)
-        pump(rig.content, rig.panel)
-        func count(_ element: Any, depth: Int) -> Int {
-            guard depth < 14, let children = (element as? NSAccessibilityProtocol)?.accessibilityChildren() else { return 0 }
-            return children.reduce(children.count) { $0 + count($1, depth: depth + 1) }
-        }
-        return (keys, count(rig.content, depth: 0))
-    }
-
     /// The shell's notice clearance (its `onPreferenceChange`, read through
     /// `AtticPanelView.lastNoticeClearance`) in the first frame with Notes
     /// shown on its editor, then in the first frame with Tasks shown and
@@ -2606,12 +2442,12 @@ extension HiddenPagesCountersTests {
         return hosts(rig.content).first { PanelPageKeyboard.membership(of: $0) == .page(page) }
     }
 
-    /// The target: hidden behind Tasks, Notes and Draw are each in a host of
-    /// their own that is neither drawn nor laid out through a live resize,
-    /// its release and a write outside a drag, and their views do not run.
-    func testND1HiddenNotesAndDrawSitOutAResize() throws {
+    /// The target: hidden behind Tasks, Notes is in a host of its own that
+    /// is neither drawn nor laid out through a live resize, its release and
+    /// a write outside a drag, and its views do not run.
+    func testND1HiddenNotesSitsOutAResize() throws {
         try withRig { rig in
-            let pages: [PanelPage] = [.notes, .canvas]
+            let pages: [PanelPage] = [.notes]
             let hosts = Dictionary(uniqueKeysWithValues: pages.map { ($0, keptHost($0, rig)) })
             let layoutsBefore = hosts.mapValues { $0.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] } ?? -1 }
             var drawnAt: [String] = []

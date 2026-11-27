@@ -70,11 +70,6 @@ final class DrawInputTests: XCTestCase {
         spin(0.3)
         while (panel.canBeginTrackpadSwipe?(probe) != true || board(in: panel) == nil), Date() < deadline { spin(0.05) }
         let board = try XCTUnwrap(board(in: panel), "the Draw page's board is in the panel")
-        // ND diagnostic (page-host-notes-draw, temporary): every board and where it sits.
-        func boards(_ view: NSView) -> [DrawBoardView] { ((view as? DrawBoardView).map { [$0] } ?? []) + view.subviews.flatMap(boards) }
-        let all = panel.contentView.map(boards) ?? []
-        print("ND_DRAWDIAG boards=\(all.count) " + all.map { "frame=\($0.convert($0.bounds, to: nil)) hidden=\($0.isHiddenOrHasHiddenAncestor)" }.joined(separator: " ; ")
-              + " panel=\(panel.contentView?.bounds ?? .zero)")
         XCTAssertTrue(model.isShown, "the Draw page is shown")
         XCTAssertFalse(panel.isKeyWindow, "the panel is not key")
         var requests = 0
@@ -708,8 +703,6 @@ final class DrawInputTests: XCTestCase {
         NSCursor.operationNotAllowed.set()
         rig.model.setTool(.select)
         spin(0.2)
-        print("ND_DRAWDIAG handle point=\(rig.board.pointerOverride ?? .zero) board=\(rig.board.convert(rig.board.bounds, to: nil)) "
-              + "chain=\(hitChain(rig.panel, at: rig.board.pointerOverride ?? .zero)) log=\(rig.board.cursorLog.suffix(3))")
         XCTAssertTrue(NSCursor.current === DrawBoardView.cursor(for: .bottomRight), "the handle's cursor wins over its reach")
         // Over the tool bar: the normal cursor.
         rig.model.setTool(.pen)

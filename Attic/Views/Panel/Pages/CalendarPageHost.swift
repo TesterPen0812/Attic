@@ -114,8 +114,8 @@ struct PanelPageKeptHost<Content: View>: View {
     @ObservedObject var transit: PanelPageTransit
     let content: Content
     /// The leaving root is laid out in the panel's update (`KeptContentHost.laysOutOnLeave`):
-    /// for a page whose leave actions (commands released, editor resigned,
-    /// a drawing finished) must run where they ran in the panel's own host.
+    /// for a page whose leave actions (commands released, editor resigned)
+    /// must run where they ran in the panel's own host (Notes).
     let laysOutOnLeave: Bool
     /// The page sets the shell's notice clearance (Notes): it is carried out
     /// of the host, since a preference does not cross an `NSHostingView` and

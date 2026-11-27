@@ -382,20 +382,15 @@ struct AtticPanelView: View {
             .atticFocusCheckProbe("tasks")
             .transition(pageTransition(.tasks))
         case .canvas:
-            // In a host of its own, as Calendar (page-host-tech-note.md,
-            // Way 1; pr80-hidden-inputs.md, "Notes and Draw").
-            PanelPageKeptHost(page: .canvas, isCurrent: page == currentPage, transit: uiState.pageTransit,
-                              laysOutOnLeave: true) {
-                PanelCanvasNoticeAwareHost(
-                    canvasSession: canvasSession,
-                    toasts: toasts,
-                    uiState: uiState,
-                    layout: layout,
-                    noticeHeight: noticeHeight,
-                    headerControlRects: headerControlRects,
-                    headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
-                )
-            }
+            PanelCanvasNoticeAwareHost(
+                canvasSession: canvasSession,
+                toasts: toasts,
+                uiState: uiState,
+                layout: layout,
+                noticeHeight: noticeHeight,
+                headerControlRects: headerControlRects,
+                headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
+            )
             .atticFocusCheckProbe("canvas")
             .transition(pageTransition(.canvas))
         case .notes:

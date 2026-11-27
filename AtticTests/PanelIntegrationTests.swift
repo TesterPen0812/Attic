@@ -306,7 +306,7 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
-    /// A Tasks tab host's container: Calendar, Notes and Draw each sit in a
+    /// A Tasks tab host's container: Calendar and Notes each sit in a
     /// kept host of their own, tagged with their page (PR 80; page-host-notes-draw).
     private func isTasksContainer(_ view: NSView) -> Bool {
         guard let host = (view as? KeptContentContainer)?.host else { return false }

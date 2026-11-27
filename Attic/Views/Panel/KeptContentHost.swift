@@ -414,7 +414,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     /// Whether the root that takes the host out of use is laid out in the
     /// update that sets it, so the content's own leave work (a page's
     /// actions on `atticPanelPageIsCurrent`: commands released, an editor
-    /// resigned, a drawing finished) runs in the panel's update that makes
+    /// resigned) runs in the panel's update that makes
     /// the switch, where it ran when the page sat in the panel's own host,
     /// not in a later pass of this host (pr80-hidden-inputs.md, "Notes and
     /// Draw", the lead's ordering condition).
