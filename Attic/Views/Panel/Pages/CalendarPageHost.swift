@@ -70,10 +70,21 @@ final class CalendarPageState: ObservableObject {
     /// The page's calendar events: EventKit in the app, the stub in tests.
     static func makeSource() -> CalendarEventSource { CalendarEventSources.makeDefault() }
 
+    #if DEBUG
+    /// Test seam: the clock of the models made from here (a day rollover).
+    static var now: (() -> Date)?
+    #endif
+    private static var modelNow: () -> Date {
+        #if DEBUG
+        if let now { return now }
+        #endif
+        return Date.init
+    }
+
     func model(store: TaskStore, resumeDefaults: UserDefaults?,
                owner: CalendarDraftTerminationRegistry.Owner) -> CalendarPageModel {
         if let model { return model }
-        let made = CalendarPageModel(store: store, source: Self.makeSource(), makeWriter: {
+        let made = CalendarPageModel(store: store, source: Self.makeSource(), now: Self.modelNow, makeWriter: {
             guard let undo = store.commandLibrary?.undo else { throw CalendarEventWriteError.undoUnavailable }
             return try CalendarEventWriters.makeDefault(undoRoute: undo)
         }, resumeDefaults: resumeDefaults)

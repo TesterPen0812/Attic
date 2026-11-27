@@ -69,11 +69,14 @@ struct CalendarPage: View {
     #if DEBUG
     /// Test seam: how many times the page's body has run.
     static var bodyEvaluations = 0
+    /// Test seam: the design mode (light or dark) the body last ran with.
+    static var lastMode: AtticDesignContext.Mode?
     #endif
 
     var body: some View {
         #if DEBUG
         let _ = Self.bodyEvaluations += 1
+        let _ = Self.lastMode = design.mode
         #endif
         let snapshot = model.snapshot
         ZStack(alignment: .top) {

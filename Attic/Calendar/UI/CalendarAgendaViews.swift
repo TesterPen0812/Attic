@@ -62,6 +62,8 @@ struct CalendarAgendaDay: View, Equatable {
     #if DEBUG && ATTIC_UNIT_TEST_HOST
     /// Count real SwiftUI body evaluations by day, including reused days.
     static var bodyEvaluationsByDay: [DueDay: Int] = [:]
+    /// Test seam: the today each agenda day's body last ran with, by day.
+    static var todayByDay: [DueDay: DueDay] = [:]
     #endif
 
     let group: CalendarAgendaGroup
@@ -94,6 +96,7 @@ struct CalendarAgendaDay: View, Equatable {
     var body: some View {
         #if DEBUG && ATTIC_UNIT_TEST_HOST
         let _ = Self.bodyEvaluationsByDay[group.day, default: 0] += 1
+        let _ = Self.todayByDay[group.day] = today
         #endif
         HStack(alignment: .top, spacing: CalendarDesign.tileToRows) {
             CalendarDateTile(group: group) { onSelectDay(group.day) }
