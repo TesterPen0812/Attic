@@ -477,8 +477,19 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         let leaving = laysOutOnLeave && ((host.isInteractive && !interactive) || (!drawn && !coordinator.hiddenRootSet))
         if drawn || !coordinator.hiddenRootSet {
             let root = root(context)
+            // A hidden root is not drawn, and an animation in it would end
+            // only at a later pass, which the host holds: its removals would
+            // stay (a task note's editor kept in the window).
+            var transaction = context.transaction
+            if leaving, !drawn {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+            #if DEBUG
+            if leaving, !drawn { print("ND_HIDROOT anim=\(context.transaction.animation != nil)") }
+            #endif
             host.setRoot(root, laidOut: leaving || Self.movesRows(from: coordinator.drawnRows, to: drawn ? rows : nil),
-                         under: context.transaction)
+                         under: transaction)
             #if DEBUG
             KeptContentHostCounts.root(drawn: drawn)
             #endif
