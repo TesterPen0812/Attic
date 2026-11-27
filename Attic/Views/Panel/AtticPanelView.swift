@@ -396,7 +396,7 @@ struct AtticPanelView: View {
         case .notes:
             // In a host of its own, as Calendar (pr80-hidden-inputs.md, "Notes and Draw").
             PanelPageKeptHost(page: .notes, isCurrent: page == currentPage, transit: uiState.pageTransit,
-                              laysOutOnLeave: true) {
+                              laysOutOnLeave: false) {
                 NotesPageHost(
                     noteStore: noteStore,
                     taskStore: store,
