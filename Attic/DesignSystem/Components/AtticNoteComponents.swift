@@ -461,7 +461,7 @@ struct AtticTagSuggestionList: View {
                                 detailColour: Self.countColour(in: design),
                                 isHighlighted: index == highlighted,
                                 // O14-07: only the dot takes the tag's colour.
-                                position: index + 1, itemCount: suggestions.count) { onPick(index) }
+                                position: index + 1, itemCount: suggestions.count, scrollID: suggestion.id) { onPick(index) }
             }
         }
         .accessibilityElement(children: .contain)
