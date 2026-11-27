@@ -564,6 +564,10 @@ struct KeptEnvironment: ViewModifier {
         entry("panelPageMotion", \.panelPageMotion),
         entry("panelTopRowPage", \.panelTopRowPage),
         entry("panelTopRowState", \.panelTopRowState),
+        // A task page's one-piece motion, set by the Tasks route host: the
+        // list shown reads it at its root (`TaskPageListFollows`). Hidden,
+        // the host hands its content the motion it held, the same object.
+        entry("taskPageMotion", \.taskPageMotion),
         ]
         #if DEBUG
         // The key itself is DEBUG-only (AtticDropdown.swift); a container
