@@ -915,6 +915,8 @@ final class TaskPageMotion {
         self.content = content
         self.pose = pose
         place = (id, pose)
+        // A landing still due from the motion this one replaced is ignored.
+        generation &+= 1
         // Not written when it is 0 already: the list's readers are told of
         // the spring's change first, never of the click's.
         if progress != 0 { progress = 0 }
@@ -986,6 +988,13 @@ struct TaskPageOnePieceLayer: View {
                 .accessibilityHidden(parked)
                 .transition(.identity)
                 .onAppear(perform: onAppear)
+                // A stand-in of its own for each task: another task opened
+                // while one is still moving comes in fresh at its own row,
+                // and its coming in starts its spring. Kept as one view, it
+                // never appeared again, its motion never ran, and the first
+                // one's landing let its page in at 0 (CI run 45914516669:
+                // "end ... gen=1" then "handedOver ... p=0.0", no turn).
+                .id(motion.taskID)
         }
     }
 }
