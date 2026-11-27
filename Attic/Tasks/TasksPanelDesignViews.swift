@@ -679,18 +679,8 @@ struct TasksFoldBody: ViewModifier, Animatable {
 struct TasksFoldLayout: Layout {
     var visible: CGFloat?
 
-    #if DEBUG
-    /// The layout's own measures of its row, and its size asks, for count tests.
-    nonisolated(unsafe) static var rowMeasures = 0
-    nonisolated(unsafe) static var sizeAsks = 0
-    #endif
-
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let row = subviews.first else { return .zero }
-        #if DEBUG
-        Self.sizeAsks += 1
-        Self.rowMeasures += 1
-        #endif
         let size = row.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
         guard let visible else { return size }
         return CGSize(width: size.width, height: min(size.height, max(0, visible)))

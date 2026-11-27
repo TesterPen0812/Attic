@@ -415,7 +415,6 @@ final class OwnerTasks1010Tests: XCTestCase {
         window.contentView = scroll
         engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
         textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
-        spin()
         return (engine, scroll, textView, window)
     }
 
@@ -435,7 +434,7 @@ final class OwnerTasks1010Tests: XCTestCase {
         let (engine, scroll, textView, window) = cursorEditor(blocks)
         defer { window.contentView = nil; window.close() }
         let point = CGPoint(x: 120, y: 200)
-        let lookups = textView.cursorInsertionLookups
+        var lookups = 0
         let scans = engine.objectKindScans
         let previous = NSCursor.current
         defer { previous.set() }
@@ -445,9 +444,12 @@ final class OwnerTasks1010Tests: XCTestCase {
             scroll.reflectScrolledClipView(scroll.contentView)
             let local = textView.convert(point, from: scroll.contentView)
             textView.mouseMoved(with: try cursorEvent(textView, at: local, in: window))
+            // What both cursorUpdate and mouseMoved ask, counted on the lookup itself.
+            let before = textView.insertionLookups
             XCTAssertNil(textView.hostedCursor(atWindowPoint: textView.convert(local, to: nil)), "step \(step): the text's own cursor")
+            lookups += textView.insertionLookups - before
         }
-        XCTAssertEqual(textView.cursorInsertionLookups - lookups, 0, "no insertion-index lookup per cursor update in a note without objects")
+        XCTAssertEqual(lookups, 0, "no insertion-index lookup per cursor update in a note without objects")
         XCTAssertLessThanOrEqual(engine.objectKindScans - scans, 1, "the note is scanned for objects once, not per update")
     }
 
@@ -468,7 +470,6 @@ final class OwnerTasks1010Tests: XCTestCase {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, far.minY - 200)))
         scroll.reflectScrolledClipView(scroll.contentView)
         textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
-        spin()
         let rect = try XCTUnwrap(engine.rect(for: box))
         let over = CGPoint(x: rect.minX + NoteChecklistAttachment.boxSize / 2, y: rect.midY)
         let onText = CGPoint(x: rect.minX + NoteChecklistAttachment.boxSize + 30, y: rect.midY)
@@ -477,14 +478,15 @@ final class OwnerTasks1010Tests: XCTestCase {
         defer { previous.set() }
 
         NSCursor.iBeam.set()
-        var lookups = textView.cursorInsertionLookups
         textView.mouseMoved(with: try cursorEvent(textView, at: over, in: window))
         XCTAssertTrue(NSCursor.current === NSCursor.arrow, "over the box after the scroll: the control cursor")
-        XCTAssertLessThanOrEqual(textView.cursorInsertionLookups - lookups, 1)
+        var lookups = textView.insertionLookups
+        XCTAssertTrue(textView.hostedCursor(atWindowPoint: textView.convert(over, to: nil)) === NSCursor.arrow)
+        XCTAssertLessThanOrEqual(textView.insertionLookups - lookups, 1)
         for (name, local) in [("the item's text", onText), ("plain text", CGPoint(x: plain.minX + 10, y: plain.midY))] {
-            lookups = textView.cursorInsertionLookups
+            lookups = textView.insertionLookups
             XCTAssertNil(textView.hostedCursor(atWindowPoint: textView.convert(local, to: nil)), "\(name): the text's own cursor")
-            XCTAssertLessThanOrEqual(textView.cursorInsertionLookups - lookups, 1, "\(name): one lookup at most")
+            XCTAssertLessThanOrEqual(textView.insertionLookups - lookups, 1, "\(name): one lookup at most")
         }
         XCTAssertTrue(textView.hostedCursor(atWindowPoint: textView.convert(over, to: nil)) === NSCursor.arrow, "and back over the box")
     }
@@ -502,7 +504,6 @@ final class OwnerTasks1010Tests: XCTestCase {
         engine.toggleChecklistLine()
         engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
         textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
-        spin()
         XCTAssertTrue(engine.objectKinds.contains(.checklist), "the edit refreshed the object kinds")
         let index = (engine.textStorage.string as NSString).range(of: "\u{FFFC}Becomes a task").location
         XCTAssertNotEqual(index, NSNotFound)

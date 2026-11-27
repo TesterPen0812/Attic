@@ -712,7 +712,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         var looked: Int?
         func insertionIndex() -> Int {
             if let looked { return looked }
-            let index = insertionIndexForCursor(at: local)
+            let index = characterIndexForInsertion(at: local)
             looked = index
             return index
         }
@@ -745,16 +745,14 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     #if DEBUG
-    /// Insertion-index lookups made for the cursor, for count tests.
-    private(set) var cursorInsertionLookups = 0
-    #endif
+    /// Every insertion-index lookup on this view, whoever asks, for count tests.
+    private(set) var insertionLookups = 0
 
-    private func insertionIndexForCursor(at point: NSPoint) -> Int {
-        #if DEBUG
-        cursorInsertionLookups += 1
-        #endif
-        return characterIndexForInsertion(at: point)
+    override func characterIndexForInsertion(at point: NSPoint) -> Int {
+        insertionLookups += 1
+        return super.characterIndexForInsertion(at: point)
     }
+    #endif
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)

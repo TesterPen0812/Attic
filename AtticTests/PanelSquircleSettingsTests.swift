@@ -240,6 +240,32 @@ final class PanelSquircleSettingsTests: XCTestCase {
         XCTAssertEqual(kept, outline.path(in: rect), "the kept outline is the fresh one")
     }
 
+    /// The store is bounded (a resize makes a new rect every frame): when
+    /// it is full, the next new key starts it over, so a key kept before
+    /// builds again, and keys within the bound are kept.
+    @MainActor
+    func testTheSquirclePathStoreStartsOverWhenFull() {
+        let cache = SquirclePathCache(capacity: 4)
+        let shape = Squircle(cornerRadius: 10, exponent: 5)
+        var builds = 0
+        func ask(_ width: CGFloat) {
+            _ = cache.path(for: SquirclePathCache.Key(shape, CGRect(x: 0, y: 0, width: width, height: 40))) {
+                builds += 1
+                return Path()
+            }
+        }
+        for width in [100, 101, 102, 103] as [CGFloat] { ask(width) }
+        XCTAssertEqual(builds, 4)
+        for width in [100, 101, 102, 103] as [CGFloat] { ask(width) }
+        XCTAssertEqual(builds, 4, "four keys fit in a store of four")
+        ask(104)
+        XCTAssertEqual(builds, 5, "a fifth key builds")
+        ask(104)
+        XCTAssertEqual(builds, 5, "and is kept")
+        ask(100)
+        XCTAssertEqual(builds, 6, "the full store started over: a key kept before builds again")
+    }
+
     /// The route the trace named: `AtticPanelContentContainer.hitTest` into
     /// the panel's SwiftUI content, which is clipped to and hit-tests inside
     /// the squircle (`PanelShellSurface`). Many hit tests at unchanged bounds
@@ -290,6 +316,7 @@ final class PanelSquircleSettingsTests: XCTestCase {
         }
         let cache = SquirclePathCache.shared
         cache.isEnabled = false
+        defer { cache.isEnabled = true }
         let fresh = hits()
         cache.isEnabled = true
         cache.removeAll()

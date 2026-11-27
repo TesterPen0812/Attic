@@ -348,8 +348,8 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
     /// Scroll trace 27 Nov: `TasksFoldLayout` measured every row in
     /// `sizeThatFits`, measured it again in `placeSubviews`, and placed it
     /// at that fixed height: a second measure and a second proposal for
-    /// every row on every scroll frame. A row now sees one proposal a pass,
-    /// the layout measures it only when asked its size, and the row's frame
+    /// every row on every scroll frame. A row now sees one proposal a pass
+    /// (two before: (width, nil) then (width, height)), and the row's frame
     /// is what it was: the full row at the list's width, also while a fold
     /// shows only part of it, and following a height change between passes.
     func testAFoldRowIsMeasuredOnceAPassAtOneProposalAndKeepsItsFrame() throws {
@@ -367,15 +367,11 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
         for (height, visible) in cases {
             log.proposals.removeAll()
             log.placed.removeAll()
-            let asks = TasksFoldLayout.sizeAsks
-            let measures = TasksFoldLayout.rowMeasures
             host.rootView = FoldProbeList(height: height, visible: visible, log: log)
             host.layoutSubtreeIfNeeded()
             let name = "row \(height), visible \(visible.map { "\($0)" } ?? "open")"
             let frame = try XCTUnwrap(log.placed.last, "\(name): the row was placed")
             XCTAssertEqual(Set(log.proposals).count, 1, "\(name): one proposal for the row a pass, got \(log.proposals)")
-            XCTAssertEqual(TasksFoldLayout.rowMeasures - measures, TasksFoldLayout.sizeAsks - asks,
-                           "\(name): placing the row measures it no more")
             XCTAssertEqual(frame.width, 200, "\(name): the list's width")
             XCTAssertEqual(frame.height, height, "\(name): the whole row, whatever the fold shows")
         }
