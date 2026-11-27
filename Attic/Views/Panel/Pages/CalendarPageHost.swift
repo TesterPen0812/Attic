@@ -70,16 +70,63 @@ final class CalendarPageState: ObservableObject {
     /// The page's calendar events: EventKit in the app, the stub in tests.
     static func makeSource() -> CalendarEventSource { CalendarEventSources.makeDefault() }
 
+    #if DEBUG
+    /// Test seam: the clock of the models made from here (a day rollover).
+    static var now: (() -> Date)?
+    #endif
+    private static var modelNow: () -> Date {
+        #if DEBUG
+        if let now { return now }
+        #endif
+        return Date.init
+    }
+
     func model(store: TaskStore, resumeDefaults: UserDefaults?,
                owner: CalendarDraftTerminationRegistry.Owner) -> CalendarPageModel {
         if let model { return model }
-        let made = CalendarPageModel(store: store, source: Self.makeSource(), makeWriter: {
+        let made = CalendarPageModel(store: store, source: Self.makeSource(), now: Self.modelNow, makeWriter: {
             guard let undo = store.commandLibrary?.undo else { throw CalendarEventWriteError.undoUnavailable }
             return try CalendarEventWriters.makeDefault(undoRoute: undo)
         }, resumeDefaults: resumeDefaults)
         model = made
         CalendarDraftTerminationRegistry.shared.register(made.eventRows, owner: owner)
         return made
+    }
+}
+
+/// A shell page in a kept host of its own (page-host-tech-note.md, Way 1;
+/// host-boundary.md §10 step 2). Drawn while it is the page shown or the
+/// page a switch's slide is carrying out; in use (clicks, keys, reads) only
+/// while shown. Hidden, its graph keeps its state and is not run, laid out
+/// or walked by the shell's updates; the update that draws it again takes
+/// the current root, size and environment before the slide's first frame.
+/// It observes only the slide's start and end. The page is held as a value,
+/// not a closure, so the shell's re-runs compare it equal and skip it.
+/// It never claims the keyboard: shown, the window keeps it, as when the
+/// page sat in the panel's own host, so Tab, Esc and ⌘Z take the trunk's
+/// path. Calendar has no list that owns keys, unlike the Tasks tab hosts;
+/// a click into Search or a field takes the keyboard the ordinary way.
+/// The host carries the page's keyboard tag, so while the page is hidden
+/// neither it nor anything under it is a key view (`PanelPageKeyboard`).
+struct PanelPageKeptHost<Content: View>: View {
+    let page: PanelPage
+    let isCurrent: Bool
+    @ObservedObject var transit: PanelPageTransit
+    let content: Content
+
+    init(page: PanelPage, isCurrent: Bool, transit: PanelPageTransit, @ViewBuilder content: () -> Content) {
+        self.page = page
+        self.isCurrent = isCurrent
+        self.transit = transit
+        self.content = content()
+    }
+
+    var body: some View {
+        KeptContentHost(drawn: isCurrent || (transit.sliding && transit.departingPage == page),
+                        interactive: isCurrent, space: PanelPageLayout.coordinateSpace, claimsKeyboard: false,
+                        page: page) {
+            content
+        }
     }
 }
 
