@@ -1,3 +1,17 @@
+## 2026-11-27 · A squircle's path is built once per shape and rect
+
+`Squircle.path(in:)` (Attic/Design) keeps the path it builds, keyed on the
+rect and every field the path reads (corner size, exponent, inset, squared
+top and bottom), and builds again only when one of them changes. SwiftUI
+asks a clip or content shape for its path on every hit test, so during a
+scroll every event rebuilt the panel's unchanged squircle
+(`PanelShellSurface`) once per hover responder: 5.9% (Tasks), 9.4% (Notes
+library) and 19.8% (long note) of main-thread time went to hit testing in
+the 27 Nov scroll trace. The kept path is the same path, point for point;
+the cache is locked (shapes draw off the main thread) and bounded at 64
+shapes, starting over when full, since a resize makes a new rect every
+frame. Nothing drawn or hit-tested changes.
+
 ## 2026-11-26 · A dropdown row carries one id, so the keyboard's row scrolls into view on macOS 27
 
 On macOS 27, `ScrollViewReader.scrollTo` finds no row whose String `.id`

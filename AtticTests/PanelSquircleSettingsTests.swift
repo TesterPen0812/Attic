@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -142,6 +144,193 @@ final class PanelSquircleSettingsTests: XCTestCase {
         defaults.set(Double.infinity, forKey: "panelContentSize")
         let settings = AppSettings(defaults: defaults)
         XCTAssertEqual(settings.panelContentSize, PanelContentSize.standard.rawValue)
+    }
+
+    // MARK: The squircle's path is built once per shape and rect
+
+    /// Scroll trace 27 Nov: every hit test during a scroll rebuilt the
+    /// panel's unchanged squircle through `Squircle.path(in:)`. Repeated asks
+    /// for one shape and rect build it once; interleaved shapes each keep
+    /// theirs; any change of rect, corner size, exponent, inset or squared
+    /// corner builds again; and the kept path is the fresh one, point for point.
+    @MainActor
+    func testTheSquirclePathIsBuiltOncePerShapeAndRect() throws {
+        let cache = SquirclePathCache.shared
+        cache.removeAll()
+        let panel = Squircle(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent)
+        let rect = CGRect(x: 0, y: 0, width: 340, height: 560)
+        let row = Squircle(cornerRadius: 10, exponent: 5)
+        let rowRect = CGRect(x: 0, y: 0, width: 300, height: 44)
+
+        var builds = cache.buildCount
+        let kept = panel.path(in: rect)
+        XCTAssertEqual(cache.buildCount - builds, 1, "the first ask builds the path")
+        builds = cache.buildCount
+        for _ in 0..<200 { _ = panel.path(in: rect) }
+        XCTAssertEqual(cache.buildCount - builds, 0, "unchanged shape and rect: no rebuild")
+        for _ in 0..<50 { _ = row.path(in: rowRect); _ = panel.path(in: rect) }
+        XCTAssertEqual(cache.buildCount - builds, 1, "a second shape builds once and does not evict the first")
+
+        var variants: [(String, Squircle, CGRect)] = [
+            ("height", panel, CGRect(x: 0, y: 0, width: 340, height: 561)),
+            ("width", panel, CGRect(x: 0, y: 0, width: 341, height: 560)),
+            ("origin", panel, CGRect(x: 1, y: 0, width: 340, height: 560)),
+            ("corner size", Squircle(cornerRadius: 40, exponent: AtticStyle.panelSquircleExponent), rect),
+            ("exponent", Squircle(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent + 1), rect),
+            ("inset", panel.inset(by: 1), rect),
+            ("squared top", Squircle(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent, squaredTop: true), rect),
+            ("squared bottom", Squircle(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent, squaredBottom: true), rect),
+        ]
+        variants.append(("row height", row, CGRect(x: 0, y: 0, width: 300, height: 61.5)))
+        for (name, shape, shapeRect) in variants {
+            builds = cache.buildCount
+            _ = shape.path(in: shapeRect)
+            XCTAssertEqual(cache.buildCount - builds, 1, "a changed \(name) rebuilds")
+            _ = shape.path(in: shapeRect)
+            XCTAssertEqual(cache.buildCount - builds, 1, "the changed \(name) is kept in turn")
+        }
+
+        cache.isEnabled = false
+        defer { cache.isEnabled = true }
+        for (name, shape, shapeRect) in variants + [("panel", panel, rect), ("row", row, rowRect)] {
+            cache.isEnabled = true
+            let kept = shape.path(in: shapeRect)
+            cache.isEnabled = false
+            let fresh = shape.path(in: shapeRect)
+            XCTAssertEqual(kept, fresh, "\(name): the kept path is the fresh one")
+            let r = shapeRect
+            let points = [CGPoint(x: r.midX, y: r.midY), CGPoint(x: r.minX - 2, y: r.midY), CGPoint(x: r.maxX + 2, y: r.midY),
+                          CGPoint(x: r.minX + 0.5, y: r.minY + 0.5), CGPoint(x: r.maxX - 0.5, y: r.minY + 0.5),
+                          CGPoint(x: r.minX + 0.5, y: r.maxY - 0.5), CGPoint(x: r.maxX - 0.5, y: r.maxY - 0.5),
+                          CGPoint(x: r.minX + 6, y: r.minY + 6), CGPoint(x: r.maxX - 6, y: r.maxY - 6)]
+            for point in points {
+                XCTAssertEqual(kept.contains(point), fresh.contains(point), "\(name): \(point) answers as before")
+            }
+        }
+        _ = kept
+    }
+
+    /// Scroll trace 27 Nov, stage 1: the panel's glass outline
+    /// (`AtticControlOutline.path`, AtticMaterials.swift:458) built its
+    /// squircle on every root layout pass. It goes through `Squircle.path`,
+    /// so at an unchanged size every pass after the first builds nothing; a
+    /// new size or inset builds once; the continuous corner builds no
+    /// squircle; and the kept outline is the fresh one.
+    @MainActor
+    func testTheGlassOutlineBuildsItsSquircleOncePerSize() {
+        let cache = SquirclePathCache.shared
+        cache.removeAll()
+        let outline = AtticControlOutline(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent)
+        let rect = CGRect(x: 0, y: 0, width: 340, height: 560)
+        var builds = cache.buildCount
+        let kept = outline.path(in: rect)
+        for _ in 0..<120 { _ = outline.path(in: rect) }
+        XCTAssertEqual(cache.buildCount - builds, 1, "120 passes at an unchanged size build the outline once")
+        builds = cache.buildCount
+        for _ in 0..<20 { _ = outline.path(in: CGRect(x: 0, y: 0, width: 340, height: 600)) }
+        XCTAssertEqual(cache.buildCount - builds, 1, "a new size builds once")
+        builds = cache.buildCount
+        for _ in 0..<20 { _ = outline.inset(by: 0.5).path(in: rect) }
+        XCTAssertEqual(cache.buildCount - builds, 1, "an inset outline (a rim) builds once")
+        builds = cache.buildCount
+        for _ in 0..<20 { _ = AtticControlOutline(cornerRadius: 52, exponent: nil).path(in: rect) }
+        XCTAssertEqual(cache.buildCount - builds, 0, "the continuous corner builds no squircle")
+        cache.isEnabled = false
+        defer { cache.isEnabled = true }
+        XCTAssertEqual(kept, outline.path(in: rect), "the kept outline is the fresh one")
+    }
+
+    /// The store is bounded (a resize makes a new rect every frame): when
+    /// it is full, the next new key starts it over, so a key kept before
+    /// builds again, and keys within the bound are kept.
+    @MainActor
+    func testTheSquirclePathStoreStartsOverWhenFull() {
+        let cache = SquirclePathCache(capacity: 4)
+        let shape = Squircle(cornerRadius: 10, exponent: 5)
+        var builds = 0
+        func ask(_ width: CGFloat) {
+            _ = cache.path(for: SquirclePathCache.Key(shape, CGRect(x: 0, y: 0, width: width, height: 40))) {
+                builds += 1
+                return Path()
+            }
+        }
+        for width in [100, 101, 102, 103] as [CGFloat] { ask(width) }
+        XCTAssertEqual(builds, 4)
+        for width in [100, 101, 102, 103] as [CGFloat] { ask(width) }
+        XCTAssertEqual(builds, 4, "four keys fit in a store of four")
+        ask(104)
+        XCTAssertEqual(builds, 5, "a fifth key builds")
+        ask(104)
+        XCTAssertEqual(builds, 5, "and is kept")
+        ask(100)
+        XCTAssertEqual(builds, 6, "the full store started over: a key kept before builds again")
+    }
+
+    /// The route the trace named: `AtticPanelContentContainer.hitTest` into
+    /// the panel's SwiftUI content, which is clipped to and hit-tests inside
+    /// the squircle (`PanelShellSurface`). Many hit tests at unchanged bounds
+    /// build no path after the first pass, and every point (inside, outside,
+    /// each corner) answers as it does with every path built fresh.
+    @MainActor
+    func testPanelHitTestsAtUnchangedBoundsBuildTheSquircleOnce() throws {
+        let suite = "SquircleHitTest.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try TasksPagePreview.seedDemo(in: container, long: true)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 340, height: 560)
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        let tasksState = TasksPageState()
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes,
+                                     canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     chromeInteractionState: chrome, uiState: state, settings: settings,
+                                     tasksPageState: tasksState),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
+        let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = content
+        panel.orderFront(nil)
+        defer { host.cancelActiveInteraction(reason: .lostWindow); state.releasePageContent(); panel.close() }
+        let model = tasksState.model(for: store, toasts: nil)
+        waitForTestOperation("the Tasks page's rows") { !model.rows(for: .now).isEmpty }
+        content.layoutSubtreeIfNeeded()
+
+        let b = content.bounds
+        let points = [CGPoint(x: b.midX, y: b.midY), CGPoint(x: b.midX, y: b.minY + 40), CGPoint(x: b.midX, y: b.maxY - 40),
+                      CGPoint(x: b.minX + 1, y: b.minY + 1), CGPoint(x: b.maxX - 1, y: b.minY + 1),
+                      CGPoint(x: b.minX + 1, y: b.maxY - 1), CGPoint(x: b.maxX - 1, y: b.maxY - 1),
+                      CGPoint(x: b.minX + 8, y: b.minY + 8), CGPoint(x: b.maxX - 8, y: b.maxY - 8),
+                      CGPoint(x: b.minX - 3, y: b.midY), CGPoint(x: b.maxX + 3, y: b.midY)]
+        func hits() -> [ObjectIdentifier?] {
+            points.map { point in content.hitTest(content.convert(point, to: content.superview)).map(ObjectIdentifier.init) }
+        }
+        let cache = SquirclePathCache.shared
+        cache.isEnabled = false
+        defer { cache.isEnabled = true }
+        let fresh = hits()
+        cache.isEnabled = true
+        cache.removeAll()
+        let start = cache.buildCount
+        let first = hits()
+        let afterFirst = cache.buildCount
+        XCTAssertGreaterThan(afterFirst, start, "the panel's hit test asks the squircle for its path (the traced route)")
+        for pass in 0..<50 {
+            XCTAssertEqual(hits(), first, "pass \(pass): the same views answer")
+        }
+        XCTAssertEqual(cache.buildCount, afterFirst, "50 passes of hit tests at unchanged bounds build no squircle path")
+        XCTAssertEqual(first, fresh, "every point answers as it does with the path built fresh each time")
+        XCTAssertNil(first[first.count - 1], "outside the panel nothing answers")
+        XCTAssertNotNil(first[0], "the panel's middle answers")
     }
 
     private func makeDefaults() -> (UserDefaults, String) {
