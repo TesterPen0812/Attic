@@ -1975,6 +1975,41 @@ extension HiddenPagesCountersTests {
         XCTAssertEqual(rig.state.selectedSection, page.section, "harness: \(page) is shown", file: file, line: line)
     }
 
+    /// EventKit work per page switch (felt-pr85.md, "Identity swap"): the
+    /// next-event feed's `setActive` and `refresh` calls and the event
+    /// sources' access and event reads, Notes to Tasks and Tasks to Notes,
+    /// on the stub source the unit-test host uses.
+    func testEK1EventWorkPerSwitchBetweenNotesAndTasks() throws {
+        try withRig { rig in
+            @MainActor func counts() -> [Int] {
+                [TasksNextEventFeed.setActiveCalls, TasksNextEventFeed.refreshCalls,
+                 CalendarEventSourceStub.accessReads, CalendarEventSourceStub.eventReads]
+            }
+            @MainActor func line(_ a: [Int], _ b: [Int]) -> String {
+                "setActive=\(b[0] - a[0]) refresh=\(b[1] - a[1]) access=\(b[2] - a[2]) events=\(b[3] - a[3])"
+            }
+            // On screen, with the next event on (as in the app); then the switches.
+            rig.panel.makeKey()
+            rig.state.panelDidReveal()
+            rig.tasksState.nextEventFeed.setEnabled(true)
+            pump(rig.content, rig.panel, seconds: 0.5)
+            print("EK_SETUP on_screen=\(rig.state.isPanelOnScreen)")
+            for round in 1...3 {
+                rig.state.island.click(.notes)
+                pump(rig.content, rig.panel, seconds: 1.0)
+                let beforeTasks = counts()
+                rig.state.island.click(.tasks)
+                pump(rig.content, rig.panel, seconds: 1.0)
+                let afterTasks = counts()
+                print("EK_SWITCH round=\(round) to_tasks \(line(beforeTasks, afterTasks))")
+            }
+            let beforeNotes = counts()
+            rig.state.island.click(.notes)
+            pump(rig.content, rig.panel, seconds: 1.0)
+            print("EK_SWITCH to_notes \(line(beforeNotes, counts()))")
+        }
+    }
+
     /// A day asked for from another page while Calendar is hidden: Tasks'
     /// next event opens its day on the Calendar page (the shell's
     /// `openCalendarDay`, which Tasks' row calls: select the day, then

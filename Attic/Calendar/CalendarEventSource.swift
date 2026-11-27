@@ -72,18 +72,35 @@ extension Array where Element == CalendarEvent {
 /// Fixed events for previews, tests and builds without calendar access.
 @MainActor
 final class CalendarEventSourceStub: CalendarEventSource {
-    var accessState: CalendarAccessState
+    #if DEBUG
+    /// Test seam: reads of the access state and of events, across stubs.
+    static var accessReads = 0
+    static var eventReads = 0
+    #endif
+    private var storedAccess: CalendarAccessState
+    var accessState: CalendarAccessState {
+        get {
+            #if DEBUG
+            Self.accessReads += 1
+            #endif
+            return storedAccess
+        }
+        set { storedAccess = newValue }
+    }
     var onChange: (@MainActor () -> Void)?
     private(set) var storedEvents: [CalendarEvent]
 
     init(accessState: CalendarAccessState = .granted, events: [CalendarEvent] = []) {
-        self.accessState = accessState
+        self.storedAccess = accessState
         self.storedEvents = events
     }
 
     func requestAccess() async -> CalendarAccessState { accessState }
 
     func events(in interval: DateInterval) -> [CalendarEvent] {
+        #if DEBUG
+        Self.eventReads += 1
+        #endif
         guard accessState == .granted else { return [] }
         return storedEvents.filter { $0.overlaps(interval) }.sortedForAgenda()
     }
