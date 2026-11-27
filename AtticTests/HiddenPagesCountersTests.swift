@@ -2201,3 +2201,131 @@ extension HiddenPagesCountersTests {
         }
     }
 }
+
+// MARK: - C10: a Tasks scroll step and the panel root (run 46012392573)
+
+/// The kept host's update request used to climb through the representable
+/// to the panel root: two root layouts per Tasks scroll step, one of them
+/// asked for by nothing. A request now marks the kept host's own layout;
+/// what a change inside the Tasks host must still move lands in the frame
+/// that makes it.
+extension HiddenPagesCountersTests {
+    /// The kept host that holds the Tasks list.
+    private func tasksHost(_ list: NSScrollView) throws -> KeptContentHostingView {
+        try XCTUnwrap(KeptContentHostingView.enclosing(list), "harness: the Tasks list sits in a kept host")
+    }
+
+    private func keptLayouts(_ host: KeptContentHostingView) -> Int {
+        KeptContentHostCounts.layoutsByHost[ObjectIdentifier(host), default: 0]
+    }
+
+    /// Moves the list to `y` with the file's pump; the panel root's layouts in that step.
+    private func rootLayouts(scrollingTo y: CGFloat, _ list: NSScrollView, _ rig: Rig) -> Int {
+        let before = AtticPanelHostingView.layoutPasses
+        list.contentView.scroll(to: CGPoint(x: 0, y: y))
+        list.reflectScrolledClipView(list.contentView)
+        pump(rig.content, rig.panel, seconds: 0.024)
+        XCTAssertEqual(list.contentView.bounds.origin.y, y, accuracy: 0.6, "harness: the step moved the list to \(y)")
+        return AtticPanelHostingView.layoutPasses - before
+    }
+
+    /// Run 46012392573 (trunk d35af39a): `root=[1:5,2:55]` over 60 steps,
+    /// every second pass asked for by the kept host's constraint request
+    /// climbing to the representable's wrapper. One pass a step is left:
+    /// the inner scroll commit dirties the panel's graph (a board item).
+    func testC10ATasksScrollStepLaysOutThePanelRootOnceNotTwice() throws {
+        Self.scrollSeed = true
+        defer { Self.scrollSeed = false }
+        try withRig { rig in
+            rig.state.panelDidReveal()
+            pump(rig.content, rig.panel)
+            let list = try tasksList(rig)
+            let host = try tasksHost(list)
+            let ys = (1...Self.scrollSteps).map { CGFloat($0) * 14 }
+                + (0..<Self.scrollSteps).reversed().map { CGFloat($0) * 14 }
+            for y in ys { _ = rootLayouts(scrollingTo: y, list, rig) } // the rows are built
+            var perStep: [Int: Int] = [:]
+            let keptBefore = keptLayouts(host)
+            for y in ys { perStep[rootLayouts(scrollingTo: y, list, rig), default: 0] += 1 }
+            let total = perStep.reduce(0) { $0 + $1.key * $1.value }
+            let twice = perStep.filter { $0.key >= 2 }.values.reduce(0, +)
+            let line = perStep.keys.sorted().map { "\($0):\(perStep[$0] ?? 0)" }.joined(separator: ",")
+            print("HIDDEN_COUNTS C10A steps=\(ys.count) root=[\(line)] rootTotal=\(total) keptLayouts=\(keptLayouts(host) - keptBefore)")
+            XCTAssertGreaterThanOrEqual(keptLayouts(host) - keptBefore, ys.count, "harness: the Tasks host laid out on every step")
+            XCTAssertLessThanOrEqual(twice, ys.count / 5,
+                                     "C10: the panel root laid out twice or more on \(twice) of \(ys.count) Tasks scroll steps (root=[\(line)])")
+            XCTAssertLessThanOrEqual(total, ys.count + ys.count / 4,
+                                     "C10: \(total) panel-root layouts over \(ys.count) Tasks scroll steps (root=[\(line)])")
+        }
+    }
+
+    /// The open card's room reaches the Tasks list's end (inside the kept
+    /// host) in the frame that opens or closes it: the first frame's end
+    /// room is the settled one. Notes and Calendar (a kept host too) are
+    /// PanelComposerScrollRoomTests' same-update test.
+    func testC10BTheCardsRoomReachesTheTasksListInTheFrameThatMovesIt() throws {
+        Self.scrollSeed = true
+        defer { Self.scrollSeed = false }
+        try withRig { rig in
+            rig.state.panelDidReveal()
+            pump(rig.content, rig.panel)
+            let list = try tasksList(rig)
+            let host = try tasksHost(list)
+            func height() -> CGFloat { list.documentView?.frame.height ?? 0 }
+            let closed = height()
+            XCTAssertGreaterThan(closed, 0, "harness: the Tasks list has a document")
+            for open in [true, false] {
+                let label = open ? "opens" : "closes"
+                let layouts = keptLayouts(host)
+                rig.composerState.room.set(height: open ? 320 : 0, open: open)
+                frame(rig)
+                let first = height()
+                XCTAssertGreaterThan(keptLayouts(host), layouts, "C10: the Tasks host took no layout in the frame the card \(label)")
+                pump(rig.content, rig.panel)
+                print("HIDDEN_COUNTS C10B card \(label) closed=\(closed) first=\(first) settled=\(height())")
+                XCTAssertEqual(first, height(), accuracy: 0.5,
+                               "C10: the Tasks list's end room in the frame the card \(label) is not the settled one")
+                if open {
+                    XCTAssertGreaterThan(height(), closed + 1, "harness: the open card adds room at the Tasks list's end")
+                } else {
+                    XCTAssertEqual(height(), closed, accuracy: 0.5, "harness: closed, the Tasks list's end room is gone")
+                }
+            }
+        }
+    }
+
+    /// A fold and an unfold of a date group reach the shown Tasks host in
+    /// the frame that makes them: the pager sets its root and the host lays
+    /// out in that frame, and the list settles shorter, then as before.
+    func testC10CAFoldAndAnUnfoldReachTheTasksListInTheFrameThatMakesThem() throws {
+        Self.scrollSeed = true
+        defer { Self.scrollSeed = false }
+        try withRig { rig in
+            rig.state.panelDidReveal()
+            pump(rig.content, rig.panel)
+            XCTAssertEqual(rig.page.tab, .now, "harness: Tasks shows Now")
+            let list = try tasksList(rig)
+            let host = try tasksHost(list)
+            let today = try XCTUnwrap(rig.page.sections(for: .now).groups.first { $0.kind == .today }?.key,
+                                      "harness: Now has today's group")
+            func height() -> CGFloat { list.documentView?.frame.height ?? 0 }
+            let unfolded = height()
+            for fold in [true, false] {
+                let label = fold ? "folds" : "unfolds"
+                let layouts = keptLayouts(host)
+                let roots = KeptContentHostCounts.roots.on
+                rig.page.toggleGroup(today, on: .now)
+                frame(rig)
+                XCTAssertGreaterThan(KeptContentHostCounts.roots.on, roots, "harness: the \(label) set the shown Tasks host's root")
+                XCTAssertGreaterThan(keptLayouts(host), layouts, "C10: the Tasks host took no layout in the frame that \(label) today")
+                pump(rig.content, rig.panel, seconds: 1.0)
+                print("HIDDEN_COUNTS C10C \(label) unfolded=\(unfolded) settled=\(height())")
+                if fold {
+                    XCTAssertLessThan(height(), unfolded - 1, "harness: folded, today's row is gone from the list")
+                } else {
+                    XCTAssertEqual(height(), unfolded, accuracy: 0.5, "harness: unfolded, the list is as tall as before")
+                }
+            }
+        }
+    }
+}
