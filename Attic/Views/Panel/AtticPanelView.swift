@@ -115,6 +115,10 @@ private final class PanelRelevantUIStateObserver: ObservableObject {
 /// and the error notice). Pages lay themselves out inside
 /// `PanelPageLayout`; the shell owns everything around them.
 struct AtticPanelView: View {
+    #if DEBUG
+    /// Test seam: the notice clearance the shell last read from its pages.
+    static var lastNoticeClearance: CGFloat?
+    #endif
     let store: TaskStore
     let noteStore: NoteStore
     let canvasSession: CanvasSession
@@ -318,6 +322,9 @@ struct AtticPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { clearance in
+            #if DEBUG
+            Self.lastNoticeClearance = clearance
+            #endif
             guard noticeClearance.value != clearance else { return }
             // A page's bottom controls grow or shrink with a spring (the
             // composer's date and tags row): the notices ride it, never
@@ -375,26 +382,35 @@ struct AtticPanelView: View {
             .atticFocusCheckProbe("tasks")
             .transition(pageTransition(.tasks))
         case .canvas:
-            PanelCanvasNoticeAwareHost(
-                canvasSession: canvasSession,
-                toasts: toasts,
-                uiState: uiState,
-                layout: layout,
-                noticeHeight: noticeHeight,
-                headerControlRects: headerControlRects,
-                headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
-            )
+            // In a host of its own, as Calendar (page-host-tech-note.md,
+            // Way 1; pr80-hidden-inputs.md, "Notes and Draw").
+            PanelPageKeptHost(page: .canvas, isCurrent: page == currentPage, transit: uiState.pageTransit,
+                              laysOutOnLeave: true) {
+                PanelCanvasNoticeAwareHost(
+                    canvasSession: canvasSession,
+                    toasts: toasts,
+                    uiState: uiState,
+                    layout: layout,
+                    noticeHeight: noticeHeight,
+                    headerControlRects: headerControlRects,
+                    headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
+                )
+            }
             .atticFocusCheckProbe("canvas")
             .transition(pageTransition(.canvas))
         case .notes:
-            NotesPageHost(
-                noteStore: noteStore,
-                taskStore: store,
-                noteDraft: noteDraft,
-                uiState: uiState,
-                layout: layout,
-                hasRestoredSession: hasRestoredNoteSession
-            )
+            // In a host of its own, as Calendar (pr80-hidden-inputs.md, "Notes and Draw").
+            PanelPageKeptHost(page: .notes, isCurrent: page == currentPage, transit: uiState.pageTransit,
+                              laysOutOnLeave: true, carriesNoticeClearance: true) {
+                NotesPageHost(
+                    noteStore: noteStore,
+                    taskStore: store,
+                    noteDraft: noteDraft,
+                    uiState: uiState,
+                    layout: layout,
+                    hasRestoredSession: hasRestoredNoteSession
+                )
+            }
             .atticFocusCheckProbe("notes")
             .transition(pageTransition(.notes))
         case .calendar:

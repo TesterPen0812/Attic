@@ -71,6 +71,11 @@ final class NotesPageChrome: ObservableObject {
 
     /// Callbacks belong to this mount. A retiring page cannot clear a newer
     /// page's commands, even if both briefly share the chrome.
+    #if DEBUG
+    /// Test seam: the page-command key monitors installed now, across pages.
+    static var installedKeyMonitors = 0
+    #endif
+
     func claimPageCommands(owner: UUID, keyPressed: @escaping (NSEvent) -> Bool) {
         commandOwner = owner
         pageCommandsActive = true
@@ -79,6 +84,9 @@ final class NotesPageChrome: ObservableObject {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 self?.keyPressed?(event) == true ? nil : event
             }
+            #if DEBUG
+            Self.installedKeyMonitors += 1
+            #endif
         }
     }
 
@@ -93,7 +101,12 @@ final class NotesPageChrome: ObservableObject {
         captureImport = nil
         #endif
         keyPressed = nil
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            #if DEBUG
+            Self.installedKeyMonitors -= 1
+            #endif
+        }
         keyMonitor = nil
         cancelKeyboardReturn()
     }

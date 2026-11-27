@@ -113,19 +113,69 @@ struct PanelPageKeptHost<Content: View>: View {
     let isCurrent: Bool
     @ObservedObject var transit: PanelPageTransit
     let content: Content
+    /// The leaving root is laid out in the panel's update (`KeptContentHost.laysOutOnLeave`):
+    /// for a page whose leave actions (commands released, editor resigned,
+    /// a drawing finished) must run where they ran in the panel's own host.
+    let laysOutOnLeave: Bool
+    /// The page sets the shell's notice clearance (Notes): it is carried out
+    /// of the host, since a preference does not cross an `NSHostingView` and
+    /// the shell reads it (`AtticPanelView`'s `PanelPageNoticeClearancePreferenceKey`).
+    let carriesNoticeClearance: Bool
+    /// Held, not observed: only `KeptNoticeClearance.Out` observes it.
+    @State private var clearance = KeptNoticeClearance()
 
-    init(page: PanelPage, isCurrent: Bool, transit: PanelPageTransit, @ViewBuilder content: () -> Content) {
+    init(page: PanelPage, isCurrent: Bool, transit: PanelPageTransit, laysOutOnLeave: Bool = false,
+         carriesNoticeClearance: Bool = false, @ViewBuilder content: () -> Content) {
         self.page = page
         self.isCurrent = isCurrent
         self.transit = transit
+        self.laysOutOnLeave = laysOutOnLeave
+        self.carriesNoticeClearance = carriesNoticeClearance
         self.content = content()
     }
 
     var body: some View {
         KeptContentHost(drawn: isCurrent || (transit.sliding && transit.departingPage == page),
                         interactive: isCurrent, space: PanelPageLayout.coordinateSpace, claimsKeyboard: false,
-                        page: page) {
-            content
+                        page: page, laysOutOnLeave: laysOutOnLeave) {
+            content.modifier(KeptNoticeClearance.In(clearance: clearance, carried: carriesNoticeClearance))
+        }
+        .modifier(KeptNoticeClearance.Out(clearance: clearance, carried: carriesNoticeClearance))
+    }
+}
+
+/// A kept page's notice clearance as its content last reported it, read
+/// outside its host. Until the content reports, the key's default: what the
+/// page's subtree reported in the panel's own host when it set none.
+@MainActor
+final class KeptNoticeClearance: ObservableObject {
+    @Published var value = PanelPageNoticeClearancePreferenceKey.defaultValue
+
+    /// Takes the content's value inside the host.
+    struct In: ViewModifier {
+        let clearance: KeptNoticeClearance
+        let carried: Bool
+        @ViewBuilder func body(content: Content) -> some View {
+            if carried {
+                content.onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { [clearance] value in
+                    if clearance.value != value { clearance.value = value }
+                }
+            } else {
+                content
+            }
+        }
+    }
+
+    /// Sets the preference outside the host; observes only this object.
+    struct Out: ViewModifier {
+        @ObservedObject var clearance: KeptNoticeClearance
+        let carried: Bool
+        @ViewBuilder func body(content: Content) -> some View {
+            if carried {
+                content.preference(key: PanelPageNoticeClearancePreferenceKey.self, value: clearance.value)
+            } else {
+                content
+            }
         }
     }
 }

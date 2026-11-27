@@ -411,6 +411,14 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     /// tagged with it (`PanelPageKeyboard`), so the panel's keyboard rule
     /// knows the page from the host itself.
     var page: PanelPage?
+    /// Whether the root that takes the host out of use is laid out in the
+    /// update that sets it, so the content's own leave work (a page's
+    /// actions on `atticPanelPageIsCurrent`: commands released, an editor
+    /// resigned, a drawing finished) runs in the panel's update that makes
+    /// the switch, where it ran when the page sat in the panel's own host,
+    /// not in a later pass of this host (pr80-hidden-inputs.md, "Notes and
+    /// Draw", the lead's ordering condition).
+    var laysOutOnLeave = false
     /// The rows the content animates between by itself (a list's ids), if
     /// it has any. A drawn root that changes them is laid out in the pass
     /// that sets it; any other root is left to AppKit's pass (`setRoot`).
@@ -463,9 +471,10 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         host.isDrawn = drawn
         // Two hidden updates in a row set nothing (as `TasksKeptPage`'s
         // equality, which this boundary carries across the host).
+        let leaving = laysOutOnLeave && host.isInteractive && !interactive
         if drawn || !coordinator.hiddenRootSet {
             let root = root(context)
-            host.setRoot(root, laidOut: Self.movesRows(from: coordinator.drawnRows, to: drawn ? rows : nil),
+            host.setRoot(root, laidOut: leaving || Self.movesRows(from: coordinator.drawnRows, to: drawn ? rows : nil),
                          under: context.transaction)
             #if DEBUG
             KeptContentHostCounts.root(drawn: drawn)
