@@ -213,6 +213,8 @@ struct TaskNoteRouteHost<Origin: View>: View {
             let origin = uiState.taskNoteGrowOrigin
             uiState.taskNoteGrowOrigin = nil
             if old != new, startOnePiece(new, origin: origin) { return }
+            // Not in one piece: the list is hidden under its page as before.
+            if onePiece.drawsListUnderPage { onePiece.drawsListUnderPage = false }
             growStartedAt = CACurrentMediaTime()
             grow.open(from: origin, reduceMotion: design.reduceMotion, reducedStyle: reducedStyle)
             #if DEBUG
@@ -318,10 +320,19 @@ struct TaskNoteRouteHost<Origin: View>: View {
         TaskPageMotion.drawLogForTesting = []
         #endif
         // It lands when every spring this started is over. What holds one is
-        // the stand-in, Tasks' top row and the list the page opened from
-        // (`TaskPageListFollows`). On Back that list is drawn again when the
-        // route has closed, and its spring runs from then.
+        // drawn for the whole motion: the stand-in, Tasks' top row and the
+        // list the page opened from (`TaskPageListFollows`).
         withAnimation(TaskPageOnePiece.spring, completionCriteria: .removed) {
+            // Going back, the list under the page is drawn again from this
+            // frame, so it runs back with the page. Told in the spring's own
+            // transaction: its host takes its root under it, and the list's
+            // lines run from where they were drawn. Told in a still one first
+            // (the Fable's try, 715e8ac1's parent), the host took its root
+            // unanimated in the same update as the change and the lines drew
+            // the end at once (CI run 45914524075: `L 0.000` first, then the
+            // stand-in alone). Drawn only from the route closing, they began
+            // about 266-285 ms late (runs 45861853003, 45894022179).
+            if !open, !onePiece.drawsListUnderPage { onePiece.drawsListUnderPage = true }
             onePiece.progress = target
         } completion: {
             landedOnePiece(generation)
@@ -362,7 +373,11 @@ struct TaskNoteRouteHost<Origin: View>: View {
         }
         var still = Transaction()
         still.disablesAnimations = true
-        withTransaction(still) { onePiece.handedOver = true }
+        withTransaction(still) {
+            onePiece.handedOver = true
+            // The list is covered now and stops being drawn.
+            if onePiece.drawsListUnderPage { onePiece.drawsListUnderPage = false }
+        }
         onePiece.trace("handedOver waits=\(waits)")
         onePieceProbe.stopWatchingEscape()
     }

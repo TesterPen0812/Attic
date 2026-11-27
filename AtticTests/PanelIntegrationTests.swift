@@ -1045,7 +1045,7 @@ final class PanelIntegrationTests: XCTestCase {
     private func onePieceDrawLog() -> String {
         let draws = TaskPageMotion.drawLogForTesting
         guard let start = draws.first?.time else { return "(nothing drawn)" }
-        let hosts = KeptContentHostCounts.drawnLog.filter { $0.time >= start - 0.05 }
+        let hosts = KeptContentHostCounts.drawnLog.filter { $0.time >= start - 0.5 }
             .map { (time: $0.time, text: "H \($0.host.hashValue % 10_000) drawn=\($0.drawn)") }
         let lines = draws.map { (time: $0.time, text: "\($0.kind) \(String(format: "%.3f", $0.p))") } + hosts
         return lines.sorted { $0.time < $1.time }.prefix(160)
@@ -1071,8 +1071,10 @@ final class PanelIntegrationTests: XCTestCase {
             XCTAssertTrue(back.accessibilityPerformPress?() ?? false)
             spin(until: { rig.panel.uiState.openTaskNoteID == nil && !motion.isActive })
             XCTAssertFalse(motion.isActive, "Back lands")
+            // The list is drawn again by the route's close at the latest.
+            spin(until: { TaskPageMotion.drawLogForTesting.last { $0.kind == "L" }?.p == 0 }, timeout: 1)
             let log = TaskPageMotion.drawLogForTesting
-            print("ONEPIECE BACK DRAWS\n" + onePieceDrawLog())
+            print("ONEPIECE BACK DRAWS (host changes \(KeptContentHostCounts.drawnLog.count))\n" + onePieceDrawLog())
             let standInHalfway = log.firstIndex { $0.kind == "S" && $0.p <= 0.5 }
             let lineBetween = log.firstIndex { $0.kind == "L" && $0.p > 0 && $0.p < 1 }
             XCTAssertNotNil(standInHalfway, "the stand-in runs back")
