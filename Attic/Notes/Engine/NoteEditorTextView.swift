@@ -711,13 +711,13 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         let kinds = engine?.objectKinds ?? []
         var looked: Int?
         func insertionIndex() -> Int {
-            if let looked { return looked }
             let index = insertionIndexForCursor(at: local)
             looked = index
             return index
         }
-        if isEditable, kinds.contains(.checklist), checkboxLocation(at: local, insertionIndex: insertionIndex) != nil { return .arrow }
-        if let engine, kinds.contains(.payload) {
+        _ = kinds
+        if isEditable, checkboxLocation(at: local, insertionIndex: insertionIndex) != nil { return .arrow }
+        if let engine {
             let index = insertionIndex()
             for location in [index, max(0, index - 1)] {
                 if let object = engine.object(at: location),
@@ -1803,7 +1803,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// cursor passes one it shares with its other checks. A note without a
     /// checkbox answers nil at once, as the full lookup would.
     private func checkboxLocation(at point: NSPoint, insertionIndex: () -> Int) -> Int? {
-        guard let engine, engine.objectKinds.contains(.checklist) else { return nil }
+        guard let engine else { return nil }
         if let range = engine.checkboxRange(near: point), let rect = engine.rect(for: range) {
             let hit = NSRect(x: rect.minX - 4, y: rect.minY - 4,
                              width: NoteChecklistAttachment.boxSize + 8, height: rect.height + 8)

@@ -703,7 +703,11 @@ struct TasksFoldLayout: Layout {
     /// this layout's `sizeThatFits` was 10.3% of Tasks' main thread).
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard let row = subviews.first else { return }
-        row.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
+        #if DEBUG
+        Self.rowMeasures += 1
+        #endif
+        let size = row.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+        row.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: size.height))
     }
 }
 
