@@ -3590,9 +3590,12 @@ extension AtticDropdownTests {
             arrowTaken = presenter.handleKey(down) == nil
         }
         defer { claims.cancel(); unfolds.cancel() }
+        let presentedAt = clock()
         presenter.present(from: anchor)
         XCTAssertIdentical(window.firstResponder, presenter.host, "the host has the keyboard as the card opens")
+        let waitFrom = clock()
         wait(timeout: 10) { claimedAt != nil && unfoldStartedAt != nil && presenter.stage.shown }
+        print(String(format: "R13_TIMES present=%.4f claimed=%.4f started=%.4f waitFrom=%.4f waited=%.4f", presentedAt, claimedAt ?? -1, unfoldStartedAt ?? -1, waitFrom, clock() - waitFrom))
         XCTAssertTrue(presenter.stage.shown, "the unfold is under way")
         let claimed = try XCTUnwrap(claimedAt, "the host claimed the keyboard")
         let started = try XCTUnwrap(unfoldStartedAt, "the unfold started")
