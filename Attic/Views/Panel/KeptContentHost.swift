@@ -71,6 +71,26 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         }
     }
 
+    /// SwiftUI asks for this host's next update by marking its constraints
+    /// (`NSHostingView.setNeedsUpdate`). AppKit then tells every container
+    /// up the chain, and SwiftUI's wrapper of the representable answers by
+    /// asking for the panel host's layout: a panel-root pass on every Tasks
+    /// scroll step that nothing asked for, since the slot never takes its
+    /// size from the content (`sizingOptions = []`, `sizeThatFits`; run
+    /// 46012392573: `root=[1:5,2:55]` per step, 60 of 60 from this climb).
+    /// The host runs its update in its own layout, so the request marks
+    /// that instead (held while hidden, as any layout).
+    override var needsUpdateConstraints: Bool {
+        get { super.needsUpdateConstraints }
+        set {
+            if newValue {
+                needsLayout = true
+            } else {
+                super.needsUpdateConstraints = false
+            }
+        }
+    }
+
     /// Whether accessibility reads the content. A host that comes into use
     /// takes clicks and the keyboard at once, but joins accessibility only
     /// after its first drawn frame: a client's read mounts the rows it asks
