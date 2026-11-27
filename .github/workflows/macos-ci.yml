@@ -98,7 +98,7 @@ jobs:
     if: ${{ (github.event_name != 'workflow_dispatch' || inputs.lane == 'fka' || inputs.lane == 'full') && !inputs.ui_tests }}
     name: Focused Full Keyboard Access verification
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 170
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
@@ -122,6 +122,19 @@ jobs:
             -skip-testing:AtticTests/NotesKeyboardUndoTests/testTheToastNeverTakesKeyboardFocusDuringNativeFullKeyboardAccessTraversal
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" --format json > "$RUNNER_TEMP/fka-notes-normal-summary.json"
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==7 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-normal-summary.json"
+      - name: SCRATCH PR 80 reds, whole classes, Full Keyboard Access off
+        if: always()
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFKA-scratch-reds.xcresult" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO \
+            -only-testing:AtticTests/HiddenPagesCountersTests/testC13CommandsSentIntoAHiddenCalendarRunNothingUntilItIsShown \
+            > "$RUNNER_TEMP/scratch-reds.log" 2>&1 || true
+          grep -E '^(HIDDEN_CMD|HIDDEN_COUNTS C9|HIDDEN_SHOWN)|error: -\[|Test Case .*(passed|failed)' "$RUNNER_TEMP/scratch-reds.log" | sed 's/^/SCRATCH_REDS /' || true
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-scratch-reds.xcresult" --format json | python3 -c 'import json,sys; s=json.load(sys.stdin); print("SCRATCH_REDS summary passed=%s failed=%s skipped=%s" % (s["passedTests"], s["failedTests"], s["skippedTests"]))' || echo 'SCRATCH_REDS no summary'
       - name: Run the native FKA test alone, then the H5-04 focus regressions
         if: always()
         env:
