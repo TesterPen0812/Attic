@@ -115,6 +115,10 @@ private final class PanelRelevantUIStateObserver: ObservableObject {
 /// and the error notice). Pages lay themselves out inside
 /// `PanelPageLayout`; the shell owns everything around them.
 struct AtticPanelView: View {
+    #if DEBUG
+    /// Test seam: the notice clearance the shell last read from its pages.
+    static var lastNoticeClearance: CGFloat?
+    #endif
     let store: TaskStore
     let noteStore: NoteStore
     let canvasSession: CanvasSession
@@ -318,6 +322,9 @@ struct AtticPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { clearance in
+            #if DEBUG
+            Self.lastNoticeClearance = clearance
+            #endif
             guard noticeClearance.value != clearance else { return }
             // A page's bottom controls grow or shrink with a spring (the
             // composer's date and tags row): the notices ride it, never

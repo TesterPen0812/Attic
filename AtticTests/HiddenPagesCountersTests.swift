@@ -2201,3 +2201,351 @@ extension HiddenPagesCountersTests {
         }
     }
 }
+
+// MARK: - Notes and Draw in kept hosts (speed/page-host-notes-draw; the lead's ruling, 27 Nov)
+
+/// The lead's conditions for moving Notes and Draw into hosts of their own:
+/// every leave hook runs in the switch's own run-loop turn, before the new
+/// page's first frame and before a key pressed in that turn is handled;
+/// the first responder after the switch is the trunk's; Draw's finish and
+/// thumbnail flush (`DrawPageModel.setShown(false)`) is never later; the
+/// shell's notice clearance is the trunk's with Notes shown and hidden; and
+/// the common paths are right in their first frame shown.
+@MainActor
+extension HiddenPagesCountersTests {
+    /// The ways a switch leaves a page: ⌘-digit (the header's shortcut),
+    /// a click on the island (the shell's `selectPage`), and the state's own
+    /// switch (the agent's and the menu's `uiState.selectSection`, as
+    /// `AppCoordinator` calls it).
+    private enum LeavePath: String, CaseIterable { case shortcut, click, state }
+
+    private static let switchDigits: [PanelPage: (UInt16, String)] = [.tasks: (18, "1"), .notes: (19, "2"), .calendar: (20, "3"), .canvas: (21, "4")]
+
+    private func keyEvents(_ rig: Rig, code: UInt16, _ characters: String, _ flags: NSEvent.ModifierFlags = []) throws -> [NSEvent] {
+        try [NSEvent.EventType.keyDown, .keyUp].map { type in
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: rig.panel.windowNumber, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+        }
+    }
+
+    private func sentinel(_ rig: Rig) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [],
+                                         timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: rig.panel.windowNumber,
+                                         context: nil, subtype: 0x4E44, data1: 0, data2: 0))
+    }
+
+    /// Switches to `page` by `path`, then in the same turn presses `x`: the
+    /// events are queued back to back and delivered as the app delivers
+    /// them (`Hosted.pumpEvents`), with no layout or display forced. `atKey`
+    /// runs as the key comes up for delivery (a sentinel event queued just
+    /// before it); `afterKey` once it was handled.
+    private func switchThenKey(_ rig: Rig, to page: PanelPage, by path: LeavePath,
+                               atKey: @escaping () -> Void, afterKey: () -> Void) throws {
+        let (code, digit) = try XCTUnwrap(Self.switchDigits[page])
+        let sentinelEvent = try sentinel(rig)
+        let key = try keyEvents(rig, code: 7, "x")
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .applicationDefined) { event in
+            if event.subtype.rawValue == 0x4E44 { atKey() }
+            return event
+        }
+        defer { monitor.map(NSEvent.removeMonitor) }
+        switch path {
+        case .shortcut:
+            for event in try keyEvents(rig, code: code, digit, .command) { NSApp.postEvent(event, atStart: false) }
+        case .click:
+            rig.state.island.click(page)
+        case .state:
+            rig.state.selectSection(page.section)
+        }
+        NSApp.postEvent(sentinelEvent, atStart: false)
+        for event in key { NSApp.postEvent(event, atStart: false) }
+        Hosted.pumpEvents()
+        afterKey()
+    }
+
+    private func editors(_ rig: Rig) -> [NoteEditorTextView] {
+        func walk(_ view: NSView) -> [NoteEditorTextView] {
+            ((view as? NoteEditorTextView).map { [$0] } ?? []) + view.subviews.flatMap(walk)
+        }
+        return walk(rig.content)
+    }
+
+    private func storedText(_ rig: Rig, _ id: UUID) -> String {
+        let context = ModelContext(rig.container)
+        return ((try? context.fetch(FetchDescriptor<NoteItem>())) ?? []).first { $0.id == id && $0.deletedAt == nil }?.plainText ?? "<missing>"
+    }
+
+    private func responderName(_ rig: Rig, editor: NSView?) -> String {
+        guard let responder = rig.panel.firstResponder else { return "nil" }
+        if let editor, responder === editor { return "editor" }
+        if let view = responder as? NSView {
+            var membership: PanelKeyboardMembership?
+            var walker: NSView? = view
+            while membership == nil, let current = walker {
+                membership = PanelPageKeyboard.membership(of: current)
+                walker = current.superview
+            }
+            return "\(type(of: view))@\(membership.map { "\($0)" } ?? "none")"
+        }
+        return "\(type(of: responder))"
+    }
+
+    /// The Tasks row with the cursor, by its index in Now.
+    private func focusRow(_ rig: Rig) -> String {
+        guard let focus = rig.page.keyboardFocus else { return "nil" }
+        return rig.page.rows(for: .now).firstIndex { $0.id == focus.id }.map { "now[\($0)]" } ?? "other"
+    }
+
+    /// Shows Notes by a click, opens a free note and puts the keyboard in its editor.
+    private func focusANotesEditor(_ rig: Rig) throws -> (NoteEditorTextView, UUID) {
+        rig.panel.makeKey()
+        rig.state.panelDidReveal()
+        rig.state.island.click(.notes)
+        pump(rig.content, rig.panel)
+        XCTAssertEqual(rig.state.selectedSection, .notes, "harness: Notes is shown")
+        let id = rig.seed.freeNotes[0]
+        XCTAssertEqual(wait { await rig.draft.pages.openFromLibrary(noteID: id) }, true, "harness: the note opened")
+        rig.notesLibrary.dismissAfterOpenedNote(rig.draft.pages, requestedQuery: "")
+        pump(rig.content, rig.panel)
+        let editor = try XCTUnwrap(editors(rig).first { $0.window != nil && !$0.isHiddenOrHasHiddenAncestor && !$0.isSuspended },
+                                   "harness: the open note's editor is on screen")
+        XCTAssertTrue(rig.panel.makeFirstResponder(editor), "harness: the editor took the keyboard")
+        pump(rig.content, rig.panel)
+        XCTAssertTrue(rig.panel.firstResponder === editor, "harness: the editor holds the keyboard")
+        return (editor, id)
+    }
+
+    /// (a), (b) and (c) of the ruling for Notes, on each leave path: with the
+    /// editor focused and an unsaved word typed, a switch to Tasks and a key
+    /// in the same turn. When the key comes up, Notes' key monitor is gone,
+    /// the editor is suspended and no longer the first responder; the key
+    /// changes neither the editor nor the stored note; the first responder
+    /// is printed for the trunk comparison, and the typed word is printed as
+    /// stored at the key and in the first frame (the save point).
+    func testND2NotesLeavesInTheSwitchsTurnOnEveryPath() throws {
+        try requireKeyWindowTests()
+        for path in LeavePath.allCases {
+            try withRig { rig in
+                let (editor, id) = try focusANotesEditor(rig)
+                let monitorsShown = NotesPageChrome.installedKeyMonitors
+                let end = (editor.string as NSString).length
+                editor.setSelectedRange(NSRange(location: end, length: 0))
+                editor.insertText(" zq7", replacementRange: editor.selectedRange())
+                let typed = editor.string
+                XCTAssertTrue(typed.hasSuffix(" zq7"), "harness: the word was typed")
+                let shellBefore = Self.shellRuns
+                var atKey = ""
+                var monitorsAtKey = -1, suspendedAtKey = false, responderIsEditorAtKey = true
+                try switchThenKey(rig, to: .tasks, by: path, atKey: {
+                    monitorsAtKey = NotesPageChrome.installedKeyMonitors
+                    suspendedAtKey = editor.isSuspended
+                    responderIsEditorAtKey = rig.panel.firstResponder === editor
+                    atKey = "monitors=\(monitorsAtKey - monitorsShown) suspended=\(editor.isSuspended) "
+                        + "responder=\(self.responderName(rig, editor: editor)) shell_ran=\(Self.shellRuns > shellBefore) "
+                        + "section=\(rig.state.selectedSection) saved_word=\(self.storedText(rig, id).contains("zq7"))"
+                }, afterKey: {})
+                let afterKey = "responder=\(responderName(rig, editor: editor)) editor_changed=\(editor.string != typed) "
+                    + "focus=\(focusRow(rig))"
+                var first = ""
+                inFirstShownFrame(of: .tasks, rig, switching: {}, read: {
+                    first = "responder=\(self.responderName(rig, editor: editor)) saved_word=\(self.storedText(rig, id).contains("zq7"))"
+                })
+                pump(rig.content, rig.panel)
+                let settled = "responder=\(responderName(rig, editor: editor)) focus=\(focusRow(rig)) "
+                    + "stored_has_x=\(storedText(rig, id).hasSuffix("zq7x"))"
+                print("ND_LEAVE notes path=\(path.rawValue) at_key{\(atKey)} after_key{\(afterKey)} first{\(first)} settled{\(settled)}")
+                XCTAssertEqual(rig.state.selectedSection, .tasks, "ND2 \(path): Tasks is shown")
+                XCTAssertEqual(monitorsAtKey, monitorsShown - 1, "ND2 \(path): Notes' key monitor was still installed when the key came")
+                XCTAssertTrue(suspendedAtKey, "ND2 \(path): the editor was not suspended when the key came")
+                XCTAssertFalse(responderIsEditorAtKey, "ND2 \(path): the editor still held the keyboard when the key came")
+                XCTAssertEqual(editor.string, typed, "ND2 \(path): the key changed the note's editor")
+                XCTAssertFalse(storedText(rig, id).contains("zq7x"), "ND2 \(path): the key reached the stored note")
+            }
+        }
+    }
+
+    /// (c) for Draw and the flush points: Draw shown, a switch to Tasks and a
+    /// key in the same turn, on each path: `setShown(false)` (which finishes
+    /// a live stroke and flushes the thumbnail) is done when the key comes
+    /// up. Then a window close right after a switch (`panelDidHide` and
+    /// `orderOut` in the switch's turn): done at once. App quit runs
+    /// `prepareForTermination` (AppCoordinator.swift:1355), an event after
+    /// the switch's turn, so it is no earlier than the key read here.
+    func testND3DrawIsHiddenInTheSwitchsTurnOnEveryPathAndAtAClose() throws {
+        try requireKeyWindowTests()
+        for path in LeavePath.allCases {
+            try withRig { rig in
+                rig.panel.makeKey()
+                rig.state.panelDidReveal()
+                rig.state.island.click(.canvas)
+                pump(rig.content, rig.panel)
+                XCTAssertTrue(DrawPageModel.shared.isShown, "harness: Draw is shown")
+                let shellBefore = Self.shellRuns
+                var shownAtKey = true, atKey = ""
+                try switchThenKey(rig, to: .tasks, by: path, atKey: {
+                    shownAtKey = DrawPageModel.shared.isShown
+                    atKey = "shown=\(shownAtKey) responder=\(self.responderName(rig, editor: nil)) shell_ran=\(Self.shellRuns > shellBefore)"
+                }, afterKey: {})
+                var first = ""
+                inFirstShownFrame(of: .tasks, rig, switching: {}, read: {
+                    first = "shown=\(DrawPageModel.shared.isShown) responder=\(self.responderName(rig, editor: nil))"
+                })
+                print("ND_LEAVE draw path=\(path.rawValue) at_key{\(atKey)} first{\(first)}")
+                XCTAssertFalse(shownAtKey, "ND3 \(path): Draw was still shown when the key came")
+            }
+        }
+        // A window close right after a switch.
+        try withRig { rig in
+            rig.panel.makeKey()
+            rig.state.panelDidReveal()
+            rig.state.island.click(.canvas)
+            pump(rig.content, rig.panel)
+            XCTAssertTrue(DrawPageModel.shared.isShown, "harness: Draw is shown")
+            rig.state.island.click(.tasks)
+            rig.state.panelDidHide()
+            let shownAtClose = DrawPageModel.shared.isShown
+            rig.panel.orderOut(nil)
+            Hosted.pumpEvents()
+            let shownAfterTurn = DrawPageModel.shared.isShown
+            pump(rig.content, rig.panel)
+            print("ND_LEAVE draw close at_close{shown=\(shownAtClose)} after_turn{shown=\(shownAfterTurn)} settled{shown=\(DrawPageModel.shared.isShown)}")
+            XCTAssertFalse(shownAtClose, "ND3 close: Draw was still shown when the window closed right after a switch")
+            XCTAssertFalse(DrawPageModel.shared.isShown, "ND3 close: Draw is shown after the close")
+        }
+    }
+
+    /// The shell's notice clearance (its `onPreferenceChange`, read through
+    /// `AtticPanelView.lastNoticeClearance`) in the first frame with Notes
+    /// shown on its editor, then in the first frame with Tasks shown and
+    /// Notes hidden: the trunk's values.
+    func testND4NoticeClearanceIsTheTrunksWithNotesShownAndHidden() throws {
+        try requireKeyWindowTests()
+        try withRig { rig in
+            AtticPanelView.lastNoticeClearance = nil
+            _ = try focusANotesEditor(rig)
+            let shownSettled = AtticPanelView.lastNoticeClearance
+            var hiddenFirst: CGFloat?
+            inFirstShownFrame(of: .tasks, rig, switching: { rig.state.island.click(.tasks) }, read: {
+                hiddenFirst = AtticPanelView.lastNoticeClearance
+            })
+            pump(rig.content, rig.panel)
+            let hiddenSettled = AtticPanelView.lastNoticeClearance
+            var shownFirst: CGFloat?
+            inFirstShownFrame(of: .notes, rig, switching: { rig.state.island.click(.notes) }, read: {
+                shownFirst = AtticPanelView.lastNoticeClearance
+            })
+            pump(rig.content, rig.panel)
+            let shownAgain = AtticPanelView.lastNoticeClearance
+            print("ND_CLEAR notes_shown=\(shownSettled.map { "\($0)" } ?? "nil") tasks_first=\(hiddenFirst.map { "\($0)" } ?? "nil") "
+                  + "tasks_settled=\(hiddenSettled.map { "\($0)" } ?? "nil") notes_first=\(shownFirst.map { "\($0)" } ?? "nil") "
+                  + "notes_settled=\(shownAgain.map { "\($0)" } ?? "nil")")
+            XCTAssertEqual(shownFirst, shownAgain, "ND4: Notes' first frame shown has another clearance than when settled")
+            XCTAssertEqual(hiddenFirst, hiddenSettled, "ND4: Tasks' first frame has another clearance than when settled")
+        }
+    }
+
+    /// A page's kept host, if it has one.
+    private func keptHost(_ page: PanelPage, _ rig: Rig) -> KeptContentHostingView? {
+        func hosts(_ view: NSView) -> [KeptContentHostingView] {
+            ((view as? KeptContentHostingView).map { [$0] } ?? []) + view.subviews.flatMap(hosts)
+        }
+        return hosts(rig.content).first { PanelPageKeyboard.membership(of: $0) == .page(page) }
+    }
+
+    /// The target: hidden behind Tasks, Notes and Draw are each in a host of
+    /// their own that is neither drawn nor laid out through a live resize,
+    /// its release and a write outside a drag, and their views do not run.
+    func testND1HiddenNotesAndDrawSitOutAResize() throws {
+        try withRig { rig in
+            let pages: [PanelPage] = [.notes, .canvas]
+            let hosts = Dictionary(uniqueKeysWithValues: pages.map { ($0, keptHost($0, rig)) })
+            let layoutsBefore = hosts.mapValues { $0.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] } ?? -1 }
+            var drawnAt: [String] = []
+            var resizing: [String: Int] = [:]
+            @MainActor func add(_ label: String, _ counts: [String: Int]) {
+                resizing.merge(counts) { $0 + $1 }
+                for page in pages where (hosts[page] ?? nil)?.isDrawn == true { drawnAt.append("\(page)@\(label)") }
+            }
+            let start = rig.state.panelSize
+            add("lock-on", measure(rig, "ND1 lock-on") { rig.state.setInteractionLock(.windowResize, isActive: true) })
+            for step in 1...Self.dragSteps {
+                add("step=\(step)", measure(rig, "ND1 write step=\(step)") { resize(rig, to: dragSize(start, step: step)) })
+            }
+            add("release", measure(rig, "ND1 release") { release(rig) })
+            add("outside", measure(rig, "ND1 outside a drag") { resize(rig, to: dragSize(start, step: Self.dragSteps + 2)) })
+            let layoutsAfter = hosts.mapValues { $0.map { KeptContentHostCounts.layoutsByHost[ObjectIdentifier($0), default: 0] } ?? -1 }
+            print("HIDDEN_COUNTS ND1 resize-total " + Self.line(resizing))
+            print("HIDDEN_COUNTS ND1 hosts=\(hosts.mapValues { $0 != nil }) drawn_at=\(drawnAt) layouts=\(layoutsBefore)->\(layoutsAfter)")
+            for page in pages {
+                for view in Self.hiddenPageViews[page, default: []] {
+                    XCTAssertEqual(resizing[view, default: 0], 0, "ND1: \(page)'s \(view) ran while hidden through a resize")
+                }
+                if (hosts[page] ?? nil) != nil {
+                    XCTAssertEqual(layoutsAfter[page], layoutsBefore[page], "ND1: hidden, \(page)'s host was laid out")
+                } else {
+                    XCTFail("ND1: \(page) sits in a kept host of its own")
+                }
+            }
+            XCTAssertEqual(drawnAt, [], "ND1: a hidden host was drawn")
+        }
+    }
+
+    /// The first frame shown of the gate's common Notes paths: a note open
+    /// in the editor changed in the store while Notes was hidden (as the
+    /// composer's or the agent's write lands), and a note opened from Tasks
+    /// (the composer's `openNote`: the switch, then the open a turn later).
+    /// In each, the first frame in which the note is the active one shows
+    /// the editor with the text and width it has once settled.
+    func testND5NotesPathsAreRightInTheirFirstFrameShown() throws {
+        try requireKeyWindowTests()
+        // A note changed while Notes was hidden.
+        try withRig { rig in
+            let (_, id) = try focusANotesEditor(rig)
+            rig.state.island.click(.tasks)
+            pump(rig.content, rig.panel)
+            let note = try XCTUnwrap(rig.notes.note(withID: id))
+            let changed = try NoteAgentTextParser.document(title: "Free note 1", body: "Changed while hidden.", base: .blank)
+            if case let .failure(error) = rig.notes.saveDocument(noteID: id, document: changed, baseRevisionID: note.revisionID) {
+                XCTFail("harness: the hidden note's write failed: \(error)")
+            }
+            pump(rig.content, rig.panel)
+            var first: (String, CGFloat)?
+            inFirstShownFrame(of: .notes, rig, switching: { rig.state.island.click(.notes) }, read: {
+                first = self.editors(rig).first { !$0.isSuspended }.map { ($0.string, $0.bounds.width) }
+            })
+            pump(rig.content, rig.panel)
+            let settled = editors(rig).first { !$0.isSuspended }.map { ($0.string, $0.bounds.width) }
+            print("ND_FIRST changed-hidden first=\(first.map { "\($0.0.contains("Changed while hidden")) w=\($0.1)" } ?? "nil") "
+                  + "settled=\(settled.map { "\($0.0.contains("Changed while hidden")) w=\($0.1)" } ?? "nil")")
+            XCTAssertEqual(first?.0, settled?.0, "ND5 changed while hidden: the first frame's text is not the settled text")
+            XCTAssertEqual(first?.1 ?? -1, settled?.1 ?? -2, accuracy: 0.5, "ND5 changed while hidden: the first frame's width")
+        }
+        // A note opened from Tasks.
+        try withRig { rig in
+            rig.panel.makeKey()
+            rig.state.panelDidReveal()
+            pump(rig.content, rig.panel)
+            let id = rig.seed.freeNotes[1]
+            var frames: [(active: Bool, text: String?, width: CGFloat?)] = []
+            rig.composer.services.openNote(id)
+            waitForTestOperation("the opened note's first frame") {
+                frame(rig)
+                let active = rig.draft.pages.active?.noteID == id && !rig.draft.pages.isLibraryPresented
+                let editor = editors(rig).first { !$0.isSuspended && !$0.isHiddenOrHasHiddenAncestor }
+                frames.append((active, editor?.string, editor?.bounds.width))
+                return active || frames.count > 400
+            }
+            let firstActive = frames.last
+            pump(rig.content, rig.panel)
+            let settled = editors(rig).first { !$0.isSuspended && !$0.isHiddenOrHasHiddenAncestor }
+            print("ND_FIRST open-from-tasks frames=\(frames.count) first_active{text=\(firstActive?.text?.contains("Free note 2") ?? false) "
+                  + "w=\(firstActive?.width ?? -1)} settled{text=\(settled?.string.contains("Free note 2") ?? false) w=\(settled?.bounds.width ?? -1)}")
+            XCTAssertEqual(rig.state.selectedSection, .notes, "ND5 open from Tasks: Notes is shown")
+            XCTAssertEqual(firstActive?.text, settled?.string, "ND5 open from Tasks: the first frame with the note active shows other text")
+            XCTAssertEqual(firstActive?.width ?? -1, settled?.bounds.width ?? -2, accuracy: 0.5,
+                           "ND5 open from Tasks: the first frame with the note active has another width")
+        }
+    }
+}
