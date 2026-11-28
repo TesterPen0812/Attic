@@ -516,7 +516,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         context.coordinator.hiddenRootSet = !drawn
         context.coordinator.drawnRows = drawn ? rows : nil
         #if DEBUG
-        KeptContentHostCounts.root(drawn: drawn)
+        KeptContentHostCounts.root(drawn: drawn, host: host)
         #endif
         return container
     }
@@ -525,7 +525,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         guard let host = container.host else { return }
         let coordinator = context.coordinator
         #if DEBUG
-        KeptContentHostCounts.update(drawn: drawn)
+        KeptContentHostCounts.update(drawn: drawn, host: host)
         #endif
         // Drawn first, so a host that held its layouts while hidden is
         // marked for the pass that takes this root.
@@ -541,7 +541,7 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
             host.setRoot(root, laidOut: leaving || Self.movesRows(from: coordinator.drawnRows, to: drawn ? rows : nil),
                          under: context.transaction)
             #if DEBUG
-            KeptContentHostCounts.root(drawn: drawn)
+            KeptContentHostCounts.root(drawn: drawn, host: host)
             #endif
         }
         coordinator.hiddenRootSet = !drawn
@@ -786,9 +786,14 @@ enum KeptContentHostCounts {
     static var accessibilityHits = Split()
     /// Layouts by host (a host's own count, whatever its state).
     static var layoutsByHost: [ObjectIdentifier: Int] = [:]
+    /// Roots set and `updateNSView` calls by host, while not drawn.
+    static var hiddenRootsByHost: [ObjectIdentifier: Int] = [:]
+    static var hiddenUpdatesByHost: [ObjectIdentifier: Int] = [:]
 
     static func reset() {
         layoutsByHost = [:]
+        hiddenRootsByHost = [:]
+        hiddenUpdatesByHost = [:]
         layouts = Split()
         passesOfTheHide = [:]
         heldPastTheHide = [:]
@@ -804,8 +809,14 @@ enum KeptContentHostCounts {
         count(&layouts, interactive)
         layoutsByHost[ObjectIdentifier(host), default: 0] += 1
     }
-    fileprivate static func root(drawn: Bool) { count(&roots, drawn) }
-    fileprivate static func update(drawn: Bool) { count(&updates, drawn) }
+    fileprivate static func root(drawn: Bool, host: KeptContentHostingView) {
+        count(&roots, drawn)
+        if !drawn { hiddenRootsByHost[ObjectIdentifier(host), default: 0] += 1 }
+    }
+    fileprivate static func update(drawn: Bool, host: KeptContentHostingView) {
+        count(&updates, drawn)
+        if !drawn { hiddenUpdatesByHost[ObjectIdentifier(host), default: 0] += 1 }
+    }
     fileprivate static func environment(drawn: Bool) { count(&environments, drawn) }
     fileprivate static func accessibilityChildren(interactive: Bool) { count(&accessibilityChildrenCalls, interactive) }
     fileprivate static func accessibilityHit(interactive: Bool) { count(&accessibilityHits, interactive) }

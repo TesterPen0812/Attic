@@ -382,15 +382,26 @@ struct AtticPanelView: View {
             .atticFocusCheckProbe("tasks")
             .transition(pageTransition(.tasks))
         case .canvas:
-            PanelCanvasNoticeAwareHost(
-                canvasSession: canvasSession,
-                toasts: toasts,
-                uiState: uiState,
-                layout: layout,
-                noticeHeight: noticeHeight,
-                headerControlRects: headerControlRects,
-                headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
-            )
+            // In a host of its own, as Calendar and Notes (draw-kept-host-brief.md):
+            // hidden, Draw's graph is not run, laid out or walked by the shell's
+            // updates. Its leave hook (`setShown(false)`: a stroke in flight is
+            // finished and saved) and the top row's undimming after it run in
+            // the switch's turn, as in the panel's own host (`laysOutOnLeave`;
+            // without it a click or an instant switch left Draw shown, DR2).
+            // The notice room is an object it observes inside the host; the
+            // header rects are a value in the root, taken while shown and on show.
+            PanelPageKeptHost(page: .canvas, isCurrent: page == currentPage, transit: uiState.pageTransit,
+                              laysOutOnLeave: true) {
+                PanelCanvasNoticeAwareHost(
+                    canvasSession: canvasSession,
+                    toasts: toasts,
+                    uiState: uiState,
+                    layout: layout,
+                    noticeHeight: noticeHeight,
+                    headerControlRects: headerControlRects,
+                    headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
+                )
+            }
             .atticFocusCheckProbe("canvas")
             .transition(pageTransition(.canvas))
         case .notes:
@@ -1047,6 +1058,8 @@ struct PanelCanvasNoticeAwareHost: View {
     static var bodyEvaluations = 0
     /// Test seam: the clearance the last body run gave the Canvas page.
     static var lastErrorBannerHeight: CGFloat = 0
+    /// Test seam: the header control frames the last body run handed on.
+    static var lastHeaderControlRects: [CGRect] = []
     #endif
     @ObservedObject var canvasSession: CanvasSession
     @ObservedObject var toasts: PanelToastCenter
@@ -1065,6 +1078,7 @@ struct PanelCanvasNoticeAwareHost: View {
         let errorBannerHeight = hasNotice || toasts.current != nil ? noticeHeight.value : 0
         #if DEBUG
         let _ = Self.lastErrorBannerHeight = errorBannerHeight
+        let _ = Self.lastHeaderControlRects = headerControlRects
         #endif
         CanvasPageHost(canvasSession: canvasSession, uiState: uiState, layout: layout,
                        errorBannerHeight: errorBannerHeight,
