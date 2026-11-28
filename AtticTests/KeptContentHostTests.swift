@@ -331,8 +331,11 @@ final class KeptContentHostTests: XCTestCase {
         // A dropdown list's highlight origin (`atticHighlightOrigin`), set
         // only by `AtticDropdownViewport` on its own rows
         // (AtticDropdown.swift:2679); rows outside a viewport read nil.
+        // The DEBUG ring census's scope (`atticFocusCensusScope`), set on
+        // each Tasks list cell (`TasksReorderCell`) and on each
+        // `AtticTaskRow` inside the host; rings elsewhere read "outside".
         let setInside: Set<String> = ["atticMenuEntranceTime", "atticMaterialProbeID", "atticContextMenuCountTag",
-                                      "atticRowHover", "atticHighlightOrigin"]
+                                      "atticRowHover", "atticHighlightOrigin", "atticFocusCensusScope"]
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Attic")
         let folders = ["Tasks", "DesignSystem", "Design"].map { root.appendingPathComponent($0) }
