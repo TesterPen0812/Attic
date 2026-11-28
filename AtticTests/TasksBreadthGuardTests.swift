@@ -1401,6 +1401,258 @@ final class TasksBreadthGuardTests: XCTestCase {
                        "the changed row draws its new priority on return")
     }
 
+    // MARK: - One view per list entry (scale-work audit #1, 26 Nov)
+
+    /// How many times a turn ran the row builder (`cell()`), per tab.
+    private func builderPasses(_ hosting: NSView, _ action: () -> Void) -> [TasksTab: Int] {
+        let base = TasksCellBodyCounts.passes, pageBase = TasksPageRenderProbe.bodyRuns
+        action()
+        settle(hosting)
+        settle(hosting)
+        print("ONE_VIEW_PAGE page_runs=\(TasksPageRenderProbe.bodyRuns - pageBase)")
+        return TasksCellBodyCounts.passes.reduce(into: [TasksTab: Int]()) { result, entry in
+            let added = entry.value - base[entry.key, default: 0]
+            if added > 0 { result[entry.key.tab, default: 0] += added }
+        }
+    }
+
+    /// A lazy list builds the rows it shows, not every entry: a `ForEach`
+    /// whose entry yields 0, 1 or 2 views (the date header and the next
+    /// event under a row-or-header `if`) has no constant view count, so the
+    /// lazy stack runs every entry's builder on each page pass. A row click
+    /// and ↓ (the model's route, as `TasksPage` drives it) run the row
+    /// builder the same number of times with 83 and 446 open tasks and the
+    /// same rows on screen.
+    func testARowClickArrowAndEditRunTheRowBuilderTheSameAt83And446Tasks() throws {
+        var results: [Int: (click: Int, arrow: Int, edit: Int, drawn: Int)] = [:]
+        for count in [83, 446] {
+            window?.close()
+            TasksCellBodyCounts.reset()
+            let store = try makeStore(open: count, tracker: true)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+            let pointer = TasksPointer()
+            let hosting = page(model, store, pointer: pointer)
+            let ids = model.rows(for: .now).map(\.id)
+            XCTAssertEqual(ids.count, count, "the seed's open rows")
+            let drawn = drawnRows(pointer, ids)
+            XCTAssertGreaterThan(drawn.count, 5, "the hosted page drew too few rows for the count to mean anything")
+            model.selectOnly(ids[1])
+            settle(hosting)
+            settle(hosting)
+            let click = builderPasses(hosting) { model.click(ids[3], modifiers: [], visible: ids) }
+            let arrow = builderPasses(hosting) {
+                model.selectOnly(ids[4])
+                model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: ids[4]), keyboardDriving: true)
+                model.cellUpdates.objectWillChange.send()
+            }
+            let edit = builderPasses(hosting) { XCTAssertTrue(model.setPriority(.high, for: [ids[6]]).isApplied) }
+            print("ONE_VIEW_TASKS n=\(count) edit_all=\(edit.values.reduce(0, +))")
+            print("ONE_VIEW_TASKS n=\(count) drawn=\(drawn.count) click_now=\(click[.now, default: 0]) "
+                  + "click_all=\(click.values.reduce(0, +)) arrow_now=\(arrow[.now, default: 0]) arrow_all=\(arrow.values.reduce(0, +))")
+            results[count] = (click.values.reduce(0, +), arrow.values.reduce(0, +), edit.values.reduce(0, +), drawn.count)
+        }
+        let small = try XCTUnwrap(results[83]), large = try XCTUnwrap(results[446])
+        XCTAssertEqual(small.drawn, large.drawn, "the same rows on screen at both sizes")
+        // Not a vacuous pass: the edit is a page pass that builds rows (the
+        // model's click and ↓ reach the rows through their states and may
+        // run no page pass at all).
+        XCTAssertGreaterThan(small.edit, 0, "the edit ran the row builder")
+        XCTAssertEqual(large.edit, small.edit, "an edit ran the row builder \(large.edit) times at 446 tasks against \(small.edit) at 83")
+        // The model's click and ↓ reach the rows through their states: no
+        // row builder runs at either size (run 45843089944).
+        XCTAssertEqual([small.click, small.arrow, large.click, large.arrow], [0, 0, 0, 0], "a click or ↓ ran the row builder")
+    }
+
+    /// Date groups (Overdue, Today, later days, No date: header entries
+    /// between the rows), measured at the list's top and scrolled to its
+    /// end, where a lazy stack that cannot count each entry's views would
+    /// walk every entry above the shown rows. A store edit of a shown row
+    /// (a page pass) runs the row builder the same number of times with 83
+    /// and 446 open tasks.
+    func testAnEditRunsTheRowBuilderTheSameAt83And446GroupedTasksAtTopAndEnd() throws {
+        var results: [Int: [String: Int]] = [:]
+        for count in [83, 446] {
+            window?.close()
+            TasksCellBodyCounts.reset()
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let context = ModelContext(container)
+            let now = Date(), calendar = Calendar.current
+            var order: Int64 = 10_000_000
+            for index in 0..<count {
+                order -= 1_024
+                let item = TaskItem(title: "Open task \(index) with a longer title like the tracker's", status: .todo,
+                                    createdAt: now, manualOrder: order)
+                item.listOrderVersion = TaskItem.currentListOrderVersion
+                item.tags = ["tag\(index % 7)", "area\(index % 3)"]
+                let offsets: [Int?] = [-3, 0, 1, 3, 6, nil]
+                if let days = offsets[index % offsets.count] {
+                    item.dueDay = DueDay(date: calendar.date(byAdding: .day, value: days, to: now)!, calendar: calendar)
+                }
+                context.insert(item)
+            }
+            try context.save()
+            let store = TaskStore(container: container)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+            let pointer = TasksPointer()
+            let hosting = page(model, store, pointer: pointer)
+            let ids = model.rows(for: .now).map(\.id)
+            XCTAssertEqual(ids.count, count, "the seed's open rows")
+            XCTAssertGreaterThan(model.listSnapshot(for: .now).sections.groups.filter(\.showsHeader).count, 3, "the list has date headers")
+            var result: [String: Int] = [:]
+            func edit(_ place: String) throws {
+                let drawn = ids.filter { pointer.frame(for: TasksRowID(tab: .now, id: $0)) != nil }
+                let target = try XCTUnwrap(drawn.dropFirst(2).first, "a shown row")
+                let ran = builderPasses(hosting) {
+                    XCTAssertTrue(model.setPriority(result.isEmpty ? .high : .low, for: [target]).isApplied)
+                }
+                let all = ran.values.reduce(0, +)
+                print("ONE_VIEW_GROUPED n=\(count) \(place) entries=\(model.listSnapshot(for: .now).entries.count) drawn=\(drawn.count) edit_all=\(all)")
+                result[place] = all
+                result[place + "_drawn"] = drawn.count
+            }
+            try edit("top")
+            let scroll = try XCTUnwrap(scrollViews(in: hosting).first { !$0.isHidden }, "Now's list")
+            let end = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: end))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            settle(hosting)
+            settle(hosting)
+            try edit("end")
+            results[count] = result
+        }
+        let small = try XCTUnwrap(results[83]), large = try XCTUnwrap(results[446])
+        for place in ["top", "end"] {
+            XCTAssertGreaterThan(small[place, default: 0], 0, "the \(place) edit ran the row builder")
+            XCTAssertEqual(small[place + "_drawn"], large[place + "_drawn"], "the same rows on screen at both sizes (\(place))")
+            XCTAssertEqual(large[place], small[place],
+                           "an edit at the \(place) ran the row builder \(large[place] ?? -1) times at 446 tasks against \(small[place] ?? -1) at 83")
+        }
+    }
+
+    /// The real routes (key window): a click on a row and ↓ through the
+    /// page's own handlers, and a store edit of one row (a page pass for
+    /// certain). Each runs the row builder the same number of times with 83
+    /// and 446 open tasks and the same rows on screen.
+    func testARealClickArrowAndEditRunTheRowBuilderTheSameAt83And446Tasks() throws {
+        try requireKeyWindowTests()
+        var results: [Int: [String: Int]] = [:]
+        for count in [83, 446] {
+            TasksCellBodyCounts.reset()
+            let hosted = try Hosted(height: 520, seed: { container in
+                let context = ModelContext(container)
+                let now = Date()
+                var order: Int64 = 10_000_000
+                for index in 0..<count {
+                    order -= 1_024
+                    let item = TaskItem(title: "Open task \(index) with a longer title like the tracker's", status: .todo,
+                                        createdAt: now, manualOrder: order)
+                    item.listOrderVersion = TaskItem.currentListOrderVersion
+                    item.tags = ["tag\(index % 7)", "area\(index % 3)"]
+                    context.insert(item)
+                }
+                try context.save()
+            })
+            defer { hosted.close() }
+            hosted.window.makeKey()
+            let ids = hosted.model.rows(for: .now).map(\.id)
+            XCTAssertEqual(ids.count, count, "the seed's open rows")
+            let drawn = Set(ids.filter { hosted.pointer.frame(for: TasksRowID(tab: .now, id: $0)) != nil })
+            try hosted.clickRow(ids[1], tab: .now)
+            hosted.spin(0.3)
+            func passes(_ name: String, _ action: () throws -> Void) rethrows -> Int {
+                let base = TasksCellBodyCounts.passes, pageBase = TasksPageRenderProbe.bodyRuns
+                try action()
+                hosted.spin(0.3)
+                var byTab: [TasksTab: Int] = [:]
+                for (row, runs) in TasksCellBodyCounts.passes where runs > base[row, default: 0] {
+                    byTab[row.tab, default: 0] += runs - base[row, default: 0]
+                }
+                let all = byTab.values.reduce(0, +)
+                print("ONE_VIEW_REAL n=\(count) \(name) drawn=\(drawn.count) page_runs=\(TasksPageRenderProbe.bodyRuns - pageBase) "
+                      + "now=\(byTab[.now, default: 0]) all=\(all)")
+                return all
+            }
+            var result: [String: Int] = ["drawn": drawn.count]
+            result["click"] = try passes("click") { try hosted.clickRow(ids[3], tab: .now) }
+            result["arrow"] = passes("arrow") { hosted.press(String(UnicodeScalar(NSDownArrowFunctionKey)!), keyCode: 125) }
+            result["edit"] = passes("edit") { XCTAssertTrue(hosted.model.setPriority(.high, for: [ids[6]]).isApplied) }
+            results[count] = result
+        }
+        let small = try XCTUnwrap(results[83]), large = try XCTUnwrap(results[446])
+        XCTAssertEqual(small["drawn"], large["drawn"], "the same rows on screen at both sizes")
+        XCTAssertGreaterThan(small["edit", default: 0], 0, "the edit ran the row builder")
+        // The real click and ↓ run the page's body but no row builder.
+        XCTAssertEqual([small["click"], small["arrow"], large["click"], large["arrow"]], [0, 0, 0, 0], "a real click or ↓ ran the row builder")
+        for name in ["click", "arrow", "edit"] {
+            XCTAssertEqual(large[name], small[name], "\(name) ran the row builder \(large[name] ?? -1) times at 446 tasks against \(small[name] ?? -1) at 83")
+        }
+    }
+
+    /// Done's list: a day heading or a row per line (a `switch` of two
+    /// single views, a constant count). With every row loaded and the list
+    /// scrolled to its end (where a lazy stack that cannot count each
+    /// line's views walks every line above), a row click builds fewer rows
+    /// than a 60-row list holds, with 240 rows (29 and 30 at 60 and 240).
+    func testADoneRowClickAtTheEndBuildsFewerRowsThanTheListHolds() throws {
+        var results: [Int: (click: Int, drawn: Int)] = [:]
+        for count in [60, 240] {
+            window?.close()
+            TasksCellBodyCounts.reset()
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let context = ModelContext(container)
+            let now = Date()
+            for index in 0..<count {
+                let item = TaskItem(title: "Finished task \(index) with a longer title", status: .todo, createdAt: now)
+                item.statusRaw = TaskStatus.done.rawValue
+                // Ten a day, so the list has day headings between its rows.
+                item.completedAt = now.addingTimeInterval(-Double(index / 10) * 86_400 - Double(index % 10) * 60 - 3_600)
+                item.doneLoggedAt = item.completedAt
+                context.insert(item)
+            }
+            try context.save()
+            let store = TaskStore(container: container)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+            let pointer = TasksPointer()
+            let hosting = page(model, store, pointer: pointer)
+            model.select(tab: .done)
+            settle(hosting, until: { model.pagerSwipe.motion.position == CGFloat(TasksTab.done.rawValue) })
+            model.loadMoreDoneLog(limit: 400)
+            settle(hosting)
+            settle(hosting)
+            let ids = model.doneDays().flatMap { $0.rows.map(\.id) }
+            XCTAssertEqual(ids.count, count, "Done loaded every row")
+            XCTAssertFalse(model.doneLogHasMore, "nothing left to load")
+            // The list the pager shows (the others lie beside it, off the page).
+            let scroll = try XCTUnwrap(scrollViews(in: hosting).first { list in
+                let frame = list.convert(list.bounds, to: nil)
+                return !list.isHidden && frame.height > Self.size.height / 2 && frame.minX > -1 && frame.minX < Self.size.width / 2
+            }, "Done's list")
+            let end = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: end))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            settle(hosting)
+            settle(hosting)
+            let shown = ids.filter { pointer.frame(for: TasksRowID(tab: .done, id: $0)) != nil }
+            XCTAssertGreaterThan(shown.count, 5, "Done drew rows at its end")
+            XCTAssertTrue(shown.contains(ids[ids.count - 1]), "the list is at its end")
+            model.selectOnly(shown[1])
+            settle(hosting)
+            settle(hosting)
+            let base = TasksCellBodyCounts.passes
+            let click = builderPasses(hosting) { model.click(shown[3], modifiers: [], visible: ids) }
+            let all = click.values.reduce(0, +)
+            let built = TasksCellBodyCounts.passes.filter { row, runs in row.tab == .done && runs > base[row, default: 0] }.count
+            print("ONE_VIEW_DONE_END n=\(count) lines=\(ids.count + model.doneDays().count) drawn=\(shown.count) "
+                  + "click_all=\(all) built_rows=\(built)")
+            XCTAssertGreaterThan(all, 0, "the click ran Done's row builder (\(count) rows)")
+            results[count] = (built, shown.count)
+        }
+        // A stack that walked every line above the shown ones would build
+        // all 240 rows; the click builds fewer than the 60-row list holds.
+        let large = try XCTUnwrap(results[240])
+        XCTAssertLessThan(large.click, 60, "a Done row click at the end built \(large.click) of 240 rows")
+    }
+
     // MARK: - Turns
 
     private struct Turn {

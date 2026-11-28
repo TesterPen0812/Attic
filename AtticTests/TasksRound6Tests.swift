@@ -476,11 +476,13 @@ final class Hosted {
          chrome: TasksPageChrome = TasksPageChrome(), services: TasksPageServices = TasksPageServices(),
          design: AtticDesignContext = AtticDesignContext(mode: .light),
          composerIsOpen: (() -> Bool)? = nil, memory: TasksPageMemory? = nil, warms: Bool = true,
-         atticPanel: Bool = false, followsWindow: Bool = false) throws {
+         atticPanel: Bool = false, followsWindow: Bool = false,
+         seed: ((ModelContainer) throws -> Void)? = nil) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        try TasksPagePreview.seedDemo(in: container, long: long)
+        // `seed`: a test's own tasks in place of the demo's.
+        if let seed { try seed(container) } else { try TasksPagePreview.seedDemo(in: container, long: long) }
         store = TaskStore(container: container)
         model = TasksPageModel(library: AtticLibrary(tasks: store), services: services, memory: memory)
         model.pagerSwipe.motion.warms = warms
