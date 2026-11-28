@@ -113,18 +113,23 @@ struct PanelPageKeptHost<Content: View>: View {
     let isCurrent: Bool
     @ObservedObject var transit: PanelPageTransit
     let content: Content
-
-    init(page: PanelPage, isCurrent: Bool, transit: PanelPageTransit, @ViewBuilder content: () -> Content) {
+    /// The leaving root is laid out in the panel's update (`KeptContentHost.laysOutOnLeave`):
+    /// for a page whose leave actions (commands released, editor resigned)
+    /// must run where they ran in the panel's own host (Notes).
+    let laysOutOnLeave: Bool
+    init(page: PanelPage, isCurrent: Bool, transit: PanelPageTransit, laysOutOnLeave: Bool = false,
+         @ViewBuilder content: () -> Content) {
         self.page = page
         self.isCurrent = isCurrent
         self.transit = transit
+        self.laysOutOnLeave = laysOutOnLeave
         self.content = content()
     }
 
     var body: some View {
         KeptContentHost(drawn: isCurrent || (transit.sliding && transit.departingPage == page),
                         interactive: isCurrent, space: PanelPageLayout.coordinateSpace, claimsKeyboard: false,
-                        page: page) {
+                        page: page, laysOutOnLeave: laysOutOnLeave) {
             content
         }
     }

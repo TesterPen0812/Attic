@@ -279,6 +279,27 @@ final class TasksTabHostTests: XCTestCase {
         switchTo(.now, "after-resize-to-now")
     }
 
+    /// The hide turn is Notes' alone (`KeptContentHostingView.takesTheHideTurn`):
+    /// a tab switch and a swipe's end hide a tab host, which then holds from
+    /// its hidden root's pass on, as on the trunk.
+    func testATabSwitchAndASwipesEndGiveNoTabHostAHideTurn() throws {
+        let hosted = try warmed(followsWindow: true)
+        defer { hosted.close() }
+        hosted.spin(0.5)
+        let tabHosts = hosts(hosted)
+        XCTAssertTrue(tabHosts.allSatisfy { !$0.takesTheHideTurn }, "no tab host takes a hide turn")
+        KeptContentHostCounts.reset()
+        hosted.go(to: .backlog)
+        hosted.spin(0.3)
+        hosted.go(to: .now)
+        hosted.spin(0.3)
+        swipe(hosted) {}
+        hosted.spin(0.5)
+        let passes = tabHosts.map { KeptContentHostCounts.passesOfTheHide[ObjectIdentifier($0), default: 0] }
+        print("TAB_HIDE_TURN passes=\(passes) tab=\(hosted.model.tab)")
+        XCTAssertEqual(passes, [0, 0, 0], "a tab switch or a swipe's end gave a tab host passes of a hide turn")
+    }
+
     /// Resize cause 2: the slots take the pager's width from layout and
     /// slide by their own width (`TasksPagerSlide`). After a resize with
     /// Later and Done hidden, each slot is as wide as the pager and sits

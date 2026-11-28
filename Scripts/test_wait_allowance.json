@@ -159,9 +159,12 @@
       "skip": 2
     },
     "AtticTests/HiddenPagesCountersTests.swift": {
-      "runloop": 3
+      "runloop": 5
     },
     "AtticTests/IslandTopRowRefineTests.swift": {
+      "runloop": 1
+    },
+    "AtticTests/KeptContentHostTests.swift": {
       "runloop": 1
     },
     "AtticTests/LeaksHuntTests.swift": {

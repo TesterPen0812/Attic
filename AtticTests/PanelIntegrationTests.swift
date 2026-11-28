@@ -133,7 +133,14 @@ final class PanelIntegrationTests: XCTestCase {
         spin(0.25)
         XCTAssertGreaterThan(counts[0], before[0], "Panel geometry changes must still refresh the shell")
         XCTAssertGreaterThan(counts[1], before[1], "Panel geometry changes must reach Tasks")
-        XCTAssertGreaterThan(counts[2], before[2], "Panel geometry changes must reach retained Notes")
+        // Notes sits in a kept host of its own (page-host-notes-draw), as
+        // Calendar (PR 80): hidden, it holds the change, and takes it when shown.
+        XCTAssertEqual(counts[2], before[2], "hidden, retained Notes ran on a geometry change it holds")
+        panel.uiState.selectSection(.notes)
+        spin(0.25)
+        XCTAssertGreaterThan(counts[2], before[2], "Panel geometry changes must reach retained Notes when it is shown")
+        panel.uiState.selectSection(.tasks)
+        spin(0.25)
         let beforeUnrelatedUIState = counts
         panel.uiState.isComposerAttachmentPickerPresented.toggle()
         spin(0.25)
@@ -299,13 +306,21 @@ final class PanelIntegrationTests: XCTestCase {
         #endif
     }
 
+    /// A Tasks tab host's container: Calendar and Notes each sit in a
+    /// kept host of their own, tagged with their page (PR 80; page-host-notes-draw).
+    private func isTasksContainer(_ view: NSView) -> Bool {
+        guard let host = (view as? KeptContentContainer)?.host else { return false }
+        guard let membership = PanelPageKeyboard.membership(of: host) else { return true }
+        return membership == .page(.tasks)
+    }
+
     private func pageWideViews(_ name: String, in root: NSView) -> [NSView] {
         (root.className.hasSuffix(name) ? [root] : []) + root.subviews.flatMap { pageWideViews(name, in: $0) }
     }
 
     /// PR 69 fix round 1, item 3: a size change that is no drag reaches the
     /// kept Notes page through the window's own delegate (`windowDidResize`),
-    /// with nothing in the test writing the size.
+    /// with nothing in the test writing the size, by its first layout shown.
     func testAFrameChangeOutsideADragReachesTheKeptNotesPageThroughTheWindow() throws {
         let panel = try makePanel()
         XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
@@ -313,7 +328,7 @@ final class PanelIntegrationTests: XCTestCase {
         spin(0.6)
         let window = panel.controller.panelForTesting
         let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
-        let tasksPage = pageWideViews("KeptContentContainer", in: host).filter { !$0.isHiddenOrHasHiddenAncestor }
+        let tasksPage = pageWideViews("KeptContentContainer", in: host).filter { !$0.isHiddenOrHasHiddenAncestor && isTasksContainer($0) }
         let notesPage = pageWideViews("NotesPageSwipeView", in: host)
         XCTAssertFalse(tasksPage.isEmpty, "harness: the shown Tasks page has a page-wide native view")
         XCTAssertFalse(notesPage.isEmpty, "harness: the kept Notes page has a page-wide native view")
@@ -322,9 +337,17 @@ final class PanelIntegrationTests: XCTestCase {
         window.setVisibleContentFrame(frame, display: true)
         let width = window.visibleContentFrame.width
         XCTAssertEqual(width, frame.width, accuracy: 0.5, "harness: the window took the frame")
-        spin(until: { host.layoutSubtreeIfNeeded(); return notesPage.allSatisfy { abs($0.bounds.width - width) < 0.5 } })
-        for view in tasksPage + notesPage {
+        spin(until: { host.layoutSubtreeIfNeeded(); return tasksPage.allSatisfy { abs($0.bounds.width - width) < 0.5 } })
+        for view in tasksPage {
             XCTAssertEqual(view.bounds.width, width, accuracy: 0.5, "\(view.className) took a size set outside a drag")
+        }
+        // Notes sits in a kept host of its own (page-host-notes-draw), which
+        // is not laid out while hidden: the size reaches it in its first
+        // layout shown.
+        panel.uiState.selectSection(.notes)
+        host.layoutSubtreeIfNeeded()
+        for view in notesPage {
+            XCTAssertEqual(view.bounds.width, width, accuracy: 0.5, "\(view.className) took a size set outside a drag in its first layout shown")
         }
         XCTAssertEqual(panel.uiState.panelSize.width, width, accuracy: 0.5)
     }
@@ -495,7 +518,7 @@ final class PanelIntegrationTests: XCTestCase {
         }
         // What the body counts stood in for, read on the laid-out views
         // (lead, 24 Nov 16:22: the size reaches the pages through layout).
-        let tasksPage = pageWideViews("KeptContentContainer", in: host).filter { !$0.isHiddenOrHasHiddenAncestor }
+        let tasksPage = pageWideViews("KeptContentContainer", in: host).filter { !$0.isHiddenOrHasHiddenAncestor && isTasksContainer($0) }
         let notesPage = pageWideViews("NotesPageSwipeView", in: host)
         XCTAssertFalse(tasksPage.isEmpty, "harness: the shown Tasks page has a page-wide native view")
         XCTAssertFalse(notesPage.isEmpty, "harness: the retained Notes page has a page-wide native view")
@@ -544,10 +567,15 @@ final class PanelIntegrationTests: XCTestCase {
         spin(0.2)
         XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.windowResize))
         let final = window.visibleContentFrame.width
-        for view in notesPage {
-            XCTAssertEqual(view.bounds.width, final, accuracy: 0.5, "The retained page must receive the final geometry at release")
-        }
         print("RESIZE_HOST_COUNTS release retained_notes=\(counts[2] - beforeEnd)")
+        // Notes sits in a kept host of its own (page-host-notes-draw), which
+        // is not laid out while hidden: the final geometry reaches it in its
+        // first layout shown.
+        panel.uiState.selectSection(.notes)
+        host.layoutSubtreeIfNeeded()
+        for view in notesPage {
+            XCTAssertEqual(view.bounds.width, final, accuracy: 0.5, "The retained page must have the final geometry in its first layout shown")
+        }
         XCTAssertEqual(panel.uiState.panelSize.width, initial.width + 60, accuracy: 1)
         #endif
     }
@@ -1232,11 +1260,17 @@ final class PanelIntegrationTests: XCTestCase {
         let presenter = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter)
         let editor = presenter.host.textView
         XCTAssertNotNil(editor.window)
+        var notesHost: NSView? = editor
+        while let view = notesHost, !(view is KeptContentHostingView) { notesHost = view.superview }
+        let hostID = ObjectIdentifier(try XCTUnwrap(notesHost, "harness: the editor sits in Notes' kept host"))
+        let heldPastTheHide = KeptContentHostCounts.heldPastTheHide[hostID, default: 0]
         followupSwitch(panel, to: .tasks)
         XCTAssertTrue(panel.uiState.builtPages.contains(.notes))
         // The outgoing page's spring may retain its native hierarchy until it settles.
         spin(until: { editor.window == nil })
         XCTAssertNil(editor.window, "the task-note route retains its original native unmount boundary")
+        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide[hostID, default: 0], heldPastTheHide,
+                       "the hide settled within its turn's passes (KeptContentHostingView.hideTurnPasses)")
         XCTAssertNotNil(presenter.lease, "the pre-existing warm workspace owner stays retained")
         followupSwitch(panel, to: .notes)
         spin(until: { editor.window != nil })
