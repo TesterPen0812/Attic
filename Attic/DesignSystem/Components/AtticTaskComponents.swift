@@ -980,7 +980,7 @@ struct AtticStatusButton: View {
         .focusable(isTabStop)
         .focusEffectDisabled()
         .atticHover { hovered = $0 }
-        .atticOwnFocusRing(.circle(diameter: AtticControlSize.statusCircle))
+        .atticOwnFocusRing(.circle(diameter: AtticControlSize.statusCircle), isTabStop: isTabStop)
         .disabled(isDisabled)
         .help(state == .done ? String(localized: "Mark as not done") : String(localized: "Complete"))
         .accessibilityLabel(String(localized: "Status"))
@@ -1006,6 +1006,15 @@ struct AtticOwnFocusRing: ViewModifier {
     }
 
     let outline: Outline
+    /// Whether the control is a Tab stop. One that is not (the status
+    /// circle in a task row or card) can never take the keyboard, so its
+    /// ring can never show for it: it holds no focus state, which SwiftUI
+    /// would re-check on every focus change, and only a pinned ring draws.
+    var isTabStop = true
+    #if DEBUG
+    /// The `atticOwnFocusRing` call's file and line, for the ring census.
+    var site = ""
+    #endif
 
     /// The ring shows when the gallery pins it, or when the button has focus
     /// while the keyboard drives; a click that focuses it shows none.
@@ -1017,8 +1026,12 @@ struct AtticOwnFocusRing: ViewModifier {
     @Environment(\.atticForcedState) private var forced
 
     func body(content: Content) -> some View {
-        if capture == nil {
+        if capture == nil, isTabStop {
+            #if DEBUG
+            content.modifier(AtticLiveOwnFocusRing(outline: outline, pinned: forced == .focused, site: site))
+            #else
             content.modifier(AtticLiveOwnFocusRing(outline: outline, pinned: forced == .focused))
+            #endif
         } else {
             content.overlay { if forced == .focused { ring } }
         }
@@ -1044,9 +1057,16 @@ private struct AtticLiveOwnFocusRing: ViewModifier {
     let outline: AtticOwnFocusRing.Outline
     let pinned: Bool
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    #if DEBUG
+    var site = ""
+    @Environment(\.atticFocusCensusScope) private var scope
+    #endif
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        #if DEBUG
+        let _ = AtticFocusReaderCensus.noteRingRun("live", scope: scope, site: site)
+        #endif
         // A focus binding also installs a SwiftUI focus proxy. Register it
         // only for keyboard navigation, so mouse-driven buttons cannot
         // compete with a live AppKit text editor (R11B-01). The focus state
@@ -1054,7 +1074,11 @@ private struct AtticLiveOwnFocusRing: ViewModifier {
         // reader, re-checked on every focus change in its graph (hidden pages
         // included), so with the mouse no ring holds one.
         if keyboardFocusVisible {
+            #if DEBUG
+            content.modifier(AtticKeyboardOwnFocusRing(outline: outline, pinned: pinned, scope: scope, site: site))
+            #else
             content.modifier(AtticKeyboardOwnFocusRing(outline: outline, pinned: pinned))
+            #endif
         } else {
             content
                 .overlay { if pinned { AtticOwnFocusRing.ring(outline) } }
@@ -1062,23 +1086,57 @@ private struct AtticLiveOwnFocusRing: ViewModifier {
     }
 }
 
+#if DEBUG
+/// DEBUG only: the ring's own focus state, a `@FocusState` wrapped in a
+/// dynamic property that counts each re-check of this holder (`update()`
+/// runs on every focus re-check, even when the body is skipped). Release
+/// builds hold the plain `@FocusState`.
+private struct AtticRingFocusState: DynamicProperty {
+    @FocusState var focused: Bool
+    let scope: String
+    let site: String
+    init(scope: String, site: String) {
+        self.scope = scope
+        self.site = site
+    }
+    func update() { MainActor.assumeIsolated { AtticFocusReaderCensus.noteRingRun("check", scope: scope, site: site) } }
+}
+#endif
+
 /// The ring while the keyboard drives: built fresh each time the keyboard
 /// takes over, with the button's own focus state.
 private struct AtticKeyboardOwnFocusRing: ViewModifier {
     let outline: AtticOwnFocusRing.Outline
     let pinned: Bool
-    @FocusState private var focused: Bool
     #if DEBUG
+    let scope: String
+    let site: String
+    /// The ring's focus state, counted on each re-check (the census's "check").
+    private let ringFocus: AtticRingFocusState
+
+    init(outline: AtticOwnFocusRing.Outline, pinned: Bool, scope: String, site: String) {
+        self.outline = outline
+        self.pinned = pinned
+        self.scope = scope
+        self.site = site
+        ringFocus = AtticRingFocusState(scope: scope, site: site)
+    }
     @State private var censusID = UUID()
+    private var focused: Bool { ringFocus.focused }
+    private var focusBinding: FocusState<Bool>.Binding { ringFocus.$focused }
+    #else
+    @FocusState private var focused: Bool
+    private var focusBinding: FocusState<Bool>.Binding { $focused }
     #endif
 
     func body(content: Content) -> some View {
         let shows = AtticOwnFocusRing.shows(pinned: pinned, focused: focused, keyboardFocusVisible: true)
         #if DEBUG
         let _ = AtticFocusReaderCensus.noteRing(censusID, keyboardFocusVisible: true, shown: shows, outline: outline)
+        let _ = AtticFocusReaderCensus.noteRingRun("kbd", scope: scope, site: site)
         #endif
         content
-            .focused($focused)
+            .focused(focusBinding)
             .overlay { if shows { AtticOwnFocusRing.ring(outline) } }
     }
 }
@@ -1086,9 +1144,14 @@ private struct AtticKeyboardOwnFocusRing: ViewModifier {
 extension View {
     /// Attic's focus ring for this button's own keyboard focus.
     @ViewBuilder
-    func atticOwnFocusRing(_ outline: AtticOwnFocusRing.Outline, acceptsKeyboardFocus: Bool = true) -> some View {
+    func atticOwnFocusRing(_ outline: AtticOwnFocusRing.Outline, acceptsKeyboardFocus: Bool = true, isTabStop: Bool = true,
+                           file: StaticString = #fileID, line: UInt = #line) -> some View {
         if acceptsKeyboardFocus {
-            modifier(AtticOwnFocusRing(outline: outline))
+            #if DEBUG
+            modifier(AtticOwnFocusRing(outline: outline, isTabStop: isTabStop, site: "\(file):\(line)" + (isTabStop ? "" : " notab")))
+            #else
+            modifier(AtticOwnFocusRing(outline: outline, isTabStop: isTabStop))
+            #endif
         } else {
             // Transient feedback must never register a SwiftUI focus proxy
             // while a native editor can be first responder (R11B-01).
@@ -1902,6 +1965,9 @@ struct AtticTaskRow: View {
             twoLine ? "Task row (details)" : "Task row", id: probeID,
             expectedSize: CGSize(width: 0, height: pitch), radius: d.radius, expectedRadius: AtticRadius.taskRow
         )
+        #if DEBUG
+        .transformEnvironment(\.atticFocusCensusScope) { if $0 == "outside" { $0 = "task-row" } }
+        #endif
     }
 
     /// The right-hand meta: the due date, always here, on the title's
