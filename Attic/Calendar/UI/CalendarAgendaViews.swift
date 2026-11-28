@@ -62,6 +62,8 @@ struct CalendarAgendaDay: View, Equatable {
     #if DEBUG && ATTIC_UNIT_TEST_HOST
     /// Count real SwiftUI body evaluations by day, including reused days.
     static var bodyEvaluationsByDay: [DueDay: Int] = [:]
+    /// Test seam: the today each agenda day's body last ran with, by day.
+    static var todayByDay: [DueDay: DueDay] = [:]
     #endif
 
     let group: CalendarAgendaGroup
@@ -94,6 +96,7 @@ struct CalendarAgendaDay: View, Equatable {
     var body: some View {
         #if DEBUG && ATTIC_UNIT_TEST_HOST
         let _ = Self.bodyEvaluationsByDay[group.day, default: 0] += 1
+        let _ = Self.todayByDay[group.day] = today
         #endif
         HStack(alignment: .top, spacing: CalendarDesign.tileToRows) {
             CalendarDateTile(group: group) { onSelectDay(group.day) }
@@ -288,6 +291,11 @@ struct CalendarEventRow: View {
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @FocusState private var headFocused: Bool
 
+    #if DEBUG
+    /// Test seam: whether each event's head held the keyboard on its row's last body run.
+    static var headFocus: [String: Bool] = [:]
+    #endif
+
     private var isOpen: Bool { rows.rowID == event.id && rows.rowDay == day }
     private var metrics: CalendarEventRowMetrics { style.metrics }
     private var isBlock: Bool { if case .dayBlock = style { true } else { false } }
@@ -295,6 +303,9 @@ struct CalendarEventRow: View {
     private var fillInset: CGFloat { style == .dayAllDay ? AtticLayout.rowHighlightInset : 0 }
 
     var body: some View {
+        #if DEBUG
+        let _ = Self.headFocus[event.id] = headFocused
+        #endif
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topLeading) {
                 Button(action: toggleRow) { summary }

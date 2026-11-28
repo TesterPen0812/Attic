@@ -48,6 +48,8 @@ final class TasksNextEventFeed {
     private var enabledObservation: AnyCancellable?
     private var readTask: Task<Void, Never>?
     private var readGeneration = 0
+    /// The access the last access-checked read saw (nil before the first).
+    private var lastAccess: CalendarAccessState?
 
     /// The page's sink; called only when the row changes.
     var onUpdate: ((TasksNextEvent?) -> Void)?
@@ -94,7 +96,12 @@ final class TasksNextEventFeed {
             return
         }
         // Never `requestAccess()` here: only the Calendar page asks.
-        guard enabled, source.accessState == .granted else { publish(nil); return }
+        guard enabled else { publish(nil); return }
+        if let reader = source as? CalendarAccessCheckedReading {
+            readCheckingAccess(reader)
+            return
+        }
+        guard source.accessState == .granted else { publish(nil); return }
         let date = now(), calendar = calendar()
         let start = calendar.startOfDay(for: date)
         guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { publish(nil); return }
@@ -116,6 +123,35 @@ final class TasksNextEventFeed {
             return
         }
         install(source.events(in: interval), date: date, calendar: calendar, end: end)
+    }
+
+    /// The EventKit path, run on every switch to Tasks: no synchronous
+    /// access read on the main actor (`EKEventStore.authorizationStatus` is
+    /// an XPC to calaccessd, and this runs inside the panel's update). The
+    /// switch's first frame keeps the row the last read left, as before:
+    /// shown while access was last seen granted, none otherwise. The read
+    /// brings fresh access, so a grant or revoke made while Tasks was away
+    /// shows when it answers.
+    private func readCheckingAccess(_ reader: CalendarAccessCheckedReading) {
+        if lastAccess != .granted { publish(nil) }
+        let date = now(), calendar = calendar()
+        let start = calendar.startOfDay(for: date)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { publish(nil); return }
+        let interval = DateInterval(start: start, end: end)
+        let generation = readGeneration
+        readTask = Task { [weak self] in
+            let read = await reader.loadAccessCheckedEvents(in: interval)
+            guard !Task.isCancelled, let self, self.readGeneration == generation,
+                  self.enabled, self.active else { return }
+            self.lastAccess = read.access
+            guard read.access == .granted else { self.publish(nil); return }
+            let current = self.now(), currentCalendar = self.calendar()
+            guard currentCalendar.isDate(current, inSameDayAs: date), currentCalendar.timeZone == calendar.timeZone else {
+                self.refresh()
+                return
+            }
+            self.install(read.events, date: current, calendar: currentCalendar, end: end)
+        }
     }
 
     private func install(_ events: [CalendarEvent], date: Date, calendar: Calendar, end: Date) {

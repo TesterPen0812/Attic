@@ -50,13 +50,16 @@ final class PanelComposerScrollRoomTests: XCTestCase {
     // MARK: First frame
 
     /// Notes' library and Calendar's grid, built behind Tasks with the card
-    /// closed, take the room while hidden in one layout; Calendar's day,
-    /// first built while hidden with the card open, has it on its first
-    /// layout. Those hidden reads are the strict check: the scroll view a
-    /// switch shows is the same object, so its first shown margin is the
-    /// hidden one. The read right after a switch is looser: the switch
-    /// closes the card, so it only checks that the margin is the open or
-    /// the closed one (`assertShownMargin`).
+    /// closed. Each page sits in a kept host of its own (Calendar, PR 80;
+    /// Notes, page-host-notes-draw), which does no work while hidden: the
+    /// room's change is held there, so the margin does not move behind
+    /// Tasks, and the first frame shown takes the room as it is then
+    /// (pr80-hidden-inputs.md, "Card room", run 45915810295).
+    ///
+    /// The user's path: the card is open on Tasks and they switch to
+    /// Calendar (its tab). The switch closes the card at once, so Calendar's
+    /// grid, and its day in day view, shows the base margin in its first
+    /// frame and the same one a settle later: no stale room, no slide from it.
     func testHiddenPagesCarryTheCardsRoomInTheirScrollMarginForTheirFirstFrame() throws {
         XCTAssertGreaterThan(extra, 0, "the card is taller than the bar's row")
         try withRig { rig in
@@ -74,44 +77,55 @@ final class PanelComposerScrollRoomTests: XCTestCase {
             let gridClosed = grid.contentInsets.bottom
 
             rig.room.set(height: cardHeight, open: true)
-            rig.host.layoutSubtreeIfNeeded() // one layout, no run-loop turn
-            XCTAssertEqual(library.contentInsets.bottom - libraryClosed, extra, accuracy: 1,
-                           "the hidden library's margin already has the card's room")
-            XCTAssertEqual(grid.contentInsets.bottom - gridClosed, extra, accuracy: 1,
-                           "the hidden grid's margin already has the card's room")
+            settle(rig.host, times: 3)
+            XCTAssertEqual(library.contentInsets.bottom, libraryClosed, accuracy: 0.5,
+                           "harness: Notes' hidden library holds the room's change until it is shown (page-host-notes-draw)")
+            XCTAssertEqual(grid.contentInsets.bottom, gridClosed, accuracy: 0.5,
+                           "harness: Calendar's hidden grid holds the room's change until it is shown (PR 80)")
 
-            // Calendar's day, first built while the card is open and Calendar hidden.
+            // The card open on Tasks, then Calendar's tab: the grid's first frame.
+            assertFirstShownMargin(rig, .calendar, grid, closed: gridClosed, "the grid")
+
+            // The card open on Calendar, then Tasks and back: the switch
+            // away closes the card as Calendar goes hidden, and the grid's
+            // first frame back has the closed margin.
+            rig.room.set(height: cardHeight, open: true)
+            settle(rig.host)
+            XCTAssertEqual(grid.contentInsets.bottom - gridClosed, extra, accuracy: 1, "harness: the shown grid has the card's room")
+            rig.state.selectSection(.tasks)
+            settle(rig.host, times: 2)
+            XCTAssertEqual(rig.room.height, 0, "harness: the switch to Tasks closed the card")
+            assertFirstShownMargin(rig, .calendar, grid, closed: gridClosed, cardOpen: false, "the grid, back after the card closed")
+
+            // Calendar's day, in day view, through the same path.
             rig.calendarModel.setDayView(true)
             let day = try XCTUnwrap(firstLaidOut(in: rig.host, besides: &known), "Calendar's day scroll view")
-            let dayFirst = day.contentInsets.bottom
-            settle(rig.host)
-
-            // The switch closes the card; whatever the room is on the first
-            // layout after it, the shown margin matches it.
-            rig.state.selectSection(.notes)
-            rig.host.layoutSubtreeIfNeeded()
-            assertShownMargin(library.contentInsets.bottom - libraryClosed, roomAtRead: rig.room.height, "the library")
             settle(rig.host, times: 2)
+            let dayClosed = day.contentInsets.bottom
             rig.state.selectSection(.tasks)
             settle(rig.host, times: 2)
             rig.room.set(height: cardHeight, open: true)
             settle(rig.host)
-            rig.state.selectSection(.calendar)
-            rig.host.layoutSubtreeIfNeeded()
-            let dayAtSwitch = day.contentInsets.bottom
-            let roomAtSwitch = rig.room.height
+            assertFirstShownMargin(rig, .calendar, day, closed: dayClosed, "the day")
 
-            rig.room.set(height: 0, open: false)
+            // The library through the same path: in its own kept host it holds
+            // the room while hidden, and the switch to it closes the card.
+            rig.state.selectSection(.tasks)
             settle(rig.host, times: 2)
-            let dayClosed = day.contentInsets.bottom
-            XCTAssertEqual(dayFirst - dayClosed, extra, accuracy: 1, "the day's first layout had the card's room")
-            assertShownMargin(dayAtSwitch - dayClosed, roomAtRead: roomAtSwitch, "the day")
+            rig.room.set(height: cardHeight, open: true)
+            settle(rig.host)
+            assertFirstShownMargin(rig, .notes, library, closed: libraryClosed, "the library")
         }
     }
 
-    /// Notes and Calendar not yet built when the card opens, then built
-    /// behind Tasks (the pointer on the page switch) and shown: each scroll
-    /// view's first layout has the room.
+    /// Notes' library and Calendar's grid, first built behind Tasks while
+    /// the card is open, have the room on their first layout. The user's
+    /// path: the card is open on Tasks while the panel builds the pages it
+    /// keeps. Calendar's kept host then holds the card's close while hidden
+    /// (run 45915810295: `gridFirst=125 gridClosedHidden=125
+    /// gridClosedShown=0`), so the grid's closed margin is read with Calendar
+    /// shown, and its first frame shown, after the card closed behind it,
+    /// has the base margin and keeps it: the held 125 is never shown.
     func testAPageFirstBuiltWhileTheCardIsOpenHasTheRoomOnItsFirstLayout() throws {
         try withRig { rig in
             XCTAssertTrue(rig.draft.pages.showLibrary())
@@ -135,10 +149,41 @@ final class PanelComposerScrollRoomTests: XCTestCase {
             rig.room.set(height: 0, open: false)
             settle(rig.host, times: 2)
             let libraryClosed = library.contentInsets.bottom
-            let gridClosed = grid.contentInsets.bottom
             XCTAssertEqual(libraryFirst - libraryClosed, extra, accuracy: 1, "the library's first layout had the card's room")
-            XCTAssertEqual(gridFirst - gridClosed, extra, accuracy: 1, "the grid's first layout had the card's room")
             assertShownMargin(libraryAtSwitch - libraryClosed, roomAtRead: roomAtSwitch, "the library")
+
+            // Calendar shown after the card closed behind it: its first frame.
+            rig.state.selectSection(.calendar)
+            rig.host.layoutSubtreeIfNeeded()
+            let gridAtFirstFrame = grid.contentInsets.bottom
+            XCTAssertEqual(rig.room.height, 0, "harness: the card is closed at the switch")
+            settle(rig.host, times: 2)
+            let gridClosed = grid.contentInsets.bottom
+            XCTAssertEqual(gridFirst - gridClosed, extra, accuracy: 1, "the grid's first layout had the card's room")
+            XCTAssertEqual(gridAtFirstFrame, gridClosed, accuracy: 1,
+                           "the grid's first frame shown has the closed margin, not the room it held while hidden")
+        }
+    }
+
+    /// Switches to `section` the user's way (its tab: `selectSection`,
+    /// which closes the card) and reads `scroll` in the first layout after
+    /// it: the margin has the room as it is at that read, and a settle
+    /// later, with no change to the room, the same one (no slide).
+    private func assertFirstShownMargin(_ rig: Rig, _ section: PanelSection, _ scroll: NSScrollView, closed: CGFloat,
+                                        cardOpen: Bool = true, _ what: String,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(rig.room.height, cardOpen ? cardHeight : 0, "harness: the card before the switch", file: file, line: line)
+        rig.state.selectSection(section)
+        rig.host.layoutSubtreeIfNeeded()
+        let first = scroll.contentInsets.bottom
+        let roomAtFirst = rig.room.height
+        XCTAssertEqual(rig.state.selectedSection, section, "harness: \(section) is shown", file: file, line: line)
+        XCTAssertEqual(first - closed, PanelComposerScrollRoom.extra(height: roomAtFirst), accuracy: 1,
+                       "\(what)'s first shown margin has the card's room as it is then (\(roomAtFirst))", file: file, line: line)
+        settle(rig.host, times: 2)
+        if abs(rig.room.height - roomAtFirst) < 0.5 {
+            XCTAssertEqual(scroll.contentInsets.bottom, first, accuracy: 1,
+                           "\(what)'s margin moved after its first shown frame with the room unchanged", file: file, line: line)
         }
     }
 

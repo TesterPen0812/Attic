@@ -46,9 +46,24 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// host is marked for layout in the update that draws it, so the pass
     /// before its first frame takes the current size, environment and root
     /// together.
+    ///
+    /// For a host that takes a hide turn (`takesTheHideTurn`: Notes), the
+    /// hold starts when the hide has settled: in the turn the host stops
+    /// being drawn, it takes up to `hideTurnPasses` layouts its content asks
+    /// for after the hidden root's pass (a task note's editor leaving Notes
+    /// takes two: run 45984030524), then holds as above. A request past
+    /// them in that turn is held and counted (`KeptContentHostCounts.heldPastTheHide`).
+    /// Every other host (Calendar, the Tasks tabs) holds from the hidden
+    /// root's pass on.
     var isDrawn = true {
         didSet {
-            guard isDrawn != oldValue, isDrawn else { return }
+            guard isDrawn != oldValue else { return }
+            guard isDrawn else {
+                // A host made hidden has not laid out yet: its first pass runs anyway.
+                if takesTheHideTurn, window != nil { openTheHideTurn() }
+                return
+            }
+            hideTurnPassesLeft = 0
             holdsLayout = false
             if owesLayout {
                 owesLayout = false
@@ -59,11 +74,54 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// Hidden, and its hidden root laid out: a layout is owed, not run.
     private var holdsLayout = false
     private var owesLayout = false
+    /// Whether the host takes the layouts of its hide's turn (`isDrawn`).
+    var takesTheHideTurn = false
+    static let hideTurnPasses = 3
+    /// Layouts the hide's turn may still take (0 once the turn has ended).
+    private var hideTurnPassesLeft = 0
+    private var hideTurnIsOpen = false
+
+    /// The turn ends where AppKit's own display pass of it has run: the
+    /// first time the main run loop is about to wait, after every other
+    /// observer of that moment (the display cycle among them). A hide made
+    /// inside that moment's own callouts (SwiftUI's flush, the display
+    /// cycle) is not seen by an observer added there until the next round,
+    /// so the turn also ends when the loop wakes, before the wake's work.
+    private func openTheHideTurn() {
+        hideTurnPassesLeft = Self.hideTurnPasses
+        guard !hideTurnIsOpen else { return }
+        hideTurnIsOpen = true
+        let activities = CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.afterWaiting.rawValue
+        let observer = CFRunLoopObserverCreateWithHandler(nil, activities, false, CFIndex.max) { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                self?.hideTurnPassesLeft = 0
+                self?.hideTurnIsOpen = false
+            }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+    }
+
+    /// Whether a layout asked for while the host holds is one of the hide's
+    /// own (it then runs); otherwise it is owed.
+    private func takesAPassOfTheHide() -> Bool {
+        guard hideTurnPassesLeft > 0 else {
+            #if DEBUG
+            if hideTurnIsOpen { KeptContentHostCounts.heldPastTheHide[ObjectIdentifier(self), default: 0] += 1 }
+            #endif
+            return false
+        }
+        hideTurnPassesLeft -= 1
+        holdsLayout = false
+        #if DEBUG
+        KeptContentHostCounts.passesOfTheHide[ObjectIdentifier(self), default: 0] += 1
+        #endif
+        return true
+    }
 
     override var needsLayout: Bool {
         get { super.needsLayout }
         set {
-            if newValue, holdsLayout {
+            if newValue, holdsLayout, !takesAPassOfTheHide() {
                 owesLayout = true
                 return
             }
@@ -232,7 +290,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         KeptContentHostCounts.layout(interactive: isInteractive, host: self)
         #endif
         // AppKit reached a host that holds (a request it marked itself).
-        if holdsLayout {
+        if holdsLayout, !takesAPassOfTheHide() {
             owesLayout = true
             return
         }
@@ -270,8 +328,30 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         isInteractive && super.acceptsFirstResponder
     }
 
+    /// A host that does not claim the keyboard is a key view only under full
+    /// keyboard access, as AppKit's own buttons are: with it off, Tab passes
+    /// the host by and stays where the window had it; with it on, the panel's
+    /// loop enters the host and Tab walks the content's controls, leaving by
+    /// the loop when they end. A click still hands it the keyboard.
+    ///
+    /// Such a host answers for itself, not through `super`: NSHostingView
+    /// accepts no first responder, so `super.canBecomeKeyView` is false, and
+    /// a host that never claims the keyboard was no stop at all; the loop
+    /// wrapped to the panel's tab bar (fka lane run 45808976473: the shown
+    /// Calendar host `canKey=false`, no `KeyViewProxy` child;
+    /// page-host-tech-note.md, "FKA entry into the Calendar host").
+    ///
+    /// It is the stop for entering, not one inside: while the keyboard is in
+    /// its content it is no key view, so Shift-Tab from the content's first
+    /// control leaves for the stop before the host rather than re-entering
+    /// the host at its last control (fka run 45820495764: Shift-Tab from
+    /// Calendar's header went on to Calendar's own `57,30` stop).
     override var canBecomeKeyView: Bool {
-        isInteractive && super.canBecomeKeyView
+        guard isInteractive else { return false }
+        if claimsKeyboard { return super.canBecomeKeyView }
+        guard NSApp.isFullKeyboardAccessEnabled, !isHiddenOrHasHiddenAncestor else { return false }
+        if let responder = window?.firstResponder as? NSView, responder.isDescendant(of: self) { return false }
+        return true
     }
 
     override func isAccessibilityElement() -> Bool {
@@ -292,6 +372,12 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
         return isInteractive && isAccessible ? super.accessibilityHitTest(point) : nil
     }
 
+    /// Whether this host claims the keyboard when it comes into use. A host
+    /// whose content owns no keys of its own (the Calendar page) leaves it
+    /// with the window, where it was before the content had a host, and is
+    /// in the key-view loop only under full keyboard access (`canBecomeKeyView`).
+    var claimsKeyboard = true
+
     /// The keyboard belongs to the tab host in use (host-boundary.md §5.1,
     /// the lead's decision of 19 Nov 08:22): a host claims it when it comes
     /// into use, but only from no one (the window itself) or from a tab
@@ -299,6 +385,7 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
     /// dropdown or menu, the panel's own host (its tab bar's ←/→), or while
     /// the panel is not key. A refusal is left alone.
     private func claimKeyboard() {
+        guard claimsKeyboard else { return joinKeyViewLoop() }
         guard let window, window.isKeyWindow else { return }
         let responder = window.firstResponder
         let fromNoOne = responder == nil || responder === window
@@ -320,6 +407,20 @@ final class KeptContentHostingView: NSHostingView<AnyView> {
             current = candidate.superview
         }
         return nil
+    }
+
+    /// A host that claims no keyboard takes its place in the panel's
+    /// key-view loop instead, under full keyboard access, where it would
+    /// have claimed: as it comes into use (at its first frame when made in
+    /// use) and when a dropdown gives the keyboard back.
+    /// The window's loop is recalculated there and then; a fresh panel's
+    /// loop otherwise stays as it was before the host was attached (fka run
+    /// 45820495764, first panel: `hostInChainFromBar=false fromContent=48
+    /// hostIndex=-1` before the first Tab and after each of 8). A host put
+    /// away needs no unlinking: it is no key view (`canBecomeKeyView`).
+    private func joinKeyViewLoop() {
+        guard NSApp.isFullKeyboardAccessEnabled, let window, window.autorecalculatesKeyViewLoop else { return }
+        window.recalculateKeyViewLoop()
     }
 
     /// A host that stops taking part while the keyboard is inside it gives
@@ -361,6 +462,23 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
     /// (the host fills the slot that declares it outside, so the origins
     /// are the same).
     var space: NamedCoordinateSpace?
+    /// Whether the host claims the keyboard when it comes into use
+    /// (`KeptContentHostingView.claimsKeyboard`).
+    var claimsKeyboard = true
+    /// The shell page this host holds whole, if it holds one: the host is
+    /// tagged with it (`PanelPageKeyboard`), so the panel's keyboard rule
+    /// knows the page from the host itself.
+    var page: PanelPage?
+    /// Whether the root that takes the host out of use is laid out in the
+    /// update that sets it, so the content's own leave work runs in the
+    /// switch's turn, where it ran when the page sat in the panel's own
+    /// host, not in a later pass of this host (pr80-hidden-inputs.md, "Notes
+    /// and Draw", the lead's ordering condition): an editor's representable
+    /// is updated (suspended, resigned) inside the panel's update, and the
+    /// content's actions on `atticPanelPageIsCurrent` (commands released,
+    /// the library's keys stopped) run when that update ends (`setRoot`).
+    /// Such a host also takes its hide's turn (`takesTheHideTurn`).
+    var laysOutOnLeave = false
     /// The rows the content animates between by itself (a list's ids), if
     /// it has any. A drawn root that changes them is laid out in the pass
     /// that sets it; any other root is left to AppKit's pass (`setRoot`).
@@ -386,16 +504,19 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         let container = KeptContentContainer()
         let host = KeptContentHostingView(rootView: root(context))
         context.coordinator.reference.host = host
+        host.takesTheHideTurn = laysOutOnLeave
         host.isDrawn = drawn
         host.isInteractive = interactive
         host.autoresizingMask = [.width, .height]
         host.frame = container.bounds
+        host.claimsKeyboard = claimsKeyboard
+        if let page { PanelPageKeyboard.tag(host, .page(page)) }
         container.host = host
         container.addSubview(host)
         context.coordinator.hiddenRootSet = !drawn
         context.coordinator.drawnRows = drawn ? rows : nil
         #if DEBUG
-        KeptContentHostCounts.root(drawn: drawn)
+        KeptContentHostCounts.root(drawn: drawn, host: host)
         #endif
         return container
     }
@@ -404,19 +525,23 @@ struct KeptContentHost<Content: View>: NSViewRepresentable {
         guard let host = container.host else { return }
         let coordinator = context.coordinator
         #if DEBUG
-        KeptContentHostCounts.update(drawn: drawn)
+        KeptContentHostCounts.update(drawn: drawn, host: host)
         #endif
         // Drawn first, so a host that held its layouts while hidden is
         // marked for the pass that takes this root.
         host.isDrawn = drawn
         // Two hidden updates in a row set nothing (as `TasksKeptPage`'s
         // equality, which this boundary carries across the host).
+        // A leaving page's root is laid out here, so its leave actions and
+        // removals apply where they did in the panel's own host
+        // (`laysOutOnLeave`).
+        let leaving = laysOutOnLeave && host.isInteractive && !interactive
         if drawn || !coordinator.hiddenRootSet {
             let root = root(context)
-            host.setRoot(root, laidOut: Self.movesRows(from: coordinator.drawnRows, to: drawn ? rows : nil),
+            host.setRoot(root, laidOut: leaving || Self.movesRows(from: coordinator.drawnRows, to: drawn ? rows : nil),
                          under: context.transaction)
             #if DEBUG
-            KeptContentHostCounts.root(drawn: drawn)
+            KeptContentHostCounts.root(drawn: drawn, host: host)
             #endif
         }
         coordinator.hiddenRootSet = !drawn
@@ -645,6 +770,10 @@ enum KeptContentHostCounts {
     }
 
     static var layouts = Split()
+    /// Layouts a hiding host took in its hide's turn, and requests it held
+    /// past `KeptContentHostingView.hideTurnPasses` in that turn.
+    static var passesOfTheHide: [ObjectIdentifier: Int] = [:]
+    static var heldPastTheHide: [ObjectIdentifier: Int] = [:]
     /// Root sets that laid the host out in their own pass.
     static var laidOutInSet = 0
     static var roots = Split()
@@ -657,10 +786,17 @@ enum KeptContentHostCounts {
     static var accessibilityHits = Split()
     /// Layouts by host (a host's own count, whatever its state).
     static var layoutsByHost: [ObjectIdentifier: Int] = [:]
+    /// Roots set and `updateNSView` calls by host, while not drawn.
+    static var hiddenRootsByHost: [ObjectIdentifier: Int] = [:]
+    static var hiddenUpdatesByHost: [ObjectIdentifier: Int] = [:]
 
     static func reset() {
         layoutsByHost = [:]
+        hiddenRootsByHost = [:]
+        hiddenUpdatesByHost = [:]
         layouts = Split()
+        passesOfTheHide = [:]
+        heldPastTheHide = [:]
         laidOutInSet = 0
         roots = Split()
         updates = Split()
@@ -673,8 +809,14 @@ enum KeptContentHostCounts {
         count(&layouts, interactive)
         layoutsByHost[ObjectIdentifier(host), default: 0] += 1
     }
-    fileprivate static func root(drawn: Bool) { count(&roots, drawn) }
-    fileprivate static func update(drawn: Bool) { count(&updates, drawn) }
+    fileprivate static func root(drawn: Bool, host: KeptContentHostingView) {
+        count(&roots, drawn)
+        if !drawn { hiddenRootsByHost[ObjectIdentifier(host), default: 0] += 1 }
+    }
+    fileprivate static func update(drawn: Bool, host: KeptContentHostingView) {
+        count(&updates, drawn)
+        if !drawn { hiddenUpdatesByHost[ObjectIdentifier(host), default: 0] += 1 }
+    }
     fileprivate static func environment(drawn: Bool) { count(&environments, drawn) }
     fileprivate static func accessibilityChildren(interactive: Bool) { count(&accessibilityChildrenCalls, interactive) }
     fileprivate static func accessibilityHit(interactive: Bool) { count(&accessibilityHits, interactive) }

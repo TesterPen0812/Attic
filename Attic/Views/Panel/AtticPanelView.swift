@@ -18,8 +18,24 @@ import SwiftData
     static var islandSurface: (() -> Void)?
     /// The panel size the island's glass drew with, on each of its runs.
     static var islandGlassSize: ((CGSize) -> Void)?
+    /// A view state written from a layout step (resize second pass): the
+    /// writer's name. A resize step should write none that draws nothing.
+    /// Tests only: compiled out of Release.
+    #if DEBUG
+    static var stepWrite: ((String) -> Void)?
+    #endif
 }
 #endif
+
+/// A value a view measures on every layout step but draws nothing from
+/// directly (resize second pass, 25 Nov): kept out of view state, so a
+/// step that changes it starts no transaction and re-runs no body. The
+/// view keeps in state only what it draws (a Bool that flips at a
+/// threshold), or copies the value in when it starts to draw from it.
+final class AtticUnobserved<Value> {
+    var value: Value
+    init(_ value: Value) { self.value = value }
+}
 
 #if DEBUG
 /// Test seam (NotesUndoMirrorCountGuardTests): the view that pads the
@@ -99,6 +115,10 @@ private final class PanelRelevantUIStateObserver: ObservableObject {
 /// and the error notice). Pages lay themselves out inside
 /// `PanelPageLayout`; the shell owns everything around them.
 struct AtticPanelView: View {
+    #if DEBUG
+    /// Test seam: the notice clearance the shell last read from its pages.
+    static var lastNoticeClearance: CGFloat?
+    #endif
     let store: TaskStore
     let noteStore: NoteStore
     let canvasSession: CanvasSession
@@ -302,6 +322,9 @@ struct AtticPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { clearance in
+            #if DEBUG
+            Self.lastNoticeClearance = clearance
+            #endif
             guard noticeClearance.value != clearance else { return }
             // A page's bottom controls grow or shrink with a spring (the
             // composer's date and tags row): the notices ride it, never
@@ -359,35 +382,54 @@ struct AtticPanelView: View {
             .atticFocusCheckProbe("tasks")
             .transition(pageTransition(.tasks))
         case .canvas:
-            PanelCanvasNoticeAwareHost(
-                canvasSession: canvasSession,
-                toasts: toasts,
-                uiState: uiState,
-                layout: layout,
-                noticeHeight: noticeHeight,
-                headerControlRects: headerControlRects,
-                headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
-            )
+            // In a host of its own, as Calendar and Notes (draw-kept-host-brief.md):
+            // hidden, Draw's graph is not run, laid out or walked by the shell's
+            // updates. Its leave hook (`setShown(false)`: a stroke in flight is
+            // finished and saved) and the top row's undimming after it run in
+            // the switch's turn, as in the panel's own host (`laysOutOnLeave`;
+            // without it a click or an instant switch left Draw shown, DR2).
+            // The notice room is an object it observes inside the host; the
+            // header rects are a value in the root, taken while shown and on show.
+            PanelPageKeptHost(page: .canvas, isCurrent: page == currentPage, transit: uiState.pageTransit,
+                              laysOutOnLeave: true) {
+                PanelCanvasNoticeAwareHost(
+                    canvasSession: canvasSession,
+                    toasts: toasts,
+                    uiState: uiState,
+                    layout: layout,
+                    noticeHeight: noticeHeight,
+                    headerControlRects: headerControlRects,
+                    headerBottom: PanelHeaderLayout.bottom(chromeInsets: layout.chromeInsets)
+                )
+            }
             .atticFocusCheckProbe("canvas")
             .transition(pageTransition(.canvas))
         case .notes:
-            NotesPageHost(
-                noteStore: noteStore,
-                taskStore: store,
-                noteDraft: noteDraft,
-                uiState: uiState,
-                layout: layout,
-                hasRestoredSession: hasRestoredNoteSession
-            )
+            // In a host of its own, as Calendar (pr80-hidden-inputs.md, "Notes and Draw").
+            PanelPageKeptHost(page: .notes, isCurrent: page == currentPage, transit: uiState.pageTransit,
+                              laysOutOnLeave: true) {
+                NotesPageHost(
+                    noteStore: noteStore,
+                    taskStore: store,
+                    noteDraft: noteDraft,
+                    uiState: uiState,
+                    layout: layout,
+                    hasRestoredSession: hasRestoredNoteSession
+                )
+            }
             .atticFocusCheckProbe("notes")
             .transition(pageTransition(.notes))
         case .calendar:
-            // Handed over with no closure, so the shell's re-runs (a size
-            // write on each step of a resize) skip it while it is hidden.
-            CalendarPageSlot(store: store, noteStore: noteStore, noteDraft: noteDraft, uiState: uiState,
-                             calendarPageState: calendarPageState, tasksPageState: tasksPageState,
-                             composerState: composerState, toasts: toasts, layout: layout,
-                             isReady: hasRestoredNoteSession)
+            // In a host of its own (page-host-tech-note.md, Way 1): hidden,
+            // its graph is not run, laid out or walked by the shell's
+            // updates. Handed over with no closure, so the shell's re-runs
+            // (a size write on each step of a resize) skip it while shown.
+            PanelPageKeptHost(page: .calendar, isCurrent: page == currentPage, transit: uiState.pageTransit) {
+                CalendarPageSlot(store: store, noteStore: noteStore, noteDraft: noteDraft, uiState: uiState,
+                                 calendarPageState: calendarPageState, tasksPageState: tasksPageState,
+                                 composerState: composerState, toasts: toasts, layout: layout,
+                                 isReady: hasRestoredNoteSession)
+            }
             .atticFocusCheckProbe("calendar")
             .transition(pageTransition(.calendar))
         }
@@ -1016,6 +1058,8 @@ struct PanelCanvasNoticeAwareHost: View {
     static var bodyEvaluations = 0
     /// Test seam: the clearance the last body run gave the Canvas page.
     static var lastErrorBannerHeight: CGFloat = 0
+    /// Test seam: the header control frames the last body run handed on.
+    static var lastHeaderControlRects: [CGRect] = []
     #endif
     @ObservedObject var canvasSession: CanvasSession
     @ObservedObject var toasts: PanelToastCenter
@@ -1034,6 +1078,7 @@ struct PanelCanvasNoticeAwareHost: View {
         let errorBannerHeight = hasNotice || toasts.current != nil ? noticeHeight.value : 0
         #if DEBUG
         let _ = Self.lastErrorBannerHeight = errorBannerHeight
+        let _ = Self.lastHeaderControlRects = headerControlRects
         #endif
         CanvasPageHost(canvasSession: canvasSession, uiState: uiState, layout: layout,
                        errorBannerHeight: errorBannerHeight,

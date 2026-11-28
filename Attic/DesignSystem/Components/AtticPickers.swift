@@ -496,6 +496,7 @@ struct AtticDateCard: View {
     @State private var hoveredDay: Date?
     @FocusState private var focused: Bool
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticHighlightOrigin) private var highlightOrigin
     @Environment(\.atticDropdownRegisterKeys) private var registerKeys
 
     private var current: AtticDateCardState { state ?? AtticDateCardState(start: calendar.startOfDay(for: selected ?? today)) }
@@ -549,11 +550,15 @@ struct AtticDateCard: View {
                     switch phase {
                     case let .active(point):
                         guard AtticListHighlight.isPointerMove(NSApp.currentEvent), let day = Self.day(at: point, in: month) else { return }
+                        highlightOrigin?.pointerEntered(Self.dayID(calendar.startOfDay(for: day)))
                         if let hovered = hoveredDay, hovered != day { update { $0.hoverDay(hovered, inside: false, calendar: calendar) } }
                         hoveredDay = day
                         if !current.isLit(day, calendar: calendar) { update { $0.hoverDay(day, inside: true, calendar: calendar) } }
                     case .ended:
-                        if let hovered = hoveredDay { update { $0.hoverDay(hovered, inside: false, calendar: calendar) } }
+                        if let hovered = hoveredDay {
+                            highlightOrigin?.pointerLeft(Self.dayID(calendar.startOfDay(for: hovered)))
+                            update { $0.hoverDay(hovered, inside: false, calendar: calendar) }
+                        }
                         hoveredDay = nil
                     }
                 }
@@ -734,7 +739,17 @@ struct AtticDateCard: View {
     private func monthButton(_ step: Int, systemName: String, label: String) -> some View {
         let d = AtticDropdownMetrics.self
         let lit = hoveredMonthStep == step
-        return Button { update { _ = $0.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false) } } label: {
+        return Button {
+            // A click acts during its own mouse-up (the app's current event
+            // now, not a stale one): the lit day the turn moves is not the
+            // keyboard's, and the card stays under the pointer. Any other
+            // press (accessibility) brings the lit day into view.
+            let clicked = NSApp.currentEvent?.type == .leftMouseUp
+            update { state in
+                _ = state.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false)
+                if clicked, state.lit == .day { highlightOrigin?.pointerEntered(Self.dayID(calendar.startOfDay(for: state.cursor))) }
+            }
+        } label: {
             AtticIcon(systemName: systemName, size: d.monthChevron, weight: .medium, ink: .icon)
                 .frame(width: d.monthNavWidth - 2, height: d.monthNavWidth - 2)
                 .background { if lit { navMark } }
@@ -988,10 +1003,10 @@ struct AtticTagPicker: View {
                 AtticDropdownRow(title: "#" + tag.name, check: tag.state, dot: colouring.hue(for: tag.name).ink, detail: tag.detail,
                                  detailInk: AtticDropdownSmallText.ink,
                                  isHighlighted: highlighted == index,
-                                 onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create)) {
+                                 onHover: hover(index), position: index + 1, itemCount: Self.rowCount(tags: tags.count, create: create),
+                                 scrollID: tag.name) {
                     onToggle(tag.name)
                 }
-                .id(tag.name)
                 .onAppear { onRowAppear?(tag.name) }
             }
             if tags.isEmpty {
@@ -1680,7 +1695,7 @@ struct AtticSuggestionList: View {
                 AtticDropdownRow(title: item.title, systemName: item.systemName, detail: item.detail,
                                isHighlighted: index == highlighted,
                                onHover: onHover.map { report in { inside in if inside { report(index) } } },
-                               position: index + 1, itemCount: items.count) { onChoose(index) }
+                               position: index + 1, itemCount: items.count, scrollID: item.id) { onChoose(index) }
             }
         }
         .accessibilityElement(children: .contain)

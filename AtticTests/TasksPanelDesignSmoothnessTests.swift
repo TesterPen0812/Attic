@@ -344,4 +344,81 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(TasksFoldBody.visibleHeight(progress: 1, place: place), heights[index])
         }
     }
+
+    /// Scroll trace 27 Nov: `TasksFoldLayout` measured every row in
+    /// `sizeThatFits`, measured it again in `placeSubviews`, and placed it
+    /// at that fixed height: a second measure and a second proposal for
+    /// every row on every scroll frame. A row now sees one proposal a pass
+    /// (two before: (width, nil) then (width, height)), and the row's frame
+    /// is what it was: the full row at the list's width, also while a fold
+    /// shows only part of it, and following a height change between passes.
+    func testAFoldRowIsMeasuredOnceAPassAtOneProposalAndKeepsItsFrame() throws {
+        let log = FoldProbeLog()
+        let host = NSHostingView(rootView: FoldProbeList(height: 44, visible: nil, log: log))
+        host.frame = CGRect(x: 0, y: 0, width: 200, height: 300)
+        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 200, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        let cases: [(height: CGFloat, visible: CGFloat?)] = [(61, nil), (29, nil), (61, 20), (45, 0), (50, nil), (90, 30)]
+        // Each pass changes the row's height, so the row is laid out again
+        // (a pass that changes only the fold need not place the row at all).
+        for (height, visible) in cases {
+            log.proposals.removeAll()
+            log.placed.removeAll()
+            host.rootView = FoldProbeList(height: height, visible: visible, log: log)
+            host.layoutSubtreeIfNeeded()
+            let name = "row \(height), visible \(visible.map { "\($0)" } ?? "open")"
+            let frame = try XCTUnwrap(log.placed.last, "\(name): the row was placed")
+            XCTAssertEqual(Set(log.proposals).count, 1, "\(name): one proposal for the row a pass, got \(log.proposals)")
+            XCTAssertEqual(frame.width, 200, "\(name): the list's width")
+            XCTAssertEqual(frame.height, height, "\(name): the whole row, whatever the fold shows")
+        }
+    }
+}
+
+/// What a probe row was proposed and where it was placed.
+private final class FoldProbeLog {
+    var proposals: [String] = []
+    var placed: [CGRect] = []
+
+    func note(_ proposal: ProposedViewSize) {
+        proposals.append("\(proposal.width.map { "\($0)" } ?? "nil") x \(proposal.height.map { "\($0)" } ?? "nil")")
+    }
+}
+
+/// A row of a fixed height that takes the width it is offered.
+private struct FoldProbeRow: Layout {
+    let height: CGFloat
+    let log: FoldProbeLog
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        log.note(proposal)
+        return CGSize(width: proposal.width ?? 100, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        log.note(proposal)
+        log.placed.append(bounds)
+        for subview in subviews { subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size)) }
+    }
+}
+
+/// One fold row in a list, with a row after it.
+private struct FoldProbeList: View {
+    let height: CGFloat
+    let visible: CGFloat?
+    let log: FoldProbeLog
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TasksFoldLayout(visible: visible) {
+                FoldProbeRow(height: height, log: log) { Color.red }
+            }
+            Color.blue.frame(height: 10)
+            Spacer(minLength: 0)
+        }
+        .frame(width: 200, height: 300, alignment: .topLeading)
+    }
 }
