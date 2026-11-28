@@ -387,8 +387,9 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
         for draw in [true, false] {
             AtticDraw.enabledOverride = draw
             try withRig { rig in
-                @MainActor func expectedRects() -> [CGRect] {
-                    let insets = PanelPageLayout(cornerSize: rig.settings.panelCornerSize, cornerRoom: rig.state.panelCornerRoom).chromeInsets
+                @MainActor func expectedRects(_ corner: Double? = nil) -> [CGRect] {
+                    let insets = PanelPageLayout(cornerSize: corner ?? rig.settings.panelCornerSize,
+                                                 cornerRoom: rig.state.panelCornerRoom).chromeInsets
                     return [CGRect(x: insets.leading, y: insets.top, width: PanelHeaderLayout.pinSize.width,
                                    height: PanelHeaderLayout.height)]
                 }
@@ -398,7 +399,10 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
                     }
                 }
                 let original = rig.settings.panelCornerSize
-                let changed = original == PanelCornerSize.large.rawValue ? PanelCornerSize.extraLarge.rawValue : PanelCornerSize.large.rawValue
+                // A corner whose header rects differ from the original's, so the check can fail.
+                let changed = try XCTUnwrap(PanelCornerSize.allCases.map(\.rawValue).first { expectedRects($0) != expectedRects(original) },
+                                            "harness: some corner size moves the header rects")
+                print("DR5 draw=\(draw) corners original=\(original) changed=\(changed) rects \(expectedRects(original)) vs \(expectedRects(changed))")
                 rig.state.selectSection(.canvas)
                 settle(rig)
                 XCTAssertNil(rig.toasts.current, "harness: no toast is up")

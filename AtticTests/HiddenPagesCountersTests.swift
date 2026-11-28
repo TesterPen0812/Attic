@@ -2600,7 +2600,7 @@ extension HiddenPagesCountersTests {
     /// which neither host takes: no layout, no hidden view run.
     func testND7APlainSwitchsHideLayoutsAndAResizeStraightAfter() throws {
         try withRig { rig in
-            for page in [PanelPage.calendar, .notes] {
+            for page in [PanelPage.calendar, .notes, .canvas] {
                 rig.state.selectSection(page.section)
                 pump(rig.content, rig.panel)
                 guard let host = keptHost(page, rig) else {
@@ -2728,11 +2728,19 @@ extension HiddenPagesCountersTests {
             var ran: [String: Int] = [:]
             var hostAt: [String] = []
             var last = before
+            let otherHosts = [PanelPage.calendar, .notes].compactMap { page in keptHost(page, rig).map { (page, ObjectIdentifier($0)) } }
+            @MainActor func otherUpdates() -> [String: Int] {
+                Dictionary(uniqueKeysWithValues: otherHosts.map { ("\($0.0)", KeptContentHostCounts.hiddenUpdatesByHost[$0.1, default: 0]) })
+            }
+            var otherLast = otherUpdates()
+            var otherAt: [String] = []
             @MainActor func add(_ label: String, _ views: [String: Int]) {
                 ran.merge(views) { $0 + $1 }
                 if host?.isDrawn == true { drawnAt.append(label) }
                 let now = counts()
                 if now != last { hostAt.append("\(label):\(last)->\(now)"); last = now }
+                let others = otherUpdates()
+                if others != otherLast { otherAt.append("\(label):\(otherLast)->\(others)"); otherLast = others }
             }
             let start = rig.state.panelSize
             add("lock-on", measure(rig, "DR1 lock-on") { rig.state.setInteractionLock(.windowResize, isActive: true) })
@@ -2743,11 +2751,8 @@ extension HiddenPagesCountersTests {
             add("outside", measure(rig, "DR1 outside a drag") { resize(rig, to: dragSize(start, step: Self.dragSteps + 2)) })
             let after = counts()
             let boardAfter = widths(of: .canvas, rig)
-            // For comparison: the hidden updates Calendar's and Notes' kept hosts took.
-            let others = [PanelPage.calendar, .notes].map { page in
-                "\(page)=\(keptHost(page, rig).map { KeptContentHostCounts.hiddenUpdatesByHost[ObjectIdentifier($0), default: 0] } ?? -1)"
-            }
-            print("HIDDEN_COUNTS DR1 other hosts' hidden updates (whole rig) \(others)")
+            // For comparison: the hidden updates Calendar's and Notes' kept hosts took, by step.
+            print("HIDDEN_COUNTS DR1 other hosts' hidden updates by step \(otherAt)")
             print("HIDDEN_COUNTS DR1 resize-total " + Self.line(ran))
             print("HIDDEN_COUNTS DR1 host=\(host != nil) drawn_at=\(drawnAt) host_changes=\(hostAt) layouts,roots,updates=\(before)->\(after) "
                   + "board=\(boardBefore.values.sorted())->\(boardAfter.values.sorted())")
@@ -2756,8 +2761,11 @@ extension HiddenPagesCountersTests {
             // the hidden pages the size it held (RZ3): the host's update sets
             // no root and lays nothing out, so Draw's graph does not run.
             XCTAssertEqual(after.prefix(2), before.prefix(2), "DR1: hidden, Draw's host took a layout or a root (layouts, roots)")
-            XCTAssertTrue(hostAt.allSatisfy { $0.hasPrefix("release:") || $0.hasPrefix("outside:") },
-                          "DR1: an update reached Draw's hidden host during the drag: \(hostAt)")
+            // Measured (377f5ceb): exactly one, at the release; none at the write outside a drag.
+            XCTAssertEqual(hostAt.count, 1, "DR1: Draw's hidden host took other updates than the release's: \(hostAt)")
+            XCTAssertTrue(hostAt.allSatisfy { $0.hasPrefix("release:") },
+                          "DR1: an update reached Draw's hidden host outside the release: \(hostAt)")
+            if let one = after.last, let was = before.last { XCTAssertEqual(one - was, 1, "DR1: the release's updates of Draw's hidden host") }
             XCTAssertEqual(drawnAt, [], "DR1: hidden, Draw's host was drawn")
             for view in Self.hiddenPageViews[.canvas, default: []] {
                 XCTAssertEqual(ran[view, default: 0], 0, "DR1: Draw's \(view) ran while hidden through a resize")
