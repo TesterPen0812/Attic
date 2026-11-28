@@ -209,6 +209,39 @@ final class HiddenPageKeyboardTests: XCTestCase {
         XCTAssertFalse(board.canBecomeKeyView, "a hidden Draw board is in the key-view loop")
     }
 
+    /// Draw in its kept host (draw-kept-host-brief.md, test 4): the board
+    /// sits in a kept host tagged with Draw's page. After a switch to each
+    /// other page, the host is out of use and the hidden board neither holds
+    /// the keyboard, nor takes it when handed it, nor is a key view; back on
+    /// Draw, the board takes the keyboard and the first key reaches it.
+    func testHiddenDrawInItsKeptHostNeverHoldsTheKeyboard() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        show(.canvas, rig)
+        let board = try board(rig)
+        var walker = board.superview
+        while let view = walker, !(view is KeptContentHostingView) { walker = view.superview }
+        let host = walker as? KeptContentHostingView
+        XCTAssertNotNil(host, "Draw's board sits in a kept host")
+        XCTAssertEqual(host.flatMap { PanelPageKeyboard.membership(of: $0) }, .page(.canvas), "Draw's kept host carries Draw's page")
+        XCTAssertTrue(holds(rig.panel, board), "harness: shown, Draw's board holds the keyboard")
+        for away in [PanelSection.tasks, .notes, .calendar] {
+            show(away, rig)
+            XCTAssertFalse(rig.draw.isShown, "\(away): Draw is still shown")
+            XCTAssertEqual(host?.isInteractive, false, "\(away): Draw's hidden host is in use")
+            XCTAssertFalse(holds(rig.panel, board), "\(away): the hidden Draw board kept the keyboard")
+            rig.panel.makeFirstResponder(board)
+            XCTAssertFalse(holds(rig.panel, board), "\(away): the hidden Draw board took the keyboard when handed it")
+            XCTAssertFalse(board.canBecomeKeyView, "\(away): the hidden Draw board is in the key-view loop")
+            show(.canvas, rig)
+            XCTAssertTrue(rig.draw.isShown, "back from \(away): Draw is not shown")
+            XCTAssertTrue(holds(rig.panel, board), "back from \(away): Draw's claim on show landed (responder \(responderName(rig.panel)))")
+        }
+        rig.draw.setTool(.pen)
+        try press("e", code: 14, rig)
+        XCTAssertEqual(rig.draw.tool, .eraser, "the first key after the last switch reached the board")
+    }
+
     // MARK: Tab never lands on a hidden page
 
     /// From Calendar (nothing of its own takes the keyboard), Tab and

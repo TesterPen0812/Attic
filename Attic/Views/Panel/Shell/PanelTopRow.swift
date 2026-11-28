@@ -166,7 +166,15 @@ final class PanelTopRowState: ObservableObject {
     /// shell's Pin, ••• and Search dim with the page's own controls).
     @Published private(set) var dimmedPages: Set<PanelPage> = []
 
+    #if DEBUG
+    /// Test seam: the state a page last dimmed or undimmed its top row in.
+    static weak var lastWrittenForTesting: PanelTopRowState?
+    #endif
+
     func setDimmed(_ dimmed: Bool, on page: PanelPage) {
+        #if DEBUG
+        Self.lastWrittenForTesting = self
+        #endif
         if dimmed, !dimmedPages.contains(page) { dimmedPages.insert(page) }
         if !dimmed, dimmedPages.contains(page) { dimmedPages.remove(page) }
     }

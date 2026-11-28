@@ -372,6 +372,78 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
         }
     }
 
+    // MARK: - The Draw page's two shell values across its kept host
+
+    /// `noticeHeight` and `headerControlRects` (draw-kept-host-brief.md):
+    /// `PanelCanvasNoticeAwareHost` takes both from the shell. With the page
+    /// shown, a toast's room reaches it and goes again, and a corner change
+    /// hands it the shell's new header control frames. With the page hidden
+    /// through a toast and a corner change, its first frame shown has both
+    /// current values. Run on the Draw page and on the old Canvas (the arm
+    /// that reads the two values).
+    func testDR5NoticeHeightAndHeaderRectsReachTheCanvasPageShownAndOnItsFirstFrame() throws {
+        let previous = AtticDraw.enabledOverride
+        defer { AtticDraw.enabledOverride = previous }
+        for draw in [true, false] {
+            AtticDraw.enabledOverride = draw
+            try withRig { rig in
+                @MainActor func expectedRects() -> [CGRect] {
+                    let insets = PanelPageLayout(cornerSize: rig.settings.panelCornerSize, cornerRoom: rig.state.panelCornerRoom).chromeInsets
+                    return [CGRect(x: insets.leading, y: insets.top, width: PanelHeaderLayout.pinSize.width,
+                                   height: PanelHeaderLayout.height)]
+                }
+                @MainActor func drawn(_ label: String, _ applied: @escaping () -> Bool) {
+                    waitForTestOperation("draw=\(draw) \(label)") {
+                        rig.content.layoutSubtreeIfNeeded(); rig.panel.displayIfNeeded(); return applied()
+                    }
+                }
+                let original = rig.settings.panelCornerSize
+                let changed = original == PanelCornerSize.large.rawValue ? PanelCornerSize.extraLarge.rawValue : PanelCornerSize.large.rawValue
+                rig.state.selectSection(.canvas)
+                settle(rig)
+                XCTAssertNil(rig.toasts.current, "harness: no toast is up")
+                XCTAssertEqual(PanelCanvasNoticeAwareHost.lastErrorBannerHeight, 0, "draw=\(draw): shown with no notice, no banner room")
+                XCTAssertEqual(PanelCanvasNoticeAwareHost.lastHeaderControlRects, expectedRects(), "draw=\(draw): shown, the header rects")
+                // Shown: a toast's room arrives and goes; a corner change's rects arrive.
+                rig.toasts.show("DR5 toast") {}
+                drawn("shown, the toast's room") { PanelCanvasNoticeAwareHost.lastErrorBannerHeight > 0 }
+                rig.toasts.dismiss()
+                drawn("shown, the room given back") { PanelCanvasNoticeAwareHost.lastErrorBannerHeight == 0 }
+                rig.settings.panelCornerSize = changed
+                drawn("shown, the new header rects") { PanelCanvasNoticeAwareHost.lastHeaderControlRects == expectedRects() }
+                // Hidden: a toast and a corner change, then the first frame shown.
+                rig.state.selectSection(.tasks)
+                settle(rig)
+                rig.toasts.show("DR5 hidden toast") {}
+                rig.settings.panelCornerSize = original
+                settle(rig)
+                XCTAssertNotNil(rig.toasts.current, "harness: the toast is up")
+                var shellRuns = 0
+                #if ATTIC_LOCAL_ONLY
+                let previousShell = PanelInvalidationProbe.shell
+                PanelInvalidationProbe.shell = { shellRuns += 1 }
+                defer { PanelInvalidationProbe.shell = previousShell }
+                #else
+                shellRuns = 1
+                #endif
+                rig.state.selectSection(.canvas)
+                var first: (CGFloat, [CGRect])?
+                waitForTestOperation("draw=\(draw): the first frame with the page shown") {
+                    rig.content.layoutSubtreeIfNeeded(); rig.panel.displayIfNeeded()
+                    guard shellRuns > 0 else { return false }
+                    first = (PanelCanvasNoticeAwareHost.lastErrorBannerHeight, PanelCanvasNoticeAwareHost.lastHeaderControlRects)
+                    return true
+                }
+                print("DR5 draw=\(draw) first_frame{banner=\(first?.0 ?? -1) rects=\(first?.1 ?? []) expected=\(expectedRects())}")
+                XCTAssertGreaterThan(first?.0 ?? 0, 0, "draw=\(draw): the first frame shown has no room for the toast up while hidden")
+                XCTAssertEqual(first?.1, expectedRects(), "draw=\(draw): the first frame shown has stale header rects")
+                rig.toasts.dismiss()
+                rig.state.selectSection(.tasks)
+                settle(rig)
+            }
+        }
+    }
+
     // MARK: - A clearance change runs no shell (SPEED-NOTICE-CLEARANCE-SHELL)
 
     /// The Tasks page's bottom stack growing or shrinking (here a paste

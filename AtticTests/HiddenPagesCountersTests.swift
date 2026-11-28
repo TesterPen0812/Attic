@@ -2713,3 +2713,174 @@ extension HiddenPagesCountersTests {
         }
     }
 }
+
+/// Draw in a kept host of its own (ops/design/draw-kept-host-brief.md, as
+/// Calendar in PR 80 and Notes in PR 85): hidden behind Tasks, its graph
+/// sits out a resize; its leave hook (`setShown(false)`, which finishes a
+/// stroke in flight) has run by the first frame after a switch away; and
+/// its first frame shown has the current size and data.
+@MainActor
+extension HiddenPagesCountersTests {
+    /// Test 1 of the brief: hidden behind Tasks, Draw is in a host of its
+    /// own that takes no layout, no root and no update through a live
+    /// resize, its release and a write outside a drag; its views do not
+    /// run and its board keeps its size.
+    func testDR1HiddenDrawSitsOutAResize() throws {
+        try withRig { rig in
+            let host = keptHost(.canvas, rig)
+            @MainActor func counts() -> [Int] {
+                guard let host else { return [] }
+                let id = ObjectIdentifier(host)
+                return [KeptContentHostCounts.layoutsByHost[id, default: 0], KeptContentHostCounts.hiddenRootsByHost[id, default: 0],
+                        KeptContentHostCounts.hiddenUpdatesByHost[id, default: 0]]
+            }
+            let before = counts()
+            let boardBefore = widths(of: .canvas, rig)
+            XCTAssertFalse(boardBefore.isEmpty, "harness: hidden Draw has its board")
+            var drawnAt: [String] = []
+            var ran: [String: Int] = [:]
+            @MainActor func add(_ label: String, _ counts: [String: Int]) {
+                ran.merge(counts) { $0 + $1 }
+                if host?.isDrawn == true { drawnAt.append(label) }
+            }
+            let start = rig.state.panelSize
+            add("lock-on", measure(rig, "DR1 lock-on") { rig.state.setInteractionLock(.windowResize, isActive: true) })
+            for step in 1...Self.dragSteps {
+                add("step=\(step)", measure(rig, "DR1 write step=\(step)") { resize(rig, to: dragSize(start, step: step)) })
+            }
+            add("release", measure(rig, "DR1 release") { release(rig) })
+            add("outside", measure(rig, "DR1 outside a drag") { resize(rig, to: dragSize(start, step: Self.dragSteps + 2)) })
+            let after = counts()
+            let boardAfter = widths(of: .canvas, rig)
+            print("HIDDEN_COUNTS DR1 resize-total " + Self.line(ran))
+            print("HIDDEN_COUNTS DR1 host=\(host != nil) drawn_at=\(drawnAt) layouts,roots,updates=\(before)->\(after) "
+                  + "board=\(boardBefore.values.sorted())->\(boardAfter.values.sorted())")
+            XCTAssertNotNil(host, "DR1: Draw sits in a kept host of its own")
+            XCTAssertEqual(after, before, "DR1: hidden, Draw's host took a layout, root or update (layouts, roots, updates)")
+            XCTAssertEqual(drawnAt, [], "DR1: hidden, Draw's host was drawn")
+            for view in Self.hiddenPageViews[.canvas, default: []] {
+                XCTAssertEqual(ran[view, default: 0], 0, "DR1: Draw's \(view) ran while hidden through a resize")
+            }
+            XCTAssertEqual(Set(boardAfter.keys), Set(boardBefore.keys), "harness: Draw kept its board")
+            for (board, width) in boardAfter {
+                XCTAssertEqual(width, boardBefore[board] ?? -1, accuracy: 0.5, "DR1: hidden, Draw's board was laid out to the new size")
+            }
+        }
+    }
+
+    /// The ways a switch leaves Draw: a click on the island, the state's
+    /// own switch (the agent's and the menu's), an instant switch, and ⌘1
+    /// (needs a key panel: run only with ATTIC_KEY_WINDOW_TESTS=1).
+    private enum DrawLeavePath: String, CaseIterable { case click, state, instant, shortcut }
+
+    /// Test 2 of the brief: with a stroke in flight and the board holding
+    /// the keyboard, a switch to Tasks. By the first frame with Tasks shown,
+    /// Draw's leave hook has run: the page is not shown, the stroke is
+    /// finished and saved as one new object, the board no longer holds the
+    /// keyboard and the shell's top row is no longer dimmed for Draw.
+    /// Settled, the same, with the stroke saved once.
+    func testDR2DrawLeavesByTheFirstFrameAwayWithItsStrokeSaved() throws {
+        let previous = DrawPageModel.shared
+        defer { DrawPageModel.replaceShared(previous) }
+        for path in DrawLeavePath.allCases {
+            if path == .shortcut, ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] != "1" {
+                print("DR2 path=shortcut not run here: it needs a key panel (ATTIC_KEY_WINDOW_TESTS=1)")
+                continue
+            }
+            let model = DrawPageModel(store: DrawInMemoryStore())
+            model.pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-dr2-\(UUID().uuidString)"))
+            DrawPageModel.replaceShared(model)
+            defer { model.setShown(false); model.pasteboard.releaseGlobally() }
+            try withRig { rig in
+                show(.canvas, rig)
+                XCTAssertTrue(model.isShown, "harness \(path): Draw is shown")
+                let board = try XCTUnwrap(nativeViews(of: .canvas, rig).values.first as? DrawBoardView, "harness: Draw's board")
+                if path == .shortcut { rig.panel.makeKey() }
+                rig.panel.makeFirstResponder(board)
+                XCTAssertTrue(rig.panel.firstResponder === board, "harness \(path): the board holds the keyboard")
+                let id = try XCTUnwrap(model.canvasID, "harness: Draw has a canvas open")
+                let savedBefore = try model.store.open(id).objects.count
+                model.setTool(.pen)
+                let mid = CGPoint(x: board.bounds.midX, y: board.bounds.midY)
+                model.pointerDown(at: mid)
+                for step in 1...6 { model.pointerDragged(to: CGPoint(x: mid.x + CGFloat(step * 6), y: mid.y + CGFloat(step * 3))) }
+                waitForTestOperation("the stroke dims the top row") {
+                    frame(rig)
+                    return PanelTopRowState.lastWrittenForTesting?.dimmedPages.contains(.canvas) == true
+                }
+                XCTAssertTrue(model.isDrawingLive, "harness \(path): a stroke is in flight")
+                @MainActor func state() -> String {
+                    let saved = (try? model.store.open(id).objects.count).map { $0 - savedBefore } ?? -1
+                    let dimmed = PanelTopRowState.lastWrittenForTesting?.dimmedPages.contains(.canvas) ?? true
+                    return "shown=\(model.isShown) live=\(model.isDrawingLive) saved=\(saved) "
+                        + "boardKeyboard=\(rig.panel.firstResponder === board) dimmed=\(dimmed)"
+                }
+                let expected = "shown=false live=false saved=1 boardKeyboard=false dimmed=false"
+                var first = ""
+                let shortcut = try keyEvents(rig, code: 18, "1", .command)
+                inFirstShownFrame(of: .tasks, rig, switching: {
+                    switch path {
+                    case .click: rig.state.island.click(.tasks)
+                    case .state: rig.state.selectSection(.tasks)
+                    case .instant: rig.state.switchPage(to: .tasks, motion: .instant)
+                    case .shortcut:
+                        for event in shortcut { NSApp.postEvent(event, atStart: false) }
+                        Hosted.pumpEvents()
+                    }
+                }, read: { first = state() })
+                pump(rig.content, rig.panel)
+                let settled = state()
+                print("DR2 path=\(path) first_frame{\(first)} settled{\(settled)}")
+                XCTAssertEqual(first, expected, "DR2 \(path): Draw's leave hook had not run by the first frame with Tasks shown")
+                XCTAssertEqual(settled, expected, "DR2 \(path): settled after the switch away")
+            }
+        }
+    }
+
+    /// Test 3 of the brief: Draw hidden behind Tasks through a resize (a
+    /// drag, its release and a write outside a drag) and a change to its
+    /// canvas (an object put, as an agent's write lands). In the first frame
+    /// after the switch to it, Draw is shown, its board has the width it
+    /// keeps once settled (the new size), the board size Draw was told is
+    /// the board's own, and its objects include the change.
+    func testDR3DrawShownAfterAResizeAndAChangeIsCurrentInItsFirstFrame() throws {
+        try withRig { rig in
+            let model = DrawPageModel.shared
+            let before = widths(of: .canvas, rig)
+            XCTAssertFalse(before.isEmpty, "harness: hidden Draw has its board")
+            XCTAssertFalse(model.isShown, "harness: Draw is hidden")
+            let start = rig.state.panelSize
+            rig.state.setInteractionLock(.windowResize, isActive: true)
+            frame(rig)
+            for step in 1...Self.dragSteps { resize(rig, to: dragSize(start, step: step)); frame(rig) }
+            release(rig)
+            frame(rig)
+            resize(rig, to: dragSize(start, step: Self.dragSteps + 2))
+            pump(rig.content, rig.panel)
+            let grown = dragSize(start, step: Self.dragSteps + 2).width - start.width
+            let added = DrawObject(frame: DrawFrame(x: 40, y: 40), content: .shape(.rectangle))
+            model.performAcknowledged(.put([added]))
+            XCTAssertTrue(model.objects.contains { $0.id == added.id }, "harness: the change reached Draw's model")
+            var first: (widths: [ObjectIdentifier: CGFloat], boardSize: CGSize, shown: Bool, hasChange: Bool)?
+            inFirstShownFrame(of: .canvas, rig, switching: { rig.state.switchPage(to: .canvas, motion: .instant) }, read: {
+                first = (widths(of: .canvas, rig), model.boardSize, model.isShown, model.objects.contains { $0.id == added.id })
+            })
+            pump(rig.content, rig.panel)
+            let settled = widths(of: .canvas, rig)
+            let board = nativeViews(of: .canvas, rig).values.first
+            print("DR3 before=\(before.values.sorted()) first=\(first.map { "\($0.widths.values.sorted()) board=\($0.boardSize) shown=\($0.shown) change=\($0.hasChange)" } ?? "nil") "
+                  + "settled=\(settled.values.sorted()) board=\(model.boardSize)")
+            XCTAssertEqual(Set(settled.keys), Set(before.keys), "harness: Draw kept its board")
+            for (id, width) in settled {
+                XCTAssertEqual(width - (before[id] ?? -1), grown, accuracy: 0.5, "DR3: settled, Draw's board does not have the new size")
+                XCTAssertEqual(first?.widths[id] ?? -1, width, accuracy: 0.5, "DR3: Draw's first frame shown is not at its settled width")
+            }
+            XCTAssertEqual(first?.shown, true, "DR3: Draw is not shown in its first frame")
+            XCTAssertEqual(first?.hasChange, true, "DR3: Draw's first frame lacks the change made while hidden")
+            XCTAssertEqual(first?.boardSize.width ?? -1, board?.bounds.width ?? -2, accuracy: 0.5,
+                           "DR3: in its first frame shown, Draw was told another board width")
+            XCTAssertEqual(first?.boardSize.height ?? -1, board?.bounds.height ?? -2, accuracy: 0.5,
+                           "DR3: in its first frame shown, Draw was told another board height")
+        }
+    }
+}

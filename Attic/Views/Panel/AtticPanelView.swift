@@ -1047,6 +1047,8 @@ struct PanelCanvasNoticeAwareHost: View {
     static var bodyEvaluations = 0
     /// Test seam: the clearance the last body run gave the Canvas page.
     static var lastErrorBannerHeight: CGFloat = 0
+    /// Test seam: the header control frames the last body run handed on.
+    static var lastHeaderControlRects: [CGRect] = []
     #endif
     @ObservedObject var canvasSession: CanvasSession
     @ObservedObject var toasts: PanelToastCenter
@@ -1065,6 +1067,7 @@ struct PanelCanvasNoticeAwareHost: View {
         let errorBannerHeight = hasNotice || toasts.current != nil ? noticeHeight.value : 0
         #if DEBUG
         let _ = Self.lastErrorBannerHeight = errorBannerHeight
+        let _ = Self.lastHeaderControlRects = headerControlRects
         #endif
         CanvasPageHost(canvasSession: canvasSession, uiState: uiState, layout: layout,
                        errorBannerHeight: errorBannerHeight,
