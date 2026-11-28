@@ -166,6 +166,26 @@ jobs:
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" --format json > "$RUNNER_TEMP/fka-notes-undo-summary.json"
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==8 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
           exit $status
+      - name: Run Calendar's agenda rows with Full Keyboard Access
+        if: always()
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+          ATTIC_CI_KEYBOARD_MODE: fka
+          TEST_RUNNER_ATTIC_FULL_KEYBOARD_ACCESS_TESTS: "1"
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFKA-calendar-agenda.xcresult" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO \
+            -only-testing:AtticTests/HiddenPageKeyboardTests/testFKAEventHeadAnswersReturnAndSpace \
+            -only-testing:AtticTests/HiddenPageKeyboardTests/testFKAArrowsOnTheAgendaStayOnTheShownPage \
+            -only-testing:AtticTests/HiddenPageKeyboardTests/testFKAShiftTabLeavesCalendarTheWayItCameIn \
+            -only-testing:AtticTests/HiddenPageKeyboardTests/testFKATabLoopNeverStopsOnAHiddenPage \
+            -only-testing:AtticTests/HiddenPageKeyboardTests/testFKAInsideCalendarUndoEscAndHotkey \
+            | tee "$RUNNER_TEMP/fka-calendar-agenda.log" || true
+          grep -E '^CAL_FKA' "$RUNNER_TEMP/fka-calendar-agenda.log" || echo 'CAL_FKA no lines'
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-calendar-agenda.xcresult" --format json > "$RUNNER_TEMP/fka-calendar-agenda-summary.json" || echo '{}' > "$RUNNER_TEMP/fka-calendar-agenda-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==5 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-calendar-agenda-summary.json"
       - name: Upload focused keyboard evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -877,7 +897,11 @@ jobs:
     if: ${{ inputs.lane != 'fast' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Optimized costs and opt-in soak retention gates
     runs-on: macos-26
-    timeout-minutes: 90
+    # The four serial -O builds took 59-84 min (runs 44868042052,
+    # 45755225479, 45762257021; the candidate alone 56.5 min in 45826396992)
+    # and the gates after them 22-36 min, so 90 cancelled most full runs
+    # before any verdict. Worst seen 84 + 36 = 120 min; 45826396992 took 114.5.
+    timeout-minutes: 150
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       # Candidate commands inherit enforcement; only reference commands opt out.
@@ -945,12 +969,14 @@ jobs:
               # table-only functional test belongs to the candidate suite.
               fixture_flags=('OTHER_SWIFT_FLAGS=$(inherited) -DATTIC_COST_REFERENCE_HOST')
             fi
+            build_started=$SECONDS
             # shellcheck disable=SC2086
             (cd "$source" && "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" build-for-testing \
               -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
               -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" $COST_FLAGS "${fixture_flags[@]}") \
               > "$RUNNER_TEMP/AtticCosts/$name-build.log" 2>&1 \
               || { tail -n 80 "$RUNNER_TEMP/AtticCosts/$name-build.log"; exit 1; }
+            echo "COST_BUILD_TIMING name=$name seconds=$((SECONDS - build_started))"
           done
 
       # Keep XCTest's compressed-hour allocation workload out of the default

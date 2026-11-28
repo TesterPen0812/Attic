@@ -133,7 +133,14 @@ final class PanelIntegrationTests: XCTestCase {
         spin(0.25)
         XCTAssertGreaterThan(counts[0], before[0], "Panel geometry changes must still refresh the shell")
         XCTAssertGreaterThan(counts[1], before[1], "Panel geometry changes must reach Tasks")
-        XCTAssertGreaterThan(counts[2], before[2], "Panel geometry changes must reach retained Notes")
+        // Notes sits in a kept host of its own (page-host-notes-draw), as
+        // Calendar (PR 80): hidden, it holds the change, and takes it when shown.
+        XCTAssertEqual(counts[2], before[2], "hidden, retained Notes ran on a geometry change it holds")
+        panel.uiState.selectSection(.notes)
+        spin(0.25)
+        XCTAssertGreaterThan(counts[2], before[2], "Panel geometry changes must reach retained Notes when it is shown")
+        panel.uiState.selectSection(.tasks)
+        spin(0.25)
         let beforeUnrelatedUIState = counts
         panel.uiState.isComposerAttachmentPickerPresented.toggle()
         spin(0.25)
@@ -144,13 +151,176 @@ final class PanelIntegrationTests: XCTestCase {
     }
 
     /// The native views of class `name` under `root` (a page's page-wide view).
+    /// Resize second pass (25 Nov): a step of a resize writes no view state
+    /// that draws nothing. The ✦'s place, the format row's room and a hidden
+    /// stand-in's glass size each moved on every step and started a second
+    /// transaction pass; only the shown island's glass takes each size.
+    func testAResizeStepWritesNoViewStateThatDrawsNothing() throws {
+        #if DEBUG && ATTIC_LOCAL_ONLY
+        // GitHub's macOS runners turn Reduce Transparency on, which draws
+        // the island solid, with no glass: these tests state glass.
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
+        var writes: [String: Int] = [:]
+        PanelInvalidationProbe.stepWrite = { writes[$0, default: 0] += 1 }
+        defer { PanelInvalidationProbe.stepWrite = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .notes, takesKeyboard: false), .shown)
+        panel.uiState.prepareBuiltPage(.tasks)
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
+        writes = [:]
+        for step in 1...6 {
+            var frame = window.visibleContentFrame
+            frame.size.width += 12
+            window.setVisibleContentFrame(frame, display: true)
+            panel.uiState.updatePanelSize(window.visibleContentFrame.size)
+            host.layoutSubtreeIfNeeded()
+            spin(0.05)
+            XCTAssertEqual(window.visibleContentFrame.width, frame.width, accuracy: 0.5, "harness: step \(step) took its width")
+        }
+        print("RESIZE_STEP_WRITES steps=6 \(writes.sorted { $0.key < $1.key })")
+        // The island's glass takes each size from AppKit (`AtticGlassSizeSource`),
+        // so it writes none either.
+        XCTAssertEqual(writes, [:], "a resize step wrote view state")
+        #endif
+    }
+
+    /// The ✦ steps aside at the same place as before (the reach plus the
+    /// bar's gap passes its leading edge), and a step that keeps the
+    /// answer writes nothing.
+    func testTheAgentButtonStepsAsideAtTheSamePlace() {
+        let gap = AtticPanelChromeMetrics.footerGap
+        XCTAssertNil(PanelSharedBottomBar.agentAsideChange(current: false, reach: 200, agentMinX: 400), "far: stays, no write")
+        XCTAssertNil(PanelSharedBottomBar.agentAsideChange(current: false, reach: 200, agentMinX: 200 + gap), "at the gap: stays")
+        XCTAssertEqual(PanelSharedBottomBar.agentAsideChange(current: false, reach: 200, agentMinX: 200 + gap - 0.5), true)
+        XCTAssertNil(PanelSharedBottomBar.agentAsideChange(current: true, reach: 200, agentMinX: 150), "still aside: no write")
+        XCTAssertEqual(PanelSharedBottomBar.agentAsideChange(current: true, reach: nil, agentMinX: 150), false, "nothing open: back")
+        XCTAssertNil(PanelSharedBottomBar.agentAsideChange(current: false, reach: 200, agentMinX: .infinity), "not measured yet")
+    }
+
+    /// The format row's cells shrink at the same width as before.
+    func testTheFormatRowTurnsCompactAtTheSameWidth() {
+        XCTAssertTrue(NoteFormatRowView.isRoomy(width: 0, need: 300), "not measured yet: full cells")
+        XCTAssertTrue(NoteFormatRowView.isRoomy(width: 300, need: 300))
+        XCTAssertFalse(NoteFormatRowView.isRoomy(width: 299.5, need: 300))
+    }
+
+    /// The stand-in is sent no size while hidden; shown after a resize, its
+    /// glass draws with the panel's size as it is, before that frame.
+    func testAStandInShownAfterAResizeDrawsWithTheCurrentSize() throws {
+        #if ATTIC_LOCAL_ONLY
+        var glass: [CGSize] = []
+        PanelInvalidationProbe.islandGlassSize = { glass.append($0) }
+        defer { PanelInvalidationProbe.islandGlassSize = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        let container = try XCTUnwrap(window.contentView as? AtticPanelContentContainer)
+        XCTAssertFalse(container.isIslandStandInShown, "harness: the stand-in is hidden at rest")
+        for step in 1...4 {
+            var frame = window.visibleContentFrame
+            frame.size.width += CGFloat(step) * 10
+            window.setVisibleContentFrame(frame, display: true)
+            panel.uiState.updatePanelSize(window.visibleContentFrame.size)
+            spin(0.05)
+        }
+        let size = panel.uiState.panelSize
+        glass = []
+        container.setIslandStandInShown(true)
+        defer { container.setIslandStandInShown(false) }
+        print("STAND_IN_SHOWN panel=\(size) glass=\(glass)")
+        XCTAssertFalse(glass.isEmpty, "the stand-in's glass did not draw as it showed")
+        XCTAssertTrue(glass.allSatisfy { $0 == size }, "the stand-in drew with a size the panel no longer has")
+        #endif
+    }
+
+    /// Review P2-2 (PR 78): the Genie snapshot draws the hidden stand-in
+    /// (its glass rides live in the flight). After a resize at rest it is
+    /// captured at the panel's size as it is now, not the size it had
+    /// when it last hid, and it is hidden again afterwards.
+    func testTheGenieSnapshotDrawsTheStandInAtTheCurrentSize() throws {
+        #if ATTIC_LOCAL_ONLY
+        var glass: [CGSize] = []
+        PanelInvalidationProbe.islandGlassSize = { glass.append($0) }
+        defer { PanelInvalidationProbe.islandGlassSize = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        let container = try XCTUnwrap(window.contentView as? AtticPanelContentContainer)
+        XCTAssertFalse(container.isIslandStandInShown, "harness: the stand-in is hidden at rest")
+        var frame = window.visibleContentFrame
+        frame.size.width += 40
+        window.setVisibleContentFrame(frame, display: true)
+        panel.uiState.updatePanelSize(window.visibleContentFrame.size)
+        spin(0.2)
+        let size = panel.uiState.panelSize
+        glass = []
+        container.prepareAlternateSnapshot(.genieLiveGlass, surface: nil)
+        let captured = glass
+        spin(0.1)
+        print("GENIE_STAND_IN panel=\(size) captured=\(captured)")
+        XCTAssertFalse(captured.isEmpty, "the stand-in's glass was not laid out for the snapshot")
+        XCTAssertTrue(captured.allSatisfy { $0 == size }, "the snapshot drew the stand-in at a size the panel no longer has")
+        XCTAssertFalse(container.isIslandStandInShown, "the stand-in stays hidden after the capture")
+        #endif
+    }
+
+    /// Resize round 2 (c): through a real resize, the island's glass has
+    /// the panel's size after each step and after it settles. Every glass
+    /// layout since a step was at that step's size, and there was one.
+    func testTheIslandsGlassFollowsThePanelAtEachStepAndAtSettle() throws {
+        #if ATTIC_LOCAL_ONLY
+        // GitHub's macOS runners turn Reduce Transparency on, which draws
+        // the island solid, with no glass: these tests state glass.
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
+        var glass: [CGSize] = []
+        PanelInvalidationProbe.islandGlassSize = { glass.append($0) }
+        defer { PanelInvalidationProbe.islandGlassSize = nil }
+        let panel = try makePanel()
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.6)
+        let window = panel.controller.panelForTesting
+        for step in 1...5 {
+            glass = []
+            var frame = window.visibleContentFrame
+            frame.size.width += 14
+            frame.size.height += step.isMultiple(of: 2) ? 6 : 0
+            window.setVisibleContentFrame(frame, display: true)
+            panel.uiState.updatePanelSize(window.visibleContentFrame.size)
+            let size = panel.uiState.panelSize
+            spin(until: { !glass.isEmpty }, timeout: 1)
+            print("ISLAND_GLASS_STEP \(step) panel=\(size) glass=\(glass)")
+            XCTAssertEqual(size.width, window.visibleContentFrame.width, accuracy: 0.5, "harness: step \(step) took its size")
+            XCTAssertFalse(glass.isEmpty, "step \(step): the island's glass was not laid out at the new size")
+            XCTAssertTrue(glass.allSatisfy { $0 == size }, "step \(step): the island's glass drew at a size the panel does not have")
+        }
+        let settled = panel.uiState.panelSize
+        glass = []
+        spin(0.4)
+        XCTAssertTrue(glass.allSatisfy { $0 == settled }, "settled: the island's glass moved off the panel's size")
+        #endif
+    }
+
+    /// A Tasks tab host's container: Calendar and Notes each sit in a
+    /// kept host of their own, tagged with their page (PR 80; page-host-notes-draw).
+    private func isTasksContainer(_ view: NSView) -> Bool {
+        guard let host = (view as? KeptContentContainer)?.host else { return false }
+        guard let membership = PanelPageKeyboard.membership(of: host) else { return true }
+        return membership == .page(.tasks)
+    }
+
     private func pageWideViews(_ name: String, in root: NSView) -> [NSView] {
         (root.className.hasSuffix(name) ? [root] : []) + root.subviews.flatMap { pageWideViews(name, in: $0) }
     }
 
     /// PR 69 fix round 1, item 3: a size change that is no drag reaches the
     /// kept Notes page through the window's own delegate (`windowDidResize`),
-    /// with nothing in the test writing the size.
+    /// with nothing in the test writing the size, by its first layout shown.
     func testAFrameChangeOutsideADragReachesTheKeptNotesPageThroughTheWindow() throws {
         let panel = try makePanel()
         XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
@@ -158,7 +328,7 @@ final class PanelIntegrationTests: XCTestCase {
         spin(0.6)
         let window = panel.controller.panelForTesting
         let host = try XCTUnwrap((window.contentView as? AtticPanelContentContainer)?.hostingView)
-        let tasksPage = pageWideViews("KeptContentContainer", in: host).filter { !$0.isHiddenOrHasHiddenAncestor }
+        let tasksPage = pageWideViews("KeptContentContainer", in: host).filter { !$0.isHiddenOrHasHiddenAncestor && isTasksContainer($0) }
         let notesPage = pageWideViews("NotesPageSwipeView", in: host)
         XCTAssertFalse(tasksPage.isEmpty, "harness: the shown Tasks page has a page-wide native view")
         XCTAssertFalse(notesPage.isEmpty, "harness: the kept Notes page has a page-wide native view")
@@ -167,19 +337,32 @@ final class PanelIntegrationTests: XCTestCase {
         window.setVisibleContentFrame(frame, display: true)
         let width = window.visibleContentFrame.width
         XCTAssertEqual(width, frame.width, accuracy: 0.5, "harness: the window took the frame")
-        spin(until: { host.layoutSubtreeIfNeeded(); return notesPage.allSatisfy { abs($0.bounds.width - width) < 0.5 } })
-        for view in tasksPage + notesPage {
+        spin(until: { host.layoutSubtreeIfNeeded(); return tasksPage.allSatisfy { abs($0.bounds.width - width) < 0.5 } })
+        for view in tasksPage {
             XCTAssertEqual(view.bounds.width, width, accuracy: 0.5, "\(view.className) took a size set outside a drag")
+        }
+        // Notes sits in a kept host of its own (page-host-notes-draw), which
+        // is not laid out while hidden: the size reaches it in its first
+        // layout shown.
+        panel.uiState.selectSection(.notes)
+        host.layoutSubtreeIfNeeded()
+        for view in notesPage {
+            XCTAssertEqual(view.bounds.width, width, accuracy: 0.5, "\(view.className) took a size set outside a drag in its first layout shown")
         }
         XCTAssertEqual(panel.uiState.panelSize.width, width, accuracy: 0.5)
     }
 
-    /// PR 69 fix round 1, item 6 (the lead's 16:05 condition a): the island
-    /// is another window, so its glass is sent each accepted size. A size
-    /// write re-runs the glass view and nothing above it in the island's
-    /// windows (the island, the name label, the stand-in).
+    /// PR 69 fix round 1, item 6 (the lead's 16:05 condition a), resize
+    /// round 2 (c): the island is another window, so AppKit sets its glass
+    /// each accepted size. A size write runs no view in the island's
+    /// windows (the island, the name label, the hidden stand-in), and the
+    /// glass is laid out at each size.
     func testASizeWriteRunsOnlyTheIslandsGlassView() throws {
         #if ATTIC_LOCAL_ONLY
+        // GitHub's macOS runners turn Reduce Transparency on, which draws
+        // the island solid, with no glass: these tests state glass.
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         var roots = 0, surfaces = 0
         PanelInvalidationProbe.islandRoot = { roots += 1 }
         PanelInvalidationProbe.islandSurface = { surfaces += 1 }
@@ -193,15 +376,24 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(roots, 0, "harness: the island's windows are built")
         XCTAssertGreaterThan(surfaces, 0, "harness: the island's glass is drawn")
         let size = panel.uiState.panelSize
+        var glass: [CGSize] = []
+        PanelInvalidationProbe.islandGlassSize = { glass.append($0) }
+        defer { PanelInvalidationProbe.islandGlassSize = nil }
         roots = 0
         surfaces = 0
+        var sent: [CGSize] = []
         for step in 1...6 {
-            panel.uiState.updatePanelSize(CGSize(width: size.width + CGFloat(step * 8), height: size.height))
+            let next = CGSize(width: size.width + CGFloat(step * 8), height: size.height)
+            sent.append(next)
+            panel.uiState.updatePanelSize(next)
             spin(0.05)
         }
-        print("ISLAND_SIZE_FEED steps=6 roots=\(roots) glass=\(surfaces)")
+        print("ISLAND_SIZE_FEED steps=6 roots=\(roots) glass_views=\(surfaces) glass_sizes=\(Set(glass).count)")
         XCTAssertEqual(roots, 0, "a size write ran the island's root wrapper")
-        XCTAssertGreaterThanOrEqual(surfaces, 6, "the island's glass takes each size")
+        XCTAssertEqual(surfaces, 0, "a size write ran the island's glass view")
+        for size in sent {
+            XCTAssertTrue(glass.contains(size), "the island's glass was not laid out at \(size)")
+        }
         #endif
     }
 
@@ -326,7 +518,7 @@ final class PanelIntegrationTests: XCTestCase {
         }
         // What the body counts stood in for, read on the laid-out views
         // (lead, 24 Nov 16:22: the size reaches the pages through layout).
-        let tasksPage = pageWideViews("KeptContentContainer", in: host).filter { !$0.isHiddenOrHasHiddenAncestor }
+        let tasksPage = pageWideViews("KeptContentContainer", in: host).filter { !$0.isHiddenOrHasHiddenAncestor && isTasksContainer($0) }
         let notesPage = pageWideViews("NotesPageSwipeView", in: host)
         XCTAssertFalse(tasksPage.isEmpty, "harness: the shown Tasks page has a page-wide native view")
         XCTAssertFalse(notesPage.isEmpty, "harness: the retained Notes page has a page-wide native view")
@@ -375,10 +567,15 @@ final class PanelIntegrationTests: XCTestCase {
         spin(0.2)
         XCTAssertFalse(panel.uiState.interactionLockReasons.contains(.windowResize))
         let final = window.visibleContentFrame.width
-        for view in notesPage {
-            XCTAssertEqual(view.bounds.width, final, accuracy: 0.5, "The retained page must receive the final geometry at release")
-        }
         print("RESIZE_HOST_COUNTS release retained_notes=\(counts[2] - beforeEnd)")
+        // Notes sits in a kept host of its own (page-host-notes-draw), which
+        // is not laid out while hidden: the final geometry reaches it in its
+        // first layout shown.
+        panel.uiState.selectSection(.notes)
+        host.layoutSubtreeIfNeeded()
+        for view in notesPage {
+            XCTAssertEqual(view.bounds.width, final, accuracy: 0.5, "The retained page must have the final geometry in its first layout shown")
+        }
         XCTAssertEqual(panel.uiState.panelSize.width, initial.width + 60, accuracy: 1)
         #endif
     }
@@ -542,6 +739,37 @@ final class PanelIntegrationTests: XCTestCase {
     /// Runs last in the suite (alphabetical): every test reveals its own panel,
     /// and hiding is animated, so the panels used to stay ordered in with the
     /// first one key and the application active for the rest of the P-Z shard.
+    /// The Calendar page sits in a kept host of its own (page-host-tech-note.md,
+    /// Way 1) that claims no keyboard, in use while Calendar is shown and
+    /// out of use while it is hidden.
+    func testCalendarSitsInAKeptHostThatClaimsNoKeyboard() throws {
+        let panel = try makePanel()
+        let window = panel.controller.panelForTesting
+        func hosts(_ view: NSView) -> [KeptContentHostingView] {
+            ((view as? KeptContentHostingView).map { [$0] } ?? []) + view.subviews.flatMap(hosts)
+        }
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .calendar, takesKeyboard: true), .shown)
+        spin(until: { panel.uiState.selectedSection == .calendar })
+        spin(0.5)
+        let pageHosts = window.contentView.map { hosts($0).filter { !$0.claimsKeyboard } } ?? []
+        XCTAssertEqual(pageHosts.count, 1, "one kept host claims no keyboard: Calendar's")
+        let calendarHost = try XCTUnwrap(pageHosts.first)
+        XCTAssertTrue(calendarHost.isInteractive, "shown, it is in use")
+        XCTAssertTrue(calendarHost.isDrawn, "shown, it is drawn")
+        XCTAssertEqual(PanelPageKeyboard.membership(of: calendarHost), .page(.calendar), "the host carries Calendar's keyboard tag")
+        XCTAssertTrue(PanelPageKeyboard.mayTakeKeyboard(calendarHost), "shown, the rule lets it take the keyboard")
+        XCTAssertFalse((window.firstResponder as? NSView).map { $0 === calendarHost || $0.isDescendant(of: calendarHost) } ?? false,
+                       "shown, it does not take the keyboard")
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: true), .shown)
+        spin(until: { panel.uiState.selectedSection == .tasks })
+        spin(until: { !calendarHost.isDrawn })
+        spin(0.5)
+        XCTAssertFalse(calendarHost.isDrawn, "hidden, it is not drawn")
+        XCTAssertFalse(calendarHost.isInteractive, "hidden, it is out of use")
+        XCTAssertFalse(calendarHost.canBecomeKeyView, "and out of the key-view loop")
+        XCTAssertFalse(PanelPageKeyboard.mayTakeKeyboard(calendarHost), "hidden, the panel's rule refuses it the keyboard")
+    }
+
     @MainActor
     func testZZRevealedPanelsDoNotOutliveTheSuite() {
         XCTAssertEqual(PanelLeakGuard.leaked(since: "PanelIntegrationTests"), [])
@@ -567,6 +795,10 @@ final class PanelIntegrationTests: XCTestCase {
     /// limits nothing reads (AppKit's constraint pass itself still runs).
     func testAnIslandUpdateAsksItsContentForNoUnboundedSize() throws {
         #if DEBUG
+        // GitHub's macOS runners turn Reduce Transparency on, which draws
+        // the island solid, with no glass sizer: this test states glass.
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         // The hook is read when an island root is built, so it is set first.
         var queries = 0
         PanelIslandSizingProbe.onSizeQuery = { queries += 1 }
@@ -1028,11 +1260,17 @@ final class PanelIntegrationTests: XCTestCase {
         let presenter = try XCTUnwrap(panel.noteDraft.pages.taskNotePresenter)
         let editor = presenter.host.textView
         XCTAssertNotNil(editor.window)
+        var notesHost: NSView? = editor
+        while let view = notesHost, !(view is KeptContentHostingView) { notesHost = view.superview }
+        let hostID = ObjectIdentifier(try XCTUnwrap(notesHost, "harness: the editor sits in Notes' kept host"))
+        let heldPastTheHide = KeptContentHostCounts.heldPastTheHide[hostID, default: 0]
         followupSwitch(panel, to: .tasks)
         XCTAssertTrue(panel.uiState.builtPages.contains(.notes))
         // The outgoing page's spring may retain its native hierarchy until it settles.
         spin(until: { editor.window == nil })
         XCTAssertNil(editor.window, "the task-note route retains its original native unmount boundary")
+        XCTAssertEqual(KeptContentHostCounts.heldPastTheHide[hostID, default: 0], heldPastTheHide,
+                       "the hide settled within its turn's passes (KeptContentHostingView.hideTurnPasses)")
         XCTAssertNotNil(presenter.lease, "the pre-existing warm workspace owner stays retained")
         followupSwitch(panel, to: .notes)
         spin(until: { editor.window != nil })

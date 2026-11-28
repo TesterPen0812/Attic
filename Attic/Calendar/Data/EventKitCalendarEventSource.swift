@@ -78,6 +78,25 @@ protocol AsyncCalendarEventReading: AnyObject {
     func loadCompleteEvents(in interval: DateInterval) async -> [CalendarEvent]
 }
 
+/// What one access-checked read found: the access it saw and, only when
+/// granted, the events.
+struct CalendarAccessCheckedEvents: Equatable, Sendable {
+    var access: CalendarAccessState
+    var events: [CalendarEvent]
+}
+
+/// A read that answers access with the events, so its caller never reads
+/// `accessState` on the main actor. `EKEventStore.authorizationStatus` is a
+/// synchronous XPC to calaccessd: 16–18 ms of blocked main thread on every
+/// switch to Tasks, 113 ms when calaccessd was busy (felt-pr85.md, "Trace:
+/// ⌘1 from Notes"). The Tasks page's next event reads through this.
+@MainActor
+protocol CalendarAccessCheckedReading: AnyObject {
+    /// Access is checked off the main actor before the read and again after
+    /// a store read, so a revoke mid-read still empties the answer.
+    func loadAccessCheckedEvents(in interval: DateInterval) async -> CalendarAccessCheckedEvents
+}
+
 extension AsyncCalendarEventReading {
     func loadCompleteEvents(in interval: DateInterval) async -> [CalendarEvent] {
         await loadEvents(in: interval)
@@ -104,7 +123,8 @@ protocol AsyncCalendarEventSearching: AnyObject {
 }
 
 @MainActor
-final class EventKitCalendarEventSource: CalendarEventSource, AsyncCalendarEventReading, AsyncCalendarEventSearching {
+final class EventKitCalendarEventSource: CalendarEventSource, AsyncCalendarEventReading, AsyncCalendarEventSearching,
+    CalendarAccessCheckedReading {
     /// EventKit matches at most four years per predicate; stay well inside it.
     nonisolated static let maximumFetchSpan: TimeInterval = 3 * 365 * 86_400
     /// Fallback when a calendar reports no colour.
@@ -226,7 +246,27 @@ final class EventKitCalendarEventSource: CalendarEventSource, AsyncCalendarEvent
 
     func loadEvents(in interval: DateInterval) async -> [CalendarEvent] {
         guard accessState == .granted else { return [] }
-        if let cached = ranges.first(where: { $0.0 == interval }) { return cached.1 }
+        return await rangeEvents(in: interval) { self.accessState }.events
+    }
+
+    func loadAccessCheckedEvents(in interval: DateInterval) async -> CalendarAccessCheckedEvents {
+        let worker = worker
+        let access = Self.accessState(for: await worker.authorizationStatus())
+        guard access == .granted else {
+            ranges.removeAll()
+            return CalendarAccessCheckedEvents(access: access, events: [])
+        }
+        return await rangeEvents(in: interval) { Self.accessState(for: await worker.authorizationStatus()) }
+    }
+
+    /// The 2-entry range cache and the shared in-flight read. `accessAfterRead`
+    /// is asked only after a store read; a cached range was read with access.
+    private func rangeEvents(
+        in interval: DateInterval, accessAfterRead: @MainActor () async -> CalendarAccessState
+    ) async -> CalendarAccessCheckedEvents {
+        if let cached = ranges.first(where: { $0.0 == interval }) {
+            return CalendarAccessCheckedEvents(access: .granted, events: cached.1)
+        }
         let epoch = generation
         let task: Task<[CalendarEvent], Never>
         if let existing = pending[interval] { task = existing }
@@ -236,13 +276,19 @@ final class EventKitCalendarEventSource: CalendarEventSource, AsyncCalendarEvent
             pending[interval] = task
         }
         let events = await task.value
-        guard generation == epoch else { return [] }
+        guard generation == epoch else { return CalendarAccessCheckedEvents(access: .granted, events: []) }
         pending[interval] = nil
-        guard accessState == .granted else { ranges.removeAll(); return [] }
+        let access = await accessAfterRead()
+        guard access == .granted else {
+            ranges.removeAll()
+            return CalendarAccessCheckedEvents(access: access, events: [])
+        }
+        // A store change while access was rechecked off the main actor.
+        guard generation == epoch else { return CalendarAccessCheckedEvents(access: .granted, events: []) }
         ranges.removeAll { $0.0 == interval }
         ranges.append((interval, events))
         if ranges.count > 2 { ranges.removeFirst(ranges.count - 2) }
-        return Task.isCancelled ? [] : events
+        return CalendarAccessCheckedEvents(access: .granted, events: Task.isCancelled ? [] : events)
     }
 
     /// The page's generation drop and 2-entry cache suit a view that rereads on
@@ -266,6 +312,13 @@ private final class CalendarEventReadWorker: @unchecked Sendable {
     private let store: CalendarEventStoring
     private let calendar: Calendar
     init(store: CalendarEventStoring, calendar: Calendar) { self.store = store; self.calendar = calendar }
+
+    /// `EKEventStore.authorizationStatus` blocks on calaccessd: off the main actor.
+    func authorizationStatus() async -> EKAuthorizationStatus {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in continuation.resume(returning: store.authorizationStatus()) }
+        }
+    }
 
     func requestFullAccess() async throws -> Bool {
         try await withCheckedThrowingContinuation { continuation in

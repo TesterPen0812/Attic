@@ -1576,6 +1576,42 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return range
     }
 
+    /// The kinds of object the text holds anywhere. The pointer's cursor
+    /// asks on every scroll frame (AppKit's cursor update), and a note with
+    /// no checkbox or image or file then needs no insertion-index lookup,
+    /// which hit-tests the whole window (scroll trace 27 Nov). Kept until
+    /// the next edit of any kind.
+    struct ObjectKinds: OptionSet {
+        let rawValue: Int
+        static let checklist = ObjectKinds(rawValue: 1 << 0)
+        /// An image or a file.
+        static let payload = ObjectKinds(rawValue: 1 << 1)
+    }
+
+    private var objectKindsCache: ObjectKinds?
+    #if DEBUG
+    /// Scans of the text for its object kinds, for count tests.
+    private(set) var objectKindScans = 0
+    #endif
+
+    var objectKinds: ObjectKinds {
+        if let objectKindsCache { return objectKindsCache }
+        #if DEBUG
+        objectKindScans += 1
+        #endif
+        var kinds: ObjectKinds = []
+        textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, _, stop in
+            if value is NoteChecklistAttachment {
+                kinds.insert(.checklist)
+            } else if value is NoteImageAttachment || value is NoteFileAttachment {
+                kinds.insert(.payload)
+            }
+            if kinds == [.checklist, .payload] { stop.pointee = true }
+        }
+        objectKindsCache = kinds
+        return kinds
+    }
+
     func checklistBox(inParagraphAt location: Int) -> NoteChecklistAttachment? {
         let line = lineRange(at: location)
         guard line.length > 0 else { return nil }
@@ -2483,6 +2519,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// processEditing allows here).
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
+        objectKindsCache = nil
         storageProcessingDepth += 1
         defer { storageProcessingDepth -= 1 }
         blockRunIntervals.removeAll(keepingCapacity: true)

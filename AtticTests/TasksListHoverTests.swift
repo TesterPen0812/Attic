@@ -254,6 +254,168 @@ final class TasksListHoverTests: XCTestCase {
         XCTAssertFalse(pointer.pointerInView)
     }
 
+    // MARK: An open card over the list (MENU-HOVER-BEHIND)
+
+    /// The page's view in an off-screen window, the list's pointer on it, and
+    /// three full-width rows (`rows`, top-down in the page) on Now.
+    private func pageInWindow(point: @escaping () -> CGPoint?, rows: (CGRect, CGRect, CGRect)) -> (List, TasksPointerProbeView, NSWindow) {
+        let window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: 380, height: 520),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 380, height: 520))
+        windows.append(window)
+        let list = List()
+        list.pointer.pointerLocation = point
+        list.pointer.hoverScope = { [gate = list.gate] in (.now, gate) }
+        list.pointer.setFrame(rows.0, for: list.rows.a, from: list.cells.a)
+        list.pointer.setFrame(rows.1, for: list.rows.b, from: list.cells.b)
+        list.pointer.setFrame(rows.2, for: list.rows.c, from: list.cells.c)
+        let probe = TasksPointerProbeView(frame: window.contentView!.bounds)
+        probe.pointer = list.pointer
+        list.pointer.view = probe
+        window.contentView?.addSubview(probe)
+        spin()
+        return (list, probe, window)
+    }
+
+    /// The card's content rectangle (the part that takes clicks), in the page.
+    private func cardRect(_ host: AtticOverlayHostingView, in page: NSView) -> CGRect {
+        page.convert(host.convert(host.contentRect, to: nil), from: nil)
+    }
+
+    /// The owner's report (MENU-HOVER-BEHIND): a row under an open dropdown
+    /// card showed its hover through the card. The list's hover follows what
+    /// the pointer is over, as a click does: a point under the card hovers
+    /// no row, a card opening under a still pointer takes the row's hover
+    /// away, a row beside the card still hovers (a click there acts), and
+    /// the row under the pointer hovers again as the card closes.
+    func testARowUnderAnOpenDropdownCardDoesNotHoverAndOneBesideItDoes() throws {
+        let anchorFrame = CGRect(x: 20, y: 400, width: 60, height: 28)
+        func presenter() -> AtticDropdownPresenter {
+            let presenter = AtticDropdownPresenter()
+            presenter.design = AtticDesignContext(reduceMotion: true)
+            presenter.takesKeyboard = false
+            presenter.contentHeight = 120
+            presenter.content = AnyView(Color.gray.frame(width: 200, height: 120))
+            return presenter
+        }
+        // Where the card goes from this anchor (a first opening, closed at
+        // once): the rows are laid out under it.
+        var point: CGPoint? = nil
+        let (list, probe, window) = pageInWindow(point: { point }, rows: (.zero, .zero, .zero))
+        let anchor = NSView(frame: anchorFrame)
+        window.contentView?.addSubview(anchor)
+        let probing = presenter()
+        probing.present(from: anchor)
+        let card = cardRect(try XCTUnwrap(probing.host), in: probe)
+        probing.close(restoreFocus: false, immediately: true)
+        spin()
+        XCTAssertGreaterThan(card.width, 100, "setup: the card has a size (\(card))")
+        list.pointer.setFrame(CGRect(x: 0, y: card.midY - 15, width: 380, height: 30), for: list.rows.a, from: list.cells.a)
+        list.pointer.setFrame(CGRect(x: 0, y: card.midY + 15, width: 380, height: 30), for: list.rows.b, from: list.cells.b)
+        list.pointer.setFrame(CGRect(x: 0, y: card.maxY + 40, width: 380, height: 30), for: list.rows.c, from: list.cells.c)
+        let under = CGPoint(x: card.midX, y: card.midY - 5)
+        let beside = CGPoint(x: card.maxX + 30, y: card.midY - 5)
+        XCTAssertLessThan(beside.x, probe.bounds.maxX, "setup: room beside the card")
+
+        point = under
+        list.pointer.updateHover()
+        XCTAssertEqual(hovered(list), [true, false, false], "no card: the row under the pointer")
+
+        let shown = presenter()
+        shown.present(from: anchor)
+        defer { shown.close(restoreFocus: false, immediately: true) }
+        let host = try XCTUnwrap(shown.host)
+        XCTAssertTrue(cardRect(host, in: probe).contains(under), "setup: the card covers the still pointer")
+        spin()
+        XCTAssertEqual(hovered(list), [false, false, false], "a card opened under the still pointer: the row lets go")
+
+        point = beside
+        list.pointer.pointerMoved(inside: true)
+        XCTAssertEqual(hovered(list), [true, false, false], "beside the card: the row hovers (a click there acts)")
+
+        point = under
+        list.pointer.pointerMoved(inside: true)
+        XCTAssertEqual(hovered(list), [false, false, false], "onto the card: no row behind it hovers")
+        point = CGPoint(x: under.x, y: under.y + 25)
+        list.pointer.pointerMoved(inside: true)
+        XCTAssertEqual(hovered(list), [false, false, false], "across the card: still none")
+
+        shown.close(restoreFocus: false)
+        spin()
+        XCTAssertEqual(hovered(list), [false, true, false], "the card closing: the row under the still pointer hovers again")
+    }
+
+    /// Every overlay host answers as a dropdown card does (Notes' bar,
+    /// `/` list, cards and suggestions): it covers the rows under its
+    /// content while it takes clicks, and the list looks again when it
+    /// starts taking them, moves, hides, stops or leaves.
+    func testAnOverlayHostCoversTheRowsUnderItWhileItTakesClicks() {
+        let point = CGPoint(x: 60, y: 95)
+        let (list, probe, window) = pageInWindow(point: { point }, rows: (
+            CGRect(x: 0, y: 50, width: 380, height: 30), CGRect(x: 0, y: 80, width: 380, height: 30),
+            CGRect(x: 0, y: 110, width: 380, height: 30)))
+        list.pointer.updateHover()
+        XCTAssertEqual(hovered(list), [false, true, false])
+
+        let host = AtticOverlayHostingView(rootView: AnyView(Color.gray))
+        host.contentInset = 0
+        let over = window.contentView!.convert(probe.convert(CGRect(x: 20, y: 70, width: 150, height: 60), to: nil), from: nil)
+        host.frame = over
+        host.isInteractive = true
+        window.contentView?.addSubview(host)
+        spin()
+        XCTAssertEqual(hovered(list), [false, false, false], "a host joined over the pointer")
+
+        host.isHidden = true
+        spin()
+        XCTAssertEqual(hovered(list), [false, true, false], "hidden: it covers nothing")
+        host.isHidden = false
+        spin()
+        XCTAssertEqual(hovered(list), [false, false, false], "shown again")
+
+        host.frame = over.offsetBy(dx: 180, dy: 0)
+        spin()
+        XCTAssertEqual(hovered(list), [false, true, false], "moved off the pointer")
+        host.frame = over
+        spin()
+        XCTAssertEqual(hovered(list), [false, false, false], "moved back over it")
+
+        host.isInteractive = false
+        spin()
+        XCTAssertEqual(hovered(list), [false, true, false], "no longer taking clicks (a card closing)")
+        host.isInteractive = true
+        spin()
+        XCTAssertEqual(hovered(list), [false, false, false])
+
+        host.removeFromSuperview()
+        spin()
+        XCTAssertEqual(hovered(list), [false, true, false], "gone from the window")
+    }
+
+    /// The tint hold still holds with a card open: a live scroll keeps the
+    /// hovered row, and its end lands on what the pointer is over.
+    func testTheTintHoldStillHoldsBesideAnOpenCard() {
+        var point = CGPoint(x: 300, y: 95)
+        let (list, probe, window) = pageInWindow(point: { point }, rows: (
+            CGRect(x: 0, y: 50, width: 380, height: 30), CGRect(x: 0, y: 80, width: 380, height: 30),
+            CGRect(x: 0, y: 110, width: 380, height: 30)))
+        let host = AtticOverlayHostingView(rootView: AnyView(Color.gray))
+        host.contentInset = 0
+        host.frame = window.contentView!.convert(probe.convert(CGRect(x: 20, y: 40, width: 150, height: 120), to: nil), from: nil)
+        host.isInteractive = true
+        window.contentView?.addSubview(host)
+        list.pointer.updateHover()
+        XCTAssertEqual(hovered(list), [false, true, false], "beside the card")
+
+        list.gate.hold()
+        point = CGPoint(x: 60, y: 95)
+        list.pointer.pointerMoved(inside: true)
+        XCTAssertEqual(hovered(list), [false, true, false], "held: the hovered row keeps it")
+        list.gate.release()
+        XCTAssertEqual(hovered(list), [false, false, false], "released over the card: no row")
+    }
+
     // MARK: The row: what hover feeds
 
     private static let space = "tasks-list-hover-test"

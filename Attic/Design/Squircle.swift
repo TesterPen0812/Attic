@@ -44,7 +44,17 @@ struct Squircle: InsettableShape {
         return inset
     }
 
+    /// The path is a pure function of the shape and the rect, and SwiftUI
+    /// asks a clip or content shape for it on every hit test: each hover
+    /// responder's contains check, so every scroll event rebuilt the panel's
+    /// unchanged squircle (4 × 33 superellipse points; scroll trace 27 Nov,
+    /// `Squircle.path` under `AtticPanelContentContainer.hitTest`). A built
+    /// path is kept for its shape and rect and rebuilt when either changes.
     func path(in fullRect: CGRect) -> Path {
+        SquirclePathCache.shared.path(for: SquirclePathCache.Key(self, fullRect)) { buildPath(in: fullRect) }
+    }
+
+    fileprivate func buildPath(in fullRect: CGRect) -> Path {
         let rect = fullRect.insetBy(dx: insetAmount, dy: insetAmount)
         let cornerRadius = max(0, cornerRadius - insetAmount)
         let r = min(cornerRadius, rect.width / 2, rect.height / 2)
@@ -133,4 +143,65 @@ extension Squircle {
     static func cornerInsetFactor(exponent: CGFloat) -> CGFloat {
         1 - pow(0.5, 1 / max(1, exponent))
     }
+}
+
+/// Built squircle paths, by everything `Squircle.path(in:)` reads. Shapes
+/// draw and hit-test from render and main threads, so it is locked; a resize
+/// makes a new rect every frame, so it is bounded and starts over when full.
+final class SquirclePathCache: @unchecked Sendable {
+    struct Key: Hashable {
+        let x, y, width, height, cornerRadius, exponent, inset: CGFloat
+        let squaredTop, squaredBottom: Bool
+
+        init(_ shape: Squircle, _ rect: CGRect) {
+            x = rect.origin.x; y = rect.origin.y; width = rect.size.width; height = rect.size.height
+            cornerRadius = shape.cornerRadius; exponent = shape.exponent; inset = shape.insetAmount
+            squaredTop = shape.squaredTop; squaredBottom = shape.squaredBottom
+        }
+    }
+
+    static let shared = SquirclePathCache(capacity: 64)
+
+    private let capacity: Int
+    private let lock = NSLock()
+    private var paths: [Key: Path] = [:]
+    #if DEBUG
+    private var builds = 0
+    /// Test seam: off, every call builds (the trunk's behaviour), so a test
+    /// can compare kept and fresh paths.
+    var isEnabled = true
+    #endif
+
+    init(capacity: Int) { self.capacity = capacity }
+
+    func path(for key: Key, build: () -> Path) -> Path {
+        lock.lock()
+        #if DEBUG
+        let enabled = isEnabled
+        #else
+        let enabled = true
+        #endif
+        if enabled, let kept = paths[key] {
+            lock.unlock()
+            return kept
+        }
+        #if DEBUG
+        builds += 1
+        #endif
+        lock.unlock()
+        let built = build()
+        guard enabled else { return built }
+        lock.lock()
+        if paths.count >= capacity { paths.removeAll(keepingCapacity: true) }
+        paths[key] = built
+        lock.unlock()
+        return built
+    }
+
+    #if DEBUG
+    /// How many paths were built (cache misses), for count tests.
+    var buildCount: Int { lock.lock(); defer { lock.unlock() }; return builds }
+
+    func removeAll() { lock.lock(); paths.removeAll(); lock.unlock() }
+    #endif
 }

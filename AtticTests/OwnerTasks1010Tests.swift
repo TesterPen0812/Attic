@@ -403,6 +403,115 @@ final class OwnerTasks1010Tests: XCTestCase {
         XCTAssertTrue(NSCursor.current === NSCursor.arrow)
     }
 
+    // MARK: The cursor's lookups during a scroll (scroll trace 27 Nov)
+
+    /// An editor in an offscreen window, laid out, like the inline note.
+    private func cursorEditor(_ blocks: [NoteBlock]) -> (NoteEditorEngine, NSScrollView, NoteEditorTextView, NSWindow) {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks))
+        let (scroll, textView) = engine.makeView()
+        scroll.frame = CGRect(x: 0, y: 0, width: 340, height: 520)
+        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 340, height: 520), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        return (engine, scroll, textView, window)
+    }
+
+    private func cursorEvent(_ textView: NSTextView, at local: CGPoint, in window: NSWindow) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: textView.convert(local, to: nil), modifierFlags: [], timestamp: 0,
+                                         windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 0, pressure: 0))
+    }
+
+    /// AppKit updates the cursor on every scroll frame (`cursorUpdate`, which
+    /// needs a real tracking area, so the test sends the pointer's move: both
+    /// set the cursor through `hostedCursor`). In a long note with
+    /// no checkbox, image or file, that update made two insertion-index
+    /// lookups (each hit-tests the whole window): one in the checkbox lookup,
+    /// one for images. Now it makes none, and the text keeps its I-beam.
+    func testTheCursorUpdateInANoteWithoutObjectsMakesNoInsertionLookup() throws {
+        let blocks = [NoteBlock.text("Long note")] + (0..<120).map { NoteBlock.text("Line \($0) of a long plain note, long enough to wrap in the panel") }
+        let (engine, scroll, textView, window) = cursorEditor(blocks)
+        defer { window.contentView = nil; window.close() }
+        let point = CGPoint(x: 120, y: 200)
+        var lookups = 0
+        let scans = engine.objectKindScans
+        let previous = NSCursor.current
+        defer { previous.set() }
+        for step in 0..<40 {
+            // The text slides under the still pointer, as in a scroll.
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: CGFloat(step) * 12))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            let local = textView.convert(point, from: scroll.contentView)
+            textView.mouseMoved(with: try cursorEvent(textView, at: local, in: window))
+            // What both cursorUpdate and mouseMoved ask, counted on the lookup itself.
+            let before = textView.insertionLookups
+            XCTAssertNil(textView.hostedCursor(atWindowPoint: textView.convert(local, to: nil)), "step \(step): the text's own cursor")
+            lookups += textView.insertionLookups - before
+        }
+        XCTAssertEqual(lookups, 0, "no insertion-index lookup per cursor update in a note without objects")
+        XCTAssertLessThanOrEqual(engine.objectKindScans - scans, 1, "the note is scanned for objects once, not per update")
+    }
+
+    /// With a checkbox in the note: after a scroll stops with the pointer
+    /// over the box, the cursor is the control cursor (the trunk's arrow);
+    /// over the item's text, and over plain text, it is the text's own. Each
+    /// update makes at most one insertion-index lookup (it made two off the
+    /// box).
+    func testTheCursorOverACheckboxAfterAScrollAndOffIt() throws {
+        let blocks = [NoteBlock.text("Title")] + (0..<60).map { NoteBlock.text("Line \($0)") }
+            + [.checklist("Deep item")] + (0..<20).map { NoteBlock.text("After \($0)") }
+        let (engine, scroll, textView, window) = cursorEditor(blocks)
+        defer { window.contentView = nil; window.close() }
+        let index = (engine.textStorage.string as NSString).range(of: "\u{FFFC}Deep item").location
+        XCTAssertNotEqual(index, NSNotFound)
+        let box = NSRange(location: index, length: 1)
+        let far = try XCTUnwrap(engine.rect(for: box))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, far.minY - 200)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        let rect = try XCTUnwrap(engine.rect(for: box))
+        let over = CGPoint(x: rect.minX + NoteChecklistAttachment.boxSize / 2, y: rect.midY)
+        let onText = CGPoint(x: rect.minX + NoteChecklistAttachment.boxSize + 30, y: rect.midY)
+        let plain = try XCTUnwrap(engine.rect(for: NSRange(location: (engine.textStorage.string as NSString).range(of: "After 3").location, length: 1)))
+        let previous = NSCursor.current
+        defer { previous.set() }
+
+        NSCursor.iBeam.set()
+        textView.mouseMoved(with: try cursorEvent(textView, at: over, in: window))
+        XCTAssertTrue(NSCursor.current === NSCursor.arrow, "over the box after the scroll: the control cursor")
+        var lookups = textView.insertionLookups
+        XCTAssertTrue(textView.hostedCursor(atWindowPoint: textView.convert(over, to: nil)) === NSCursor.arrow)
+        XCTAssertLessThanOrEqual(textView.insertionLookups - lookups, 1)
+        for (name, local) in [("the item's text", onText), ("plain text", CGPoint(x: plain.minX + 10, y: plain.midY))] {
+            lookups = textView.insertionLookups
+            XCTAssertNil(textView.hostedCursor(atWindowPoint: textView.convert(local, to: nil)), "\(name): the text's own cursor")
+            XCTAssertLessThanOrEqual(textView.insertionLookups - lookups, 1, "\(name): one lookup at most")
+        }
+        XCTAssertTrue(textView.hostedCursor(atWindowPoint: textView.convert(over, to: nil)) === NSCursor.arrow, "and back over the box")
+    }
+
+    /// The object scan is kept until the next edit: a line made a checklist
+    /// after the cursor has asked shows the control cursor over its new box.
+    func testACheckboxAddedAfterTheCursorAskedStillGetsTheControlCursor() throws {
+        let (engine, _, textView, window) = cursorEditor([.text("Title"), .text("Becomes a task"), .text("Stays text")])
+        defer { window.contentView = nil; window.close() }
+        let line = (engine.textStorage.string as NSString).range(of: "Becomes a task").location
+        let before = try XCTUnwrap(engine.rect(for: NSRange(location: line, length: 1)))
+        XCTAssertNil(textView.hostedCursor(atWindowPoint: textView.convert(CGPoint(x: before.minX + 4, y: before.midY), to: nil)))
+        XCTAssertFalse(engine.objectKinds.contains(.checklist))
+        textView.setSelectedRange(NSRange(location: line + 2, length: 0))
+        engine.toggleChecklistLine()
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        XCTAssertTrue(engine.objectKinds.contains(.checklist), "the edit refreshed the object kinds")
+        let index = (engine.textStorage.string as NSString).range(of: "\u{FFFC}Becomes a task").location
+        XCTAssertNotEqual(index, NSNotFound)
+        let rect = try XCTUnwrap(engine.rect(for: NSRange(location: index, length: 1)))
+        let over = textView.convert(CGPoint(x: rect.minX + NoteChecklistAttachment.boxSize / 2, y: rect.midY), to: nil)
+        XCTAssertTrue(textView.hostedCursor(atWindowPoint: over) === NSCursor.arrow, "the new box takes the control cursor")
+    }
+
     func testAttachmentPickerRecoveryFromAnOffscreenOwnerStaysOnscreen() throws {
         let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
         for owner in [CGRect(x: -4000, y: 200, width: 340, height: 520), CGRect(x: 4000, y: 200, width: 340, height: 520),

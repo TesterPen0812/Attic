@@ -1,3 +1,94 @@
+## 2026-11-27 · A squircle's path is built once per shape and rect
+
+`Squircle.path(in:)` (Attic/Design) keeps the path it builds, keyed on the
+rect and every field the path reads (corner size, exponent, inset, squared
+top and bottom), and builds again only when one of them changes. SwiftUI
+asks a clip or content shape for its path on every hit test, so during a
+scroll every event rebuilt the panel's unchanged squircle
+(`PanelShellSurface`) once per hover responder: 5.9% (Tasks), 9.4% (Notes
+library) and 19.8% (long note) of main-thread time went to hit testing in
+the 27 Nov scroll trace. The kept path is the same path, point for point;
+the cache is locked (shapes draw off the main thread) and bounded at 64
+shapes, starting over when full, since a resize makes a new rect every
+frame. Nothing drawn or hit-tested changes.
+
+## 2026-11-26 · A dropdown row carries one id, so the keyboard's row scrolls into view on macOS 27
+
+On macOS 27, `ScrollViewReader.scrollTo` finds no row whose String `.id`
+differs from the String id its `ForEach` keys on: the scroll is issued and
+the list stays. macOS 26 found such rows. Two lists' rows had no
+`scrollID`, so they took their title ("#work") as their id while their
+`ForEach` keyed on the item's id ("work"):
+
+- the Notes tag suggestions (`AtticTagSuggestionList`);
+- the Tasks title's and composer's "#" and date suggestions (`AtticSuggestionList`).
+
+↑ and ↓ moved the highlight past the bottom row there and the list never
+followed it. Each row now passes its `ForEach` id as its `scrollID`, so its
+`.id` and the highlight it publishes (moved by the keyboard or the pointer)
+are the same value. The row reads the same to VoiceOver (its title, and a tag's
+count), and a highlight move rebuilds no row. A row that keeps its id while
+its title changes is no longer rebuilt.
+
+## 2026-11-26 · A row under an open dropdown card does not hover
+
+A dropdown card is in its own hosting view above the page, in the same
+window, and the Tasks list's hover tracker only asked whether the pointer
+was in the page, so the row under the card kept or took its tint through
+the card (MENU-HOVER-BEHIND). The tracker now skips a point an overlay
+covers (`AtticOverlayHostingView.covers`: interactive, shown, its content's
+rectangle; the answer a click gets from `hitTest`), and looks again when
+an overlay starts or stops covering or moves (`coveringDidChange`, posted
+by the host itself). A row beside the card still hovers: a click there acts.
+The row under a still pointer hovers again as the card closes. Nothing else
+in hover's look changes.
+
+## 2026-11-26 · Lists scroll to the keyboard's highlight, never to a hover
+
+A scrolling list (`AtticDropdownViewport`) brings a highlight into view only
+when the keyboard or typing made it. It no longer reads `NSApp.currentEvent`
+to tell them apart: a stale mouse move left over from an earlier event made a
+key press look like a hover, and the list never reached the last tag (PF-43).
+The viewport knows the source from the change itself, through
+`AtticHighlightOrigin`:
+
+- A row the pointer lit never scrolls any viewport. A picker inside a
+  presenter's persistent, height-limited card has two viewports; they share
+  one origin, so the hover scrolls neither.
+- Only a hover that moves the highlight counts as the pointer's. Rows with no
+  `onHover` (the Notes tag suggestions) leave the keyboard's highlight to
+  scroll its row into view even when the pointer rests on it.
+- A click on ‹ or › in a date card cut short to fit the panel turns the month
+  without scrolling the card; an accessibility press, or a key that turns the
+  month, still scrolls to the day it lights.
+- A tag row's id, the id it publishes for the highlight and the id the
+  pointer reports are one: the tag's name.
+
+The rows' own hover handlers still use `NSApp.currentEvent` to ignore a row
+sliding under a resting pointer as the keyboard scrolls; that is unchanged.
+No look, motion, size or token changes.
+
+## 2026-11-26 · A resize step writes only the view state it draws
+
+A step of a window resize wrote view state that draws nothing, and each
+write ran another transaction pass. A per-step measurement is now kept out
+of view state (`AtticUnobserved`), and a view keeps only what it draws. The
+agent slot keeps whether the ✦ steps aside, not its minX. The note format
+row keeps whether its cells are roomy, not its width; while closed it keeps
+the width unobserved and copies it in with the first frame of its opening
+motion. The island's stand-in is sent no size while hidden and reads the
+panel's size as it shows.
+
+The island's glass takes the panel's size from AppKit, not from view state.
+`AtticGlassSizeSource` (`AtticMaterials.swift`) holds the size, and
+`AtticSurfaceBackground.nativeGlassSizeSource` sizes the glass from it
+through `AtticGlassSizer`, a view that draws nothing and is never hit,
+focused or read by accessibility. A new size lays the glass out again and
+runs no view body. `nativeGlassSize` stays for the island's stand-in.
+Looks are unchanged: the island and label frames match the trunk's
+at rest, at each step and once settled (CI, to the point). With Reduce
+Transparency the island is solid, has no sizer, and takes no size.
+
 ## 2026-11-25 · Hover in the Tasks list comes from the list, not from each row
 
 A row in the Tasks list no longer carries a SwiftUI hover region for itself,
