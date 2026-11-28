@@ -384,11 +384,14 @@ struct AtticPanelView: View {
         case .canvas:
             // In a host of its own, as Calendar and Notes (draw-kept-host-brief.md):
             // hidden, Draw's graph is not run, laid out or walked by the shell's
-            // updates. Its leave hook (`setShown(false)`) runs in the hidden
-            // root's one pass, before the first frame away. The notice room is
-            // an object it observes inside the host; the header rects are a
-            // value in the root, taken while shown and on show.
-            PanelPageKeptHost(page: .canvas, isCurrent: page == currentPage, transit: uiState.pageTransit) {
+            // updates. Its leave hook (`setShown(false)`: a stroke in flight is
+            // finished and saved) and the top row's undimming after it run in
+            // the switch's turn, as in the panel's own host (`laysOutOnLeave`;
+            // without it a click or an instant switch left Draw shown, DR2).
+            // The notice room is an object it observes inside the host; the
+            // header rects are a value in the root, taken while shown and on show.
+            PanelPageKeptHost(page: .canvas, isCurrent: page == currentPage, transit: uiState.pageTransit,
+                              laysOutOnLeave: true) {
                 PanelCanvasNoticeAwareHost(
                     canvasSession: canvasSession,
                     toasts: toasts,

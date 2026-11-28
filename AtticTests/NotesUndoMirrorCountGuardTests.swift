@@ -503,14 +503,28 @@ final class NotesUndoMirrorCountGuardTests: XCTestCase {
                 XCTAssertGreaterThan(padded, 0, "\(label): the notices took the new clearance")
             }
             // Liveness (PR52 B3): a new layout (a corner change; a size
-            // change no longer makes one) reaches the hidden Canvas host, so
-            // its counter and the shell's probe run.
+            // change no longer makes one) runs the shell's probe. The Canvas
+            // page sits in a kept host of its own (draw-kept-host-brief.md):
+            // hidden, it takes no new layout; shown, it takes the one it held,
+            // so its counter runs then.
             let canvasBefore = PanelCanvasNoticeAwareHost.bodyEvaluations
             let shellBefore = shellRuns
             assertCalendarColumnsAreLive(rig)
-            let canvasLive = PanelCanvasNoticeAwareHost.bodyEvaluations - canvasBefore
-            print("CLEARANCE_SHELL_COUNTS panel corner changed shell=\(shellRuns - shellBefore) canvasHost=\(canvasLive)")
-            XCTAssertGreaterThan(canvasLive, 0, "harness: a new layout runs the hidden Canvas host")
+            let original = rig.settings.panelCornerSize
+            rig.settings.panelCornerSize = original == PanelCornerSize.large.rawValue
+                ? PanelCornerSize.extraLarge.rawValue : PanelCornerSize.large.rawValue
+            settle(rig)
+            let canvasHidden = PanelCanvasNoticeAwareHost.bodyEvaluations - canvasBefore
+            rig.state.selectSection(.canvas)
+            settle(rig)
+            let canvasShown = PanelCanvasNoticeAwareHost.bodyEvaluations - canvasBefore - canvasHidden
+            rig.state.selectSection(.tasks)
+            settle(rig)
+            rig.settings.panelCornerSize = original
+            settle(rig)
+            print("CLEARANCE_SHELL_COUNTS panel corner changed shell=\(shellRuns - shellBefore) canvasHost=\(canvasHidden) canvasShown=\(canvasShown)")
+            XCTAssertEqual(canvasHidden, 0, "a new layout ran the hidden Canvas host")
+            XCTAssertGreaterThan(canvasShown, 0, "harness: shown after the new layout, the Canvas host runs")
             #if ATTIC_LOCAL_ONLY
             XCTAssertGreaterThan(shellRuns - shellBefore, 0, "harness: a new layout runs the shell")
             #endif
