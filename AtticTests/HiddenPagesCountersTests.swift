@@ -1698,20 +1698,15 @@ extension HiddenPagesCountersTests {
             }
             release(rig)
             let grown = dragSize(start, step: Self.dragSteps).width - start.width
-            // Draw is laid out while hidden: it takes the final size hidden.
-            let laidOutHidden: [PanelPage] = [.canvas]
-            waitForTestOperation("the hidden pages take the final size") {
+            waitForTestOperation("the release's pass") {
                 oneFrame(rig)
-                return laidOutHidden.allSatisfy { page in
-                    let now = widths(of: page, rig)
-                    return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - grown) < 0.5 }
-                }
+                return rig.state.retainedPageSizeDuringLiveResize == nil
             }
             XCTAssertNil(rig.state.retainedPageSizeDuringLiveResize)
-            // Notes and Calendar sit in kept hosts that are not laid out while
-            // hidden (page-host-notes-draw; PR 80): each takes the final size
-            // in its first frame shown.
-            for page in [PanelPage.notes, .calendar] { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: grown, "RZ3") }
+            // Notes, Calendar and Draw sit in kept hosts that are not laid out
+            // while hidden (page-host-notes-draw; PR 80; draw-kept-host-brief.md):
+            // each takes the final size in its first frame shown.
+            for page in hidden { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: grown, "RZ3") }
         }
     }
 
@@ -1728,19 +1723,11 @@ extension HiddenPagesCountersTests {
             }
             let start = rig.state.panelSize
             resize(rig, to: CGSize(width: start.width + 24, height: start.height + 12))
-            // Draw is laid out while hidden: it takes the size hidden.
-            let laidOutHidden: [PanelPage] = [.canvas]
-            waitForTestOperation("the hidden pages take a size written outside a drag") {
-                oneFrame(rig)
-                return laidOutHidden.allSatisfy { page in
-                    let now = widths(of: page, rig)
-                    return !now.isEmpty && now.allSatisfy { abs($0.value - (before[$0.key] ?? -1) - 24) < 0.5 }
-                }
-            }
-            // Notes and Calendar sit in kept hosts that are not laid out while
-            // hidden (page-host-notes-draw; PR 80): each takes the size in its
-            // first frame shown.
-            for page in [PanelPage.notes, .calendar] { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: 24, "RZ4A") }
+            oneFrame(rig)
+            // Notes, Calendar and Draw sit in kept hosts that are not laid out
+            // while hidden (page-host-notes-draw; PR 80; draw-kept-host-brief.md):
+            // each takes the size in its first frame shown.
+            for page in hidden { assertFirstShownFrameTookTheSize(page, rig, before: before, grown: 24, "RZ4A") }
         }
     }
 
