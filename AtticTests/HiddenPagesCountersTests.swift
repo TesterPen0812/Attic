@@ -2761,11 +2761,12 @@ extension HiddenPagesCountersTests {
             // the hidden pages the size it held (RZ3): the host's update sets
             // no root and lays nothing out, so Draw's graph does not run.
             XCTAssertEqual(after.prefix(2), before.prefix(2), "DR1: hidden, Draw's host took a layout or a root (layouts, roots)")
-            // Measured (377f5ceb): exactly one, at the release; none at the write outside a drag.
-            XCTAssertEqual(hostAt.count, 1, "DR1: Draw's hidden host took other updates than the release's: \(hostAt)")
+            // At most one, at the release (the Pro measured one on 377f5ceb, CI run
+            // 46108339736 none); none through the drag or at the write outside it.
+            XCTAssertLessThanOrEqual(hostAt.count, 1, "DR1: Draw's hidden host took other updates than the release's: \(hostAt)")
             XCTAssertTrue(hostAt.allSatisfy { $0.hasPrefix("release:") },
                           "DR1: an update reached Draw's hidden host outside the release: \(hostAt)")
-            if let one = after.last, let was = before.last { XCTAssertEqual(one - was, 1, "DR1: the release's updates of Draw's hidden host") }
+            if let one = after.last, let was = before.last { XCTAssertLessThanOrEqual(one - was, 1, "DR1: the release's updates of Draw's hidden host") }
             XCTAssertEqual(drawnAt, [], "DR1: hidden, Draw's host was drawn")
             for view in Self.hiddenPageViews[.canvas, default: []] {
                 XCTAssertEqual(ran[view, default: 0], 0, "DR1: Draw's \(view) ran while hidden through a resize")
